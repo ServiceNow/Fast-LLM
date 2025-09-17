@@ -27,32 +27,33 @@ optimizer:
   beta_2: 0.95
 model:
   base_model:
-    transformer:
-      mixer:
-        type: attention
-        rotary:
-          type: default
-          theta: 10000
-        heads: 32
-        head_groups: 8
-        head_size: 128
-        add_linear_biases: false
-        window_size: 4096
-        dropout: 0.0
-      mlp:
-        intermediate_size: 14336
-        add_linear_biases: false
-        gated: true
-        activation: silu
-      normalization:
-        type: rms_norm
-        epsilon: 1.0e-05
-      num_layers: 32
-      hidden_size: 4096
-      dropout: 0.0
     embeddings_layer:
+      hidden_size: 4096
       vocab_size: 32000
       dropout: 0.0
+    decoder:
+      block:
+        mixer:
+          type: attention
+          rotary:
+            type: default
+            theta: 10000
+          heads: 32
+          head_groups: 8
+          head_size: 128
+          add_linear_biases: false
+          window_size: 4096
+          dropout: 0.0
+        mlp:
+          intermediate_size: 14336
+          add_linear_biases: false
+          gated: true
+          activation: silu
+        normalization:
+          type: rms_norm
+          epsilon: 1.0e-05
+        dropout: 0.0
+      num_blocks: 32
     output_layer:
       tied_weight: false
       normalization:

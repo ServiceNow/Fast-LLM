@@ -6,7 +6,7 @@ import typing
 import torch
 import torch._dynamo  # noqa
 
-from fast_llm.engine.base_model.base_model import LossDef
+from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.logging import TensorLogs
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.tensor import TensorMeta

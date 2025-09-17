@@ -4,12 +4,23 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.models.gpt.conversion.config import (
+    AprielHybridSSMCheckpointFormat,
+    AutoGPTHuggingfaceCheckpointFormat,
+    DiffusionDreamCheckpointFormat,
+    DiffusionLlamaCheckpointFormat,
+    LlamaCheckpointFormat,
+    MistralCheckpointFormat,
+    MixtralCheckpointFormat,
+    MTPLlamaCheckpointFormat,
+    Qwen2CheckpointFormat,
+)
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
 
@@ -19,52 +30,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.trainer import GPTTrainer
 
 logger = logging.getLogger(__name__)
-
-
-class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
-
-    @classmethod
-    def get_handler_class(cls) -> type[CheckpointHandler]:
-        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
-
-        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.name)
-
-
-class AutoGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "auto"
-
-
-class Starcoder2GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "starcoder2"
-
-
-class LlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "llama"
-
-
-class Qwen2GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "qwen2"
-
-
-class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "mistral"
-
-
-class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "mixtral"
-
-
-class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "mtp_llama"
-
-
-class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "dream"
-
-
-class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "diffusion_llama"
 
 
 @config_class()
@@ -151,14 +116,14 @@ class GPTModelConfig(FastLLMModelConfig):
     base_model: GPTBaseModelConfig = FieldUpdate()
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         AutoGPTHuggingfaceCheckpointFormat,
-        Starcoder2GPTHuggingfaceCheckpointFormat,
-        LlamaGPTHuggingfaceCheckpointFormat,
-        Qwen2GPTHuggingfaceCheckpointFormat,
-        MistralGPTHuggingfaceCheckpointFormat,
-        MixtralGPTHuggingfaceCheckpointFormat,
-        MTPLlamaGPTHuggingfaceCheckpointFormat,
-        DiffusionDreamGPTHuggingfaceCheckpointFormat,
-        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+        LlamaCheckpointFormat,
+        Qwen2CheckpointFormat,
+        MistralCheckpointFormat,
+        MixtralCheckpointFormat,
+        MTPLlamaCheckpointFormat,
+        DiffusionDreamCheckpointFormat,
+        DiffusionLlamaCheckpointFormat,
+        AprielHybridSSMCheckpointFormat,
     )
 
     @classmethod

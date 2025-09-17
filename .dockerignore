@@ -6,6 +6,7 @@
 !setup.cfg
 !Megatron-LM
 !fast_llm
+!fast_llm_external_models
 !examples
 !tools
 !tests

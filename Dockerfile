@@ -33,6 +33,7 @@ RUN MAX_JOBS=2 pip install --no-build-isolation  "causal-conv1d@git+https://gith
 RUN MAX_JOBS=2 pip install --no-build-isolation "mamba_ssm[causal-conv1d]@git+https://github.com/state-spaces/mamba@4a8a2a2"
 # Copy dependency files with universal write permissions for all users.
 COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
+COPY --chmod=777 ./fast_llm_external_models/__init__.py fast_llm_external_models/
 COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
 COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
@@ -44,4 +45,5 @@ COPY --chmod=777 ./Megatron-LM Megatron-LM
 COPY --chmod=777 ./examples examples
 COPY --chmod=777 ./tests tests
 COPY --chmod=777 ./tools tools
+COPY --chmod=777 ./fast_llm_external_models fast_llm_external_models
 COPY --chmod=777 --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/

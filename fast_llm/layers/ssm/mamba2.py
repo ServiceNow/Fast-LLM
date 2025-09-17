@@ -8,9 +8,9 @@ from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import Mamba2Config, init_a, init_dtprojbias
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
@@ -25,12 +25,13 @@ except (ImportError, RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
+class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
 
     _mixer_name: typing.ClassVar[str] = "mamba_2"
+    _config: Mamba2Config
 
     def __init__(
         self,
@@ -81,6 +82,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
 
         self.convolution = self._config.convolution_layer.get_layer(
             convolution_dim,
+            default_add_bias=self._config.add_linear_biases,
             default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
@@ -108,6 +110,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
             inner_dim,
             default_weight_initialization=init_uniform_centered_(self._config.dt_rank**-0.5),
             default_bias_initialization=init_dtprojbias(),
+            default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
@@ -223,7 +226,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
             c,
             self.D.float(),
             z,
-            delta_bias=self.dt_proj.bias.float(),
+            delta_bias=None if self.dt_proj.bias is None else self.dt_proj.bias.float(),
             delta_softplus=True,
         )
 

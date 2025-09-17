@@ -19,14 +19,14 @@ class LinearBaseConfig(Config):
     Configuration for a linear-like layer without bias.
     """
 
+    weight: ParameterConfig = Field(
+        desc="Configuration for the weight.",
+        hint=FieldHint.architecture,
+    )
     lr_scale: float | None = Field(
         default=None,
         desc="Scaling factor for the layer learning rate."
         " Combines multiplicatively with the scale set by the parent layer and individual parameters, if applicable.",
-        hint=FieldHint.feature,
-    )
-    weight: ParameterConfig = Field(
-        desc="Initialization configuration for the weight.",
         hint=FieldHint.feature,
     )
 

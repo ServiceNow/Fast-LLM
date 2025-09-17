@@ -10,9 +10,9 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
-from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
@@ -49,7 +49,7 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
+class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
     """
     A self-attention layer.
     """

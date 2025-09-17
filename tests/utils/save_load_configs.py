@@ -18,13 +18,32 @@ class DistributedSaveLoadConfig:
     num_gpus: int = 2
 
     def resolve(self, base_path: pathlib.Path, model_testing_config: ModelTestingConfig) -> typing.Self:
+        if model_testing_config.checkpoint_format is None:
+            format = {
+                "distributed": do_get_convert_path(
+                    DistributedCheckpointFormat.name, FastLLMCheckpointFormat.name, base_path=pathlib.Path()
+                ),
+                "fast_llm": do_get_convert_path(
+                    FastLLMCheckpointFormat.name, DistributedCheckpointFormat.name, base_path=pathlib.Path()
+                ),
+            }
+        else:
+            format = {
+                "checkpoint_format": model_testing_config.checkpoint_format.name,
+                "distributed": do_get_convert_path(
+                    DistributedCheckpointFormat.name,
+                    model_testing_config.checkpoint_format.name,
+                    base_path=pathlib.Path(),
+                ),
+                "fast_llm": do_get_convert_path(
+                    FastLLMCheckpointFormat.name, model_testing_config.checkpoint_format.name, base_path=pathlib.Path()
+                ),
+            }
         return dataclasses.replace(
             self,
-            load_path=base_path
-            / str(self.load_path).format(checkpoint_format=model_testing_config.checkpoint_format.name),
-            load_format=self.load_format.format(checkpoint_format=model_testing_config.checkpoint_format.name),
-            save_path=base_path
-            / str(self.save_path).format(checkpoint_format=model_testing_config.checkpoint_format.name),
+            load_path=base_path / str(self.load_path).format(**format),
+            load_format=self.load_format.format(**format),
+            save_path=base_path / str(self.save_path).format(**format),
         )
 
     @property
@@ -58,11 +77,11 @@ _DISTRIBUTED_SAVE_LOAD_CONFIGS = []
 for pretrained_format, pretrained_path in (
     (
         DistributedCheckpointFormat.name,
-        do_get_convert_path(DistributedCheckpointFormat.name, "{checkpoint_format}", base_path=pathlib.Path()),
+        pathlib.Path("{distributed}"),
     ),
     (
         FastLLMCheckpointFormat.name,
-        do_get_convert_path(FastLLMCheckpointFormat.name, "{checkpoint_format}", base_path=pathlib.Path()),
+        pathlib.Path("{fast_llm}"),
     ),
     (
         "{checkpoint_format}",

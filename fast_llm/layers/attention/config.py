@@ -9,8 +9,9 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
-from fast_llm.layers.block.config import BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
+from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:

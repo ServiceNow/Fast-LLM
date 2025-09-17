@@ -9,9 +9,9 @@ from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import DiscreteMamba2Config
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import div
@@ -27,12 +27,13 @@ except (ImportError, RuntimeError):
     _mamba_available = False
 
 
-class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
+class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]):
     """
     This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
     """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
+    _config: DiscreteMamba2Config
 
     def __init__(
         self,
@@ -104,6 +105,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
 
         self.convolution = self._config.convolution_layer.get_layer(
             convolution_dim,
+            default_add_bias=self._config.add_linear_biases,
             default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,

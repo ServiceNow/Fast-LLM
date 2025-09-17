@@ -1,5 +1,4 @@
 import abc
-import dataclasses
 import typing
 
 import torch
@@ -78,17 +77,6 @@ class Sequential(Layer):
             layer.setup(distributed)
 
 
-@dataclasses.dataclass()
-class LossDef:
-    # A name for the loss
-    name: str
-    formatted_name: str
-    # The number of times this loss is evaluated by the model for each micro-batch. Used as a denominator for averaging.
-    # TODO: Allow variable count?  Would need a reduction across PP devices.
-    count: int = 1
-    dtype: torch.dtype = torch.float32
-
-
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequential):
 
     def __init__(
@@ -134,11 +122,6 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         # Warning: This may return buffers instead of metas after stage setup.
         # The name (dict key) is used to insert the weight in the kwargs of the forward pass.
         return {}
-
-    @property
-    @abc.abstractmethod
-    def loss_defs(self) -> list[LossDef]:
-        pass
 
     def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:
         assert name not in self._reference_models

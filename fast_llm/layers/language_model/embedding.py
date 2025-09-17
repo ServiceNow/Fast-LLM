@@ -4,12 +4,11 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
-from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.layers.block.block import BlockLayerBase
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
@@ -18,7 +17,7 @@ from fast_llm.utils import Assert
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
 
-class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLayerBase[ConfigType], Layer):
+class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[ConfigType]):
     """
     A language model embedding layer.
     Consists of word embeddings (tensor-parallel or sequence-tensor-parallel),
@@ -37,13 +36,17 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLay
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_input: bool = False,
     ):
+        if return_input:
+            raise NotImplementedError()
         super().__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_input=return_input,
         )
         self._residual_dtype = (
             self._distributed_config.optimization_dtype

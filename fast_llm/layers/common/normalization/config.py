@@ -4,7 +4,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.engine.config_utils.parameter import ParameterConfig, combine_lr_scales
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
@@ -81,7 +81,10 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
     Common configuration for layer norm and rms norm
     """
 
-    # TODO: Rename to normalization_epsilon
+    weight: ParameterConfig = Field(
+        desc="Configuration for the weight.",
+        hint=FieldHint.architecture,
+    )
     epsilon: float = Field(
         default=1e-5,
         desc="Regularizer for the division.",
@@ -97,13 +100,6 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         default=NormalizationImplementation.auto,
         desc="The implementation to use for the normalization layer.",
         hint=FieldHint.performance,
-    )
-    # TODO: Rename to normalization_init_range
-    initialization_range: float = Field(
-        default=0.0,
-        desc="Randomize the initialization with a uniform noise. Used to test for issues that may not be visible with the default initialization.",
-        hint=FieldHint.testing,
-        valid=check_field(Assert.geq, 0),
     )
 
     @property
@@ -128,6 +124,10 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
 
 @config_class(dynamic_type={NormalizationConfig: "layer_norm"})
 class LayerNormalizationConfig(LayerNormalizationBaseConfig):
+    bias: ParameterConfig = Field(
+        desc="Configuration for the weight.",
+        hint=FieldHint.architecture,
+    )
     _abstract = False
 
     @property

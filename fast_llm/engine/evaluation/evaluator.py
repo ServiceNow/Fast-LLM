@@ -116,7 +116,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
             phase=PhaseType.validation,
         )
 
-        self._loss_defs = self._multi_stage.base_model.loss_defs
+        self._loss_defs = self._multi_stage.base_model.config.get_loss_definitions()
         self._evaluation_iterator = None
         self._is_setup = True
 

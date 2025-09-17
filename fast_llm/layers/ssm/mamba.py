@@ -8,9 +8,9 @@ from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import MambaConfig, init_a, init_dtprojbias
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
@@ -31,8 +31,9 @@ This works with triton 3.1.0
 """
 
 
-class Mamba[ConfigType: MambaConfig](BlockLayer[ConfigType]):
+class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     _mixer_name: typing.ClassVar[str] = "mamba"
+    _config: MambaConfig
 
     def __init__(
         self,
@@ -72,7 +73,7 @@ class Mamba[ConfigType: MambaConfig](BlockLayer[ConfigType]):
         self.convolution = self._config.convolution_layer.get_layer(
             inner_dim,
             default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
-            default_add_bias=False,
+            default_add_bias=self._config.add_linear_biases,
             default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
@@ -91,6 +92,7 @@ class Mamba[ConfigType: MambaConfig](BlockLayer[ConfigType]):
             inner_dim,
             default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
             default_bias_initialization=init_dtprojbias(),
+            default_add_bias=self._config.add_linear_biases,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -113,7 +115,7 @@ class Mamba[ConfigType: MambaConfig](BlockLayer[ConfigType]):
             inner_dim,
             hidden_dim,
             default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
-            default_add_bias=False,
+            default_add_bias=self._config.add_linear_biases,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )

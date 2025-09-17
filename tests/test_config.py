@@ -74,19 +74,23 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
-                "transformer": {
-                    "mixer": {
-                        "rotary": {"type": "default"},
-                        "window_size": 32,
-                        "head_groups": 4,
-                    },
-                    "mlp": {
-                        "intermediate_size": 4096,  # Implicit default, default value
-                        "activation": "silu",  # Implicit default, non-default value
-                    },
-                    "normalization": {"type": "rms_norm"},  # Nested
-                    "num_layers": 12,  # Default
+                "embeddings_layer": {
                     "hidden_size": 1024,  # Default
+                },
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "rotary": {"type": "default"},
+                            "window_size": 32,
+                            "head_groups": 4,
+                        },
+                        "mlp": {
+                            "intermediate_size": 4096,  # Implicit default, default value
+                            "activation": "silu",  # Implicit default, non-default value
+                        },
+                        "normalization": {"type": "rms_norm"},  # Nested
+                    },
+                    "num_blocks": 12,  # Default
                 },
                 "output_layer": {"tied_weight": False},
             },
@@ -101,15 +105,16 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config.save_metadata(save_config)
 
     base_model_update = {
-        "transformer": {
-            "mixer": {
-                "head_groups": 1,  # Override to default
+        "embeddings_layer": {"hidden_size": 512, "vocab_size": 1000},
+        "decoder": {
+            "block": {
+                "mixer": {
+                    "head_groups": 1,  # Override to default
+                },
+                # rotary: Don't override nested.
+                "normalization": {"implementation": "triton"},  # Update non-default nested
             },
-            # rotary: Don't override nested.
-            "normalization": {"implementation": "triton"},  # Update non-default nested
-            "hidden_size": 512,  # Override, affects derived value (kv channels)
         },
-        "embeddings_layer": {"vocab_size": 1000},
         "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
@@ -129,36 +134,43 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     expected_config["distributed"].update({"seed": 1234, "training_dtype": "float16"})
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
-            "transformer": {
-                "mixer": {
-                    "type": "attention",
-                    "rotary": {"type": "default"},
-                    "window_size": 32,
-                    "head_groups": 1,
-                },
-                "mlp": {
-                    "type": "mlp",
-                    "intermediate_size": 4096,  # Implicit default, default value
-                    "activation": "silu",  # Implicit default, non-default value
-                },
-                "normalization": {"type": "rms_norm", "implementation": "triton"},
-                "num_layers": 12,
+            "embeddings_layer": {
                 "hidden_size": 512,
+                "vocab_size": 1000,
             },
-            "embeddings_layer": {"vocab_size": 1000},
+            "decoder": {
+                "type": "fixed",
+                "block": {
+                    "type": "decoder",
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default"},
+                        "window_size": 32,
+                        "head_groups": 1,
+                    },
+                    "mlp": {
+                        "type": "mlp",
+                        "intermediate_size": 4096,  # Implicit default, default value
+                        "activation": "silu",  # Implicit default, non-default value
+                    },
+                    "normalization": {"type": "rms_norm", "implementation": "triton"},
+                },
+                "num_blocks": 12,
+            },
             "output_layer": {"tied_weight": False, "normalization": {"type": "layer_norm"}},
             "peft": {"type": "lora", "freeze_others": False},
         }
     else:
-        base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
-        base_model_update["transformer"]["mixer"]["type"] = "attention"
-        base_model_update["transformer"]["mixer"]["rotary"] = {"type": "none"}
-        base_model_update["transformer"]["mlp"] = {"type": "mlp"}
+        base_model_update["decoder"]["type"] = "fixed"
+        base_model_update["decoder"]["block"]["type"] = "decoder"
+        base_model_update["decoder"]["block"]["normalization"]["type"] = "layer_norm"
+        base_model_update["decoder"]["block"]["mixer"]["type"] = "attention"
+        base_model_update["decoder"]["block"]["mixer"]["rotary"] = {"type": "none"}
+        base_model_update["decoder"]["block"]["mlp"] = {"type": "mlp"}
         base_model_update["output_layer"] = {"normalization": {"type": "layer_norm"}}
         base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 
-    print("IKEUFGH", serialized_config, expected_config)
     check_equal_nested(serialized_config, expected_config)
 
 
@@ -276,6 +288,6 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
         # Check that the global ranks are partitioned into disjoint groups for each distributed dimension,
         # and indirectly that `DistributedDim.global_ranks` is consistent between ranks.
         Assert.eq(sum(len(global_ranks) for global_ranks in global_ranks_set), world_size)
-        Assert.eq(len({global_rank for global_ranks in global_ranks_set for global_rank in global_ranks}))
+        Assert.eq(len({global_rank for global_ranks in global_ranks_set for global_rank in global_ranks}), world_size)
 
     Assert.eq(len(rank_breakdowns), world_size)

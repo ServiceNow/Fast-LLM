@@ -149,7 +149,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             multi_stage=self._multi_stage,
             distributed_config=self._config.model.distributed,
         )
-        self._loss_defs = self._multi_stage.base_model.loss_defs
+        self._loss_defs = self._multi_stage.base_model.config.get_loss_definitions()
 
         if not self._is_evaluation_only:
             steps_per_split = {

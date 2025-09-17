@@ -4,17 +4,15 @@ import typing
 import torch
 
 from fast_llm.data.data.gpt.data import GPTBatch
-from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
+from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
-from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -37,79 +35,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         config: GPTBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        self._hidden_dim = TensorDim("hidden", config.transformer.hidden_size)
+        self._hidden_dim = TensorDim("hidden", config.embeddings_layer.hidden_size)
         super().__init__(config, distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+                param.init_parameter = get_init_megatron(
+                    param, self._config.decoder.block, config.embeddings_layer.hidden_size
+                )  # Noqa
         # `self._reference_models` is not populated at this point, so we pass a mutable dict.
         self._preprocessors: list[Preprocessor] = self._config.get_preprocessors(distributed_config)
 
-    def _get_output_layers(self) -> list[Layer]:
-        layers = []
-        for i in range(self._config.output_layer.prediction_heads):
-            if i > 0:
-                layers.append(
-                    self._get_block(
-                        # TODO MTP: which index?
-                        max(self._config.transformer.num_layers + i, 1),
-                        f"MPT head {i} block",
-                        # The last layer only returns the transformer output.
-                        # The previous layers return a stack of shared_hidden and transformer_output.
-                        i < self._config.output_layer.prediction_heads - 1,
-                    )
-                )
-            layers.append(self._get_head(i))
-        return layers
-
     def get_layers(self) -> list[Layer]:
-        return [
-            self._get_embeddings(),
-            *[
-                self._get_block(
-                    i + 1,
-                    f"Block {i + 1}",
-                    # The last layer only returns the transformer output.
-                    # The previous layers return a stack of shared_hidden and transformer_output.
-                    self._config.output_layer.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
-                )
-                for i in range(self._config.transformer.num_layers)
-            ],
-            *self._get_output_layers(),
-        ]
-
-    def _get_block(
-        self,
-        block_index: int,
-        name: str,
-        return_input: bool = False,
-    ):
-        return self._config.transformer.get_layer(
-            self._distributed_config,
-            hidden_dim=self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-            return_input=return_input,
-        )
-
-    def _get_embeddings(self):
-        return self._config.embeddings_layer.get_layer(
-            self._distributed_config,
-            hidden_dim=self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-        )
-
-    def _get_head(self, prediction_distance):
-        return self._config.output_layer.get_layer(
-            self._distributed_config,
-            self._config.embeddings_layer,
-            hidden_dim=self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-            prediction_distance=prediction_distance,
-        )
+        return self._config.get_blocks(self._distributed_config)
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
@@ -340,10 +278,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[0]
 
     @property
-    def transformer_layers(self) -> list[Block]:
-        return self.layers[1:-1]
-
-    @property
     def model_head(self) -> LanguageModelHead:
         return self.layers[self.model_head_indices[0]]
 
@@ -368,54 +302,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             }
         else:
             return {}
-
-    @property
-    def loss_defs(self) -> list[LossDef]:
-        loss_defs = []
-        if (
-            isinstance(self._config.transformer.mlp, MoEMLPConfig)
-            and self._config.transformer.mlp.experts > 1
-            and self._config.transformer.mlp.routing == RoutingType.topk
-        ):
-            loss_defs.append(
-                LossDef(
-                    name=MLPLossNames.load_balancing_loss,
-                    formatted_name="load balancing loss",
-                    count=self._config.transformer.num_layers,
-                )
-            )
-            if self._config.transformer.mlp.z_loss_coefficient:
-                loss_defs.append(
-                    LossDef(
-                        name=MLPLossNames.router_z_loss,
-                        formatted_name="router z loss",
-                        count=self._config.transformer.num_layers,
-                    )
-                )
-        if self._config.output_layer.logit_z_loss:
-            LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
-
-        if self._config.output_layer.enable_dpo:
-            loss_defs.append(LossDef(name=LanguageModelLossNames.dpo_loss, formatted_name="dpo loss", count=1))
-
-        if self._config.output_layer.distillation_model is not None:
-            loss_defs.append(
-                LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=1)
-            )
-            if self._config.output_layer.language_model_loss_factor > 0.0:
-                loss_defs.append(
-                    LossDef(name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=1)
-                )
-
-        for i in range(self._config.output_layer.prediction_heads):
-            loss_defs.append(
-                LossDef(
-                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
-                    formatted_name=f"language model loss {i}",
-                    count=1,
-                )
-            )
-        return loss_defs
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):

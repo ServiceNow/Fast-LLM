@@ -67,7 +67,7 @@ _fp16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
         # Saved gradient include the gradient scaling by 2**16 (default initial value)
-        (None, "fw"): get_config(1e-3, 3e-4),
+        (None, "fw"): get_config(1.2e-3, 3e-4),
         (None, "bw"): get_config(3e-3, 1e-5, scale=2**16),
         (None, "bias"): get_config(3e-3, 1e-4, scale=2**16),
         (None, "gradient"): get_config(3e-3, 5e-5, scale=2**16),

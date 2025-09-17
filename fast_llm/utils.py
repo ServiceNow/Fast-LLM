@@ -93,8 +93,9 @@ class Assert:
 
     @staticmethod
     def eq(x, *args, msg=None):
+        assert args
         for arg in args:
-            assert x == arg, f"{x} != {arg} " + (f"| {msg}" if msg else "")
+            assert x == arg, f"{x} != {arg} " + ("" if msg is None else f"| {msg}")
 
     @staticmethod
     def is_(x, y):
@@ -457,3 +458,15 @@ def get_and_reset_memory_usage_mib(
         _global_max_reserved = max(max_reserved, _global_max_reserved)
 
     return report
+
+
+def safe_merge_dicts(*dicts) -> dict:
+    out = {}
+    for dict_ in dicts:
+        for key, value in dict_.items():
+            if key in out:
+                if isinstance(value, dict) and isinstance(out[key], dict):
+                    out[key] = safe_merge_dicts(value, out[key])
+                Assert.eq(value, out[key])
+            out[key] = value
+    return out
