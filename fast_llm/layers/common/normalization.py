@@ -358,7 +358,7 @@ class _TPRMSNormFn(torch.autograd.Function):
         # global stats
         ss_local = x.square().sum(dim=-1, keepdim=True)  # [S,B,1]
         # ss_global = ss_local.sum(dim=0)
-        ss_global = ss_local  # torch.distributed.nn.functional.all_reduce(ss_local, op=dist.ReduceOp.SUM, group=group)
+        ss_global = torch.distributed.nn.functional.all_reduce(ss_local, op=dist.ReduceOp.SUM, group=group)
         inv_rms = torch.rsqrt(ss_global / float(H_global) + eps)  # [S,B,1]
 
         y = (x * inv_rms) * w  # [S,B,H_local
@@ -386,9 +386,7 @@ class _TPRMSNormFn(torch.autograd.Function):
         x_eff = x
         gw = gy_pre * w  # [B,S,H_local]
         local_dot = (gw * x_eff).sum(dim=-1, keepdim=True)  # [B,S,1]
-        global_dot = (
-            local_dot  # torch.distributed.nn.functional.all_reduce(local_dot, op=dist.ReduceOp.SUM, group=group)
-        )
+        global_dot = torch.distributed.nn.functional.all_reduce(local_dot, op=dist.ReduceOp.SUM, group=group)
         inv_rms3 = inv_rms * inv_rms * inv_rms
         gx = inv_rms * gw - (inv_rms3 / float(H)) * x_eff * global_dot
 
