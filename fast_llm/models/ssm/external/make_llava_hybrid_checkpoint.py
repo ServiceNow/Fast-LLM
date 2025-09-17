@@ -67,22 +67,16 @@ def main(base_checkpoint: str, m2_indices: list[int], hybrid_checkpoint: str, sa
     save_dir: directory to save the converted model.
     tokenizer_dir: directory containing tokenizer files to copy over to save_dir.
     """
-    m2_indexes = list(m2_indices)  # convert tuple -> list
+    m2_indices = list(m2_indices)  # convert tuple -> list
     transformer = AutoModelForVision2Seq.from_pretrained(base_checkpoint, trust_remote_code=True)
     if hybrid_checkpoint == "none":
         print("No hybrid checkpoint provided, creating new config from base model.")
         hybrid_config = make_hybrid_llava_config(transformer)
-
-        hybrid_llava_model = None
     else:
         hybrid_config = LlavaHybridConfig.from_pretrained(hybrid_checkpoint)
-        # Load existing SSM layers
-        hybrid_llava_model = AutoModelForVision2Seq.from_pretrained(
-            hybrid_checkpoint, torch_dtype=torch.bfloat16, trust_remote_code=True
-        )
 
     hybrid_block_layout = hybrid_config.text_config.hybrid_block_layout
-    for m2_index in m2_indexes:
+    for m2_index in m2_indices:
         hybrid_block_layout[m2_index] = "m2"
     print(hybrid_block_layout)
 
@@ -99,9 +93,12 @@ def main(base_checkpoint: str, m2_indices: list[int], hybrid_checkpoint: str, sa
 
     # Load existing SSM layers
     if hybrid_checkpoint != "none":
+        hybrid_llava_model = AutoModelForVision2Seq.from_pretrained(
+            hybrid_checkpoint, torch_dtype=torch.bfloat16, trust_remote_code=True
+        )
         llava_state_dict = hybrid_llava_model.state_dict()
         missing, unexpected = transformer.load_state_dict(llava_state_dict, strict=False)
-        for m2_index in m2_indexes:
+        for m2_index in m2_indices:
             assert f"model.layers.{m2_index}.mixer.A_log" in missing
             assert f"model.layers.{m2_index}.self_attn.q_proj.weight" in unexpected
         print("MISSING", missing)
