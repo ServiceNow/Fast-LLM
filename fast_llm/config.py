@@ -1122,6 +1122,3 @@ def pop_nested_dict_value[
         return d.pop(keys[-1])
     else:
         return d.pop(keys)
-
-
-i = 0
