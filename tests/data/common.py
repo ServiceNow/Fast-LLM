@@ -77,9 +77,8 @@ def get_test_data_and_compare_samples(
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     expected_samples: dict[str, list[list[int]]] | list[list[int]],
-    legacy: bool = False,
 ) -> GPTData:
-    distributed_config = DistributedConfig(seed=seed if legacy else 87522)
+    distributed_config = DistributedConfig(seed=87522)
     distributed = Distributed(distributed_config, use_cpu=True)
     if isinstance(samples_per_dataset, int):
         samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
@@ -97,11 +96,7 @@ def get_test_data_and_compare_samples(
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
     assert "sampling" not in config
-    config["sampling"] = GPTSamplingConfig(
-        seed=87522 if legacy else seed,
-        gpu=gpu,
-        shuffle=shuffle,
-    )
+    config["sampling"] = GPTSamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
     data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():

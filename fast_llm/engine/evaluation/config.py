@@ -27,16 +27,11 @@ class EvaluatorConfig(EvaluatorConfigBase):
     _abstract: typing.ClassVar[bool] = True
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.x: Remove backward compatibility.
-        if not "type" in default:
-            default["type"] = "loss"
-        return super()._from_dict(default, strict, flat)
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if cls is EvaluatorConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return LossEvaluatorConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
 
 @config_class(dynamic_type={EvaluatorConfig: "loss"})

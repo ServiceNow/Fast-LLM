@@ -18,16 +18,11 @@ class RotaryConfig(BaseModelConfig):
     # TODO: Move rotary to its own submodule.
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is RotaryConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return NoRotaryConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return NoRotaryConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
     def get_layer(self, head_size_dim: TensorDim) -> "Rotary":
         return self._get_configurable_class()(self, head_size_dim)

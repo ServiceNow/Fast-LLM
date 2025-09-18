@@ -29,7 +29,7 @@ def test_varlen_preprocessor():
     micro_sequence_length = 12
     sequence_length = 36
     varlen_preprocessor = FlashAttnVarlenPreprocessor(
-        AttentionConfig(head_size=64), DistributedConfig(training_dtype="bfloat16")
+        AttentionConfig(head_size=64), DistributedConfig(compute_dtype="bfloat16")
     )
     for micro_seq_idx in range(int(sequence_length / micro_sequence_length)):
         kwargs = {

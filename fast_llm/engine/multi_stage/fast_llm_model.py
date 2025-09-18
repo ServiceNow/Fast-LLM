@@ -54,14 +54,10 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         metadata = cls.config_class.load_metadata(pretrained_config)
         config = cls.config_class.from_dict(metadata.config, *updates, update_type=UpdateType.update)
         if mode.support_training:
-            # TODO v0.3: Make metadata.shards mandatory?
-            if metadata.shards:
-                if optimizer_state_names is None:
-                    optimizer_state_names = metadata.shards[1:]
-                else:
-                    Assert.eq(optimizer_state_names, metadata.shards[1:])
-            elif optimizer_state_names is None:
-                raise ValueError("`optimizer_state_names` is required")
+            if optimizer_state_names is None:
+                optimizer_state_names = metadata.shards[1:]
+            else:
+                Assert.eq(optimizer_state_names, metadata.shards[1:])
         else:
             assert optimizer_state_names is None
             optimizer_state_names = ()

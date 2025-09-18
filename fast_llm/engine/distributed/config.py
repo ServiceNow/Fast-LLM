@@ -104,7 +104,7 @@ class DistributedConfig(Config):
     """
     Configuration for the distributed setup.
     Also include variables for global settings such as data types, random seeds, initialization parameters.
-    TODO v0.3: Move these unrelated variables elsewhere.
+    TODO: Move these unrelated variables elsewhere.
     TODO: Avoid hard-coding distributed dims (use derived class?)
     TODO: Separate distributed space from config?
     """
@@ -181,19 +181,19 @@ class DistributedConfig(Config):
         valid=check_field(Assert.gt, 0),
     )
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
-    # TODO v0.3: Rename to compute_dtype (not just for training), move elsewhere
-    training_dtype: DataType = Field(
+    # TODO: Rename to compute_dtype (not just for training), move elsewhere
+    compute_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the forward and backward passes.",
         hint=FieldHint.core,
     )
-    # TODO v0.3: move elsewhere
+    # TODO : move elsewhere
     optimization_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the optimizer.",
         hint=FieldHint.expert,
     )
-    # TODO v0.3: move random state elsewhere
+    # TODO: move random state elsewhere
     # Extra seed parameters (can usually be left alone)
     dp_seed_shift: int = Field(
         default=_BIG_PRIMES[0], desc="Seed shift for extra randomness.", hint=FieldHint.optional
@@ -378,13 +378,3 @@ class DistributedConfig(Config):
 
     def log_first_rank[T](self, *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info):
         return self._log_on_rank(*message, rank=0, log_fn=log_fn)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        cls._handle_renamed_field(default, "distributed_timeout", "timeout")
-        return super()._from_dict(default, strict, flat)

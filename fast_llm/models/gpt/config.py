@@ -88,26 +88,6 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )
 
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility fix
-        if "transposed_mlp_weight" in default:
-            assert default.pop("transposed_mlp_weight")
-        if "match_megatron" in default:
-            assert "use_megatron_initialization" not in default
-            default["use_megatron_initialization"] = default.pop("match_megatron")
-        if "layer_norm_impl" in default:
-            assert "normalization_implementation" not in default
-            default["normalization_implementation"] = default.pop("layer_norm_impl")
-        if "fused_mlp" in default:
-            del default["fused_mlp"]
-        return super()._from_dict(default, strict, flat)
-
 
 @config_class(dynamic_type={FastLLMModelConfig: "gpt"})
 class GPTModelConfig(FastLLMModelConfig):
@@ -196,29 +176,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
                 self.model.base_model.embeddings_layer.vocab_parallel,
             )
             Assert.geq(output_layer.prediction_heads, output_layer.prediction_heads)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.x: Remove backward compatibility.
-        cls._handle_renamed_field(
-            default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
-        )
-        if "truncate_documents" in default.get("data", {}):
-            # Backward compatibility for the legacy truncate_documents field.
-            # TODO v0.x: Remove backward compatibility.
-            logger.warning(
-                "`data.truncate_documents` field is deprecated. " "Please use `batch.truncate_documents` instead."
-            )
-            assert "truncate_documents" not in default.get("batch", {})
-            if "batch" not in default:
-                default["batch"] = {}
-            default["batch"]["truncate_documents"] = default["data"].pop("truncate_documents")
-        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

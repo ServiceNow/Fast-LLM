@@ -52,16 +52,11 @@ class NormalizationConfig(BaseModelConfig):
         return out
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is NormalizationConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return LayerNormalizationConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return LayerNormalizationConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
 
 @config_class(dynamic_type={NormalizationConfig: "none"})
@@ -106,20 +101,6 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
     @abc.abstractmethod
     def module_class(self):
         pass
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        cls._handle_renamed_field(default, "normalization_type", "type")
-        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
-        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
-        cls._handle_renamed_field(default, "normalization_implementation", "implementation")
-        cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
-        return super()._from_dict(default, strict, flat)
 
 
 @config_class(dynamic_type={NormalizationConfig: "layer_norm"})

@@ -170,17 +170,6 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase, IntervalConfig):
 
         return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
 
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.x: Remove backward compatibility.
-        cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
-        return super()._from_dict(default, strict, flat)
-
 
 @config_class()
 class TrainingCheckpointBaseConfig(IntervalConfig):
@@ -234,10 +223,7 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     keep: int | None = FieldUpdate(default=5)
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
-        # TODO v0.3: Remove backward compatibility.
-        old_path = experiment_directory / "checkpoints"
-        new_path = experiment_directory / "checkpoint"
-        return old_path if old_path.is_dir() and not new_path.is_dir() else new_path
+        return experiment_directory / "checkpoint"
 
     def get_save_config(self, path: pathlib.Path, timeout: float | None) -> CheckpointSaveConfig:
         return CheckpointSaveConfig(
@@ -328,18 +314,6 @@ class TrainingConfig(Config):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.x: Remove backward compatibility.
-        cls._handle_renamed_field(default, "validation", ("evaluators", "validation"))
-        cls._handle_renamed_field(default, "evaluations", ("evaluators"))
-        return super()._from_dict(default, strict, flat)
 
     def _validate(self) -> None:
         super()._validate()

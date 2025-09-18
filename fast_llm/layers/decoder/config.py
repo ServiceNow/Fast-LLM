@@ -45,18 +45,13 @@ class MLPBaseConfig(BlockWithBiasConfig):
     _abstract = True
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is MLPBaseConfig and cls.get_subclass(default.get("type")) is None:
             from fast_llm.layers.decoder.mlp.config import MLPConfig
 
             # Default subclass.
-            return MLPConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return MLPConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
 
 @config_class(registry=True)
@@ -66,18 +61,13 @@ class MixerConfig(BlockWithBiasConfig):
     """
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
             from fast_llm.layers.attention.config import AttentionConfig
 
             # Default subclass.
-            return AttentionConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return AttentionConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
 
 @config_class(dynamic_type={BlockConfig: "decoder"})

@@ -15,16 +15,11 @@ class PeftConfig(Config):
     _abstract = True
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is PeftConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return NoPeftConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return NoPeftConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
     def apply_linear(
         self,

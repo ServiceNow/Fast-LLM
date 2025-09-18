@@ -87,7 +87,7 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
             dims = (input_.dims[0], kwargs[AttentionKwargs.sequence_q_dim], self._intermediate_2_dim)
         # Also adjust the dtype in case of full-precision residual
         layer_2_input = TensorMeta.from_dims(
-            dims, tensor_name="intermediate_1", dtype=self._distributed_config.training_dtype.torch
+            dims, tensor_name="intermediate_1", dtype=self._distributed_config.compute_dtype.torch
         )
 
         # TODO: Add marginal compute? (ex. activation, gate + up)

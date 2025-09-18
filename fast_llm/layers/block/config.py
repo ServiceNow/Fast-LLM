@@ -69,18 +69,13 @@ class BlockConfig(BaseBlockConfig):
     """
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is BlockConfig and cls.get_subclass(default.get("type")) is None:
             from fast_llm.layers.decoder.config import DecoderBlockConfig
 
             # Default subclass.
-            return DecoderBlockConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return DecoderBlockConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
     @property
     def layer_class(self) -> "type[Block]":
@@ -107,16 +102,11 @@ class BlockConfig(BaseBlockConfig):
 @config_class(registry=True)
 class BlockSequenceConfig(BaseModelConfig):
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is BlockSequenceConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return FixedBlockSequenceConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return FixedBlockSequenceConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
     @abc.abstractmethod
     def __len__(self) -> int:

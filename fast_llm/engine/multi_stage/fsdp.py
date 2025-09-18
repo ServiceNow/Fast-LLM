@@ -84,7 +84,7 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_shards
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
         # TODO: Distinguish grad and optimizer shard?
@@ -94,13 +94,13 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_shards
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
         self._weight_buffer_meta = TensorMeta.from_dims(
             (TensorDim("weight_buffer", weight_shard_dim.size * self._fsdp_dim.size),),
             tensor_name=f"{self._name}_weight_buffer",
-            dtype=self._distributed_config.training_dtype.torch,
+            dtype=self._distributed_config.compute_dtype.torch,
         )
         self._grad_buffer_meta = TensorMeta.from_dims(
             (TensorDim("grad_buffer", weight_shard_dim.size * self._fsdp_dim.size if self._requires_grad else 0),),
@@ -108,7 +108,7 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_gradient_buffer
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
 

@@ -350,20 +350,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.testing,
     )
 
-    @classmethod
-    def from_flat_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-    ) -> typing.Self:
-        # The backward compatibility fix in `NormalizationArchitectureConfig`
-        # won't work for older checkpoints saved with a flat config.
-        # TODO v0.3: Remove flat format
-        cls._handle_renamed_field(default, "normalization_type", "type")
-        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
-        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
-        return super().from_flat_dict(default, strict)
-
     def __len__(self) -> int:
         return len(self.decoder) + 2 * self.output_layer.prediction_heads
 
