@@ -31,6 +31,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
+    from fast_llm.engine.inference.runner import InferenceRunner
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,10 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def get_model_class(cls) -> type["FastLLMModel"]:
+        raise NotImplementedError
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["InferenceRunner"]:
         raise NotImplementedError
 
     @classmethod
