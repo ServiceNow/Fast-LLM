@@ -246,13 +246,14 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         # Sequence-parallel splits
         # dpo and lm targets may need to be split
+        # Loss mask may need to be split. It was not split in the embedding layer as it is not used there.
         if self._sequence_parallel_logits:
-            dpo_target = (
-                None if dpo_target is None else split_op(dpo_target, self._tensor_space.distributed.tensor_group, 0)
-            )
-            lm_target = (
-                None if lm_target is None else split_op(lm_target, self._tensor_space.distributed.tensor_group, 0)
-            )
+            if dpo_target is not None:
+                dpo_target = split_op(dpo_target, self._tensor_space.distributed.tensor_group, 0)
+            if lm_target is not None:
+                lm_target = split_op(lm_target, self._tensor_space.distributed.tensor_group, 0)
+            if loss_mask is not None:
+                loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
         # distillation targets have already been split in the embedding layer
         if (
             self._config.distillation_model is not None
@@ -265,9 +266,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 if distillation_target is None
                 else split_op(distillation_target, self._tensor_space.distributed.tensor_group, 0)
             )
-        # Loss mask may need to be split. It was not split in the embedding layer as it is not used there.
-        if loss_mask is not None and self._sequence_parallel_logits:
-            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
+
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
