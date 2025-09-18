@@ -57,7 +57,12 @@ def test_and_compare_model(
 def test_run_model_distributed(run_distributed_script, model_testing_config, run_test_script_base_path, request):
     import tests.models.distributed_test_model
 
-    script = [tests.models.distributed_test_model.__file__, str(run_test_script_base_path), model_testing_config.name]
+    script = [
+        "-m",
+        tests.models.distributed_test_model.__name__,
+        str(run_test_script_base_path),
+        model_testing_config.name,
+    ]
     if request.config.getoption("distributed_capture"):
         logger.warning(
             "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."

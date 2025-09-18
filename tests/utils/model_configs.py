@@ -11,20 +11,15 @@ from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.models.gpt.config import (
-    DiffusionDreamGPTHuggingfaceCheckpointFormat,
-    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
-    LlamaGPTHuggingfaceCheckpointFormat,
-    MistralGPTHuggingfaceCheckpointFormat,
-    MixtralGPTHuggingfaceCheckpointFormat,
-    MTPLlamaGPTHuggingfaceCheckpointFormat,
-    Qwen2GPTHuggingfaceCheckpointFormat,
-    Starcoder2GPTHuggingfaceCheckpointFormat,
-)
-from fast_llm.models.ssm.config import (
-    AprielSSMHHybridHuggingfaceCheckpointFormat,
-    AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
-    LLambaHuggingfaceCheckpointFormat,
+from fast_llm.models.gpt.conversion.config import (
+    AprielHybridSSMCheckpointFormat,
+    DiffusionDreamCheckpointFormat,
+    DiffusionLlamaCheckpointFormat,
+    LlamaCheckpointFormat,
+    MistralCheckpointFormat,
+    MixtralCheckpointFormat,
+    MTPLlamaCheckpointFormat,
+    Qwen2CheckpointFormat,
 )
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
@@ -175,9 +170,9 @@ init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
 # Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
 init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
 
-MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
-    name="gpt2",
+    name="gpt_2",
     model_type="gpt",
     config_dict={
         "run": {
@@ -197,22 +192,28 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
                 "embeddings_layer": {
                     "word_embeddings": init_1,
                     "position_embeddings": {"enabled": True, **init_1},
+                    "hidden_size": 256,
                     "num_position_embeddings": 512,
                     "vocab_size": MODEL_TEST_VOCAB_SIZE,
                 },
-                "transformer": {
-                    "mixer": {
-                        "query_layer": {"weight": init_1},
-                        "key_layer": {"weight": init_1},
-                        "value_layer": {"weight": init_1},
-                        "dense_layer": {"weight": init_2},
-                        "heads": 8,
-                        "head_groups": 8,
-                        "head_size": 32,
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "query_layer": {"weight": init_1},
+                            "key_layer": {"weight": init_1},
+                            "value_layer": {"weight": init_1},
+                            "dense_layer": {"weight": init_2},
+                            "heads": 8,
+                            "head_groups": 8,
+                            "head_size": 32,
+                        },
+                        "mlp": {
+                            "layer_1": {"weight": init_1},
+                            "layer_2": {"weight": init_2},
+                            "intermediate_size": 1024,
+                        },
                     },
-                    "mlp": {"layer_1": {"weight": init_1}, "layer_2": {"weight": init_2}, "intermediate_size": 1024},
-                    "num_layers": 2,
-                    "hidden_size": 256,
+                    "num_blocks": 2,
                 },
                 "output_layer": {"output_weight": init_1},
             },
@@ -288,7 +289,8 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        # TODO: PP checkpoint failing for tied weights.
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -297,10 +299,10 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
 
 _update_and_add_testing_config(
     # Tests MQA.
-    "gpt2",
+    "gpt_2",
     "starcoder",
     updates={
-        ("model", "base_model", "transformer", "mixer", "head_groups"): 1,
+        ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 1,
     },
     megatron_args=["--group-query-attention"],
     checkpoint_format=None,
@@ -316,11 +318,11 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests intermediate between gpt2 and llama, closest converter to gpt2.
-    "gpt2",
-    "starcoder2",
+    "gpt_2",
+    "starcoder_2",
     updates={
-        ("model", "base_model", "transformer", "mixer", "head_groups"): 4,
-        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "default",
+        ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 4,
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "default",
         ("model", "base_model", "embeddings_layer", "position_embeddings", "enabled"): False,
     },
     megatron_args=[
@@ -329,7 +331,7 @@ _update_and_add_testing_config(
         "--use-rotary-position-embeddings",
         "--no-position-embedding",
     ],
-    checkpoint_format=Starcoder2GPTHuggingfaceCheckpointFormat,
+    checkpoint_format=None,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -343,14 +345,14 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Main tested model.
-    "starcoder2",
+    "starcoder_2",
     "llama",
     updates={
-        ("model", "base_model", "transformer", "mixer", "add_linear_biases"): False,
-        ("model", "base_model", "transformer", "mlp", "gated"): True,
-        ("model", "base_model", "transformer", "mlp", "activation"): "silu",
-        ("model", "base_model", "transformer", "mlp", "add_linear_biases"): False,
-        ("model", "base_model", "transformer", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "decoder", "block", "mixer", "add_linear_biases"): False,
+        ("model", "base_model", "decoder", "block", "mlp", "gated"): True,
+        ("model", "base_model", "decoder", "block", "mlp", "activation"): "silu",
+        ("model", "base_model", "decoder", "block", "mlp", "add_linear_biases"): False,
+        ("model", "base_model", "decoder", "block", "normalization", "type"): "rms_norm",
         ("model", "base_model", "output_layer", "normalization", "type"): "rms_norm",
         ("model", "base_model", "output_layer", "tied_weight"): False,
     },
@@ -361,7 +363,7 @@ _update_and_add_testing_config(
         "--ffn-hidden-size=1024",
         "--untie-embeddings-and-output-weights",
     ],
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
@@ -376,13 +378,13 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests llama3-style rotary embeddings.
     "llama",
-    "llama3",
+    "llama_3",
     updates={
-        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "llama3",
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "llama3",
     },
     # Megatron doesn't support Llama3-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -398,11 +400,11 @@ _update_and_add_testing_config(
     "llama",
     "llama_yarn",
     updates={
-        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "yarn",
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "yarn",
     },
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -420,7 +422,7 @@ _update_and_add_testing_config(
     updates={},
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=DiffusionLlamaCheckpointFormat,
     # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
@@ -436,13 +438,13 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
-    "llama_mtp",
+    "mtp_llama",
     updates={
-        ("model", "base_model", "output_layer", "prediction_heads"): 4,
+        ("model", "base_model", "output_layer", "prediction_heads"): 2,
     },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
-    checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MTPLlamaCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -458,14 +460,14 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests partial linear biases, Qwen2 converter.
     "llama",
-    "qwen2",
+    "qwen_2",
     # TODO: replace
     updates={
-        ("model", "base_model", "transformer", "add_linear_biases"): "only_attn_qkv",
+        ("model", "base_model", "decoder", "block", "add_linear_biases"): "only_attn_qkv",
     },
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
-    checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
+    checkpoint_format=Qwen2CheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.broken,
@@ -479,13 +481,13 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests diffusion dream converter.
-    "qwen2",
+    "qwen_2",
     "dream",
     # TODO: replace only_attn_qkv
     updates={},
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
-    checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=DiffusionDreamCheckpointFormat,
     # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
@@ -503,11 +505,11 @@ _update_and_add_testing_config(
     "llama",
     "mistral",
     updates={
-        ("model", "base_model", "transformer", "mixer", "window_size"): 128,
+        ("model", "base_model", "decoder", "block", "mixer", "window_size"): 128,
     },
     # Megatron doesn't support sliding windows.
     megatron_args=None,
-    checkpoint_format=MistralGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MistralCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -524,16 +526,16 @@ _update_and_add_testing_config(
     "llama",
     "mixtral",
     updates={
-        ("model", "base_model", "transformer", "mlp", "type"): "moe",
-        ("model", "base_model", "transformer", "mlp", "router", "weight"): init_1,
-        ("model", "base_model", "transformer", "mlp", "experts"): 4,
-        ("model", "base_model", "transformer", "mlp", "experts_per_token"): 4,
+        ("model", "base_model", "decoder", "block", "mlp", "type"): "moe",
+        ("model", "base_model", "decoder", "block", "mlp", "router", "weight"): init_1,
+        ("model", "base_model", "decoder", "block", "mlp", "experts"): 4,
+        ("model", "base_model", "decoder", "block", "mlp", "experts_per_token"): 4,
     },
     megatron_args=[
         "--num-experts=4",
         "--moe-router-topk=4",
     ],
-    checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MixtralCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -546,29 +548,41 @@ _update_and_add_testing_config(
     compare_factor=2.0,
 )
 
+_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
+
+
 _update_and_add_testing_config(
     # Tests hybrid Mamba, llamba converter.
     "llama",
-    "llamba",
-    model_type="hybrid_ssm",
+    "hybrid_mamba",
     updates={
-        ("model", "base_model", "ssm"): {
-            "type": "mamba",
-            "d_inner": 512,
-            "state_size": 16,
-            "dt_rank": 16,
-            "add_linear_biases": False,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba",
+                        "d_inner": 512,
+                        "state_size": 16,
+                        "dt_rank": 16,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m"],
         },
-        ("model", "base_model", "hybrid_block_layout"): "['t','m']",
     },
     megatron_args=None,
-    checkpoint_format=LLambaHuggingfaceCheckpointFormat,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
@@ -581,25 +595,35 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests hybrid Mamba 2.
     "llama",
-    "hybrid_mamba2",
-    model_type="hybrid_ssm",
+    "hybrid_mamba_2",
     updates={
-        ("model", "base_model", "ssm"): {
-            "type": "mamba_2",
-            "d_inner": 512,
-            "state_size": 8,
-            "dt_rank": 16,
-            "d_xb": 256,
-            "add_linear_biases": False,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m2": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba_2",
+                        "dt_layer": {"bias": {"enabled": True}},
+                        "d_inner": 512,
+                        "state_size": 8,
+                        "dt_rank": 16,
+                        "d_xb": 256,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m2"],
         },
-        ("model", "base_model", "hybrid_block_layout"): "['t','m2']",
     },
     megatron_args=None,
-    checkpoint_format=AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -616,26 +640,35 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests hybrid discrete Mamba 2.
     "llama",
-    "hybrid_discrete_mamba2",
-    model_type="hybrid_ssm",
+    "hybrid_discrete_mamba_2",
     updates={
-        ("model", "base_model", "ssm"): {
-            "type": "discrete_mamba_2",
-            "d_inner": 512,
-            "state_size": 8,
-            "n_qk_heads": 8,
-            "n_v_heads": 16,
-            "chunk_size": 32,
-            "add_linear_biases": False,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m2d": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "discrete_mamba_2",
+                        "d_inner": 512,
+                        "state_size": 8,
+                        "n_qk_heads": 8,
+                        "n_v_heads": 16,
+                        "chunk_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m2d"],
         },
-        ("model", "base_model", "hybrid_block_layout"): "['t','m2d']",
     },
     megatron_args=None,
-    checkpoint_format=AprielSSMHHybridHuggingfaceCheckpointFormat,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement

@@ -3,7 +3,7 @@ import abc
 import torch
 
 from fast_llm.config import Configurable
-from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_ones_, init_zeros_
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
@@ -15,7 +15,7 @@ from fast_llm.layers.common.normalization.config import (
     NormalizationImplementation,
     RMSNormalizationConfig,
 )
-from fast_llm.tensor import ParameterMeta, accumulate_gradient
+from fast_llm.tensor import accumulate_gradient
 from fast_llm.utils import Assert
 
 try:
@@ -205,23 +205,17 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
         else:
             raise NotImplementedError(implementation)
 
-        if self.config.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            weight_init_method = init_uniform_centered_(self.config.initialization_range, mean=mean)
-        else:
-            weight_init_method = init_zeros_ if self._config.zero_centered else init_ones_
-
-        self.weight = ParameterMeta.from_dims(
+        self.weight = self._config.weight.get_parameter(
             (hidden_dim,),
-            init_method=weight_init_method,
-            weight_decay=False,
+            default_initialization=init_zeros_ if self._config.zero_centered else init_ones_,
             lr_scale=self._lr_scale,
+            peft=None,
         )
-        self.bias = ParameterMeta.from_dims(
+        self.bias = self._config.bias.get_parameter(
             (hidden_dim,),
-            init_method=init_zeros_,
-            weight_decay=False,
+            default_initialization=init_zeros_,
             lr_scale=self._lr_scale,
+            peft=None,
         )
         self._normalized_shape = self.weight.shape
 
@@ -277,17 +271,11 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         else:
             raise NotImplementedError(implementation)
 
-        if self.config.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            weight_init_method = init_uniform_centered_(self.config.initialization_range, mean=mean)
-        else:
-            weight_init_method = init_zeros_ if self._config.zero_centered else init_ones_
-
-        self.weight = ParameterMeta.from_dims(
+        self.weight = self._config.weight.get_parameter(
             (hidden_dim,),
-            init_method=weight_init_method,
-            weight_decay=False,
-            lr_scale=lr_scale,
+            default_initialization=init_zeros_ if self._config.zero_centered else init_ones_,
+            lr_scale=self._lr_scale,
+            peft=None,
         )
         self._normalized_shape = self.weight.shape
 

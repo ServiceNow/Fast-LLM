@@ -1,12 +1,11 @@
-import enum
 import math
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
-from fast_llm.layers.block.config import MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
+from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -15,38 +14,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
-
-
-class SSMBlockType(enum.StrEnum):
-    """
-    An enum for the available mamba types for the MLP layer.
-    """
-
-    mamba = "m"
-    mamba2_discrete = "m2d"
-    mamba2 = "m2"
-    transformer = "t"
-
-    def get_mixer_class(self):
-        if self == SSMBlockType.mamba:
-            from fast_llm.layers.ssm.mamba import Mamba
-
-            return Mamba
-        elif self == SSMBlockType.mamba2:
-            from fast_llm.layers.ssm.mamba2 import Mamba2
-
-            return Mamba2
-        elif self == SSMBlockType.mamba2_discrete:
-            from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-
-            return DiscreteMamba2
-        else:
-            raise NotImplementedError(self)
-
-
-class DTInitType(enum.StrEnum):
-    constant = "constant"
-    random = "random"
 
 
 @config_class()

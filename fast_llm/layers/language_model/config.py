@@ -1,12 +1,12 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import BaseModelConfig, Preprocessor
+from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, Preprocessor
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockLayerConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
@@ -42,7 +42,7 @@ class LanguageModelKwargs(BlockKwargs):
 
 
 @config_class()
-class LanguageModelEmbeddingsConfig(BlockLayerConfig):
+class LanguageModelEmbeddingsConfig(BlockConfig):
     _abstract = False
     word_embeddings: ParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
@@ -51,6 +51,12 @@ class LanguageModelEmbeddingsConfig(BlockLayerConfig):
     position_embeddings: OptionalParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
+    )
+    hidden_size: int = Field(
+        default=1024,
+        desc="Size of the model's main hidden dimension, e.g., for its input and output layers.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
     vocab_size: int = Field(
         default=49152,
@@ -72,7 +78,7 @@ class LanguageModelEmbeddingsConfig(BlockLayerConfig):
     )
     full_precision_residual: bool = Field(
         default=False,
-        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        desc="Store the residuals for the model in full precision (`optimization_dtype`).",
         hint=FieldHint.stability,
     )
 
@@ -104,7 +110,7 @@ class LanguageModelEmbeddingsConfig(BlockLayerConfig):
 
 
 @config_class()
-class LanguageModelHeadConfig(BlockLayerConfig):
+class LanguageModelHeadConfig(BlockConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
         desc="Configuration for the final normalization layer.",
@@ -234,7 +240,36 @@ class LanguageModelHeadConfig(BlockLayerConfig):
 
         return preprocessors
 
-    def get_layer(
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        loss_defs = []
+        if self.logit_z_loss:
+            LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=count)
+
+        if self.enable_dpo:
+            loss_defs.append(LossDef(name=LanguageModelLossNames.dpo_loss, formatted_name="dpo loss", count=count))
+
+        if self.distillation_model is not None:
+            loss_defs.append(
+                LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=count)
+            )
+            if self.language_model_loss_factor > 0.0:
+                loss_defs.append(
+                    LossDef(
+                        name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=count
+                    )
+                )
+
+        for i in range(self.prediction_heads):
+            loss_defs.append(
+                LossDef(
+                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
+                    formatted_name=f"language model loss {i}",
+                    count=count,
+                )
+            )
+        return loss_defs
+
+    def get_block(
         self,
         distributed_config: DistributedConfig,
         embeddings_config: LanguageModelEmbeddingsConfig,
@@ -254,12 +289,49 @@ class LanguageModelHeadConfig(BlockLayerConfig):
             prediction_distance=prediction_distance,
         )
 
+    def get_blocks(
+        self,
+        distributed_config: DistributedConfig,
+        embeddings_config: LanguageModelEmbeddingsConfig,
+        mtp_block_config: BlockConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+    ):
+        blocks = []
+        for i in range(self.prediction_heads):
+            if i > 0:
+                blocks.append(
+                    mtp_block_config.get_block(
+                        distributed_config,
+                        hidden_dim=hidden_dim,
+                        lr_scale=lr_scale,
+                        peft=peft,
+                        # The last block only returns the model output.
+                        # The previous blocks return a stack of shared_hidden and transformer_output.
+                        return_input=i < self.prediction_heads - 1,
+                    )
+                )
+            blocks.append(
+                self.get_block(
+                    distributed_config,
+                    embeddings_config,
+                    hidden_dim=hidden_dim,
+                    lr_scale=lr_scale,
+                    peft=peft,
+                    prediction_distance=i,
+                )
+            )
+        return blocks
 
+
+# TODO: `BlockSequenceConfig`? (interface not fully compatible)
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
     # TODO: block
-    transformer: BlockConfig = Field(
-        desc="Configuration for the transformer architecture.",
+    decoder: BlockSequenceConfig = Field(
+        desc="Configuration for the language model decoder.",
         hint=FieldHint.architecture,
     )
     embeddings_layer: LanguageModelEmbeddingsConfig = Field()
@@ -292,9 +364,61 @@ class LanguageModelBaseConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
         return super().from_flat_dict(default, strict)
 
+    def __len__(self) -> int:
+        return len(self.decoder) + 2 * self.output_layer.prediction_heads
+
+    def __getitem__(self, index: int) -> BlockConfig:
+        if index <= 0:
+            Assert.eq(index, 0)
+            return self.embeddings_layer
+        elif index <= len(self.decoder):
+            return self.decoder[index - 1]
+        else:
+            # Start at the last decoder layer so all MTP heads are treated similarly.
+            index - len(self.decoder)
+            return self.embeddings_layer
+
     def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
         return (
             self.embeddings_layer.get_preprocessors(distributed_config)
-            + self.transformer.get_preprocessors(distributed_config)
+            + self.decoder.get_preprocessors(distributed_config)
             + self.output_layer.get_preprocessors(distributed_config)
         )
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return (
+            self.embeddings_layer.get_loss_definitions(count)
+            + self.decoder.get_loss_definitions(count)
+            + self.output_layer.get_loss_definitions(count)
+        )
+
+    def get_blocks(self, distributed_config: DistributedConfig):
+        hidden_dim = TensorDim("hidden", self.embeddings_layer.hidden_size)
+        return [
+            self.embeddings_layer.get_block(
+                distributed_config,
+                hidden_dim=hidden_dim,
+                lr_scale=None,
+                peft=self.peft,
+            ),
+            *[
+                self.decoder[i].get_block(
+                    distributed_config,
+                    hidden_dim,
+                    lr_scale=None,
+                    peft=self.peft,
+                    # The last layer only returns the transformer output.
+                    # The previous layers return a stack of shared_hidden and transformer_output.
+                    return_input=self.output_layer.prediction_heads > 1 and i == len(self.decoder) - 1,
+                )
+                for i in range(len(self.decoder))
+            ],
+            *self.output_layer.get_blocks(
+                distributed_config,
+                self.embeddings_layer,
+                self.decoder[len(self.decoder) - 1],
+                hidden_dim=hidden_dim,
+                lr_scale=None,
+                peft=self.peft,
+            ),
+        ]

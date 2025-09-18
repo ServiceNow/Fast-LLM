@@ -232,7 +232,7 @@ Continuing our `AwesomeModel` handler example, we define:
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
         # The set of converters may depend on the base model configuration, which is accessible through `self._model.base_model_config`.
-        num_layers = self._model.config.base_model.transformer.num_layers
+        num_layers = len(self._model.config.base_model.decoder)
 
         # A simple renaming example, for the word embeddings.
         converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))

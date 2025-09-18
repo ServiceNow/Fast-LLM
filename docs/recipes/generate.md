@@ -21,12 +21,12 @@ Below is a step-by-step example of how to generate text using a Fast-LLM model c
 import huggingface_hub
 from transformers import AutoTokenizer
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
-from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat
+from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
 # Specify model and configuration
 model = "HuggingFaceTB/SmolLM2-135M-Instruct"
-checkpoint_format = LlamaGPTHuggingfaceCheckpointFormat
+checkpoint_format = LlamaCheckpointFormat
 max_new_tokens = 50
 
 # Download model checkpoint from the Hugging Face Hub to a local directory

@@ -783,11 +783,12 @@ class Config(metaclass=ConfigMeta):
 
         try:
             actual_cls = cls.get_subclass(default.get("type"))
-            if actual_cls is not None and actual_cls is not cls:
-                return actual_cls._from_dict(default, strict=strict, flat=flat)
         except KeyError:
-            # Postpone error to validation.
-            pass
+            # Try to postpone error to validation.
+            actual_cls = cls
+
+        if actual_cls is not None and actual_cls is not cls:
+            return actual_cls._from_dict(default, strict=strict, flat=flat)
 
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():

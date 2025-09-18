@@ -162,11 +162,13 @@ def test_lm_head(
 ):
     config = GPTBaseModelConfig.from_dict(
         {
-            "transformer": {
-                "hidden_size": HIDDEN_SIZE,
-                "num_layers": 0,
+            "decoder": {
+                "num_blocks": 0,
             },
-            "embeddings_layer": {"vocab_size": VOCAB_SIZE},
+            "embeddings_layer": {
+                "vocab_size": VOCAB_SIZE,
+                "hidden_size": HIDDEN_SIZE,
+            },
             "output_layer": {
                 "cross_entropy_implementation": cross_entropy_impl,
                 "normalization": {"type": "rms_norm"},
@@ -239,7 +241,7 @@ def test_lm_head(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
             )
-            .normal_(config.transformer.hidden_size**-0.5)
+            .normal_(config.embeddings_layer.hidden_size**-0.5)
             .requires_grad_(True)
         )
         kwargs[WORD_EMBEDDINGS_WEIGHT if config.output_layer.tied_weight else OUTPUT_WEIGHTS] = logit_weight

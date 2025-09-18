@@ -1,8 +1,8 @@
 import typing
 
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
-from fast_llm.layers.block.config import BlockConfig
-from fast_llm.layers.block.mlp.config import MoEMLPConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
 
 
 def get_init_megatron(
-    meta: "ParameterMeta", config: BlockConfig
+    meta: "ParameterMeta", config: DecoderBlockConfig, hidden_size: int
 ) -> typing.Callable[["torch.Tensor", "Distributed"], None]:
     def init_megatron(tensor: "torch.Tensor", distributed: "Distributed") -> None:
         Assert.eq(distributed.config.world_size, 1)
@@ -22,13 +22,13 @@ def get_init_megatron(
             # Generator unused.
             return meta.param_init_method(meta, tensor, distributed.tp_init_generator)
         if "query" in meta.tensor_name or "key_value" in meta.tensor_name or "dense" in meta.tensor_name:
-            tensor_ = _init_attention_megatron(config, meta, tensor, distributed)
+            tensor_ = _init_attention_megatron(config, meta, tensor, distributed, hidden_size)
         elif "position_embeddings" in meta.tensor_name:
             tensor_ = _init_position_embeddings_megatron(meta, tensor, distributed)
         elif "mlp.router.weight" in meta.tensor_name:
             tensor_ = _init_moe_router_megatron(meta, tensor, distributed)
         elif isinstance(config.mlp, MoEMLPConfig) and config.mlp.experts > 1 and "mlp.layer_" in meta.tensor_name:
-            tensor_ = _init_moe_mlp_megatron(config, meta, tensor, distributed)
+            tensor_ = _init_moe_mlp_megatron(config, meta, tensor, distributed, hidden_size)
         elif "mlp.layer_2" in meta.tensor_name:
             tensor_ = _init_transposed_mlp_weight_megatron(meta, tensor, distributed)
         else:
@@ -51,7 +51,11 @@ def set_megatron_distributed_seeds(config: "DistributedConfig") -> None:
 
 
 def _init_attention_megatron(
-    config: BlockConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    config: DecoderBlockConfig,
+    meta: "ParameterMeta",
+    tensor: "torch.Tensor",
+    distributed: "Distributed",
+    hidden_size: int,
 ) -> "torch.Tensor":
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
@@ -63,7 +67,7 @@ def _init_attention_megatron(
         meta,
         dense_tensor_ := tensor.new_empty(
             config.mixer.head_size * config.mixer.heads,
-            config.hidden_size,
+            hidden_size,
         ),
         generator,
     )
@@ -75,7 +79,7 @@ def _init_attention_megatron(
             config.mixer.head_groups,
             heads_per_group + 2,
             config.mixer.head_size,
-            config.hidden_size,
+            hidden_size,
         ),
         generator,
     )
@@ -141,19 +145,23 @@ def _init_moe_router_megatron(
 
 
 def _init_moe_mlp_megatron(
-    config: BlockConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    config: DecoderBlockConfig,
+    meta: "ParameterMeta",
+    tensor: "torch.Tensor",
+    distributed: "Distributed",
+    hidden_size: int,
 ) -> "torch.Tensor":
     assert meta.param_init_method is not None
     generator = distributed.tp_init_generator if meta.is_tensor_parallel else distributed.pp_init_generator
     # self.param_init_method(self, tensor, generator)
     state = generator.get_state()
     weight_1 = tensor.new_empty(
-        config.mlp.experts * (1 + config.mlp.gated) * config.mlp.intermediate_size, config.hidden_size
+        config.mlp.experts * (1 + config.mlp.gated) * config.mlp.intermediate_size, hidden_size
     )
-    weight_2 = tensor.new_empty(config.mlp.experts * config.mlp.intermediate_size, config.hidden_size)
+    weight_2 = tensor.new_empty(config.mlp.experts * config.mlp.intermediate_size, hidden_size)
     for chunk_1, chunk_2 in zip(weight_1.chunk(config.mlp.experts), weight_2.chunk(config.mlp.experts)):
         meta.param_init_method(meta, chunk_1, generator)
-        chunk_2_ = chunk_2.new_empty(config.hidden_size, config.mlp.intermediate_size)
+        chunk_2_ = chunk_2.new_empty(hidden_size, config.mlp.intermediate_size)
         meta.param_init_method(meta, chunk_2_, generator)
         chunk_2.copy_(chunk_2_.t())
     if "layer_1.weight" in meta.tensor_name:

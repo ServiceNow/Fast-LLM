@@ -6,21 +6,47 @@ import typing
 
 import safetensors
 import torch
-from transformers.configuration_utils import PretrainedConfig
 
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
-from fast_llm.engine.checkpoint.external import (
-    ConstantExportParamConverter,
-    ExternalStateDictCheckpointHandler,
-    ParamConverter,
-    logger,
-)
-from fast_llm.engine.multi_stage.config import CheckpointMetadata
+from fast_llm.engine.checkpoint.external import ExternalStateDictCheckpointHandler, WeightConverter, logger
+from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, safe_merge_dicts
+
+if typing.TYPE_CHECKING:
+    import transformers
+
+
+class HuggingFaceBaseModelConverter:
+    @classmethod
+    @abc.abstractmethod
+    def import_config(cls, config: dict) -> dict:
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def export_config(cls, config: BaseModelConfig) -> dict:
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
+        pass
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
+    architecture: typing.ClassVar[str]
+    base_model_converter_class: typing.ClassVar[type[HuggingFaceBaseModelConverter]]
+
+    @classmethod
+    @abc.abstractmethod
+    def get_transformers_configuration_class(cls) -> type["transformers.PretrainedConfig"]:
+        pass
+
+    @classmethod
+    def get_model_files(cls) -> tuple[str | None, str | None, str | None]:
+        return None, None, None
 
     @classmethod
     def _save_serialized_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
@@ -35,7 +61,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         )
 
     def _serialize_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
-        huggingface_config = self._export_config(self._model.config.base_model)
+        huggingface_config = self._export_config(self._model.config)
         self._save_config(config.path, huggingface_config)
         return {
             "fast_llm_metadata": metadata.to_dict(),
@@ -49,6 +75,20 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
         super().load(config)
 
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
+        super().save(config, metadata)
+        # Copy the modeling files to the output directory
+        modeling_file, configuration_file, generation_utils_file = self.get_model_files()
+        if configuration_file is not None:
+            shutil.copy(configuration_file, config.path)
+        if modeling_file is not None:
+            shutil.copy(modeling_file, config.path)
+        if generation_utils_file is not None:
+            shutil.copy(generation_utils_file, config.path)
+            gen_config = pathlib.Path(generation_utils_file).parent / "generation_config.json"
+            if gen_config.exists():
+                shutil.copy(gen_config, config.path)
+
     @classmethod
     def get_huggingface_model_type(self) -> str:
         # We assume the two names match, but derived classes can make it different.
@@ -59,28 +99,37 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         Assert.eq(shard_name, "weights")
         return parameter_name
 
-    @classmethod
-    @abc.abstractmethod
-    def _create_config_converters(cls) -> list[ParamConverter]:
-        return [
-            ConstantExportParamConverter(
-                export_names=(("model_type",),), export_value=cls.get_huggingface_model_type()
-            )
-        ]
-
+    # Use custom config instead of relying on the transformers library
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
-        import transformers
-
-        config = transformers.AutoConfig.from_pretrained(directory).to_dict()
+        config = cls.get_transformers_configuration_class().from_pretrained(directory).to_dict()
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
 
     @classmethod
     def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
-        import transformers
+        cls.get_transformers_configuration_class().from_dict(config).save_pretrained(directory)
 
-        transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
+    @classmethod
+    def _export_config(cls, config: FastLLMModelConfig) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            cls.base_model_converter_class.export_config(config.base_model),
+            {
+                "model_type": cls.get_huggingface_model_type(),
+                "architecture": cls.architecture,
+            },
+        )
+
+    @classmethod
+    def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        Assert.eq(config["architecture"], cls.architecture)
+        return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
+
+    def _create_weight_converters(
+        self,
+    ) -> list[WeightConverter]:
+        return self.base_model_converter_class.get_converters(self._model.config.base_model)
 
     def _load_weights(
         self, config: CheckpointLoadConfig, device
@@ -123,39 +172,3 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                 yield from torch.load(path)
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")
-
-
-class CustomModelingExportMixin:
-    """
-    Mixin class for HuggingfaceStateDictCheckpointHandler to handle custom modeling files.
-    """
-
-    modeling_file: typing.ClassVar[str]
-    configuration_file: typing.ClassVar[str]
-    configuration_cls: typing.ClassVar[type[PretrainedConfig]]
-    generation_utils_file: str | None = None
-
-    # Use custom config instead of relying on the transformers library
-    @classmethod
-    def _load_config(cls, directory: pathlib.Path | str) -> dict:
-        config = cls.configuration_cls.from_pretrained(directory).to_dict()
-        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
-        return config
-
-    @classmethod
-    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
-        cls.configuration_cls.from_dict(config).save_pretrained(directory)
-
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
-        super().save(config, metadata)
-        self._copy_modeling_files(config)
-
-    def _copy_modeling_files(self, config: CheckpointSaveConfig) -> None:
-        # Copy the modeling files to the output directory
-        shutil.copy(self.modeling_file, config.path)
-        shutil.copy(self.configuration_file, config.path)
-        if self.generation_utils_file:
-            shutil.copy(self.generation_utils_file, config.path)
-            gen_config = pathlib.Path(self.generation_utils_file).parent / "generation_config.json"
-            if gen_config.exists():
-                shutil.copy(gen_config, config.path)

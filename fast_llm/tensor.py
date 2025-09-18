@@ -198,12 +198,12 @@ class TensorMeta(torch.Tensor):
         assert not self._reductions
         if tensor.ndim == 0:
             tensor = tensor[None]
-        Assert.eq(tensor.shape, self.global_shape)
+        Assert.eq(tensor.shape, self.global_shape, msg=self)
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
             tensor = tensor_dim.global_to_local(tensor, dim)
 
-        Assert.eq(tensor.shape, self.shape)
+        Assert.eq(tensor.shape, self.shape, msg=self)
         return tensor
 
     @classmethod

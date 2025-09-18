@@ -6,7 +6,6 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
 from fast_llm.core.ops import split_op
-from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
@@ -16,7 +15,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, T
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
-from fast_llm.layers.block.block import BlockLayerBase
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[ConfigType], Layer):
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -53,13 +52,17 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
         lr_scale: float | None,
         peft: PeftConfig | None,
         prediction_distance: int,
+        return_input: bool = False,
     ):
+        if return_input:
+            raise NotImplementedError()
         super().__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_input=return_input,
         )
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -179,7 +182,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
                     if self._sequence_parallel_logits
                     else TensorDim(BlockDimNames.sequence_q, dims[sequence_index].global_size)
                 )
-                meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
+                meta = TensorMeta.from_dims(tuple(dims), tensor_name="hidden_state", dtype=ln_output.dtype)
                 hidden_state, _ = meta.local_to_global(ln_output.detach())
                 kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
 

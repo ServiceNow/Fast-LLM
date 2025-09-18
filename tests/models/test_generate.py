@@ -7,7 +7,8 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
-from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
+from fast_llm.models.gpt.config import PretrainedGPTModelConfig
+from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
@@ -55,14 +56,14 @@ def _get_hf_model(model_path: str, use_flash_attention: bool, use_bf16: bool):
 
 
 def _get_fast_llm_model(
-    model_path: str, use_flash_attention: bool, use_bf16: bool, checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat
+    model_path: str, use_flash_attention: bool, use_bf16: bool, checkpoint_format=LlamaCheckpointFormat
 ):
     updates = {}
     if use_flash_attention:
-        updates[("base_model", "transformer", "use_flash_attention")] = True
+        updates[("base_model", "decoder", "block", "mixer", "use_flash_attention")] = True
         updates[("distributed", "training_dtype")] = "bf16"
     else:
-        updates[("base_model", "transformer", "use_flash_attention")] = False
+        updates[("base_model", "decoder", "block", "mixer", "use_flash_attention")] = False
         if use_bf16:
             updates[("distributed", "training_dtype")] = "bf16"
     return HuggingfaceGPTModelForCausalLM.from_pretrained(
@@ -76,7 +77,7 @@ def _get_fast_llm_model(
 
 
 def _get_fast_llm_model_from_model(
-    model_path: str, use_flash_attention: bool, use_bf16: bool, checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat
+    model_path: str, use_flash_attention: bool, use_bf16: bool, checkpoint_format=LlamaCheckpointFormat
 ):
     updates = {
         ("pretrained", "path"): model_path,
@@ -85,10 +86,10 @@ def _get_fast_llm_model_from_model(
     }
 
     if use_flash_attention:
-        updates[("model", "base_model", "transformer", "use_flash_attention")] = True
+        updates[("model", "base_model", "decoder", "block", "mixer", "use_flash_attention")] = True
         updates[("model", "distributed", "training_dtype")] = "bf16"
     else:
-        updates[("model", "base_model", "transformer", "use_flash_attention")] = False
+        updates[("model", "base_model", "decoder", "block", "mixer", "use_flash_attention")] = False
         if use_bf16:
             updates[("model", "distributed", "training_dtype")] = "bf16"
 
@@ -227,7 +228,7 @@ def test_generate(
 ):
     _test_generate(
         model_path,
-        LlamaGPTHuggingfaceCheckpointFormat,
+        LlamaCheckpointFormat,
         use_flash_attention,
         use_bf16,
         max_new_tokens,
@@ -311,9 +312,7 @@ def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
 def test_generate_from_model(
     model_path,
 ):
-    _test_generate_from_model(
-        model_path, AutoTokenizer.from_pretrained(model_path), LlamaGPTHuggingfaceCheckpointFormat
-    )
+    _test_generate_from_model(model_path, AutoTokenizer.from_pretrained(model_path), LlamaCheckpointFormat)
 
 
 @requires_cuda
@@ -353,16 +352,14 @@ def _test_forward_return_hidden_states(
     )
 
     # hidden_states include embeddings layer
-    assert (
-        len(res_fast_llm.hidden_states) - 1 == fast_llm_model.config.fast_llm_config.base_model.transformer.num_layers
-    )
+    assert len(res_fast_llm.hidden_states) - 1 == len(fast_llm_model.config.fast_llm_config.base_model.decoder)
 
 
 @pytest.mark.extra_slow
 @requires_cuda
 def test_forward_return_hidden_states(model_path):
     _test_forward_return_hidden_states(
-        model_path, LlamaGPTHuggingfaceCheckpointFormat, AutoTokenizer.from_pretrained(model_path).vocab_size
+        model_path, LlamaCheckpointFormat, AutoTokenizer.from_pretrained(model_path).vocab_size
     )
 
 

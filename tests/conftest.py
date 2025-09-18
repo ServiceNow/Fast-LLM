@@ -34,6 +34,10 @@ from tests.utils.run_test_script import (  # isort: skip
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
 from tests.utils.utils import result_path, format_resource_report, report_subtest  # isort: skip
 
+# Import all dynamic classes.
+import fast_llm.cli  # isort: skip
+
+
 logger = logging.getLogger(__name__)
 
 manager: DependencyManager | None = None

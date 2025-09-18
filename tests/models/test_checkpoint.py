@@ -119,31 +119,38 @@ def test_conversion(model_testing_config, run_conversion, get_convert_path):
         DistributedCheckpointFormat,
         FastLLMCheckpointFormat,
     )
-    run_conversion(
-        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
-        FastLLMCheckpointFormat,
-        model_testing_config.checkpoint_format,
-    )
-    run_conversion(
-        get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat),
-        model_testing_config.checkpoint_format,
-        DistributedCheckpointFormat,
-    )
-    run_conversion(
-        get_convert_path(),
-        DistributedCheckpointFormat,
-        model_testing_config.checkpoint_format,
-    )
-    run_conversion(
-        get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat),
-        model_testing_config.checkpoint_format,
-        FastLLMCheckpointFormat,
-    )
-    run_conversion(
-        get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format),
-        FastLLMCheckpointFormat,
-        DistributedCheckpointFormat,
-    )
+    if model_testing_config.checkpoint_format is None:
+        run_conversion(
+            get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
+            FastLLMCheckpointFormat,
+            DistributedCheckpointFormat,
+        )
+    else:
+        run_conversion(
+            get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
+            FastLLMCheckpointFormat,
+            model_testing_config.checkpoint_format,
+        )
+        run_conversion(
+            get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat),
+            model_testing_config.checkpoint_format,
+            DistributedCheckpointFormat,
+        )
+        run_conversion(
+            get_convert_path(),
+            DistributedCheckpointFormat,
+            model_testing_config.checkpoint_format,
+        )
+        run_conversion(
+            get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat),
+            model_testing_config.checkpoint_format,
+            FastLLMCheckpointFormat,
+        )
+        run_conversion(
+            get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format),
+            FastLLMCheckpointFormat,
+            DistributedCheckpointFormat,
+        )
 
 
 def _compare_safetensor_files(
@@ -170,20 +177,29 @@ def _compare_safetensor_files(
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_round_trip(model_testing_config, get_convert_path):
     # Test that the various possible conversion paths yield identical results.
-    _compare_safetensor_files(
-        get_convert_path() / "rank_0.safetensors",
-        get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
-        get_convert_path(DistributedCheckpointFormat, model_testing_config.checkpoint_format) / "rank_0.safetensors",
-        expected_keys={_WEIGHT_SHARD_SAVE_NAME},
-    )
-    _compare_safetensor_files(
-        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / "model_0.safetensors",
-        get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format) / "model_0.safetensors",
-    )
-    _compare_safetensor_files(
-        get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat) / "model_0.safetensors",
-        get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat) / "model_0.safetensors",
-    )
+    if model_testing_config.checkpoint_format is None:
+        _compare_safetensor_files(
+            get_convert_path() / "rank_0.safetensors",
+            get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
+            expected_keys={_WEIGHT_SHARD_SAVE_NAME},
+        )
+    else:
+        _compare_safetensor_files(
+            get_convert_path() / "rank_0.safetensors",
+            get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
+            get_convert_path(DistributedCheckpointFormat, model_testing_config.checkpoint_format)
+            / "rank_0.safetensors",
+            expected_keys={_WEIGHT_SHARD_SAVE_NAME},
+        )
+        _compare_safetensor_files(
+            get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / "model_0.safetensors",
+            get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format) / "model_0.safetensors",
+        )
+        _compare_safetensor_files(
+            get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat)
+            / "model_0.safetensors",
+            get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat) / "model_0.safetensors",
+        )
 
 
 def _compare_model_configs(config_ref: FastLLMModelConfig, config_test: FastLLMModelConfig):
@@ -223,6 +239,24 @@ def test_load_pretrained(
     reference_config = model_testing_config.model_config_class.from_dict(
         yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
     )
+    reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
+        _WEIGHT_SHARD_SAVE_NAME
+    ]
+    load_and_compare_checkpoints(
+        FastLLMCheckpointFormat,
+        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
+        reference_config,
+        reference_shard,
+    )
+    if model_testing_config.checkpoint_format is None:
+        load_and_compare_checkpoints(
+            DistributedCheckpointFormat,
+            get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat),
+            reference_config,
+            reference_shard,
+        )
+        return
+
     reference_config_from_hf = model_testing_config.model_config_class.from_dict(
         {
             "base_model": yaml.safe_load(
@@ -233,10 +267,6 @@ def test_load_pretrained(
         }
     )
     _compare_architectures(reference_config, reference_config_from_hf)
-
-    reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
-        _WEIGHT_SHARD_SAVE_NAME
-    ]
 
     load_and_compare_checkpoints(DistributedCheckpointFormat, get_convert_path(), reference_config, reference_shard)
 
@@ -253,12 +283,6 @@ def test_load_pretrained(
         reference_shard,
     )
 
-    load_and_compare_checkpoints(
-        FastLLMCheckpointFormat,
-        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
-        reference_config,
-        reference_shard,
-    )
     load_and_compare_checkpoints(
         FastLLMCheckpointFormat,
         get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format),
@@ -284,6 +308,8 @@ def test_load_pretrained(
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_huggingface_model(model_testing_config, get_convert_path):
+    if model_testing_config.checkpoint_format is None:
+        return
     # Test that Fast-LLM's Hugging Face wrapper produces the same results as the converted Hugging Face model.
     # TODO: Stress the importance of this test as the main correctness test for most models.
     # TODO: Review test. Move to test_generate?
@@ -354,7 +380,8 @@ def test_save_and_load_in_parallel(run_distributed_script, run_test_script_base_
     import tests.models.distributed_test_checkpoint
 
     script = [
-        tests.models.distributed_test_checkpoint.__file__,
+        "-m",
+        tests.models.distributed_test_checkpoint.__name__,
         str(run_test_script_base_path),
         model_testing_config.name,
     ]
@@ -388,6 +415,11 @@ def test_load_parallel_checkpoint_in_single_gpu(
     reference_distributed_shard,
     report_subtest,
 ):
+    if (
+        model_testing_config.checkpoint_format is None
+        and distributed_save_load_config.load_format == "{checkpoint_format}"
+    ):
+        return
     # This should only happen when test is skipped (failed dependency).
     assert reference_distributed_shard is not None
     distributed_save_load_config = distributed_save_load_config.resolve(
@@ -416,11 +448,8 @@ def test_parallel_checkpoint_consistency(model_testing_config, run_test_script_b
                     .resolve(base_path=run_test_script_base_path, model_testing_config=model_testing_config)
                     .save_path
                     / f"{DistributedCheckpointFormat.name}/rank_{rank}.safetensors"
-                    for format_ in (
-                        DistributedCheckpointFormat.name,
-                        FastLLMCheckpointFormat.name,
-                        "{checkpoint_format}",
-                    )
+                    for format_ in (DistributedCheckpointFormat.name, FastLLMCheckpointFormat.name)
+                    + (() if model_testing_config.checkpoint_format is None else ("{checkpoint_format}",))
                 ]
             )
 
