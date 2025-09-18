@@ -246,7 +246,7 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         ssm_state_size = config.ssm_cfg["d_state"]
         self.conv_kernel_size = conv_kernel_size = config.ssm_cfg["d_conv"]
         self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
-        self.num_C_head = intermediate_size // ssm_state_size  # mamba2
+        self.num_C_head = intermediate_size // ssm_state_size  # Mamba
         assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
         self.head_d = intermediate_size // self.n_qk_heads
         self.conv_states = []
@@ -816,34 +816,29 @@ class MambaRMSNormGated(torch.nn.Module):
         )
 
 
-class NemotronHMamba2Mixer(nn.Module):
+class Mamba2(nn.Module):
     """
-    From https://huggingface.co/nvidia/Nemotron-H-8B-Base-8K/blob/main/modeling_nemotron_h.py.
-    Compute ∆, A, B, C, and D the state space parameters and compute the `contextualized_states`.
-    A, D are input independent (see Mamba paper [1] Section 3.5.2 "Interpretation of A" for why A isn't selective)
-    ∆, B, C are input-dependent (this is a key difference between Mamba and the linear time invariant S4,
-    and is why Mamba is called **selective** state spaces)
+    Mix of https://huggingface.co/nvidia/Nemotron-H-8B-Base-8K/blob/main/modeling_nemotron_h.py. and https://github.com/jxiw/M1/blob/main/mamba2/hybrid_mamba_layer.py
 
-
-    Note: we assume n_groups = num_heads here, we do not want to share B or C over heads.
-    Why: we mimic GQA here, so sharing B over heads would result in additional complecity which we want to avoid at this point.
-    Note: to reconstruct the architecture of original nemotron-H mixer (but iwth n_groups = num_heads), d_xb needs to be same as d_inner.
+    Note: we assume num_heads=n_groups here, hence we do not share B or C over heads.
+    Why: we use MIL init from a GQA model like this: x -> V, B -> K, C -> Q
     """
 
     def __init__(
         self,
         d_model,
         d_inner,
-        d_xb=None,
+        d_xb=None,  # to mimic GQA, i.e. if we have e.g. 32 heads and 8 kv heads, i.e. 4 GQA groups, then d_xb should be head_dim * 8 (so that we can MIL init B and C from Ks and Vs)
         d_state=16,
         d_conv=4,
-        expand=2,
         head_dim=128,
         layer_norm_epsilon=1e-5,
         conv_bias=True,
         chunk_size=128,
         bias=False,
         layer_idx=None,
+        n_groups=1,
+        # num_heads=128,
         # device=None,
         # dtype=None,
         **kwargs,
@@ -852,10 +847,12 @@ class NemotronHMamba2Mixer(nn.Module):
         self.hidden_size = d_model
         self.ssm_state_size = d_state
         self.conv_kernel_size = d_conv
-        self.expand = expand
-        self.intermediate_size = (
-            d_inner if d_inner is not None else d_model * expand
-        )  # config.mamba_num_heads * config.mamba_head_dim
+        # self.expand = expand
+        # self.intermediate_size = (
+        #     d_inner if d_inner is not None else d_model * expand
+        # )  #
+
+        assert head_dim == d_state, "head_dim must be equal to d_state"
 
         self.d_xb = d_xb if d_xb is not None else self.intermediate_size
         self.layer_idx = layer_idx
@@ -863,42 +860,52 @@ class NemotronHMamba2Mixer(nn.Module):
         self.activation = "silu"
         self.act = nn.SiLU()
         self.head_dim = head_dim
+        self.num_heads = n_groups  # to make sure B and C are same shape, so we have seperate B and C per head  #self.intermediate_size // self.head_dim
+        self.intermediate_size = self.num_heads * head_dim
         assert self.intermediate_size % self.head_dim == 0, "intermediate_size must be divisible by head_dim"
-        self.num_heads = self.intermediate_size // self.head_dim
 
-        # for GQA simulation, where we repeat x and B for each group
-        self.num_xb_heads = self.d_xb // self.head_dim
+        # for GQA simulation, where we repeat x and B for each GQA group
+        self.num_xb_heads = self.d_xb // self.head_dim  # how many heads inside one xb
         assert self.num_heads % self.num_xb_heads == 0, "num_heads must be divisible by num_xb_heads"
-        self.repeat_groups = self.num_heads // self.num_xb_heads
+        self.repeat_xb_groups = self.num_heads // self.num_xb_heads  # num. GQA groups
         if self.d_xb == self.intermediate_size:
-            assert self.repeat_groups == 1
+            assert self.repeat_xb_groups == 1
             logger.warning(
-                f"d_xb == intermediate_size, d_xb: {self.d_xb}, intermediate_size: {self.intermediate_size}, repeat_groups: {self.repeat_groups}"
+                f"d_xb == intermediate_size, d_xb: {self.d_xb}, intermediate_size: {self.intermediate_size}, repeat_groups: {self.repeat_xb_groups}"
             )
 
         self.layer_norm_epsilon = layer_norm_epsilon
+        # nemotron allows for any num_groups, we use the same as num_heads for now, otherwisxe it becomes too complecated with GQA simulation
+        # this would mean we share B and C
+        self.n_groups = (
+            # self.num_heads
+            n_groups
+        )
+        self.chunk_size = chunk_size
 
         logger.warning(
-            f"Instantiating mamba2 with num_heads: {self.num_heads}, head_dim: {self.head_dim}, \n \
+            f"Instantiating Mamba with num_heads: {self.num_heads}, head_dim: {self.head_dim}, \n \
                       intermediate_size: {self.intermediate_size}, \n \
                       d_xb: {self.d_xb}, \n \
                       number_xb_heads: {self.num_xb_heads}, \n \
-                      repeat_groups: {self.repeat_groups}, \n \
-                      d_state: {self.ssm_state_size}"
+                      number_heads: {self.num_heads}, \n \
+                      repeat_groups: {self.repeat_xb_groups}, \n \
+                      d_state: {self.ssm_state_size}, \n \
+                      n_groups: {self.n_groups}"
         )
-
-        self.n_groups = (
-            self.num_heads
-        )  # nemotron allows for any num_groups, we use the same as num_heads for now, otherwisxe it becomes too complecated with GQA simulation
-        self.chunk_size = chunk_size
 
         self.time_step_limit = (0.0, float("inf"))  # hard coded
         # conv is over xBC -- d_xb (head_dim), d_bb (state_dim), d_c (state_dim)
         # self.conv_dim = self.intermediate_size + 2 * self.n_groups * self.ssm_state_size
+        # for B dstate is shared within each group of heads;
+        # with MIL we need to copy k_proj weights into B proj., and B has is ngroups x dstate i M2
+        # so k_proj is 5120 x 1024 (1024/8 = 128 per head) in apriel_thinker
         self.conv_dim = (
-            self.d_xb  # self.num_xb_heads x head_dim
-            + self.num_xb_heads * self.ssm_state_size
-            + self.num_heads * self.ssm_state_size
+            self.d_xb  # self.num_xb_heads x head_dim # x, 1024 for Apriel_thinker, innitialized from v
+            + self.num_xb_heads
+            * self.ssm_state_size  # we disable ngroups in fvour of MIL init. So we will act as if we had seperate B per head;
+            + self.n_groups
+            * self.ssm_state_size  # C # C can be shared accross groups, if group is 1 its shared across all heads
         )
         self.conv1d = nn.Conv1d(
             in_channels=self.conv_dim,
@@ -910,6 +917,7 @@ class NemotronHMamba2Mixer(nn.Module):
         )
 
         # projection of the input hidden states
+        # intermediate_size for the gate x the rest for x, B and C
         projection_size = self.intermediate_size + self.conv_dim  # + self.num_heads
         self.in_proj = nn.Linear(
             self.hidden_size,
@@ -964,9 +972,11 @@ class NemotronHMamba2Mixer(nn.Module):
 
         # Set up dimensions for reshapes later
         batch_size, seq_len, _ = hidden_states.shape
+        self.repeat_xb_groups * self.n_groups * self.ssm_state_size
+        groups_time_state_size = self.n_groups * self.ssm_state_size
         # C dim, note we keep number of groups same as number of heads here
-        head_time_state_size = self.num_heads * self.ssm_state_size
-        num_xb_heads_time_state_size = self.num_xb_heads * self.ssm_state_size
+        # head_time_state_size = self.num_heads * self.ssm_state_size
+        # num_xb_heads_time_state_size = self.num_xb_heads * self.ssm_state_size
 
         # d_mlp = (
         #     projected_states.shape[-1]
@@ -993,27 +1003,29 @@ class NemotronHMamba2Mixer(nn.Module):
 
             hidden_states, B, C = torch.split(
                 hidden_states_B_C,
-                [self.d_xb, num_xb_heads_time_state_size, head_time_state_size],
+                [self.d_xb, self.d_xb, groups_time_state_size],
                 dim=-1,
             )
             # simulate GQA by repeating heads in x,b, x -> v, B -> k, C -> q
             hidden_states = rearrange(
                 hidden_states,
-                "b (local_head_groups head_dim) -> b local_head_groups  head_dim",
+                "b (num_xb_heads head_dim) -> b num_xb_heads  head_dim",
+                l=seq_len,
                 head_dim=self.head_dim,
+                num_xb_heads=self.num_xb_heads,
             )  # x is b x local_head_groups x l x head_dim
             B = rearrange(
                 B,
-                "b (local_head_groups state_size) -> b local_head_groups state_size",
+                "b (xb_groups state_size) -> b xb_groups state_size",
                 state_size=self.ssm_state_size,
             )  # b is b x local_head_groups x l x state_size
             batch, num_key_value_heads, head_dim = hidden_states.shape
             hidden_states = hidden_states[:, :, None, :].expand(
-                batch, num_key_value_heads, self.repeat_groups, head_dim
+                batch, num_key_value_heads, self.repeat_xb_groups, head_dim
             )
-            hidden_states = hidden_states.reshape(batch, num_key_value_heads * self.repeat_groups, head_dim)
-            B = B[:, :, None, :].expand(batch, num_key_value_heads, self.repeat_groups, self.ssm_state_size)
-            B = B.reshape(batch, num_key_value_heads * self.repeat_groups, self.ssm_state_size)
+            hidden_states = hidden_states.reshape(batch, num_key_value_heads * self.repeat_xb_groups, head_dim)
+            B = B[:, :, None, :].expand(batch, num_key_value_heads, self.repeat_xb_groups, self.ssm_state_size)
+            B = B.reshape(batch, num_key_value_heads * self.repeat_xb_groups, self.ssm_state_size)
 
             # 3. SSM transformation z
             A = -torch.exp(self.A_log.float())  # (nheads,)
@@ -1021,7 +1033,9 @@ class NemotronHMamba2Mixer(nn.Module):
             dt = dt[:, :, None].expand(-1, -1, self.head_dim)
             dt_bias = self.dt_bias[:, None, ...].expand(-1, self.head_dim)
             D = self.D[:, None, ...].expand(-1, self.head_dim)
-            C = C.view(batch_size, self.num_heads, self.ssm_state_size)
+            C = rearrange(
+                C, "b (g n) -> b g n", g=self.n_groups
+            )  # C.view(batch_size, self.num_heads, self.ssm_state_size)
             # B = B.view(batch_size, self.n_groups, B.shape[1] // self.n_groups)
             # C = C.view(batch_size, self.n_groups, C.shape[1] // self.n_groups)
             hidden_states_reshaped = hidden_states.view(batch_size, self.num_heads, self.head_dim)
@@ -1105,29 +1119,34 @@ class NemotronHMamba2Mixer(nn.Module):
                 )  # this does not seem to do anything in nemotron
                 hidden_states, B, C = torch.split(
                     hidden_states_B_C,
-                    [self.d_xb, num_xb_heads_time_state_size, head_time_state_size],
+                    [self.d_xb, self.d_xb, groups_time_state_size],
                     dim=-1,
                 )
                 # simulate GQA by repeating heads in x,b, x -> v, B -> k, C -> q
                 hidden_states = rearrange(
                     hidden_states,
-                    "b l (local_head_groups head_dim) -> b local_head_groups l head_dim",
+                    "b l (num_xb_heads head_dim) -> b num_xb_heads l head_dim",
+                    l=seq_len,
                     head_dim=self.head_dim,
+                    num_xb_heads=self.num_xb_heads,
                 )  # x is b x local_head_groups x l x head_dim
                 B = rearrange(
                     B,
-                    "b l (local_head_groups state_size) -> b local_head_groups l state_size",
+                    "b l (xb_groups state_size) -> b xb_groups l state_size",
                     state_size=self.ssm_state_size,
                 )  # b is b x local_head_groups x l x state_size
                 batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+
                 hidden_states = hidden_states[:, :, None, :, :].expand(
-                    batch, num_key_value_heads, self.repeat_groups, slen, head_dim
+                    batch, num_key_value_heads, self.repeat_xb_groups, slen, head_dim
                 )
-                hidden_states = hidden_states.reshape(batch, num_key_value_heads * self.repeat_groups, slen, head_dim)
+                hidden_states = hidden_states.reshape(
+                    batch, num_key_value_heads * self.repeat_xb_groups, slen, head_dim
+                )
                 B = B[:, :, None, :, :].expand(
-                    batch, num_key_value_heads, self.repeat_groups, slen, self.ssm_state_size
+                    batch, num_key_value_heads, self.repeat_xb_groups, slen, self.ssm_state_size
                 )
-                B = B.reshape(batch, num_key_value_heads * self.repeat_groups, slen, self.ssm_state_size)
+                B = B.reshape(batch, num_key_value_heads * self.repeat_xb_groups, slen, self.ssm_state_size)
                 hidden_states = hidden_states.transpose(1, 2).contiguous()
                 B = B.transpose(1, 2).contiguous()
 
@@ -1136,8 +1155,8 @@ class NemotronHMamba2Mixer(nn.Module):
                     hidden_states.view(batch_size, seq_len, -1, self.head_dim),  # (b, s, h, d)
                     dt,  # (b, s, h)
                     A,  # (h)
-                    B.view(batch_size, seq_len, self.num_heads, -1),  # (b, s, n_groups, state)
-                    C.view(batch_size, seq_len, self.num_heads, -1),  # (b, s, n_groups, state)
+                    B.view(batch_size, seq_len, -1, self.ssm_state_size),  # (b, s, n_groups, state)
+                    C.view(batch_size, seq_len, -1, self.ssm_state_size),  # (b, s, n_groups, state)
                     chunk_size=self.chunk_size,
                     D=self.D,
                     z=None,
@@ -1185,7 +1204,7 @@ class NemotronHMamba2Mixer(nn.Module):
         return self.torch_forward(hidden_states, cache_params, cache_position, attention_mask)
 
 
-class Mamba2(nn.Module):
+class Mamba(nn.Module):
     """
     From https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
@@ -1594,7 +1613,7 @@ class AprielSSMDecoderLayer(nn.Module):
 
 
 class AprielSSMM2DecoderLayer(AprielSSMDecoderLayer):
-    _mixer_class = Mamba2
+    _mixer_class = Mamba
 
 
 class AprielHybridIdentity(nn.Module):
@@ -1607,7 +1626,7 @@ class AprielHybridIdentity(nn.Module):
 
 
 class AprielSSMNemotronHM2DecoderLayer(AprielSSMDecoderLayer):
-    _mixer_class = NemotronHMamba2Mixer
+    _mixer_class = Mamba2
 
 
 class AprielThinkerSSMHybridModel(MistralModel):

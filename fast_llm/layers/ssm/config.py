@@ -239,13 +239,13 @@ class SSMConfig(LLMBlockConfig):
     # here instead of setting d_inner, we set head dim. and number of heads
     # Note: we do not implement n_groups for Mamba2, because, sicne we do MiL init, we do not want to share B and C parameters accross heads.
     # Instead, we mimic the GQA behaviour (x -> v, B -> k, C -> q), where x and B are shared accross heads. So this is the same as having n_groups = n_heads?
-    # n_groups: int = Field(
-    #     default=8,
-    #     desc="Number of groups for Mamba2. Allows sharing B and C parameters accross heads.",
-    #     hint=FieldHint.architecture,
-    # )
+    n_groups: int = Field(
+        default=128,
+        desc="Number of groups for Mamba2. Allows sharing B and C parameters accross heads.",
+        hint=FieldHint.architecture,
+    )
     head_dim: int = Field(
-        default=64,
+        default=128,
         desc="Head dimension for Nemotron H",
         hint=FieldHint.architecture,
     )
@@ -265,11 +265,12 @@ class SSMConfig(LLMBlockConfig):
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = num_heads
         elif block_type == SSMBlockType.mamba2:
+            Assert.eq(self.head_dim, self.state_size)  # for MIL init
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = div(self.d_xb, self.state_size)
         elif block_type == SSMBlockType.nemotron_h_mamba2:
             # head dim and state size are not the same
-            num_heads = div(self.d_inner, self.head_dim)
+            num_heads = self.n_groups  # div(self.d_inner, self.head_dim)
             num_head_groups = div(self.d_xb, self.head_dim)
         elif block_type == SSMBlockType.mamba2_discrete:
             # TODO: Use different variables?

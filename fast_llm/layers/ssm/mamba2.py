@@ -293,7 +293,7 @@ class NemotronHMamba2(Mixer):
     This code is adapted from https://huggingface.co/nvidia/Nemotron-H-8B-Base-8K/blob/main/modeling_nemotron_h.py
     """
 
-    _mixer_name: typing.ClassVar[str] = "mamba_2"
+    _mixer_name: typing.ClassVar[str] = "nm_mamba_2"
 
     _XZ_DIMS = (
         TransformerDimNames.batch,

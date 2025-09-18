@@ -236,7 +236,7 @@ def generate_random_cu_seqlens(seq_len, packages_num=2):
         pytest.param(
             partial(NemotronHMamba2, block_index=0),
             ["nm2", "t"],
-            1e-3,  # not 100% sure why, mamba2 requires lower tollerance (maybe its not really supporting packing)
+            1e-4,  # not 100% sure why, mamba2 requires lower tollerance (maybe its not really supporting packing)
             id="nemotron_hmamba2",
         ),
         pytest.param(
