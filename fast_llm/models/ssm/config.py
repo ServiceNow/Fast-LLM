@@ -126,6 +126,16 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
+    def get_inference_runner_class(cls) -> type["HybridSSMInferenceRunner"]:
+        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
+
+        logger.warning(
+            "HybridSSMInferenceRunner only supports training-style forward pass. Use generate with cache disabled."
+        )
+
+        return HybridSSMInferenceRunner
+
+    @classmethod
     def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
@@ -179,13 +189,3 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
                 reference_model.model.base_model.output_layer.prediction_heads,
                 self.model.base_model.output_layer.prediction_heads,
             )
-
-    @classmethod
-    def get_inference_runner_class(cls) -> type["HybridSSMInferenceRunner"]:
-        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
-
-        logger.warning(
-            "HybridSSMInferenceRunner only supports training-style forward pass. Use generate with cache disabled."
-        )
-
-        return HybridSSMInferenceRunner
