@@ -3,8 +3,9 @@ import shutil
 
 import pytest
 
-from tests.utils.dataset import TOKENIZER_PATH, download_santacoder_tokenizer
+from tests.utils.dataset import download_santacoder_tokenizer
 from tests.utils.distributed_configs import DistributedTestingConfig
+from tests.utils.global_variables import TOKENIZER_PATH
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 

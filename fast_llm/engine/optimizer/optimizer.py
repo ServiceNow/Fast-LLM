@@ -19,7 +19,7 @@ def get_grad_scaler(config: GradientScalerConfig, distributed: Distributed) -> "
             initial_scale=config.constant,
             distributed=distributed,
         )
-    elif distributed.config.training_dtype == DataType.float16:
+    elif distributed.config.compute_dtype == DataType.float16:
         return DynamicGradScaler(
             initial_scale=config.initial,
             min_scale=config.minimum,

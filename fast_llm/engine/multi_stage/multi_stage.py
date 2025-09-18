@@ -1,4 +1,3 @@
-import abc
 import dataclasses
 import logging
 import typing
@@ -12,8 +11,8 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
-from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
@@ -26,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
-    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
     _flat_shard: torch.Tensor
@@ -253,11 +251,6 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
         self.train(self._mode.support_backward)
 
-    @abc.abstractmethod
-    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:
-        # TODO: Do in model, automate/generalize, get other stats
-        pass
-
     def _allocate_buffers(
         self, buffer_meta: TensorMeta, sizes: list[int], name: str
     ) -> tuple[tuple[torch.Tensor, ...], int]:
@@ -475,9 +468,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for shard_name in shard_names:
             shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
-            for shard_index, (stage, shard) in enumerate(
-                zip(self._stages_on_device.values(), shard_split, strict=True)
-            ):
+            for shard_index, (stage, shard) in enumerate(zip(self._stages_owned.values(), shard_split, strict=True)):
                 for name, tensor in stage._export_shard(
                     shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
                 ):  # noqa

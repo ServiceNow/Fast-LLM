@@ -11,7 +11,8 @@ from tests.data.common import (
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
-from tests.utils.dataset import DATASET_CACHE, DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_CACHE, DATASET_PREFIX
 
 _DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
 
@@ -43,17 +44,6 @@ GPT_BLENDED_SAMPLES = [
     [207, 4700, 549, 79, 417, 3036],
     [387, 4224, 87, 2713, 423, 324],
     [3036, 253, 207, 2968, 4536, 1178],
-]
-
-GPT_BLENDED_LEGACY_SAMPLES = [
-    [1725, 74, 207, 1635, 4440, 2774],
-    [359, 489, 4266, 2052, 5351, 80],
-    [328, 80, 263, 890, 1797, 88],
-    [374, 7534, 87, 1073, 79, 480],
-    [8008, 498, 71, 727, 80, 315],
-    [2210, 8179, 73, 2582, 897, 1178],
-    [1852, 71, 776, 7878, 7390, 80],
-    [409, 5091, 328, 1378, 5483, 88],
 ]
 
 GPT_BLENDED_MIXED_SAMPLES = [
@@ -143,7 +133,7 @@ def test_gpt_blended_data():
     get_test_data_and_compare_samples(
         {
             "datasets": {
-                "Training": {
+                "training": {
                     "type": "blended",
                     "datasets": [
                         {"type": "memmap", "path": DATASET_PREFIX},
@@ -156,22 +146,6 @@ def test_gpt_blended_data():
         8,
         sequence_length=5,
         expected_samples=GPT_BLENDED_SAMPLES,
-    )
-
-
-def test_gpt_blended_data_legacy():
-    get_test_dataset()
-    _get_test_dataset_mix_1()
-    get_test_data_and_compare_samples(
-        {
-            "format": "list",
-            "path": ["0.75", str(DATASET_PREFIX), "0.25", str(_DATASET_PREFIX_MIX_1)],
-            "split": [1, 0, 0],
-        },
-        8,
-        sequence_length=5,
-        expected_samples=GPT_BLENDED_LEGACY_SAMPLES,
-        legacy=True,
     )
 
 
@@ -197,7 +171,7 @@ def test_gpt_blended_mixed_data():
     get_test_data_and_compare_samples(
         {
             "datasets": {
-                "Training": {
+                "training": {
                     "type": "blended",
                     "datasets": [{"type": "memmap", "path": DATASET_PREFIX}, {"type": "random"}],
                     "weights": [0.6, 0.4],

@@ -24,11 +24,7 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import (
-    GPTMemmapDatasetPreparatorConfig,
-    PromptCompletionConfig,
-    TextColumnConfig,
-)
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -37,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
-    config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
-
     _tokenizer: Tokenizer
     _data_type: DataType
     _text_column: str
@@ -51,30 +45,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         num_tokens = [len(x) for x in input_ids]
         return {
             "input_ids": input_ids,
-            "num_tokens": num_tokens,
-        }
-
-    def _tokenize_prompt_completion_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        """
-        Tokenize prompt and completion columns separately, then concatenate.
-        Returns input_ids, token_spans (prompt len), and num_tokens.
-        """
-        prompt_col = self._config.dataset.source_schema.prompt_column
-        completion_col = self._config.dataset.source_schema.completion_column
-        delimiter = self._config.dataset.source_schema.delimiter
-        input_ids = []
-        token_spans = []
-        for prompt, completion in zip(batch[prompt_col], batch[completion_col]):
-            prompt_tokens = self._tokenizer.tokenize(prompt, begin=True, end=False)
-            completion_tokens = self._tokenizer.tokenize(f"{delimiter}{completion}", begin=False, end=True)
-            combined = prompt_tokens + completion_tokens
-            input_ids.append(np.array(combined, dtype=self._data_type.numpy))
-            token_spans.append(np.array((0, len(prompt_tokens) - 1), dtype=np.int32).reshape(-1, 2))
-
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "token_spans": token_spans,
             "num_tokens": num_tokens,
         }
 
@@ -171,7 +141,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            if "token_spans" in shard_dataset.column_names:
+            if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
                         np.array(item["input_ids"], dtype=self._data_type.numpy),
@@ -317,46 +287,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
         # Set data column and loss masking spans column based on source schema
-        source_schema = self._config.dataset.source_schema
-        if isinstance(source_schema, TextColumnConfig):
-            self._text_column = source_schema.input_column
-            self._loss_masking_spans_column = source_schema.loss_masking_spans_column
-        elif isinstance(source_schema, PromptCompletionConfig):
-            Assert.incl(source_schema.prompt_column, dataset.column_names)
-            Assert.incl(source_schema.completion_column, dataset.column_names)
-            tokenize_fn = self._tokenize_prompt_completion_batch
+        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
+            self._text_column = self._config.dataset.source_schema.input_column
+            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
         else:
             raise ValueError(
                 f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
             )
 
-        # TODO: Add a new schema for preference datasets then drop class vars _loss_masking_spans_column & _text_column
-        if isinstance(source_schema, TextColumnConfig):
-            if self._text_column not in dataset.column_names:
-                raise ValueError(f"Dataset does not have field '{self._text_column}'.")
+        if self._text_column not in dataset.column_names:
+            raise ValueError(f"Dataset does not have field '{self._text_column}'.")
 
-            if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
-                self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
-            ):
-                raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
-            if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
-                raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
+        if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
+            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
+        ):
+            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+        if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
+            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
 
-            # route tokenize function
-            if self._loss_masking_spans_column is not None:
-                if self._loss_masking_spans_column not in dataset.column_names:
-                    raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
-                tokenize_fn = self._tokenize_batch_with_spans
-            elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
-                if self._config.dataset.chosen_text not in dataset.column_names:
-                    raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
-                if self._config.dataset.rejected_text not in dataset.column_names:
-                    raise ValueError(
-                        f"Dataset does not have rejected spans field '{self._config.dataset.rejected_text}'."
-                    )
-                tokenize_fn = self._tokenize_preference_batch_with_spans
-            else:
-                tokenize_fn = self._tokenize_batch
+        # route tokenize function
+        if self._loss_masking_spans_column is not None:
+            if self._loss_masking_spans_column not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
+            tokenize_fn = self._tokenize_batch_with_spans
+        elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+            if self._config.dataset.chosen_text not in dataset.column_names:
+                raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
+            if self._config.dataset.rejected_text not in dataset.column_names:
+                raise ValueError(f"Dataset does not have rejected spans field '{self._config.dataset.rejected_text}'.")
+            tokenize_fn = self._tokenize_preference_batch_with_spans
+        else:
+            tokenize_fn = self._tokenize_batch
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
@@ -368,6 +329,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Calculate total number of tokens
         total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
+
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
         shards = [

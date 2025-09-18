@@ -3,10 +3,11 @@ import dataclasses
 import typing
 
 from fast_llm.config import MISSING, Config, Field, FieldHint, FieldVerboseLevel, config_class
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import compare_nested, log
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.config_utils.tensor_space import TensorSpace
+    import torch
 
 
 @config_class()
@@ -17,9 +18,6 @@ class BaseModelConfig(Config):
     """
 
     _abstract = True
-
-    def setup_tensor_space(self, tensor_space: "TensorSpace") -> None:
-        raise NotImplementedError()
 
     def compare_architecture(
         self,
@@ -64,5 +62,28 @@ class Preprocessor(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         pass
+
+
+@dataclasses.dataclass
+class ResourceUsageConfig:
+    # Disable to get usage for current GPU only
+    global_: bool = True
+    # Enable to get hardware compute, i.e. include redundant computations.
+    hardware: bool = False
+    # Number of backward passes. Typically 1, may be 2 with full activation recomputation.
+    forward: int = 1
+    # Number of backward passes. Typically 1 for training, 0 for inference.
+    backward: int = 1
+
+
+@dataclasses.dataclass()
+class LossDef:
+    # A name for the loss
+    name: str
+    formatted_name: str
+    # The number of times this loss is evaluated by the model for each micro-batch. Used as a denominator for averaging.
+    # TODO: Allow variable count?  Would need a reduction across PP devices.
+    count: int = 1
+    dtype: DataType = DataType.float32

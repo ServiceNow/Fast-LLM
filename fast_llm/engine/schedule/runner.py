@@ -56,15 +56,14 @@ class BatchContext:
 
     def __repr__(self):
         return (
-            f"BatchContext(iteration={self.iteration},"
-            f" batch_len={len(self.batch)},"
+            f"BatchContext(batch_len={len(self.batch)},"
             f" inputs={list(self.inputs)},"
             f" contexts={list(self.contexts)},"
             f" losses={ {key: len(value) for key, value in self.losses.items()}},"
         )
 
 
-class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
+class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
     _compute_stream: torch.cuda.Stream
     _data_stream: torch.cuda.Stream
@@ -94,7 +93,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self._stages: list[Stage] = self._multi_stage.stages
         self._tied_parameters = self._multi_stage.tied_parameters
         self._num_stages = len(self._stages)
-        self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.loss_defs}
+        self._loss_definitions = {
+            loss_definition.name: loss_definition
+            for loss_definition in self._multi_stage.base_model.config.get_loss_definitions()
+        }
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
@@ -149,7 +151,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         context = BatchContext(
             iteration=iteration,
             schedule=schedule,
-            losses={loss_def: [] for loss_def in self._loss_defs},
+            losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
         context.data_iterator = self._preprocess_data(context, data_iterator, preprocessed)
@@ -192,11 +194,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
 
         # Run the steps according to the schedule
         for step in schedule:
-            try:
-                self._train_step(context, step)
-            except Exception as e:
-                # Add debugging information to errors, which may be cryptic outside the forward pass.
-                raise RuntimeError(f"Schedule step {step} failed, context = {context}: {e}")
+            self._train_step(context, step)
 
         # Make sure we used all the data. This also ensures the generator terminates and prevents a memory leak.
         try:
@@ -285,11 +283,13 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         for name, losses in context.losses.items():
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_defs[name].count
+                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_definitions[name].count
                     if self._distributed.data_group:
                         all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
-                    reduced_loss = torch.zeros([1], dtype=self._loss_defs[name].dtype, device=self._distributed.device)
+                    reduced_loss = torch.zeros(
+                        [1], dtype=self._loss_definitions[name].dtype.torch, device=self._distributed.device
+                    )
                 if self._distributed.pipeline_group:
                     all_reduce(reduced_loss, group=self._distributed.pipeline_group)
             else:
@@ -400,7 +400,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             step.recv_event.wait()
             self._record_event(context, EventType.compute_wait_pipe, step)
 
-    def _forward(self, context: BatchContext, step: Step) -> torch.Tensor | None:
+    def _forward(self, context: BatchContext, step: Step) -> None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
             context.batch[step.data_index],

@@ -1,6 +1,5 @@
 import datetime
 import logging
-import typing
 
 import torch
 import torch.distributed
@@ -146,8 +145,6 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     TODO: Clarify cpu support.
     """
 
-    config_class: typing.ClassVar[type[DistributedConfig]] = DistributedConfig
-
     def __init__(self, config: DistributedConfig, use_cpu: bool = False):
         super().__init__(config)
         assert self._config.reference_config is None
@@ -241,7 +238,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     def set_step(self, step: int, phase: PhaseType) -> None:
         """
         Reseed pytorch for a given training step.
-        TODO v0.3: Move unrelated content elsewhere.
+        TODO: Move unrelated content elsewhere.
         """
         seed_shift = step * self._config.sample_seed_shift + self._phase_seeds_shifts[phase]
         self.pp_generator.manual_seed((self._pp_seed + seed_shift) % MAX_SEED)

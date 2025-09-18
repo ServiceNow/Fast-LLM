@@ -25,7 +25,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         self.use_cache = kwargs.pop("use_cache", True)
         super().__init__(**kwargs)
         if self.torch_dtype is not None:
-            assert self.torch_dtype == self.fast_llm_config.distributed.training_dtype.torch
+            assert self.torch_dtype == self.fast_llm_config.distributed.compute_dtype.torch
 
     def save_pretrained(self, save_directory: str | os.PathLike, push_to_hub: bool = False, **kwargs) -> None:
         # Hack the method to save at the right place.
@@ -90,7 +90,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         updates = {}
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:
-            updates[("distributed", "training_dtype")] = torch_dtype
+            updates[("distributed", "compute_dtype")] = torch_dtype
         fast_llm_config = cls.model_config_class.from_metadata(
             pretrained, metadata, default=kwargs.pop("fast_llm_config", None), updates=updates
         )

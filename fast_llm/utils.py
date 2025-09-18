@@ -10,7 +10,6 @@ from typing import Callable
 
 if typing.TYPE_CHECKING:
     import numpy as np
-    import numpy.typing as npt
     import torch
 
 logger = logging.getLogger(__name__)
@@ -94,8 +93,9 @@ class Assert:
 
     @staticmethod
     def eq(x, *args, msg=None):
+        assert args
         for arg in args:
-            assert x == arg, f"{x} != {arg} " + (f"| {msg}" if msg else "")
+            assert x == arg, f"{x} != {arg} " + ("" if msg is None else f"| {msg}")
 
     @staticmethod
     def is_(x, y):
@@ -348,24 +348,6 @@ def check_equal_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
 
 
-def get_lr_scale(
-    lr_scale: float | None | tuple[float | None, ...], layer_lr_scale: float | None
-) -> float | None | tuple[float | None, ...]:
-    """
-    Combine module and layer lr_scale.
-    If one is None, return the other.
-    """
-    if lr_scale is None:
-        return layer_lr_scale
-    if layer_lr_scale is None:
-        return lr_scale
-    if isinstance(lr_scale, float):
-        return lr_scale * layer_lr_scale
-    if isinstance(lr_scale, tuple):
-        return tuple(lrs * layer_lr_scale if lrs is not None else layer_lr_scale for lrs in lr_scale)
-    raise ValueError(f"Invalid lr_scale: {lr_scale} (type {type(lr_scale)})")
-
-
 class Interrupter:
     def __init__(self, enabled: bool = True, signals: typing.Sequence[int] = (signal.SIGINT, signal.SIGTERM)):
         self._enabled = enabled
@@ -476,3 +458,15 @@ def get_and_reset_memory_usage_mib(
         _global_max_reserved = max(max_reserved, _global_max_reserved)
 
     return report
+
+
+def safe_merge_dicts(*dicts) -> dict:
+    out = {}
+    for dict_ in dicts:
+        for key, value in dict_.items():
+            if key in out:
+                if isinstance(value, dict) and isinstance(out[key], dict):
+                    out[key] = safe_merge_dicts(value, out[key])
+                Assert.eq(value, out[key])
+            out[key] = value
+    return out

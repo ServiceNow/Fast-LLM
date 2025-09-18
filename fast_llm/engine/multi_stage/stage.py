@@ -5,9 +5,10 @@ import typing
 import torch
 
 from fast_llm.core.distributed import check_parallel_match
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import StageMode
+from fast_llm.engine.multi_stage.config import StageConfig, StageMode
 from fast_llm.engine.multi_stage.stage_base import StageBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage, log_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, accumulate_gradient
@@ -22,15 +23,13 @@ logger = logging.getLogger(__name__)
 def _accumulate_grad_hook(buffer: torch.nn.Parameter, meta: ParameterMeta) -> typing.Callable[[tuple, tuple], None]:
     def hook(grad_inputs, grad_outputs):  # noqa
         if buffer.grad is not None:
-            if not meta.auto_grad_accumulation:
-                raise RuntimeError(f"Unexpected grad for parameter {meta.tensor_name}")
             accumulate_gradient(buffer, buffer.grad)
             buffer.grad = None
 
     return hook
 
 
-class Stage(StageBase):
+class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
     _is_restored: bool
     _training: bool | None = None
     # TODO: Handle all buffer sharing in multi_stage
@@ -83,6 +82,7 @@ class Stage(StageBase):
 
     def forward_meta(self, input_: TensorMeta, kwargs: dict) -> TensorMeta:
         # Store the meta inputs and outputs, for debugging only.
+        # TODO: Varies if there are multiple schedules.
         self._meta_inputs, self._meta_outputs = [], []
         # TODO: use layer.forward_meta
         for layer in self._layers:
@@ -94,6 +94,17 @@ class Stage(StageBase):
             )
             self._meta_outputs.append(input_)
         return input_
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        total = 0
+        for layer in self._layers:
+            total += layer.get_compute_usage(input_, kwargs, config)
+            input_ = layer(
+                input_,
+                kwargs,
+                losses={},
+            )
+        return total
 
     def forward(
         self,
@@ -123,7 +134,11 @@ class Stage(StageBase):
                 # Last layer does not provide output
                 if output is not None:
                     meta = self._meta_outputs[i]
-                    output_global, _ = meta.local_to_global(output.detach(), distributed=self._distributed)
+                    if output.shape == meta.shape:
+                        output_global, _ = meta.local_to_global(output.detach())
+                    else:
+                        # TODO: Handle variable shape.
+                        output_global = output
                     kwargs["hidden_states"][self._layer_range[i]] = {
                         "layer_type": type(layer).__name__,
                         "tensor": output_global,
@@ -216,11 +231,13 @@ class Stage(StageBase):
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
                 name = f"{name}, ms={kwargs.get('micro_batch_split',0)}/{nms}"
 
+            # Assuming all tensors are either duplicated of parallel in the TP direction.
             log_distributed_tensor(
                 name,
                 output,
                 level=self._config.debug_layer_outputs,
-                distributed=self._distributed,
+                # Assuming all tensors are either duplicated of parallel in the TP direction.
+                duplicate_groups=(self._distributed.tensor_group,),
                 global_=self._config.debug_global_tensors,
                 meta=self._meta_outputs[i],
             )
@@ -250,8 +267,9 @@ class Stage(StageBase):
                 name,
                 input_,
                 level=self._config.debug_layer_gradients,
-                distributed=self._distributed,
                 grad_fn=lambda grad: grad / self._fsdp_size,
+                # Assuming all tensors are either duplicated of parallel in the TP direction.
+                duplicate_groups=(self._distributed.tensor_group,),
                 global_=self._config.debug_global_tensors,
                 meta=self._meta_inputs[i],
             )

@@ -20,8 +20,7 @@ from fast_llm.utils import Assert, div
 logger = logging.getLogger(__name__)
 
 
-class StageBase(Configurable[StageConfig]):
-    config_class: typing.ClassVar[type[StageConfig]] = StageConfig
+class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
     _distributed: Distributed
     _mode: StageMode
 
@@ -185,8 +184,9 @@ class StageBase(Configurable[StageConfig]):
                 # Multi-gpu init may be different because of TP or FSDP (different shape), or PP (not on device)
                 global_shape = meta.global_shape
 
-                if self._distributed_config.reproducible_init and (
-                    global_shape.numel() != parameter.numel() or not self._mode.on_device
+                if meta.requires_global_initialization or (
+                    self._distributed_config.reproducible_init
+                    and (global_shape.numel() != parameter.numel() or not self._mode.on_device)
                 ):
                     # Initialize all global weights on every gpu, then select the appropriate slice if applicable.
                     global_param = parameter.new_empty(global_shape, device=self._distributed.device)
@@ -314,7 +314,7 @@ class StageBase(Configurable[StageConfig]):
         self, shards: tuple[torch.Tensor], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         for fsdp, shard in zip(self._fsdps, shards, strict=True):
-            yield from fsdp.export_shard(shard, self._distributed, data_type)
+            yield from fsdp.export_shard(shard, data_type)
 
     def _get_parameter_metas(self) -> tuple[list[ParameterMeta], list[ParameterMeta]]:
         # Get all the stage parameters,

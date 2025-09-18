@@ -759,57 +759,32 @@ class Config(metaclass=ConfigMeta):
         return cls._from_dict(default, strict)
 
     @classmethod
-    def from_flat_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-    ) -> typing.Self:
-        # TODO v0.3: Remove flat format
-        return cls._from_dict(default, strict, True)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove flat format
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         out_arg_dict = {"_from_dict_check": True}
-
-        # TODO v0.3: Remove backward compatibility fix
-        if "__class__" in default:
-            del default["__class__"]
-
         try:
             actual_cls = cls.get_subclass(default.get("type"))
-            if actual_cls is not None and actual_cls is not cls:
-                return actual_cls._from_dict(default, strict=strict, flat=flat)
         except KeyError:
-            # Postpone error to validation.
-            pass
+            # Try to postpone error to validation.
+            actual_cls = cls
+
+        if actual_cls is not None and actual_cls is not cls:
+            return actual_cls._from_dict(default, strict=strict)
 
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():
             for name, field in cls.fields():
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
-                if flat:
-                    if isinstance(field.type, type) and issubclass(field.type, Config):
-                        out_arg_dict[name] = field.type._from_dict(default, False, True)
-                    elif name in default:
-                        out_arg_dict[name] = default.pop(name)
-                else:
-                    # Check for nested configs to instantiate.
-                    try:
-                        value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
-                        if value is not MISSING:
-                            out_arg_dict[name] = value
-                    except FieldTypeError as e:
-                        raise FieldTypeError(
-                            f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
-                            + ", ".join(e.args)
-                        )
+                # Check for nested configs to instantiate.
+                try:
+                    value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                    if value is not MISSING:
+                        out_arg_dict[name] = value
+                except FieldTypeError as e:
+                    raise FieldTypeError(
+                        f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
+                        + ", ".join(e.args)
+                    )
             out = cls(**out_arg_dict)  # noqa
             if strict and default:
                 out._unknown_fields = default.copy()
@@ -1027,6 +1002,28 @@ class Configurable[ConfigType: Config](abc.ABC):
         self._config = config
         # Handle multiple inheritance.
         super().__init__(*args, **kwargs)
+
+    def __init_subclass__(cls):
+        # Automatically set `config_class` based on the bound type.
+        # Make sure `ConfigType` is bound and respects class hierarchy.
+        try:
+            config_class = None
+            for base in types.get_original_bases(cls):
+                if hasattr(base, "__origin__") and issubclass(base.__origin__, Configurable):
+                    for arg in base.__args__:
+                        if arg.__name__ == "ConfigType":
+                            if config_class is None:
+                                config_class = arg.__bound__
+                            else:
+                                assert arg.__bound__ is config_class
+            assert config_class is not None
+        except Exception as e:
+            raise TypeError(
+                f"Could not determine the configuration class for the configurable class {cls.__name__}: {e.args}. "
+                "Please make sure to declare in the format "
+                f"`class {cls.__name__}[ConfigType: ConfigClass](BaseConfigurable[ConfigType])`.] "
+            )
+        cls.config_class = config_class
 
     @property
     def config(self) -> ConfigType:

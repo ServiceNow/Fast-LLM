@@ -43,8 +43,6 @@ logger = logging.getLogger(__name__)
 
 
 class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[TrainingEvaluatorConfig]] = TrainingEvaluatorConfig
-
     evaluator: Evaluator
 
     def __init__(
@@ -114,7 +112,6 @@ class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigTyp
 
 
 class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
     # TODO: Generalize data, schedule, logging, etc.
     _is_setup: bool = False
     _distributed: Distributed
@@ -152,7 +149,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             multi_stage=self._multi_stage,
             distributed_config=self._config.model.distributed,
         )
-        self._loss_defs = self._multi_stage.base_model.loss_defs
+        self._loss_defs = self._multi_stage.base_model.config.get_loss_definitions()
 
         if not self._is_evaluation_only:
             steps_per_split = {
@@ -400,12 +397,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        model_tflops, hardware_tflops = self._multi_stage.get_tflops(
-                            PhaseType.training,
-                            time_per_iteration,
-                            self._config.batch.batch_size,
-                            self._config.batch.sequence_length,
+                        model_compute, hardware_compute = self._schedule[PhaseType.training][
+                            PhaseType.training.value.lower()
+                        ].compute_usage
+                        model_tflops = math.nan if model_compute is None else model_compute / time_per_iteration
+                        hardware_tflops = (
+                            math.nan if hardware_compute is None else hardware_compute / time_per_iteration
                         )
+
                         metrics_key = PhaseType.training.value
                         metrics[metrics_key] = {
                             "train_iters": self._config.training.train_iters,
@@ -542,7 +541,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def _save_checkpoint(
         self, config: TrainingCheckpointBaseConfig, metrics: dict[str, dict[str, float | int]] | None
     ) -> None:
-        # TODO v0.3: Move barrier, ok file to FastLLMModel
+        # TODO: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
@@ -601,7 +600,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
-        # TODO v0.3: Move barrier, ok file to FastLLMModel
+        # TODO: Move barrier, ok file to FastLLMModel
         safe_barrier(
             self._distributed.world_group,
             f"load {config.save_name} {iteration} exit",

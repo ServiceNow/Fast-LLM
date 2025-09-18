@@ -30,25 +30,6 @@ class SourceSchemaConfig(Config):
     pass
 
 
-@config_class(dynamic_type={SourceSchemaConfig: "prompt_completion"})
-class PromptCompletionConfig(SourceSchemaConfig):
-    prompt_column: str = Field(
-        default="prompt",
-        desc="Field of the dataset to use.",
-        hint=FieldHint.optional,
-    )
-    completion_column: str = Field(
-        default="completion",
-        desc="Field of the dataset to use.",
-        hint=FieldHint.optional,
-    )
-    delimiter: str = Field(
-        default="",
-        desc="Delimiter between prompt and completion.",
-        hint=FieldHint.optional,
-    )
-
-
 @config_class(dynamic_type={SourceSchemaConfig: "text_column"})
 class TextColumnConfig(SourceSchemaConfig):
     input_column: str = Field(

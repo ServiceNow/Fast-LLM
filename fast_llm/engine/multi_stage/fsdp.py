@@ -9,7 +9,7 @@ from torch.distributed import all_reduce, reduce_scatter_tensor
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, ShardName, StageMode
@@ -84,7 +84,7 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_shards
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
         # TODO: Distinguish grad and optimizer shard?
@@ -94,13 +94,13 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_shards
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
         self._weight_buffer_meta = TensorMeta.from_dims(
             (TensorDim("weight_buffer", weight_shard_dim.size * self._fsdp_dim.size),),
             tensor_name=f"{self._name}_weight_buffer",
-            dtype=self._distributed_config.training_dtype.torch,
+            dtype=self._distributed_config.compute_dtype.torch,
         )
         self._grad_buffer_meta = TensorMeta.from_dims(
             (TensorDim("grad_buffer", weight_shard_dim.size * self._fsdp_dim.size if self._requires_grad else 0),),
@@ -108,7 +108,7 @@ class FSDP:
             dtype=(
                 self._distributed_config.optimization_dtype
                 if full_precision_gradient_buffer
-                else self._distributed_config.training_dtype
+                else self._distributed_config.compute_dtype
             ).torch,
         )
 
@@ -320,27 +320,31 @@ class FSDP:
         return end - begin
 
     def export_shard(
-        self, shard: torch.Tensor, distributed: Distributed, data_type: DataType | None = None
+        self, shard: torch.Tensor, data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         if data_type is not None:
             shard = shard.to(dtype=data_type.torch)
         tensors = self.split_buffer(self.reconstruct_from_shard(shard))
         for name, meta in self._parameter_metas.items():
-            yield name, meta.local_to_global(tensors[name], distributed=distributed)[0]
+            yield name, meta.local_to_global(tensors[name])[0]
 
     def log_shard(self, name, shard, *, distributed: Distributed, level, global_: bool) -> None:
         # if global_ is None:
         #    global_ = self._config.debug_global_tensors
         parameters = self.split_buffer(self.reconstruct_from_shard(shard)) if global_ else self.split_shard(shard)
         for parameter_name, parameter in parameters.items():
+            meta = self.get_parameter_meta(parameter_name)
             log_distributed_tensor(
                 name,
                 parameter,
                 level=level,
-                distributed=distributed,
                 global_=global_,
-                duplicate_groups=(distributed.data_group,),
-                meta=self.get_parameter_meta(parameter_name),
+                # Assuming all tensors are either duplicated of parallel in the TP direction.
+                duplicate_groups=(
+                    distributed.data_group,
+                    distributed.tensor_group,
+                ),
+                meta=meta,
             )
 
     def restore_parameters(self) -> None:
@@ -441,39 +445,21 @@ class FSDP:
         where it is located in the shard if it exists, or -1 if it's not in the shard.
         Used to determine the location of each entry in a different distributed configuration.
         """
-
-        # Create an empty index for the global parameter.
-        index = torch.full(
-            parameter_meta.global_shape,
-            -1,
-            dtype=torch.int64,
-            device=device,
-        )
         # Set the shard slice of the global parameter to corresponding indices of the parameter slice of the shard
         begin, end = self._get_parameter_range_in_shard(parameter_name)
 
-        buffer_index = parameter_meta.global_to_local(index, expand=True)
-        # Copying directly into `buffer_index` requires a view of the tensor, which may not be feasible.
-        # In that case, we work with a separate tensor to be copied back into `buffer_index`.
-        try:
-            buffer_index_flat = buffer_index.view(-1)
-            is_view = True
-        except RuntimeError:
-            buffer_index_flat = buffer_index.new_full((buffer_index.numel(),), -1)
-            is_view = False
+        # Create an empty local index to hold the local shard indices.
+        buffer_index = torch.full_like(parameter_meta, -1, dtype=torch.int64, device=device)
 
-        # Copy the shard indices at their respective positions in the flat buffer index.
-        buffer_index_flat[
+        # Copy the shard indices at their respective positions in the buffer index.
+        buffer_index.flatten()[
             self._index_buffer_to_param(
                 self._fsdp_dim.rank * self._shard_size, parameter_name
             ) : self._index_buffer_to_param((self._fsdp_dim.rank + 1) * self._shard_size, parameter_name)
         ].copy_(torch.arange(begin, end, dtype=torch.int64, device=device))
 
-        # If needed, copy the flat buffer index back into the index.
-        if not is_view:
-            buffer_index.copy_(buffer_index_flat.view_as(buffer_index))
-
-        return index
+        # Create a global index from the local one.
+        return parameter_meta.local_to_global_partial(buffer_index, -1)
 
     def copy_shard_overlaps(
         self,

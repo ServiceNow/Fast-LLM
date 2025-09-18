@@ -1,17 +1,19 @@
-import math
+import logging
 import typing
 
-import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
-from fast_llm.utils import get_lr_scale
+from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
+from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.block import BlockWithBias
+from fast_llm.layers.ssm.config import Mamba2Config, init_a, init_dtprojbias
+from fast_llm.tensor import TensorMeta
+from fast_llm.utils import div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -20,251 +22,226 @@ try:
 except (ImportError, RuntimeError):
     _mamba_available = False
 
-try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
-
-    _causal_conv1d_available = True
-except (ImportError, RuntimeError):
-    _causal_conv1d_available = False
+logger = logging.getLogger(__name__)
 
 
-def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """
-    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
-    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-
-def bias_init_method(conv_weight):
-    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
-    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    return init_uniform_(-bound, bound)
-
-
-class Mamba2(Mixer):
+class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
 
     _mixer_name: typing.ClassVar[str] = "mamba_2"
-
-    _XZ_DIMS = (
-        TransformerDimNames.batch,
-        SSMDimNames.inner_dim,
-        TransformerDimNames.sequence_q,
-    )
-    _BC_DIMS = (
-        TransformerDimNames.batch,
-        SSMDimNames.c_heads,
-        SSMDimNames.state_dim,
-        TransformerDimNames.sequence_q,
-    )
+    _config: Mamba2Config
 
     def __init__(
         self,
-        config: SSMConfig,
-        tensor_space: TensorSpace,
-        block_index: int,
-        transformer_config: TransformerConfig,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
-        self.config: SSMConfig = config
-        bias: bool = config.add_bias_linear
-        layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        mamba_layer_lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(
-            self.config.mamba_lr_scale, layer_lr_scale
+        super().__init__(
+            config,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            lr_scale=lr_scale,
+            peft=peft,
         )
 
-        td_inner: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_dim)
-        td_state: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.state_dim)
-        td_model: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.model_dim)
-        tdt_rank: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
-        td_xb: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.x_proj_dim_2)
-        td_inner_proj: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_proj_mamba2)
-        td_conv_kernel: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel_size)
+        num_heads = div(self._config.d_inner, self._config.state_size)
+        num_head_groups = div(self._config.d_xb, self._config.state_size)
 
-        self.repeat_kv_before_conv = config.repeat_kv_before_conv
+        state_dim = TensorDim("state", self._config.state_size)
 
-        self.d_state = td_state.size
-        self.d_model = td_model.size
-        self.d_xb = td_xb.size
-        self.d_inner = td_inner.size
-        self.dt_rank = tdt_rank.size
-
-        if self.repeat_kv_before_conv:
-            self.conv1d_weight = ParameterMeta.from_dims(
-                (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
-                init_method=init_uniform_(
-                    -1 / math.sqrt(td_inner.size * td_conv_kernel.size),
-                    1 / math.sqrt(td_inner.size * td_conv_kernel.size),
-                ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
-                lr_scale=mamba_layer_lr_scale,
-            )
-
-            self.conv1d_bias = ParameterMeta.from_dims(
-                (td_inner,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
-            )
-        else:
-            self.conv1d_weight = ParameterMeta.from_dims(
-                (td_xb, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
-                init_method=init_uniform_(
-                    -1 / math.sqrt(td_xb.size * td_conv_kernel.size),
-                    1 / math.sqrt(td_xb.size * td_conv_kernel.size),
-                ),
-            )
-            self.conv1d_bias = ParameterMeta.from_dims(
-                (td_xb,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
-            )
-
-        self.activation = "silu"
-
-        self.num_xb_head = td_xb.size // td_state.size
-        self.num_C_head = td_inner.size // td_state.size
-        self.repeat_group = self.num_C_head // self.num_xb_head
-
-        self.in_proj = Linear(
-            td_model,
-            td_inner_proj,
-            bias=bias,
-            weight_init_method=kaiming_init_(td_model.size),
-            lr_scale=mamba_layer_lr_scale,
+        head_groups_dim = TensorDim(
+            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         )
-        self.dt_in_proj = Linear(
-            td_model,
-            tdt_rank,
-            bias=config.add_bias_linear,
-            weight_init_method=kaiming_init_(transformer_config.hidden_size),
-            lr_scale=mamba_layer_lr_scale,
-        )
-        # Initialize special dt projection to preserve variance at initialization
-        dt_scale = config.dt_scale  # 1.0
-        dt_init_std = self.dt_rank**-0.5 * dt_scale
-        if config.dt_init == "constant":
-            dt_init = init_fill_(dt_init_std)
-        elif config.dt_init == "random":
-            dt_init = init_uniform_(-dt_init_std, dt_init_std)
-        else:
-            raise NotImplementedError
+        group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
 
-        self.dt_proj = Linear(
-            tdt_rank,
-            td_inner,
-            bias=False,
-            weight_init_method=dt_init,
-            lr_scale=mamba_layer_lr_scale,
-        )
-        # define bias outside the linear layer since its also used in the selective_scan_fn
-        self.dt_proj_bias = ParameterMeta.from_dims(
-            (td_inner,),
-            init_method=init_dtprojbias(
-                self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor
-            ),
-            lr_scale=mamba_layer_lr_scale,
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
+
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, state_dim))
+        xb_dim = CompositeTensorDim("xb", (head_groups_dim, state_dim))
+
+        # DT projection
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, xb_dim, xb_dim, inner_dim),
         )
 
-        self.A_log = ParameterMeta.from_dims(
-            (td_inner, td_state),
-            init_method=init_A(self.config.state_size, self.config.d_inner),
-            lr_scale=mamba_layer_lr_scale,
+        self._local_heads = heads_dim.size
+        self._local_head_groups = head_groups_dim.size
+        self._group_heads = div(self._local_heads, self._local_head_groups)
+        self._local_inner_size = inner_dim.size
+        self._local_xb_size = xb_dim.size
+        convolution_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
+
+        self.convolution = self._config.convolution_layer.get_layer(
+            convolution_dim,
+            default_add_bias=self._config.add_linear_biases,
+            default_activation=ActivationType.silu,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        # TODO: Use x_layer, b_layer, c_layer
+        self.in_proj = self._config.z_layer.get_layer(
+            hidden_dim,
+            inner_projection_dim,
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self.dt_in_proj = self._config.dt_input_layer.get_layer(
+            hidden_dim,
+            dt_rank_dim,
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._config.add_linear_biases,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self.dt_proj = self._config.dt_layer.get_layer(
+            dt_rank_dim,
+            inner_dim,
+            default_weight_initialization=init_uniform_centered_(self._config.dt_rank**-0.5),
+            default_bias_initialization=init_dtprojbias(),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self.A_log = self._config.a_log_weight.get_parameter(
+            (inner_dim, state_dim),
+            default_initialization=init_a(self._config.state_size, self._config.d_inner),
             weight_decay=False,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
-
-        self.D = ParameterMeta.from_dims(
-            (td_inner,),
+        # D "skip" parameter
+        self.D = self._config.d_weight.get_parameter(
+            (inner_dim,),
+            default_initialization=init_ones_,
             weight_decay=False,
-            init_method=init_ones_,
-            lr_scale=mamba_layer_lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self.out_proj = self._config.output_layer.get_layer(
+            inner_dim,
+            hidden_dim,
+            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
 
-        self.out_proj = Linear(
-            td_inner,
-            td_model,
-            bias=bias,
-            weight_init_method=kaiming_init_(td_inner.size),
+        # Debug dims
+        self._xz_dims = (
+            BlockDimNames.batch,
+            inner_dim,
+            BlockDimNames.sequence_q,
+        )
+        self._bc_dims = (
+            BlockDimNames.batch,
+            heads_dim,
+            state_dim,
+            BlockDimNames.sequence_q,
         )
 
-    def forward(self, hidden_states, kwargs):
-        """
-        hidden_states: (B, L, D)
-        Returns: same shape as hidden_states
-        """
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
-        batch, seqlen, dim = hidden_states.shape
-        outputs = {}
 
-        conv_state, ssm_state = None, None
+        # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
+        #   -> (batch/sequence, sequence/batch, local_inner_projection)
+        inner_projection = self.in_proj(input_)
+        dt = self.dt_proj(self.dt_in_proj(input_))
+        # Standardize to (batch, sequence, local_inner_projection)
+        if kwargs[BlockKwargs.sequence_first]:
+            inner_projection = inner_projection.transpose(0, 1)
+            dt = dt.transpose(0, 1)
 
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        sequence_length = inner_projection.size(1)
 
-        zxbc = self.in_proj(hidden_states)
-        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
+        z, x, b, c = torch.split(
+            inner_projection,
+            [self._local_inner_size, self._local_xb_size, self._local_xb_size, self._local_inner_size],
+            dim=2,
+        )
 
-        x = einops.rearrange(x, "b l d -> b d l")
-        z = einops.rearrange(z, "b l d -> b d l")
+        # z: (batch, sequence, local_heads * state) -> (batch, local_heads * state, sequence)
+        z = z.transpose(1, 2)
 
-        B = einops.rearrange(B, "b l (n_group dstate) -> b n_group l dstate", dstate=self.d_state)
-        B = repeat_kv(B, self.repeat_group)  # B, n_group, L, H
-        B = einops.rearrange(B, "b n_group l dstate -> b n_group dstate l").contiguous()
-        C = einops.rearrange(C, "b l (n_group dstate) -> b n_group dstate l", dstate=self.d_state).contiguous()
-
-        dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias  # B, L, d_inner
-        dt = einops.rearrange(dt, "b l d -> b d l")  # B, d_inner, L
-
-        if self.repeat_kv_before_conv:
-            assert self.repeat_group > 0
-            x = einops.rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
-            x = repeat_kv(x, self.repeat_group)
-            x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
-
-        assert self.activation in ["silu", "swish"]
-        if _causal_conv1d_available:
-            x = _causal_conv1d_fn(
-                x=x,
-                weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
-                bias=self.conv1d_bias,
-                activation=self.activation,
-            )  # B, L, D
+        # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
+        x = x.transpose(1, 2)
+        if self._config.repeat_kv_before_conv:
+            x = self.convolution(
+                x.unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+                .flatten(1, 2)
+            )
         else:
-            raise RuntimeError("Causal conv1d is not available. Please install causal_conv1d.")
+            x = (
+                self.convolution(x)
+                .unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+                .flatten(1, 2)
+            )
 
-        if not self.repeat_kv_before_conv:
-            x = einops.rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
-            x = repeat_kv(x, self.repeat_group)
-            x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
+        # b: (batch, sequence, local_head_groups * state) -> (batch, local_heads, state, sequence)
+        b = (
+            b.transpose(1, 2)
+            .unflatten(1, (self._local_head_groups, self._config.state_size))
+            .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+        )
 
-        if self._debug_level:
-            self._debug_log(z, "z", self._XZ_DIMS, kwargs)
-            self._debug_log(x, "x", self._XZ_DIMS, kwargs)
-            self._debug_log(B, "b", self._BC_DIMS, kwargs)
-            self._debug_log(C, "c", self._BC_DIMS, kwargs)
-            self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
+        # c: (batch, sequence, heads * state) -> (batch, heads, state, sequence)
+        c = c.transpose(1, 2).unflatten(1, (self._local_heads, self._config.state_size))
+
+        # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
+        dt = dt.transpose(1, 2)
+
+        if self._debug.enabled:
+            self._debug(z, "z", self._xz_dims, kwargs)
+            self._debug(x, "x", self._xz_dims, kwargs)
+            self._debug(b, "b", self._bc_dims, kwargs)
+            self._debug(c, "c", self._bc_dims, kwargs)
+            self._debug(dt, "dt", self._xz_dims, kwargs)
 
         y = selective_scan_fn(
             x,
             dt,
-            A,
-            B,
-            C,
+            -torch.exp(self.A_log.float()),
+            b,
+            c,
             self.D.float(),
-            z=z,
-            delta_bias=self.dt_proj_bias.float(),  # self.dt_proj.bias.float(),
+            z,
+            delta_bias=None if self.dt_proj.bias is None else self.dt_proj.bias.float(),
             delta_softplus=True,
-            return_last_state=False,
         )
 
-        if self._debug_level:
-            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+        if self._debug.enabled:
+            self._debug(y, "y", self._xz_dims, kwargs)
 
-        if ssm_state is not None:
-            y, last_state = y
-            ssm_state.copy_(einops.rearrange(last_state, "b (h d) n -> b h d n", h=self.num_C_head))
+        # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
+        y = y.transpose(1, 2)[:, :sequence_length]
+        if kwargs[BlockKwargs.sequence_first]:
+            # TODO: Is contiguous needed?
+            y = y.transpose(0, 1).contiguous()
+        # (batch/sequence, sequence/batch, local_heads * state)
+        #   -> (batch/local_sequence, local_sequence/batch, hidden)
+        return self.out_proj(y)
 
-        y = einops.rearrange(y, "b d l -> b l d")
-        out = self.out_proj(y)
-        outputs["hidden_states"] = out[:, :seqlen, :].contiguous()
-        return outputs["hidden_states"], None
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        # TODO: Implement.
+        raise NotImplementedError()

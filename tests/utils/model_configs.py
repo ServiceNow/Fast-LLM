@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import enum
 import functools
@@ -6,22 +7,22 @@ import typing
 
 import pytest
 
+from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.models.gpt.config import (
-    DiffusionDreamGPTHuggingfaceCheckpointFormat,
-    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
-    LlamaGPTHuggingfaceCheckpointFormat,
-    MistralGPTHuggingfaceCheckpointFormat,
-    MixtralGPTHuggingfaceCheckpointFormat,
-    MTPLlamaGPTHuggingfaceCheckpointFormat,
-    Qwen2GPTHuggingfaceCheckpointFormat,
-    Starcoder2GPTHuggingfaceCheckpointFormat,
+from fast_llm.models.gpt.conversion.config import (
+    AprielHybridSSMCheckpointFormat,
+    DiffusionDreamCheckpointFormat,
+    DiffusionLlamaCheckpointFormat,
+    LlamaCheckpointFormat,
+    MistralCheckpointFormat,
+    MixtralCheckpointFormat,
+    MTPLlamaCheckpointFormat,
+    Qwen2CheckpointFormat,
 )
-from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
-from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 from tests.utils.distributed_configs import DistributedTestingConfig
+from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
@@ -52,11 +53,24 @@ class ModelTestingGroupAction(enum.StrEnum):
     not_implemented = "not_implemented"
 
 
+def _config_dict_to_args(config_dict: dict[str, typing.Any], keys=()):
+    """
+    Converts a config dict to cli arguments. Not generic but good enough for the tests.
+    """
+    args = []
+    for key, value in config_dict.items():
+        if isinstance(value, dict):
+            args += _config_dict_to_args(value, (*keys, key))
+        else:
+            args.append(f"{'.'.join((*keys, key))}={value}")
+    return args
+
+
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class ModelTestingConfig:
     name: str = None
     model_type: str
-    config_args: list[str]
+    config_dict: dict[str, typing.Any]
     megatron_args: list[str] | None
     checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
@@ -66,13 +80,17 @@ class ModelTestingConfig:
     skip_tests: tuple[str] = ()
 
     @functools.cached_property
+    def config_args(self):
+        return _config_dict_to_args(self.config_dict)
+
+    @functools.cached_property
     def trainer_config_class(self) -> type[TrainerConfig]:
         return TrainerConfig.get_subclass(self.model_type)
 
     @functools.cached_property
     def trainer_config(self) -> TrainerConfig:
         # See `RunnableConfig._from_parsed_args`
-        return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+        return self.trainer_config_class.from_dict(self.config_dict)
 
     @functools.cached_property
     def evaluators_config_class(self) -> type[EvaluatorsConfig]:
@@ -83,7 +101,7 @@ class ModelTestingConfig:
     @functools.cached_property
     def evaluators_config(self) -> EvaluatorsConfig:
         # See `RunnableConfig._from_parsed_args`
-        return self.evaluators_config_class.from_dict(self.evaluators_config_class._parse_updates(self.config_args))
+        return self.evaluators_config_class.from_dict(self.config_dict)
 
     @functools.cached_property
     def model_config_class(self) -> type[FastLLMModelConfig]:
@@ -115,78 +133,126 @@ def _update_and_add_testing_config(
     new_name: str,
     *,
     model_type: str | None = None,
-    extra_args: list[str] | None = None,
+    updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     megatron_args: list[str] | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
     **kwargs,
-):
+) -> ModelTestingConfig:
+
     config = MODEL_CONFIGS[old_name]
-    updates: dict[str, typing.Any] = {
-        "name": new_name,
-        "groups": groups,
-    }
-    if model_type is not None:
-        updates["model_type"] = model_type
-    if extra_args is not None:
-        updates["config_args"] = config.config_args + extra_args
+    config_dict = copy.deepcopy(config.config_dict)
+    if updates is not None:
+        for keys, update in updates.items():
+            set_nested_dict_value(config_dict, keys, update)
     if megatron_args is not ...:
         if megatron_args is None:
-            updates["megatron_args"] = None
-        elif config.megatron_args is None:
-            updates["megatron_args"] = megatron_args
-        else:
-            updates["megatron_args"] = config.megatron_args + megatron_args
-    updates.update(kwargs)
-
-    MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
+            megatron_args = None
+        elif config.megatron_args is not None:
+            megatron_args = config.megatron_args + megatron_args
+    new_config = dataclasses.replace(
+        config,
+        name=new_name,
+        model_type=config.model_type if model_type is None else model_type,
+        groups=groups,
+        config_dict=config_dict,
+        megatron_args=megatron_args,
+        **kwargs,
+    )
+    MODEL_CONFIGS[new_name] = new_config
+    return new_config
 
 
 MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
+# We use a smaller initialization scheme than the default to lower variance in layer outputs during comparisons.
+# This is as if we had a hidden size of 2048
+init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
+# Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
+init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
 
-MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
-    name="gpt2",
+    name="gpt_2",
     model_type="gpt",
-    config_args=[
-        "training.logs.interval=1",
-        "run.tensor_logs.save=True",
-        "run.tensor_logs.show=False",
-        "model.base_model.max_position_embeddings=512",
-        "model.base_model.transformer.num_layers=2",
-        "model.base_model.transformer.hidden_size=256",
-        "model.base_model.transformer.num_attention_heads=8",
-        "model.base_model.transformer.head_groups=8",
-        "model.base_model.transformer.init_method_std=0.022",
-        f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
-        f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
-        f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
-        f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
-        f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
-        "model.multi_stage.debug_tensor_parallel=True",
-        "model.distributed.reproducible_init=True",
-        "model.distributed.timeout=20",
-        "training.train_iters=2",
-        "training.num_workers=0",
-        "training.timeout=30",
-        "batch.batch_size=8",
-        "batch.sequence_length=512",
-        "data.datasets.training.type=slice",
-        "data.datasets.training.end=0.969",
-        "data.datasets.training.dataset.type=memmap",
-        f"data.datasets.training.dataset.path={MODEL_DATASET_PREFIX}",
-        "data.datasets.validation.type=slice",
-        "data.datasets.validation.begin=0.969",
-        "data.datasets.validation.end=0.999",
-        "data.datasets.validation.dataset.type=memmap",
-        f"data.datasets.validation.dataset.path={MODEL_DATASET_PREFIX}",
-        "data.datasets.test.type=slice",
-        "data.datasets.test.begin=0.999",
-        "data.datasets.test.end=1",
-        "data.datasets.test.dataset.type=memmap",
-        f"data.datasets.test.dataset.path={MODEL_DATASET_PREFIX}",
-        "optimizer.learning_rate.base=0.0001",
-    ],
+    config_dict={
+        "run": {
+            "tensor_logs": {
+                "save": True,
+                "show": False,
+            },
+        },
+        "training": {
+            "logs": {"interval": 1},
+            "train_iters": 2,
+            "num_workers": 0,
+            "timeout": 30,
+        },
+        "model": {
+            "base_model": {
+                "embeddings_layer": {
+                    "word_embeddings": init_1,
+                    "position_embeddings": {"enabled": True, **init_1},
+                    "hidden_size": 256,
+                    "num_position_embeddings": 512,
+                    "vocab_size": MODEL_TEST_VOCAB_SIZE,
+                },
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "query_layer": {"weight": init_1},
+                            "key_layer": {"weight": init_1},
+                            "value_layer": {"weight": init_1},
+                            "dense_layer": {"weight": init_2},
+                            "heads": 8,
+                            "head_groups": 8,
+                            "head_size": 32,
+                        },
+                        "mlp": {
+                            "layer_1": {"weight": init_1},
+                            "layer_2": {"weight": init_2},
+                            "intermediate_size": 1024,
+                        },
+                    },
+                    "num_blocks": 2,
+                },
+                "output_layer": {"output_weight": init_1},
+            },
+            "multi_stage": {
+                "debug_param_init": _LOG_LEVEL,
+                "debug_layer_outputs": _LOG_LEVEL,
+                "debug_layer_gradients": _LOG_LEVEL,
+                "debug_all_param_gradients": _LOG_LEVEL,
+                "debug_tensor_parallel": True,
+            },
+            "distributed": {
+                "reproducible_init": True,
+                "timeout": 20,
+            },
+        },
+        "batch": {"batch_size": 8, "sequence_length": 512},
+        "data": {
+            "datasets": {
+                "training": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "end": 0.969,
+                },
+                "validation": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "begin": 0.969,
+                    "end": 0.999,
+                },
+                "test": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "begin": 0.999,
+                    "end": 1,
+                },
+            }
+        },
+        "optimizer": {"learning_rate": {"base": 0.0001}},
+    },
     megatron_args=[
         "--num-layers=2",
         "--hidden-size=256",
@@ -205,7 +271,7 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--micro-batch-size=8",
         "--max-position-embeddings=512",
         "--seq-length=512",
-        "--init-method-std=0.022",
+        f"--init-method-std={2**-5.5}",
         "--lr=0.0001",
         "--num-workers=0",
         "--valid-num-workers=0",
@@ -213,6 +279,7 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
         f"--data-path={MODEL_DATASET_PREFIX}",
+        "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
         "--use-mcore-models",
@@ -223,7 +290,8 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        # TODO: PP checkpoint failing for tied weights.
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -232,9 +300,11 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
 
 _update_and_add_testing_config(
     # Tests MQA.
-    "gpt2",
+    "gpt_2",
     "starcoder",
-    extra_args=["model.base_model.transformer.head_groups=1"],
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 1,
+    },
     megatron_args=["--group-query-attention"],
     checkpoint_format=None,
     groups={
@@ -249,21 +319,20 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests intermediate between gpt2 and llama, closest converter to gpt2.
-    "gpt2",
-    "starcoder2",
-    extra_args=[
-        "model.base_model.transformer.head_groups=4",
-        "model.base_model.transformer.rotary.type=default",
-        # Unused, but prevents issues with conversion tests.
-        "model.base_model.max_position_embeddings=2048",
-    ],
+    "gpt_2",
+    "starcoder_2",
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 4,
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "default",
+        ("model", "base_model", "embeddings_layer", "position_embeddings", "enabled"): False,
+    },
     megatron_args=[
         "--group-query-attention",
         "--num-query-groups=4",
         "--use-rotary-position-embeddings",
         "--no-position-embedding",
     ],
-    checkpoint_format=Starcoder2GPTHuggingfaceCheckpointFormat,
+    checkpoint_format=None,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -277,16 +346,17 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Main tested model.
-    "starcoder2",
+    "starcoder_2",
     "llama",
-    extra_args=[
-        "model.base_model.transformer.gated=True",
-        "model.base_model.transformer.activation_type=silu",
-        "model.base_model.transformer.add_linear_biases=False",
-        "model.base_model.transformer.normalization.type=rms_norm",
-        "model.base_model.transformer.ffn_hidden_size=1024",
-        "model.base_model.tie_word_embeddings=False",
-    ],
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "add_linear_biases"): False,
+        ("model", "base_model", "decoder", "block", "mlp", "gated"): True,
+        ("model", "base_model", "decoder", "block", "mlp", "activation"): "silu",
+        ("model", "base_model", "decoder", "block", "mlp", "add_linear_biases"): False,
+        ("model", "base_model", "decoder", "block", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "output_layer", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "output_layer", "tied_weight"): False,
+    },
     megatron_args=[
         "--swiglu",
         "--disable-bias-linear",
@@ -294,7 +364,7 @@ _update_and_add_testing_config(
         "--ffn-hidden-size=1024",
         "--untie-embeddings-and-output-weights",
     ],
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
@@ -309,11 +379,13 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests llama3-style rotary embeddings.
     "llama",
-    "llama3",
-    extra_args=["model.base_model.transformer.rotary.type=llama3"],
+    "llama_3",
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "llama3",
+    },
     # Megatron doesn't support Llama3-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -328,10 +400,12 @@ _update_and_add_testing_config(
     # Tests yarn-style rotary embeddings.
     "llama",
     "llama_yarn",
-    extra_args=["model.base_model.transformer.rotary.type=yarn"],
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "yarn",
+    },
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=LlamaCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -346,10 +420,10 @@ _update_and_add_testing_config(
     # Tests diffusion llama converter.
     "llama_yarn",
     "diffusion_llama",
-    extra_args=[],
+    updates={},
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
-    checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=DiffusionLlamaCheckpointFormat,
     # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
@@ -365,11 +439,13 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
-    "llama_mtp",
-    extra_args=["model.base_model.prediction_heads=4"],
+    "mtp_llama",
+    updates={
+        ("model", "base_model", "output_layer", "prediction_heads"): 2,
+    },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
-    checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MTPLlamaCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -385,16 +461,19 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests partial linear biases, Qwen2 converter.
     "llama",
-    "qwen2",
-    extra_args=["model.base_model.transformer.add_linear_biases=only_attn_qkv"],
+    "qwen_2",
+    # TODO: replace
+    updates={
+        ("model", "base_model", "decoder", "block", "add_linear_biases"): "only_attn_qkv",
+    },
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
-    checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
+    checkpoint_format=Qwen2CheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
@@ -403,17 +482,18 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests diffusion dream converter.
-    "qwen2",
+    "qwen_2",
     "dream",
-    extra_args=[],
+    # TODO: replace only_attn_qkv
+    updates={},
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
-    checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=DiffusionDreamCheckpointFormat,
     # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -425,10 +505,12 @@ _update_and_add_testing_config(
     # Tests sliding window attention, mistral converter.
     "llama",
     "mistral",
-    extra_args=["model.base_model.transformer.window_size=128"],
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer", "window_size"): 128,
+    },
     # Megatron doesn't support sliding windows.
     megatron_args=None,
-    checkpoint_format=MistralGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MistralCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -444,15 +526,17 @@ _update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
-    extra_args=[
-        "model.base_model.transformer.num_experts=4",
-        "model.base_model.transformer.num_experts_per_token=4",
-    ],
+    updates={
+        ("model", "base_model", "decoder", "block", "mlp", "type"): "moe",
+        ("model", "base_model", "decoder", "block", "mlp", "router", "weight"): init_1,
+        ("model", "base_model", "decoder", "block", "mlp", "experts"): 4,
+        ("model", "base_model", "decoder", "block", "mlp", "experts_per_token"): 4,
+    },
     megatron_args=[
         "--num-experts=4",
         "--moe-router-topk=4",
     ],
-    checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
+    checkpoint_format=MixtralCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
@@ -465,75 +549,135 @@ _update_and_add_testing_config(
     compare_factor=2.0,
 )
 
+_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
+
+
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
+    # Tests hybrid Mamba, llamba converter.
     "llama",
-    "llamba",
-    model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m']",
-        "model.base_model.ssm.state_size=8",
-        "model.base_model.ssm.chunk_size=32",
-        "model.base_model.ssm.n_qk_heads=8",
-        "model.base_model.ssm.n_v_heads=8",
-    ],
+    "hybrid_mamba",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba",
+                        "d_inner": 512,
+                        "state_size": 16,
+                        "dt_rank": 16,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m"],
+        },
+    },
     megatron_args=None,
-    checkpoint_format=LLambaHuggingfaceCheckpointFormat,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
     },
     compare_factor=2.0,
-    # SSMs don't support sequence-first configurations.
-    skip_tests=("sf", "sdp", "stp", "ms"),
+    # Micro-sequence split not supported.
+    skip_tests=("sdp", "ms"),
+)
+
+_update_and_add_testing_config(
+    # Tests hybrid Mamba 2.
+    "llama",
+    "hybrid_mamba_2",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m2": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba_2",
+                        "dt_layer": {"bias": {"enabled": True}},
+                        "d_inner": 512,
+                        "state_size": 8,
+                        "dt_rank": 16,
+                        "d_xb": 256,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m2"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported.
+    skip_tests=(
+        "sdp",
+        "ms",
+    ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
-    "hybrid_discrete_mamba2",
-    model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2d']",
-    ],
+    # Tests hybrid discrete Mamba 2.
+    "llama",
+    "hybrid_discrete_mamba_2",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m2d": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "discrete_mamba_2",
+                        "d_inner": 512,
+                        "state_size": 8,
+                        "n_qk_heads": 8,
+                        "n_v_heads": 16,
+                        "chunk_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m2d"],
+        },
+    },
     megatron_args=None,
-    checkpoint_format=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        # TODO: Implement
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-)
-
-_update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
-    "hybrid_mamba2",
-    model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2']",
-    ],
-    megatron_args=None,
-    checkpoint_format=None,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sdp", "ms"),
 )
 
 

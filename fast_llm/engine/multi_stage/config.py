@@ -351,48 +351,28 @@ class CheckpointMetadata(Config):
     def _validate(self) -> None:
         if isinstance(self.fast_llm_version, str):
             self.fast_llm_version = packaging.version.Version(self.fast_llm_version)
-
+        code_version = packaging.version.Version(__version__)
         self.format = self.model.get_checkpoint_format(self.format)
         super()._validate()
-        if self.fast_llm_version.major != 0 or self.fast_llm_version.minor not in (0, 1, 2):
-            raise ValueError(f"Invalid checkpoint version: {self.fast_llm_version}")
+        if self.fast_llm_version > code_version:
+            raise ValueError(f"Unknown checkpoint version: {self.fast_llm_version}")
+        if self.fast_llm_version < packaging.version.Version("0.3.0"):
+            raise ValueError(
+                f"Checkpoint version {self.fast_llm_version} is no longer supported."
+                " If you really need this checkpoint,"
+                " please convert it to an external model first using a compatible Fast-LLM version."
+            )
         Assert.eq(self.config.__class__, self.model)
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility.
-        cls._handle_renamed_field(default, "checkpoint_type", "format")
-        cls._handle_renamed_field(default, "checkpoint_version", "fast_llm_version")
-        cls._handle_renamed_field(default, "fast_llm_config", "config")
-        cls._handle_renamed_field(default, "state_shard_names", "shards")
-        if "model" not in default:
-            default["model"] = "gpt"
-        if "format" not in default:
-            default["format"] = DistributedCheckpointFormat
-        if "fast_llm_version" not in default:
-            default["fast_llm_version"] = "0"
-
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         model_config_class = default["model"]
         if isinstance(model_config_class, str):
             model_config_class = FastLLMModelConfig.get_subclass(default["model"])
             default["model"] = model_config_class
 
-        # TODO v0.3: Remove backward compatibility.
-        if "config" not in default:
-            default["config"] = {
-                "base_model": model_config_class.get_base_model_config_class().from_flat_dict(
-                    default.pop("model_config", {})
-                ),
-                "multi_stage": default.pop("multi_stage_config", {}),
-                "distributed": default.pop("distributed_config", {}),
-            }
         # Instantiate the config with the appropriate class
         config = default.get("config", {})
         if isinstance(config, dict):
             default["config"] = model_config_class.from_dict(config)
-        return super()._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict)

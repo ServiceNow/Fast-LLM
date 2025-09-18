@@ -1,27 +1,21 @@
 import pathlib
 import random
-import string
 
 import numpy as np
 import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from tests.utils.utils import SHARED_RESULT_PATH, TEST_RESULTS_PATH
-
-# TODO: Fixtures
-TOKENIZER_PATH = SHARED_RESULT_PATH / "tokenizer"
-TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
-DATASET_CACHE = SHARED_RESULT_PATH / "dataset"
-DATASET_PREFIX = DATASET_CACHE / "common_dataset"
-DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset_sampling_cache"
-TEST_VOCAB_SIZE = 8192
-# Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
-TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
-TEST_DATASET_TOKENS = 1000000
-
-MODEL_DATASET_PREFIX = DATASET_CACHE / "model_dataset"
-MODEL_TEST_VOCAB_SIZE = 384
+from tests.utils.global_variables import (
+    DATASET_PREFIX,
+    MODEL_DATASET_PREFIX,
+    MODEL_TEST_VOCAB_SIZE,
+    TEST_CHARACTERS,
+    TEST_DATASET_TOKENS,
+    TEST_VOCAB_SIZE,
+    TOKENIZER_FILE,
+    TOKENIZER_PATH,
+)
 
 
 def download_santacoder_tokenizer():
@@ -72,25 +66,3 @@ def get_model_test_dataset(
     vocab_size: int = MODEL_TEST_VOCAB_SIZE,
 ):
     return get_test_dataset(prefix=prefix, vocab_size=vocab_size)
-
-
-def get_test_concatenated_memmap_dataset(
-    path: pathlib.Path,
-    num_files: int,
-    seed: int = 1234,
-    num_tokens: int = TEST_DATASET_TOKENS,
-    characters: str = TEST_CHARACTERS,
-    vocab_size: int = TEST_VOCAB_SIZE,
-    seed_shift: int = 55,
-):
-    index_file = path / "index.txt"
-    if not index_file.is_file():
-        for i in range(num_files):
-            get_test_dataset(
-                prefix=path / f"dataset_{i}",
-                seed=seed + i * seed_shift,
-                num_tokens=num_tokens,
-                characters=characters,
-                vocab_size=vocab_size,
-            )
-        index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])

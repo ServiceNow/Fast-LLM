@@ -63,6 +63,8 @@ def main(args: list[str] | None = None) -> None:
         group = pool.get_process_group(range(world_size), rank)
 
         for config in DISTRIBUTED_SAVE_LOAD_CONFIGS.values():
+            if config.load_format == "{checkpoint_format}" and model_testing_config.checkpoint_format is None:
+                continue
             config = config.resolve(base_path, model_testing_config)
             Assert.eq(world_size, config.num_gpus)
             with DistributedSubtestContext(base_path, config.name, group, world_size, enabled=do_capture) as subtest:
