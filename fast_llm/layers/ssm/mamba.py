@@ -4,20 +4,16 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import (
-    CompositeTensorDim,
-    ConcatenatedTensorDim,
-    DefaultDimNames,
-    TensorDim,
-    TensorSpace,
-)
+from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
-from fast_llm.utils import Assert, div, get_lr_scale
+from fast_llm.tensor import ParameterMeta
+from fast_llm.utils import Assert, combine_lr_scales, div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
@@ -58,26 +54,25 @@ def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> Lambd
     return LambdaInitializer(init_)
 
 
-class MambaLayer(Mixer):
+class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     _mixer_name: typing.ClassVar[str] = "mamba"
 
     def __init__(
         self,
-        config: SSMConfig,
+        config: ConfigType,
+        block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
         block_index: int,
-        tensor_space: TensorSpace,
-        transformer_config: TransformerConfig,
+        name: str,
+        lr_scale: float | None,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
-        assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
-        self._config = config
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
+        assert self._distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for Mamba"
         # TODO: It's not silu?
         Assert.eq(self._config.activation_type, ActivationType.silu)
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         # Tensor dims:
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
         heads_dim = TensorDim("heads", div(self._config.d_inner, self._config.state_size))
         state_dim = TensorDim("state", self._config.state_size)
         inner_dim = CompositeTensorDim("inner", (heads_dim, state_dim))
@@ -85,6 +80,8 @@ class MambaLayer(Mixer):
         dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
         inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
         x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
+
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         # TODO: Backward compatibility?
         self.in_proj = Linear(
@@ -94,17 +91,15 @@ class MambaLayer(Mixer):
             weight_init_method=init_kaiming_(hidden_dim.size),
             lr_scale=lr_scale,
         )
-
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 inner_dim,
-                tensor_space[DefaultDimNames.scalar],
+                scalar_dim,
                 convolution_kernel_dim,
             ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
         )
-
         self.x_proj = Linear(
             inner_dim,
             x_projection_dim,
@@ -113,27 +108,23 @@ class MambaLayer(Mixer):
             lr_scale=lr_scale,
         )
         self.x_proj.weight.auto_grad_accumulation = True
-
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
             (inner_dim, dt_rank_dim),
             init_method=init_kaiming_(self._config.dt_rank),
             lr_scale=lr_scale,
         )
-
         self.dt_proj_bias = ParameterMeta.from_dims(
             (inner_dim,),
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
             lr_scale=lr_scale,
         )
-
         self.A_log = ParameterMeta.from_dims(
             (inner_dim, state_dim),
             weight_decay=False,
             init_method=init_A(self._config.state_size, inner_dim.size),
             lr_scale=lr_scale,
         )
-
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (inner_dim,),
@@ -141,7 +132,6 @@ class MambaLayer(Mixer):
             init_method=init_ones_,
             lr_scale=lr_scale,
         )
-
         self.out_proj = Linear(
             inner_dim,
             hidden_dim,
@@ -151,9 +141,15 @@ class MambaLayer(Mixer):
         )
         self.out_proj.weight.auto_grad_accumulation = True
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
-        in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[TransformerKwargs.sequence_first] else (0, 2, 1))
+        in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[BlockKwargs.sequence_first] else (0, 2, 1))
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         # not, if we wanbt to support inference, we would need to imp.lement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
@@ -172,6 +168,10 @@ class MambaLayer(Mixer):
             delta_bias=self.dt_proj_bias.float(),
             delta_softplus=True,
         )
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             out = out.transpose(0, 1)
         return out, None
+
+
+def init_kaiming_(d_in: float) -> LambdaInitializer:
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))

@@ -23,8 +23,8 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
-from fast_llm.layers.transformer.rotary.rotary import (
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.attention.rotary.rotary import (
     apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,
@@ -92,7 +92,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y1 = apply_rotary_embeddings(
         x,
         DefaultRotaryConfig(triton=False)
-        .build()
+        .get_layer(None)
         ._get_frequencies(
             sequence_length,
             kv_channels,
@@ -103,7 +103,9 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
-            DefaultRotaryConfig(triton=True).build()._get_frequencies(sequence_length, kv_channels, device="cuda"),
+            DefaultRotaryConfig(triton=True)
+            .get_layer(None)
+            ._get_frequencies(sequence_length, kv_channels, device="cuda"),
         ),
         kv_channels,
         3,

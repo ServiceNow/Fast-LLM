@@ -348,22 +348,29 @@ def check_equal_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
 
 
-def get_lr_scale(
-    lr_scale: float | None | tuple[float | None, ...], layer_lr_scale: float | None
-) -> float | None | tuple[float | None, ...]:
-    """
-    Combine module and layer lr_scale.
-    If one is None, return the other.
-    """
-    if lr_scale is None:
-        return layer_lr_scale
-    if layer_lr_scale is None:
-        return lr_scale
-    if isinstance(lr_scale, float):
-        return lr_scale * layer_lr_scale
-    if isinstance(lr_scale, tuple):
-        return tuple(lrs * layer_lr_scale if lrs is not None else layer_lr_scale for lrs in lr_scale)
-    raise ValueError(f"Invalid lr_scale: {lr_scale} (type {type(lr_scale)})")
+def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
+    # Remove `None` entries.
+    lr_scales = tuple(lr_scale for lr_scale in lr_scales if lr_scale is not None)
+    if not lr_scales:
+        # Everything is None
+        return None
+    tuple_length = None
+    # Check if we have tuples, and determine the length.
+    for lr_scale in lr_scales:
+        if isinstance(lr_scale, tuple):
+            if tuple_length is None:
+                tuple_length = len(lr_scale)
+            else:
+                assert len(lr_scale) == tuple_length
+    if tuple_length is None:
+        # No tuple: simple product.
+        return math.prod(lr_scales)
+    else:
+        # Tuple(s): use recursion.
+        return tuple(
+            combine_lr_scales(*[lr_scale[i] if isinstance(lr_scale, tuple) else lr_scale for lr_scale in lr_scales])
+            for i in range(tuple_length)
+        )
 
 
 class Interrupter:

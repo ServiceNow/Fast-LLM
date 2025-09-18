@@ -3,8 +3,8 @@ import pytest
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.engine.training.trainer import Trainer
-from fast_llm.layers.ssm.llamba_block import SSMBlock
-from fast_llm.layers.transformer.transformer import TransformerBlock
+from fast_llm.layers.attention.block import TransformerBlock
+from fast_llm.layers.ssm.block import SSMBlock
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_model_test_dataset
 from tests.utils.model_configs import ModelTestingGroup

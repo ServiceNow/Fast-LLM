@@ -6,7 +6,6 @@ from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig
@@ -46,14 +45,6 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     )
     # TODO: Support combination of different SSM block types.
     ssm_block_type: SSMBlockType | None = Field(init=False)
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        """
-        Setup the tensor space for the model.
-        """
-        super().setup_tensor_space(tensor_space)
-        if self.ssm_block_type is not None:
-            self.ssm.setup_tensor_space(tensor_space, self.ssm_block_type)
 
     def _validate(self):
         with self._set_implicit_default(None):

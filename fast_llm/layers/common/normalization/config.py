@@ -7,23 +7,8 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    import torch
-
-    from fast_llm.engine.config_utils.tensor_space import TensorDim
-    from fast_llm.layers.common.linear import LinearBase, LinearLike
-    from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
-
-
-@config_class()
-class LLMBlockConfig(BaseModelConfig):
-    _abstract = False
-
-    per_layer_lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
+    from fast_llm.engine.config_utils.tensor_dim import TensorDim
+    from fast_llm.layers.common.normalization.normalization import Normalization
 
 
 class NormalizationImplementation(str, enum.Enum):
@@ -42,9 +27,17 @@ class NormalizationImplementation(str, enum.Enum):
 class NormalizationConfig(BaseModelConfig):
     pass
 
+    @property
     @abc.abstractmethod
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None) -> "torch.nn.Module":
+    def module_class(self) -> type["Normalization"]:
         pass
+
+    def get_layer(
+        self,
+        hidden_dim: "TensorDim",
+        lr_scale: float | None = None,
+    ) -> "Normalization":
+        return self.module_class(self, hidden_dim, lr_scale)
 
     @classmethod
     def _from_dict(
@@ -63,8 +56,11 @@ class NormalizationConfig(BaseModelConfig):
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None) -> "torch.nn.Module":
-        return torch.nn.Identity()
+    @property
+    def module_class(self) -> type["Normalization"]:
+        from fast_llm.layers.common.normalization.normalization import NoNormalization
+
+        return NoNormalization
 
 
 @config_class()
@@ -98,21 +94,6 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
-        from fast_llm.tensor import init_uniform_centered_
-
-        kwargs = {
-            "hidden_dim": hidden_dim,
-            "eps": self.epsilon,
-            "implementation": self.implementation,
-            "zero_centered": self.zero_centered,
-            "lr_scale": lr_scale,
-        }
-        if self.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            kwargs["weight_init_method"] = init_uniform_centered_(self.initialization_range, mean=mean)
-        return self.module_class(**kwargs)
-
     @property
     @abc.abstractmethod
     def module_class(self):
@@ -139,9 +120,9 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import LayerNorm
+        from fast_llm.layers.common.normalization.normalization import LayerNormalization
 
-        return LayerNorm
+        return LayerNormalization
 
 
 @config_class(dynamic_type={NormalizationConfig: "rms_norm"})
@@ -150,56 +131,6 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import RMSNorm
+        from fast_llm.layers.common.normalization.normalization import RMSNormalization
 
-        return RMSNorm
-
-
-@config_class()
-class PeftConfig(BaseModelConfig):
-    @abc.abstractmethod
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        pass
-
-
-@config_class()
-class NoPeftConfig(PeftConfig):
-    _abstract = False
-
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        return linear
-
-
-@config_class()
-class LoRAConfig(PeftConfig):
-    _abstract = False
-
-    rank: int = Field(
-        default=8,
-        desc="The LoRA rank, i.e. the size of the intermediate dimension.",
-        hint=FieldHint.stability,
-    )
-    alpha: float = Field(
-        default=8.0,
-        desc="The LoRA scaling parameter.",
-        hint=FieldHint.stability,
-    )
-    dropout: float = Field(
-        default=0.0,
-        desc="Dropout rate for LoRA.",
-        hint=FieldHint.stability,
-    )
-
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        from fast_llm.layers.common.peft import lora_linear
-
-        # TODO: Init method?
-        return lora_linear(
-            linear,
-            linear.weight.param_init_method,
-            linear.weight.param_init_method,
-            self.rank,
-            self.alpha,
-            self.dropout,
-            **kwargs,
-        )
+        return RMSNormalization

@@ -1,14 +1,13 @@
-import abc
 import functools
 import logging
-import math
 import typing
 
 import torch
 
 from fast_llm.core.distributed import ReduceOp
 from fast_llm.core.ops import reduce_op
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.initialization import Initializer, LambdaInitializer
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
@@ -139,30 +138,11 @@ class TensorMeta(torch.Tensor):
             **kwargs,
         )
 
-    @classmethod
-    def from_tensor_space(
-        cls,
-        dim_names: tuple[str, ...],
-        tensor_space: TensorSpace,
-        *,
-        tensor_name: str = "",
-        dtype: torch.dtype = torch.float32,
-        reductions: tuple[tuple[str, ReduceOp], ...] = (),
-        **kwargs: typing.Any,
-    ) -> typing.Self:
-        dims = tuple(tensor_space[dim_name] for dim_name in dim_names)
-        if reductions:
-            # kwarg not available for ParameterMeta, so we only provide if necessary.
-            kwargs["reductions"] = tuple(
-                (tensor_space.distributed_config.get_distributed_dim(name), op) for name, op in reductions
-            )
-        return cls.from_dims(dims, tensor_name=tensor_name, dtype=dtype, **kwargs)
-
     @property
     def global_shape(self) -> torch.Size:
         return torch.Size([dim.global_size for dim in self.dims])
 
-    def local_to_global(self, tensor: torch.Tensor, *, distributed: Distributed) -> tuple[torch.Tensor, ...]:
+    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, ...]:
         """
         Reconstruct a global tensor from its distributed slices. Support lazy-loaded safetensor slices.
         Returns a view of the input tensor (or the input tensor itself) when possible.
@@ -172,7 +152,7 @@ class TensorMeta(torch.Tensor):
         Assert.eq(tensor.shape, self.shape)
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
-        is_first_rank, modified = distributed.config.tensor_rank == 0, False
+        is_first_rank, modified = True, False
 
         for dim, tensor_dim in enumerate(self.dims):
             if tensor_dim.is_parallel:
@@ -240,12 +220,8 @@ class TensorMeta(torch.Tensor):
         return validate_tensor(tensor, self, device)
 
     def replace_tensor_parallel_dim(self, distributed_dim: DistributedDim) -> "TensorMeta":
-        """
-        Replace the tensor-parallel `DistributedDim` in `meta`, preserving the local size.
-        Requires for advanced tensor manipulations,
-        ex. turn tensor-parallel slices of a tensor into slices of a different tensor-parallel size.
-        Note: This will turn `ParameterMeta` into `TensorMeta`
-        """
+        # Replace the tensor-parallel `DistributedDim` in `meta`.
+        # Note: This will turn `ParameterMeta` into `TensorMeta`
         if not self.is_tensor_parallel:
             return self
         dims = list(self.dims)
@@ -365,70 +341,3 @@ def accumulate_gradient(param: torch.Tensor, grad: torch.Tensor) -> None:
         triton_copy(grad, param.grad_buffer)  # noqa
     else:
         triton_add(grad, param.grad_buffer, out=param.grad_buffer)  # noqa
-
-
-class Initializer(abc.ABC):
-    @abc.abstractmethod
-    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
-        pass
-
-    requires_global_initialization = False
-
-
-class LambdaInitializer(Initializer):
-    def __init__(
-        self,
-        init_method: typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None],
-        requires_global_initialization: bool = False,
-    ) -> None:
-        self._init_method = init_method
-        self.requires_global_initialization = requires_global_initialization
-
-    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
-        return self._init_method(meta, tensor, generator)
-
-
-def init_fill_(value: float) -> LambdaInitializer:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
-        tensor.fill_(value)
-
-    return LambdaInitializer(init_)
-
-
-init_zeros_ = init_fill_(0.0)
-init_ones_ = init_fill_(1.0)
-
-
-def init_normal_(
-    mean: float = 0.0, std: float = 1.0, min_val: float | None = None, max_val: float | None = None
-) -> LambdaInitializer:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
-        tensor = tensor.normal_(mean, std, generator=generator)
-        if min_val is not None or max_val is not None:
-            tensor.clamp_(min=min_val, max=max_val)
-
-    return LambdaInitializer(init_)
-
-
-def init_kaiming_(d_in: float) -> LambdaInitializer:
-    return init_normal_(0.0, math.sqrt(2.0 / d_in))
-
-
-def init_uniform_(
-    low: float = 0.0, high: float = 1.0, min_val: float | None = None, max_val: float | None = None
-) -> LambdaInitializer:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
-        tensor = tensor.uniform_(low, high, generator=generator)
-        if min_val is not None or max_val is not None:
-            tensor.clamp_(min=min_val, max=max_val)
-
-    return LambdaInitializer(init_)
-
-
-def init_uniform_centered_(high: float, max_val: float | None = None, mean: float = 0.0) -> LambdaInitializer:
-    return init_uniform_(
-        mean - high,
-        mean + high,
-        min_val=None if max_val is None else mean - max_val,
-        max_val=None if max_val is None else mean + max_val,
-    )

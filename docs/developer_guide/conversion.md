@@ -230,21 +230,21 @@ Continuing our `AwesomeModel` handler example, we define:
 
 ```python
     def _create_weight_converters(self) -> list[WeightConverter]:
-    converters = []
-    # The set of converters may depend on the base model configuration, which is accessible through `self._model.base_model_config`.
-    num_layers = self._model.config.base_model.transformer.num_layers
+        converters = []
+        # The set of converters may depend on the base model configuration, which is accessible through `self._model.base_model_config`.
+        num_layers = self._model.config.base_model.transformer.num_layers
 
-    # A simple renaming example, for the word embeddings.
-    converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
+        # A simple renaming example, for the word embeddings.
+        converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
 
-    # We usually want to loop dynamically over layers
-    for i in range(num_layers):
-        # A `SplitWeightConverter` example, splitting a weight in two.
-        converters.append(SplitWeightConverter(
-            f"layers.{i + 1}.weight",
-            (f"model.layers.{i}.weight_1", f"model.layers.{i}.weight_2"),
-        ))
-    return converters
+        # We usually want to loop dynamically over layers
+        for i in range(num_layers):
+            # A `SplitWeightConverter` example, splitting a weight in two.
+            converters.append(SplitWeightConverter(
+                f"layers.{i + 1}.weight",
+                (f"model.layers.{i}.weight_1", f"model.layers.{i}.weight_2"),
+            ))
+        return converters
 ```
 
 And that's it! We're ready to use the new checkpoint format in Fast-LLM.

@@ -3,7 +3,8 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.config_utils.initialization import init_zeros_
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
     input_parallel_linear_autograd,
@@ -14,7 +15,7 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
-from fast_llm.tensor import ParameterMeta, init_zeros_
+from fast_llm.tensor import ParameterMeta
 
 logger = logging.getLogger(__name__)
 

@@ -56,15 +56,14 @@ class BatchContext:
 
     def __repr__(self):
         return (
-            f"BatchContext(iteration={self.iteration},"
-            f" batch_len={len(self.batch)},"
+            f"BatchContext(batch_len={len(self.batch)},"
             f" inputs={list(self.inputs)},"
             f" contexts={list(self.contexts)},"
             f" losses={ {key: len(value) for key, value in self.losses.items()}},"
         )
 
 
-class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
+class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
     _compute_stream: torch.cuda.Stream
     _data_stream: torch.cuda.Stream
@@ -192,11 +191,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
 
         # Run the steps according to the schedule
         for step in schedule:
-            try:
-                self._train_step(context, step)
-            except Exception as e:
-                # Add debugging information to errors, which may be cryptic outside the forward pass.
-                raise RuntimeError(f"Schedule step {step} failed, context = {context}: {e}")
+            self._train_step(context, step)
 
         # Make sure we used all the data. This also ensures the generator terminates and prevents a memory leak.
         try:
@@ -400,7 +395,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             step.recv_event.wait()
             self._record_event(context, EventType.compute_wait_pipe, step)
 
-    def _forward(self, context: BatchContext, step: Step) -> torch.Tensor | None:
+    def _forward(self, context: BatchContext, step: Step) -> None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
             context.batch[step.data_index],

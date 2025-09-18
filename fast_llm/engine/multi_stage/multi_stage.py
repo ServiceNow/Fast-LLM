@@ -12,7 +12,7 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
-from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
-    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
     _flat_shard: torch.Tensor

@@ -3,22 +3,17 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import (
-    CompositeTensorDim,
-    ConcatenatedTensorDim,
-    DefaultDimNames,
-    TensorDim,
-    TensorSpace,
-)
-from fast_llm.engine.distributed.config import DistributedDimNames
+from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig
-from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
-from fast_llm.utils import Assert, div, get_lr_scale
+from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias, init_kaiming_
+from fast_llm.tensor import ParameterMeta
+from fast_llm.utils import Assert, combine_lr_scales, div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -37,7 +32,7 @@ except (ImportError, RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-class Mamba2(Mixer):
+class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
@@ -46,27 +41,24 @@ class Mamba2(Mixer):
 
     def __init__(
         self,
-        config: SSMConfig,
-        tensor_space: TensorSpace,
+        config: ConfigType,
+        block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
         block_index: int,
-        transformer_config: TransformerConfig,
+        name: str,
+        lr_scale: float | None,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
-        self._config: SSMConfig = config
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         Assert.eq(self._config.activation_type, ActivationType.silu)
-        layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         num_heads = div(self._config.d_inner, self._config.state_size)
         num_head_groups = div(self._config.d_xb, self._config.state_size)
 
-        hidden_dim: TensorDim = tensor_space[TransformerDimNames.hidden]
         state_dim = TensorDim("state", self._config.state_size)
 
         head_groups_dim = TensorDim(
-            "head_groups",
-            num_head_groups,
-            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor),
+            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         )
         group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
 
@@ -89,12 +81,14 @@ class Mamba2(Mixer):
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
-
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
+
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
+
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,
-                tensor_space[DefaultDimNames.scalar],
+                scalar_dim,
                 convolution_kernel_dim,
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
@@ -109,16 +103,15 @@ class Mamba2(Mixer):
             hidden_dim,
             inner_projection_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(transformer_config.hidden_size),
+            weight_init_method=init_kaiming_(block_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-
         self.dt_in_proj = Linear(
             hidden_dim,
             dt_rank_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(transformer_config.hidden_size),
+            weight_init_method=init_kaiming_(block_config.hidden_size),
             lr_scale=lr_scale,
         )
         self.dt_proj = OutputParallelLinear(
@@ -158,20 +151,27 @@ class Mamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        if self._debug_level:
+
+        if self._debug.enabled:
             self._xz_dims = (
-                TransformerDimNames.batch,
+                BlockDimNames.batch,
                 inner_dim,
-                TransformerDimNames.sequence_q,
+                BlockDimNames.sequence_q,
             )
             self._bc_dims = (
-                TransformerDimNames.batch,
+                BlockDimNames.batch,
                 heads_dim,
                 state_dim,
-                TransformerDimNames.sequence_q,
+                BlockDimNames.sequence_q,
             )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
         assert _causal_conv1d_available
 
@@ -180,7 +180,7 @@ class Mamba2(Mixer):
         inner_projection = self.in_proj(input_)
         dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
         # Standardize to (batch, sequence, local_inner_projection)
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
             dt = dt.transpose(0, 1)
 
@@ -225,12 +225,12 @@ class Mamba2(Mixer):
         # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
         dt = dt.transpose(1, 2)
 
-        if self._debug_level:
-            self._debug_log(z, "z", self._xz_dims, kwargs)
-            self._debug_log(x, "x", self._xz_dims, kwargs)
-            self._debug_log(b, "b", self._bc_dims, kwargs)
-            self._debug_log(c, "c", self._bc_dims, kwargs)
-            self._debug_log(dt, "dt", self._xz_dims, kwargs)
+        if self._debug.enabled:
+            self._debug(z, "z", self._xz_dims, kwargs)
+            self._debug(x, "x", self._xz_dims, kwargs)
+            self._debug(b, "b", self._bc_dims, kwargs)
+            self._debug(c, "c", self._bc_dims, kwargs)
+            self._debug(dt, "dt", self._xz_dims, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -244,12 +244,12 @@ class Mamba2(Mixer):
             delta_softplus=True,
         )
 
-        if self._debug_level:
-            self._debug_log(y, "y", self._xz_dims, kwargs)
+        if self._debug.enabled:
+            self._debug(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
         # (batch/sequence, sequence/batch, local_heads * state)

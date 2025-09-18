@@ -29,7 +29,6 @@ def set_testing_global_variables():
             num_gpus = len(gpus)
             gpus = [gpus[(i + worker_id) % num_gpus] for i in range(num_gpus)]
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in gpus)
-    # TODO: This might help with some issues, but slows down testing significantly.
     # os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(SHARED_RESULT_PATH / "torchinductor_cache")
     # os.environ["TRITON_CACHE_DIR"] = str(SHARED_RESULT_PATH / "triton_cache")
 

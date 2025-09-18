@@ -1,6 +1,5 @@
 import datetime
 import logging
-import typing
 
 import torch
 import torch.distributed
@@ -145,8 +144,6 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     TODO: Make more variables private.
     TODO: Clarify cpu support.
     """
-
-    config_class: typing.ClassVar[type[DistributedConfig]] = DistributedConfig
 
     def __init__(self, config: DistributedConfig, use_cpu: bool = False):
         super().__init__(config)

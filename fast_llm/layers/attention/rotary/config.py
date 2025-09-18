@@ -5,12 +5,12 @@ import warnings
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.transformer.rotary.rotary import DefaultRotary, Llama3Rotary, NoRotary, Rotary, YarnRotary
+    from fast_llm.layers.attention.rotary.rotary import DefaultRotary, Llama3Rotary, NoRotary, Rotary, YarnRotary
 
 
 @config_class(registry=True)
@@ -29,8 +29,8 @@ class RotaryConfig(BaseModelConfig):
             return NoRotaryConfig._from_dict(default, strict, flat)
         return super()._from_dict(default, strict=strict, flat=flat)
 
-    def build(self, tensor_space: TensorSpace | None = None) -> "Rotary":
-        return self._get_configurable_class()(self, tensor_space)
+    def get_layer(self, kv_channels_dim: TensorDim) -> "Rotary":
+        return self._get_configurable_class()(self, kv_channels_dim)
 
     @classmethod
     @abc.abstractmethod
@@ -44,7 +44,7 @@ class NoRotaryConfig(RotaryConfig):
 
     @classmethod
     def _get_configurable_class(self) -> "type[NoRotary]":
-        from fast_llm.layers.transformer.rotary.rotary import NoRotary
+        from fast_llm.layers.attention.rotary.rotary import NoRotary
 
         return NoRotary
 
@@ -75,7 +75,7 @@ class DefaultRotaryConfig(RotaryConfig):
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
     def _get_configurable_class(self) -> "type[DefaultRotary]":
-        from fast_llm.layers.transformer.rotary.rotary import DefaultRotary
+        from fast_llm.layers.attention.rotary.rotary import DefaultRotary
 
         return DefaultRotary
 
@@ -97,7 +97,7 @@ class Llama3RotaryConfig(DefaultRotaryConfig):
         Assert.gt(self.high_frequency_factor, self.low_frequency_factor)
 
     def _get_configurable_class(self) -> "type[Llama3Rotary]":
-        from fast_llm.layers.transformer.rotary.rotary import Llama3Rotary
+        from fast_llm.layers.attention.rotary.rotary import Llama3Rotary
 
         return Llama3Rotary
 
@@ -137,6 +137,6 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         super()._validate()
 
     def _get_configurable_class(self) -> "type[YarnRotary]":
-        from fast_llm.layers.transformer.rotary.rotary import YarnRotary
+        from fast_llm.layers.attention.rotary.rotary import YarnRotary
 
         return YarnRotary

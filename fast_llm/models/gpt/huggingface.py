@@ -9,7 +9,7 @@ from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
-from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
 
@@ -86,12 +86,12 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
 
         if past_key_values is not None:
             # The transformers will use the past keys and values to this list.
-            kwargs[TransformerKwargs.past_key_values] = past_key_values
+            kwargs[AttentionKwargs.past_key_values] = past_key_values
             # TODO: preprocess needs to know about the past.
             raise NotImplementedError()
         if use_cache:
             # The transformers will save the present keys and values to this list.
-            kwargs[TransformerKwargs.presents] = []
+            kwargs[AttentionKwargs.presents] = []
 
         if output_hidden_states:
             kwargs["output_hidden_states"] = True
@@ -117,11 +117,11 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
                 outputs = (logits,)
 
             if use_cache:
-                outputs += (kwargs[TransformerKwargs.presents],)
+                outputs += (kwargs[AttentionKwargs.presents],)
             return outputs
 
         return transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
             hidden_states=hidden_states,
-            past_key_values=kwargs[TransformerKwargs.presents],
+            past_key_values=kwargs[AttentionKwargs.presents],
         )

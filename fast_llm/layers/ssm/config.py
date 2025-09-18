@@ -1,14 +1,12 @@
 import enum
 import typing
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.tensor import Initializer
+    from fast_llm.engine.config_utils.initialization import Initializer
 
 
 class SSMBlockType(enum.StrEnum):
@@ -23,9 +21,9 @@ class SSMBlockType(enum.StrEnum):
 
     def get_mixer_class(self):
         if self == SSMBlockType.mamba:
-            from fast_llm.layers.ssm.mamba_layer import MambaLayer
+            from fast_llm.layers.ssm.mamba import Mamba
 
-            return MambaLayer
+            return Mamba
         elif self == SSMBlockType.mamba2:
             from fast_llm.layers.ssm.mamba2 import Mamba2
 
@@ -43,40 +41,34 @@ class DTInitType(enum.StrEnum):
     random = "random"
 
     def get_init_method(self, scale: float) -> "Initializer":
-        from fast_llm.tensor import init_fill_, init_uniform_centered_
+        from fast_llm.engine.config_utils.initialization import init_fill_, init_uniform_centered_
 
         return init_fill_(scale) if self == DTInitType.constant else init_uniform_centered_(scale)
 
 
 @config_class()
-class SSMConfig(LLMBlockConfig):
+class SSMConfig(Config):
     _abstract = False
-
-    # Normalization
-    normalization: NormalizationConfig = Field(
-        desc="Configuration for the normalization layers architecture.",
-        hint=FieldHint.architecture,
-    )
 
     # Model dimensions
     # TODO: Remove (redundant default)
     expansion_factor: int = Field(
         default=2,
-        desc="Expansion factor for Mamba blocks.",
+        desc="Expansion factor.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
     # head_size [MambaLayer, Mamba2, DiscreteMamba2]
     state_size: int = Field(
         default=16,
-        desc="State size for Mamba blocks.",
+        desc="State size.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
     # [MambaLayer, Mamba2, DiscreteMamba2]
     conv_kernel_dimension: int = Field(
         default=4,
-        desc="Conv kernel dimension for Mamba blocks.",
+        desc="Conv kernel dimension.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
@@ -89,19 +81,19 @@ class SSMConfig(LLMBlockConfig):
     # head_groups [DiscreteMamba2]
     n_qk_heads: int = Field(
         default=32,
-        desc="Number of QK heads for Mamba2 blocks.",
+        desc="Number of QK heads.",
         hint=FieldHint.architecture,
     )
     # heads [DiscreteMamba2]# TODO: Remove? (redundant)
     n_v_heads: int = Field(
         default=32,
-        desc="Number of V heads for Mamba2 blocks.",
+        desc="Number of V heads.",
         hint=FieldHint.architecture,
     )
     # c_size [MambaLayer, Mamba2, DiscreteMamba2]?
     d_inner: None | int = Field(
         default=None,
-        desc="Inner dimension for Mamba2 blocks.",
+        desc="Inner dimension.",
         hint=FieldHint.core,
     )
     # xb_size [Mamba2]
@@ -187,7 +179,3 @@ class SSMConfig(LLMBlockConfig):
                 self.activation_type = ActivationType.silu
         super()._validate()
         Assert.geq(self.dt_max, self.dt_min)
-
-    def setup_tensor_space(self, tensor_space: TensorSpace, block_type: SSMBlockType) -> None:
-        # Handled in the model.
-        pass

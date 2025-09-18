@@ -4,21 +4,17 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import (
-    CompositeTensorDim,
-    ConcatenatedTensorDim,
-    DefaultDimNames,
-    TensorDim,
-    TensorSpace,
-)
-from fast_llm.engine.distributed.config import DistributedDimNames
+from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
-from fast_llm.utils import div, get_lr_scale
+from fast_llm.layers.ssm.mamba import init_kaiming_
+from fast_llm.tensor import ParameterMeta
+from fast_llm.utils import combine_lr_scales, div
 
 logger = logging.getLogger(__name__)
 
@@ -39,31 +35,31 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-class DiscreteMamba2(Mixer):
-    """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
+class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
+    """
+    This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+    """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
 
     def __init__(
         self,
-        config: SSMConfig,
+        config: ConfigType,
+        block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
         block_index: int,
-        tensor_space: TensorSpace,
-        transformer_config: TransformerConfig,
+        name: str,
+        lr_scale: float | None,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
-        self._config: SSMConfig = config
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
-
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         state_dim = TensorDim("state", self._config.state_size)
         v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
 
         head_groups_dim = TensorDim(
             "head_groups",
             self._config.n_qk_heads,
-            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor),
+            self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
         )
         group_heads_dim = TensorDim("group_heads", div(self._config.n_v_heads, self._config.n_qk_heads))
         heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
@@ -86,13 +82,15 @@ class DiscreteMamba2(Mixer):
         # local_bc_size = local_head_groups * state
         self._local_bc_size = bc_dim.size
 
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
+
         # TODO: double check initializations
         # Projections
         self.in_proj = OutputParallelLinear(
             hidden_dim,
             inner_projection_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(transformer_config.hidden_size),
+            weight_init_method=init_kaiming_(block_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -106,7 +104,7 @@ class DiscreteMamba2(Mixer):
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 convolution_dim,
-                tensor_space[DefaultDimNames.scalar],
+                scalar_dim,
                 convolution_kernel_dim,
             ),
             init_method=init_uniform_centered_(
@@ -135,22 +133,27 @@ class DiscreteMamba2(Mixer):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        sequence_length = kwargs[TransformerKwargs.sequence_q_dim].global_size
+        sequence_length = kwargs[BlockKwargs.sequence_q_dim].global_size
 
         # Pad input to nearest multiple of chunklen
         padded_length = (1 + (sequence_length - 1) // self._config.chunk_size) * self._config.chunk_size
         if padded_length != sequence_length:
-            assert not kwargs[TransformerKwargs.sequence_first] and input_.size(1) == sequence_length
+            assert not kwargs[BlockKwargs.sequence_first] and input_.size(1) == sequence_length
             input_ = torch.nn.functional.pad(input_, (0, 0, 0, padded_length - sequence_length))
 
-        # inner_projection : (batch/local_or_padded_sequence, local_sequence/batch, hidden)
-        #   -> (batch/padded_sequence, sequence/batch, local_inner_projection)
+        # -> (batch/padded_sequence, sequence/batch, local_inner_projection
         inner_projection = self.in_proj(input_)
         # Standardize to (batch, padded_sequence, local_inner_projection)
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
 
         xBC, z, A_log = torch.split(
@@ -162,7 +165,6 @@ class DiscreteMamba2(Mixer):
             ],
             dim=-1,
         )
-
         # Convolutional layer
         # xbc: (batch, padded_sequence, local_heads * head_size + 2 * local_head_groups * state)
         xBC = self.convolutional_forward(xBC, padded_length)
@@ -203,7 +205,7 @@ class DiscreteMamba2(Mixer):
 
         # y: (batch, padded_sequence, local_heads, head_size) -> (batch, sequence, local_heads * head_size)
         y = ((y + Du).flatten(2, 3) * torch.nn.functional.silu(z))[:, :sequence_length]
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)

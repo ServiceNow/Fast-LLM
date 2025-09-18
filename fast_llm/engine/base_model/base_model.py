@@ -7,7 +7,6 @@ import torch.nn
 
 from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -20,11 +19,18 @@ if typing.TYPE_CHECKING:
 class Module(torch.nn.Module, abc.ABC):
     """ """
 
-    def forward(self, input_, kwargs):
-        """
-        Run a forward pass for the module, with autograd support.
-        """
-        raise NotImplementedError()
+    _is_setup: bool = False
+    _distributed: Distributed
+
+    def __init__(self, distributed_config: DistributedConfig):
+        self._distributed_config = distributed_config
+        super().__init__()
+
+    def setup(self, distributed: Distributed) -> None:
+        assert not self._is_setup
+        distributed.check_config(self._distributed_config)
+        self._distributed = distributed
+        self._is_setup = True
 
 
 class Layer(Module):
@@ -39,9 +45,9 @@ class Layer(Module):
 
 
 class Sequential(Layer):
-    def __init__(self, layers: list[Layer]):
-        super().__init__()
-        self.layers = torch.nn.ModuleList(layers)
+    def __init__(self, distributed_config: DistributedConfig):
+        super().__init__(distributed_config)
+        self.layers = torch.nn.ModuleList(self.get_layers())
 
     def __getitem__(self, item):
         return self.layers[item]
@@ -59,6 +65,15 @@ class Sequential(Layer):
             input_ = layer(input_, kwargs, losses, metrics)
         return input_
 
+    @abc.abstractmethod
+    def get_layers(self) -> list[Layer]:
+        pass
+
+    def setup(self, distributed: Distributed) -> None:
+        super().setup(distributed)
+        for layer in self.layers:
+            layer.setup(distributed)
+
 
 @dataclasses.dataclass()
 class LossDef:
@@ -71,29 +86,14 @@ class LossDef:
     dtype: torch.dtype = torch.float32
 
 
-class SequentialLayers(Sequential, abc.ABC):
-    # Small class defined to fix the MRO of BaseModel.__init__
-    def __init__(self):
-        super().__init__(self.get_layers())
-
-    @abc.abstractmethod
-    def get_layers(self) -> list[Layer]:
-        pass
-
-
-class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], SequentialLayers, abc.ABC):
-    config_class: typing.ClassVar[type[BaseModelConfig]] = BaseModelConfig
-    _is_setup: bool = False
+class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequential):
 
     def __init__(
         self,
         config: BaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        self._tensor_space: TensorSpace = TensorSpace(distributed_config)
-        config.setup_tensor_space(self._tensor_space)
-
-        super().__init__(config)
+        super().__init__(config, distributed_config)
 
         for key, value in self.named_parameters():
             Assert.custom(isinstance, value, ParameterMeta)
@@ -103,12 +103,6 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         # Reference models
         # TODO: Add basic handling (preprocessor) in this class.
         self._reference_models: dict[str, "InferenceRunner"] = {}
-
-    def setup(self, distributed: Distributed) -> None:
-        assert not self._is_setup
-        distributed.check_config(self._tensor_space.distributed_config)
-        self._tensor_space.setup(distributed)
-        self._is_setup = True
 
     @abc.abstractmethod
     def get_layers(self) -> list[Layer]:

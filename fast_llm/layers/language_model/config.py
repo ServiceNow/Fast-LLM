@@ -2,21 +2,11 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
+from fast_llm.layers.attention.config import TransformerConfig
+from fast_llm.layers.attention.rotary.config import NoRotaryConfig
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
-
-
-class LanguageModelDimNames:
-    # Embedding dimensions
-    position_embed = "position_embed"
-    vocab = "vocab"
-    vocab_tp = "vocab_tp"
-    # Misc
-    scalar = "scalar"
 
 
 class LanguageModelLossNames:
@@ -33,7 +23,7 @@ class LanguageModelLossNames:
         return f"language_model_loss_{index}"
 
 
-class LanguageModelKwargs:
+class LanguageModelKwargs(BlockKwargs):
     position_ids = "position_ids"
     # TODO: These are generic
     labels = "labels"
@@ -46,6 +36,7 @@ class LanguageModelKwargs:
 
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
+    # TODO: block
     transformer: TransformerConfig = Field(
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
@@ -234,16 +225,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(
                 len(self.transformer.per_layer_lr_scale), self.transformer.num_layers + self.prediction_heads - 1 + 1
             )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space)
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-
-        # Embedding dimensions
-        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.position_embed, self.max_position_embeddings))
-        # TODO: Need both?
-        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
-        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
 
     @property
     def num_absolute_position_embeddings(self) -> int:
