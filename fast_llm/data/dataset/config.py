@@ -204,11 +204,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         desc="The blending weight of each dataset.",
         hint=FieldHint.core,
     )
-    legacy: bool = Field(
-        default=False,
-        desc="Use the legacy formulas for sub-dataset seeds and sample sizes.",
-        hint=FieldHint.deprecated,
-    )
 
     def _validate(self) -> None:
         self.weights = normalize_probabilities(self.weights)
@@ -231,20 +226,10 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                     sampling,
                     parameters=dataclasses.replace(
                         sampling.parameters,
-                        num_samples=(
-                            math.ceil(
-                                weight
-                                * (
-                                    sampling.parameters.num_samples
-                                    + 5 * (sampling.parameters.num_samples * (1 - weight)) ** 0.5
-                                )
-                            )
-                            if self.legacy
-                            else math.ceil(weight * sampling.parameters.num_samples) + 1
-                        ),
+                        num_samples=math.ceil(weight * sampling.parameters.num_samples) + 1,
                     ),
                     # TODO: Seed may not be unique for nested blended datasets.
-                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
+                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * 697}),
                 ),
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))

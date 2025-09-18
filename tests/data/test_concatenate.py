@@ -44,7 +44,7 @@ def test_gpt_concatenate_data():
     get_test_data_and_compare_samples(
         {
             "datasets": {
-                "Training": {
+                "training": {
                     "type": "concatenated",
                     "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)],
                 }

@@ -39,8 +39,8 @@ class BackupAttentionPreprocessor(Preprocessor):
             self._mask.triu_(-self._config.window_size + 1)
         self._mask_value = torch.full(
             [],
-            torch.finfo(self._distributed_config.training_dtype.torch).min,
-            dtype=self._distributed_config.training_dtype.torch,
+            torch.finfo(self._distributed_config.compute_dtype.torch).min,
+            dtype=self._distributed_config.compute_dtype.torch,
             device=device,
         )
 
@@ -80,7 +80,7 @@ class BackupAttentionPreprocessor(Preprocessor):
         kwargs[AttentionKwargs.attention_mask_value] = TensorMeta.from_dims(
             (scalar_dim,),
             tensor_name=AttentionKwargs.attention_mask_value,
-            dtype=self._distributed_config.training_dtype.torch,
+            dtype=self._distributed_config.compute_dtype.torch,
         )
 
 

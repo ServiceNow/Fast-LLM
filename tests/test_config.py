@@ -95,7 +95,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 "output_layer": {"tied_weight": False},
             },
             "multi_stage": {"zero_stage": 3},
-            "distributed": {"training_dtype": "bfloat16"},
+            "distributed": {"compute_dtype": "bfloat16"},
         }
     )
     with NoAutoValidate():
@@ -121,7 +121,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         {
             "model": {
                 "base_model": base_model_update,
-                "distributed": {"seed": 1234, "training_dtype": "float16"},
+                "distributed": {"seed": 1234, "compute_dtype": "float16"},
             },
             "pretrained": {"format": "fast_llm", "path": config_path, "load_config": load_config},
         }
@@ -131,7 +131,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
 
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
-    expected_config["distributed"].update({"seed": 1234, "training_dtype": "float16"})
+    expected_config["distributed"].update({"seed": 1234, "compute_dtype": "float16"})
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
             "embeddings_layer": {

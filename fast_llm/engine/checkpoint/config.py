@@ -4,7 +4,6 @@ import enum
 import logging
 import pathlib
 import typing
-import warnings
 
 import yaml
 
@@ -58,9 +57,7 @@ class CheckpointFormat(abc.ABC):
 
 
 class DistributedCheckpointFormat(CheckpointFormat):
-    # TODO v0.3: Add `enforce_version_match`
     name: typing.ClassVar[str] = "distributed"
-    enforce_architecture_match: typing.ClassVar[bool] = True
 
     @classmethod
     def get_handler_class(cls) -> type["DistributedCheckpointHandler"]:
@@ -124,17 +121,6 @@ class CheckpointStateConfigBase(CheckpointConfigBase):
     # Defaults and descriptions are set in derived classes.
     model_weights: bool = Field(default=True, hint=FieldHint.feature)
     optimizer_state: bool = Field(default=None, hint=FieldHint.feature)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        cls._handle_renamed_field(default, "load_weights", "model_weights")
-        cls._handle_renamed_field(default, "load_optimizer", "optimizer_state")
-        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
@@ -203,23 +189,6 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
         desc="Configuration to save/load.",
         hint=FieldHint.core,
     )
-
-    def _validate(self) -> None:
-        if self.load_config == "architecture":
-            raise NotImplementedError("load_config==`architecture` is no longer supported.")
-        super()._validate()
-        if (
-            self.format in (DistributedCheckpointFormat, FastLLMCheckpointFormat)
-            and "load_config" not in self._explicit_fields
-        ):
-            warnings.warn(
-                "The default behaviour for model configuration loading has changed (May 2025)."
-                "All model parameters are now loaded, not just the architecture parameters."
-                "Please make sure this doesn't lead to unexpected breaking changes."
-                "Suppress this warning by setting `load_config = model` explicitly.",
-            )
-        if self.format.enforce_architecture_match:
-            assert self.load_config.load_base_model
 
 
 @config_class()

@@ -541,7 +541,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def _save_checkpoint(
         self, config: TrainingCheckpointBaseConfig, metrics: dict[str, dict[str, float | int]] | None
     ) -> None:
-        # TODO v0.3: Move barrier, ok file to FastLLMModel
+        # TODO: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
@@ -600,7 +600,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
-        # TODO v0.3: Move barrier, ok file to FastLLMModel
+        # TODO: Move barrier, ok file to FastLLMModel
         safe_barrier(
             self._distributed.world_group,
             f"load {config.save_name} {iteration} exit",

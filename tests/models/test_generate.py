@@ -61,11 +61,11 @@ def _get_fast_llm_model(
     updates = {}
     if use_flash_attention:
         updates[("base_model", "decoder", "block", "mixer", "use_flash_attention")] = True
-        updates[("distributed", "training_dtype")] = "bf16"
+        updates[("distributed", "compute_dtype")] = "bf16"
     else:
         updates[("base_model", "decoder", "block", "mixer", "use_flash_attention")] = False
         if use_bf16:
-            updates[("distributed", "training_dtype")] = "bf16"
+            updates[("distributed", "compute_dtype")] = "bf16"
     return HuggingfaceGPTModelForCausalLM.from_pretrained(
         CheckpointLoadConfig(
             path=model_path,
@@ -87,11 +87,11 @@ def _get_fast_llm_model_from_model(
 
     if use_flash_attention:
         updates[("model", "base_model", "decoder", "block", "mixer", "use_flash_attention")] = True
-        updates[("model", "distributed", "training_dtype")] = "bf16"
+        updates[("model", "distributed", "compute_dtype")] = "bf16"
     else:
         updates[("model", "base_model", "decoder", "block", "mixer", "use_flash_attention")] = False
         if use_bf16:
-            updates[("model", "distributed", "training_dtype")] = "bf16"
+            updates[("model", "distributed", "compute_dtype")] = "bf16"
 
     config = PretrainedGPTModelConfig.from_dict({}, updates)
     multi_stage = config.model.get_model_class()(config.model)

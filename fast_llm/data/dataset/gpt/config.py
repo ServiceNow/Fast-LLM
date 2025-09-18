@@ -1,10 +1,8 @@
 import dataclasses
 import enum
-import json
 import pathlib
 import time
 import typing
-import warnings
 
 import yaml
 
@@ -22,8 +20,7 @@ from fast_llm.data.dataset.config import (
     SamplingData,
     SamplingParameters,
 )
-from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
@@ -41,7 +38,6 @@ class ShufflingType(str, enum.Enum):
     skip_first_epoch = "skip_first_epoch"
     # Disable shuffling entirely.
     disabled = "disabled"
-    legacy = "legacy"
 
 
 @config_class()
@@ -222,45 +218,6 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
         return config
 
 
-# Add user-friendly names for the configs.
-@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated_memmap"})
-class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
-    # TODO v0.3: Remove.
-    _abstract: typing.ClassVar[bool] = False
-    path: pathlib.Path = Field(
-        default=None,
-        desc="The path to a dataset directory.",
-        hint=FieldHint.core,
-    )
-
-    def _validate(self) -> None:
-        warnings.warn("`concatenated_memmap` dataset is deprecated. Use `file` instead.", DeprecationWarning)
-        super()._validate()
-
-    def build(self) -> "GPTConcatenatedDataset":
-
-        assert self.path.is_dir()
-        index_path = self.path / "index.txt"
-
-        if index_path.is_file():
-            prefixes = [self.path / line.strip() for line in index_path.open("r").readlines()]
-        else:
-            warnings.warn(
-                f"The dataset path {self.path} points to a directory."
-                " The dataset will be indexed automatically, which may be unsafe."
-                " We recommend using an index file instead."
-            )
-            prefixes = [
-                path.with_suffix("")
-                for path in self.path.iterdir()
-                if path.suffix == ".idx" and path.is_file() and path.with_suffix(".bin").is_file()
-            ]
-        dataset_config = GPTConcatenatedDatasetConfig.from_dict(
-            {"datasets": [{"type": "memmap", "path": prefix} for prefix in prefixes]}
-        )
-        return dataset_config.build()
-
-
 @config_class()
 class FimConfig(Config):
     """
@@ -268,7 +225,7 @@ class FimConfig(Config):
     """
 
     rate: float = Field(
-        # TODO: Use meaningful default now that fim is a wrapper? (bad for legacy config)
+        # TODO: Use meaningful default now that fim is a wrapper?
         default=0.0,
         desc="FIM rate for each sample.",
         hint=FieldHint.core,
@@ -350,131 +307,6 @@ class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
         return GPTFimDataset(self, self.dataset.build_and_sample(sampling), sampling)
-
-
-class LegacyDatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    """
-
-    list = "list"
-    file = "file"
-    random = "random"
-
-
-def _validate_split(value: list[int]) -> list[int]:
-    Assert.leq(len(value), 3)
-    return value + [0] * (len(value) - 3)
-
-
-def _validate_path(value: str | list[str]) -> list[str]:
-    return [value] if isinstance(value, str) else value
-
-
-@config_class()
-class GPTLegacyConfig(Config):
-    split: list[float] = Field(
-        default_factory=lambda: [969, 30, 1],
-        desc="Split ratio for train, valid and test datasets.",
-        hint=FieldHint.deprecated,
-        valid=_validate_split,
-    )
-    format: LegacyDatasetSource = Field(
-        default=LegacyDatasetSource.list,
-        desc="Format for the dataset definition.",
-        hint=FieldHint.deprecated,
-    )
-    path: list[str] = Field(
-        default_factory=list,
-        desc="Path or list of paths and weights.",
-        hint=FieldHint.deprecated,
-        valid=_validate_path,
-    )
-    fim: FimConfig = Field(
-        desc="Configuration for Fill In the Middle (FIM).",
-        hint=FieldHint.feature,
-    )
-
-
-@config_class(dynamic_type={GPTSampledDatasetConfig: "legacy"})
-class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
-    _abstract: typing.ClassVar[bool] = False
-
-    def build_and_sample(self, sampling: GPTSamplingData) -> SampledDataset:
-
-        if self.format == LegacyDatasetSource.random:
-            Assert.eq(len(self.path), 0)
-            dataset_config = GPTRandomDatasetConfig()
-        else:
-            if self.format == LegacyDatasetSource.file:
-                Assert.eq(len(self.path), 1)
-                data_path = pathlib.Path(self.path[0])
-                dataset_defs = json.load(data_path.open("r"))
-                data_base_path = data_path.parent
-                dataset_prefixes = [
-                    (data_base_path / dataset_def["prefix"]).resolve() for dataset_def in dataset_defs["datasets"]
-                ]
-                dataset_weights = normalize_probabilities(
-                    [dataset_def["weight"] for dataset_def in dataset_defs["datasets"]]
-                )
-            elif self.format == LegacyDatasetSource.list:
-                Assert.geq(len(self.path), 1)
-                if len(self.path) == 1:
-                    dataset_prefixes, dataset_weights = [self.path[0].strip()], [1.0]
-                else:
-                    Assert.custom(lambda x: x % 2 == 0, len(self.path))
-                    dataset_prefixes = [pathlib.Path(x.strip()).resolve() for x in self.path[1::2]]
-                    assert len(dataset_prefixes) == len(set(dataset_prefixes))
-                    dataset_weights = normalize_probabilities([float(x) for x in self.path[::2]])
-            else:
-                raise NotImplementedError(self.format)
-
-            phase_splits = padded_cumsum(normalize_probabilities(self.split))
-
-            phase_index = {
-                PhaseType.training.value.lower(): 0,
-                PhaseType.validation.value.lower(): 1,
-                PhaseType.test.value.lower(): 2,
-            }[sampling.dataset_name]
-
-            dataset_configs = [
-                {
-                    "type": "slice",
-                    # TODO: this duplicates memmap datasets for each phase.
-                    "dataset": {"type": "memmap", "path": prefix},
-                    "begin": float(phase_splits[phase_index]),
-                    "end": float(phase_splits[phase_index + 1]),
-                }
-                for prefix in dataset_prefixes
-            ]
-            dataset_config = (
-                {
-                    "type": "blended",
-                    "name": "blended",
-                    "datasets": dataset_configs,
-                    "weights": dataset_weights,
-                    "legacy": True,
-                }
-                if len(dataset_configs) > 1
-                else dataset_configs[0]
-            )
-            if self.fim.rate > 0:
-                dataset_config = {
-                    "type": "fim",
-                    "dataset": dataset_config,
-                    **self.fim.to_dict(),
-                }
-        # Legacy sampling config
-        dataset_config = {
-            "type": "sampled",
-            "dataset": dataset_config,
-            "sampling": {
-                "seed": sampling.distributed.config.seed,
-                "shuffle": "legacy",
-            },
-        }
-
-        return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)
 
 
 @config_class(dynamic_type={GPTSampledDatasetConfig: "test_slow"})

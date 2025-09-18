@@ -759,28 +759,8 @@ class Config(metaclass=ConfigMeta):
         return cls._from_dict(default, strict)
 
     @classmethod
-    def from_flat_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-    ) -> typing.Self:
-        # TODO v0.3: Remove flat format
-        return cls._from_dict(default, strict, True)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove flat format
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         out_arg_dict = {"_from_dict_check": True}
-
-        # TODO v0.3: Remove backward compatibility fix
-        if "__class__" in default:
-            del default["__class__"]
-
         try:
             actual_cls = cls.get_subclass(default.get("type"))
         except KeyError:
@@ -788,29 +768,23 @@ class Config(metaclass=ConfigMeta):
             actual_cls = cls
 
         if actual_cls is not None and actual_cls is not cls:
-            return actual_cls._from_dict(default, strict=strict, flat=flat)
+            return actual_cls._from_dict(default, strict=strict)
 
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():
             for name, field in cls.fields():
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
-                if flat:
-                    if isinstance(field.type, type) and issubclass(field.type, Config):
-                        out_arg_dict[name] = field.type._from_dict(default, False, True)
-                    elif name in default:
-                        out_arg_dict[name] = default.pop(name)
-                else:
-                    # Check for nested configs to instantiate.
-                    try:
-                        value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
-                        if value is not MISSING:
-                            out_arg_dict[name] = value
-                    except FieldTypeError as e:
-                        raise FieldTypeError(
-                            f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
-                            + ", ".join(e.args)
-                        )
+                # Check for nested configs to instantiate.
+                try:
+                    value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                    if value is not MISSING:
+                        out_arg_dict[name] = value
+                except FieldTypeError as e:
+                    raise FieldTypeError(
+                        f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
+                        + ", ".join(e.args)
+                    )
             out = cls(**out_arg_dict)  # noqa
             if strict and default:
                 out._unknown_fields = default.copy()

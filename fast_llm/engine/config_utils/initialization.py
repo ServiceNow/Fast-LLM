@@ -26,16 +26,11 @@ class InitializationConfig(Config, Initialization):
     is_default: typing.ClassVar[bool] = False
 
     @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is InitializationConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return DefaultInitializationConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
+            return DefaultInitializationConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
 
 
 @config_class()

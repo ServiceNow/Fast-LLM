@@ -71,18 +71,9 @@ class DistributedCheckpointHandler(CheckpointHandler):
                 framework="pt",
                 device=str(self._model.distributed.device),
             ) as f:
-                if "state_shard" in f.keys():
-                    # Old format `state_shard` with shape `(num_shards, shard_size)
-                    # TODO v0.3: Use checkpoint version? Drop support?
-                    log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
-                    for shard_name in shard_names:
-                        self._model.get_shard(shard_name).copy_(
-                            f.get_slice("state_shard")[loaded_metadata.shards.index(shard_name)]
-                        )
-                else:
-                    # TODO: Does this copy twice?
-                    for shard_name in shard_names:
-                        self._model.get_shard(shard_name).copy_(f.get_tensor(f"{shard_name}_shard"))
+                # TODO: Does this copy twice?
+                for shard_name in shard_names:
+                    self._model.get_shard(shard_name).copy_(f.get_tensor(f"{shard_name}_shard"))
 
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load", log_fn=logger.info)
@@ -105,18 +96,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     # TODO: Lazy loading?
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
-                        if "state_shard" in f.keys():
-                            # Old format `state_shard` with shape `(num_shards, shard_size)
-                            # TODO v0.3: Use checkpoint version? Drop support?
-                            log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
-                            loaded_shards = {
-                                shard_name: f.get_slice("state_shard")[loaded_metadata.shards.index(shard_name)]
-                                for shard_name in shard_names
-                            }
-                        else:
-                            loaded_shards = {
-                                shard_name: f.get_tensor(f"{shard_name}_shard") for shard_name in shard_names
-                            }
+                        loaded_shards = {shard_name: f.get_tensor(f"{shard_name}_shard") for shard_name in shard_names}
 
                     self._copy_shard_overlaps(loaded_model, loaded_shards, context)
 

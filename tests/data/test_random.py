@@ -26,7 +26,7 @@ def test_gpt_random_data():
     get_test_data_and_compare_samples(
         {
             "datasets": {
-                "Training": {
+                "training": {
                     "type": "random",
                 }
             }
@@ -34,14 +34,4 @@ def test_gpt_random_data():
         4,
         sequence_length=7,
         expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
-    )
-
-
-def test_gpt_random_data_legacy():
-    get_test_data_and_compare_samples(
-        {"format": "random"},
-        4,
-        sequence_length=7,
-        expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
-        legacy=True,
     )

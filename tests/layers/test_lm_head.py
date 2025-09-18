@@ -104,8 +104,8 @@ VOCAB_SIZE = 500
     ("config_dict", "distributed_config_dict", "loss_masking"),
     (
         ({}, {}, False),
-        ({}, {"training_dtype": DataType.bfloat16}, False),
-        ({"embeddings_layer": {"full_precision_residual": True}}, {"training_dtype": DataType.bfloat16}, False),
+        ({}, {"compute_dtype": DataType.bfloat16}, False),
+        ({"embeddings_layer": {"full_precision_residual": True}}, {"compute_dtype": DataType.bfloat16}, False),
         ({"sequence_first": True}, {}, False),
         ({"output_layer": {"logit_z_loss": 1e-3}}, {}, False),
         ({"output_layer": {"logits_scale_factor": 5.0}}, {}, False),
@@ -195,7 +195,7 @@ def test_lm_head(
         dtype=(
             distributed.config.optimization_dtype.torch
             if config.embeddings_layer.full_precision_residual
-            else distributed.config.training_dtype.torch
+            else distributed.config.compute_dtype.torch
         ),
         device=distributed.device,
         requires_grad=True,
@@ -239,7 +239,7 @@ def test_lm_head(
     if config.output_layer.tied_weight or config.output_layer.prediction_heads > 1:
         logit_weight = (
             torch.empty(
-                VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
+                VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.compute_dtype.torch, device=distributed.device
             )
             .normal_(config.embeddings_layer.hidden_size**-0.5)
             .requires_grad_(True)
@@ -302,9 +302,9 @@ def test_lm_head(
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
-        threshold = 1e-5 if distributed.config.training_dtype == DataType.float32 else 5e-3
+        threshold = 1e-5 if distributed.config.compute_dtype == DataType.float32 else 5e-3
         min_threshold = (
-            1e-5 if distributed.config.training_dtype == DataType.float32 else 1e-4
+            1e-5 if distributed.config.compute_dtype == DataType.float32 else 1e-4
         ) * config.output_layer.logits_scale_factor
 
         Assert.eq(losses.keys(), loss_keys)

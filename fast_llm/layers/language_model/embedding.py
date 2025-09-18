@@ -51,7 +51,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
             if self._config.full_precision_residual
-            else self._distributed_config.training_dtype
+            else self._distributed_config.compute_dtype
         ).torch
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and self._config.vocab_parallel

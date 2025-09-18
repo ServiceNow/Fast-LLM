@@ -87,14 +87,14 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="bf16",
         compare="simple",
-        config_args=["model.distributed.training_dtype=bf16"],
+        config_args=["model.distributed.compute_dtype=bf16"],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),
     DistributedTestingConfig(
         name="fp16",
         compare="simple",
-        config_args=["model.distributed.training_dtype=fp16"],
+        config_args=["model.distributed.compute_dtype=fp16"],
         num_gpus=1,
         compare_config=_fp16_compare,
     ),

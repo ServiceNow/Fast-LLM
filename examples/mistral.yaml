@@ -62,7 +62,7 @@ model:
   multi_stage:
     zero_stage: 2
   distributed:
-    training_dtype: bf16
+    compute_dtype: bf16
     seed: 984059
 run:
   experiment_dir: mistral_example
