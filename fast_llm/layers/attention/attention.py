@@ -4,14 +4,16 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.layers.block.block import BlockLayer
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 try:
@@ -52,26 +54,21 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
     A self-attention layer.
     """
 
+    _config: ConfigType
+
     def __init__(
         self,
         config: ConfigType,
-        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         *,
-        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ):
         super().__init__(
             config,
-            block_config,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=lr_scale,
             peft=peft,
         )
@@ -86,32 +83,32 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         )
         group_heads_dim = TensorDim(
             "group_heads",
-            div(self._config.num_attention_heads, self._config.head_groups),
+            div(self._config.heads, self._config.head_groups),
             None if self._config.head_groups > 1 else self._parallel_dim,
         )
         self._local_head_groups = head_group_dim.size
         self._local_heads_per_group = group_heads_dim.size
         self._local_heads = self._local_head_groups * self._local_heads_per_group
 
-        kv_channels_dim = TensorDim("kv_channels", self._config.kv_channels)
-        query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, kv_channels_dim))
+        head_size_dim = TensorDim("head_size", self._config.head_size)
+        query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, head_size_dim))
         key_value_dim = ConcatenatedTensorDim(
             "key_value",
             (
-                CompositeTensorDim("key", (head_group_dim, kv_channels_dim)),
-                CompositeTensorDim("value", (head_group_dim, kv_channels_dim)),
+                CompositeTensorDim("key", (head_group_dim, head_size_dim)),
+                CompositeTensorDim("value", (head_group_dim, head_size_dim)),
             ),
         )
-        dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, kv_channels_dim))
+        dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, head_size_dim))
 
-        self._softmax_scale = self._config.kv_channels ** (-self._config.attention_softmax_scale_power)
+        self._softmax_scale = self._config.head_size ** (-self._config.softmax_scale_power)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = self._config.query_layer.get_layer(
             hidden_dim,
             query_dim,
-            default_weight_initialization=init_normal_(std=self._block_config.init_method_std),
-            default_add_bias=self._block_config.add_linear_biases,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,
             default_apply_peft=True,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
@@ -121,8 +118,8 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.key_value = self._config.key_layer.get_layer(
             hidden_dim,
             key_value_dim,
-            default_weight_initialization=init_normal_(std=self._block_config.init_method_std),
-            default_add_bias=self._block_config.add_linear_biases,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=None if self._config.key_layer.apply_peft is None else self._peft,
@@ -137,39 +134,37 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
         # Rotary embeddings.
-        self._rotary = self._config.rotary.get_layer(kv_channels_dim)
+        self._rotary = self._config.rotary.get_layer(head_size_dim)
 
         # Output.
         self.dense = self._config.dense_layer.get_layer(
             dense_dim,
             hidden_dim,
-            default_weight_initialization=init_normal_(
-                std=self._block_config.init_method_std / max(2 * self._block_config.num_layers, 1) ** 0.5,
-            ),
-            default_add_bias=self._block_config.add_linear_biases,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
 
-        if self._debug.enabled:
-            self._query_dims = (
-                BlockDimNames.batch,
-                BlockDimNames.sequence_q,
-                CompositeTensorDim("heads", (head_group_dim, group_heads_dim)),
-                kv_channels_dim,
-            )
-            self._kv_dims = (
-                BlockDimNames.batch,
-                BlockDimNames.sequence_q,
-                head_group_dim,
-                kv_channels_dim,
-            )
-            self._context_dims = (
-                BlockDimNames.batch,
-                BlockDimNames.sequence_q,
-                dense_dim,
-            )
+        # Debug dims
+        self._query_dims = (
+            BlockDimNames.batch,
+            BlockDimNames.sequence_q,
+            CompositeTensorDim("heads", (head_group_dim, group_heads_dim)),
+            head_size_dim,
+        )
+        self._kv_dims = (
+            BlockDimNames.batch,
+            BlockDimNames.sequence_q,
+            head_group_dim,
+            head_size_dim,
+        )
+        self._context_dims = (
+            BlockDimNames.batch,
+            BlockDimNames.sequence_q,
+            dense_dim,
+        )
 
     def _attn_fused(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
@@ -179,17 +174,17 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         sk = key.size(1)
 
         if self._local_head_groups == 1:
-            query = query.view(b, sq * self._local_heads, self._config.kv_channels)
+            query = query.view(b, sq * self._local_heads, self._config.head_size)
             key = key.transpose(-1, -2)
         else:
             query = (
-                query.unflatten(-1, (self._local_head_groups, self._local_heads_per_group, self._config.kv_channels))
+                query.unflatten(-1, (self._local_head_groups, self._local_heads_per_group, self._config.head_size))
                 .transpose(1, 2)
-                .reshape(b * self._local_head_groups, sq * self._local_heads_per_group, self._config.kv_channels)
+                .reshape(b * self._local_head_groups, sq * self._local_heads_per_group, self._config.head_size)
             )
-            key = key.unflatten(-1, (self._local_head_groups, self._config.kv_channels)).movedim(1, 3).flatten(0, 1)
+            key = key.unflatten(-1, (self._local_head_groups, self._config.head_size)).movedim(1, 3).flatten(0, 1)
             value = (
-                value.unflatten(-1, (self._local_head_groups, self._config.kv_channels)).transpose(1, 2).flatten(0, 1)
+                value.unflatten(-1, (self._local_head_groups, self._config.head_size)).transpose(1, 2).flatten(0, 1)
             )
 
         attn_weights = torch.empty(
@@ -200,15 +195,15 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             query,
             key,
             beta=0,
-            alpha=self._softmax_scale / self._block_index,
+            alpha=self._softmax_scale,
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
-        attn_weights = attn_weights.to(torch.float32) * self._block_index
+        attn_weights = attn_weights.to(torch.float32)
         attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._distributed.tp_generator):
-            attn_weights = torch.dropout(attn_weights, self._config.attention_dropout, self.training)
+            attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
         attn_output = torch.bmm(
             attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
         )
@@ -217,7 +212,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             return attn_output.view(b, sq, -1)
         else:
             return (
-                attn_output.view(b, self._local_head_groups, sq, self._local_heads_per_group, self._config.kv_channels)
+                attn_output.view(b, self._local_head_groups, sq, self._local_heads_per_group, self._config.head_size)
                 .transpose(1, 2)
                 .flatten(2)
             )
@@ -278,16 +273,6 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         input_grad.add_(self.key_value.backward(key_value_grad, context.pop("key_value")))
         return input_grad
 
-    def _decide_window_size(self) -> int | None:
-        # NOTE: This is a temporal solution for qwen 2.X
-        # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
-        # TODO: make universal per layer config
-        window_size = self._config.window_size
-        if self._config.max_window_layers is not None and self._block_index < self._config.max_window_layers:
-            window_size = None
-
-        return window_size
-
     def forward(
         self,
         input_: torch.Tensor,
@@ -324,18 +309,18 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             query = query.transpose(0, 1).contiguous()
             key_value = key_value.transpose(0, 1).contiguous()
 
-        key, value = key_value.split(self._local_head_groups * self._config.kv_channels, dim=-1)
+        key, value = key_value.split(self._local_head_groups * self._config.head_size, dim=-1)
 
-        query = query.view(*query.shape[:2], self._local_heads, self._config.kv_channels)
-        key = key.view(*key.shape[:2], self._local_head_groups, self._config.kv_channels)
-        value = value.view(*value.shape[:2], self._local_head_groups, self._config.kv_channels)
+        query = query.view(*query.shape[:2], self._local_heads, self._config.head_size)
+        key = key.view(*key.shape[:2], self._local_head_groups, self._config.head_size)
+        value = value.view(*value.shape[:2], self._local_head_groups, self._config.head_size)
 
         if self._debug.enabled:
-            self._debug(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
-            self._debug(key, "key_rotary_input", self._KV_DIMS, kwargs)
+            self._debug(query, "query_rotary_input", self._query_dims, kwargs)
+            self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
-        window_size = self._decide_window_size()
+        window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
 
         if self._use_flash_attention:
             assert _flash_available
@@ -353,8 +338,8 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
                         cu_seqlens_k=kwargs.get(AttentionKwargs.cu_seqlens_k),
                         max_seqlen_q=kwargs.get(AttentionKwargs.max_seqlen_q),
                         max_seqlen_k=kwargs.get(AttentionKwargs.max_seqlen_k),
-                        dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                        dropout_p=self._config.dropout if self.training else 0.0,
+                        window_size=window_size,
                         causal=True,
                         softmax_scale=self._softmax_scale,
                     ).view(*out_dims)
@@ -363,8 +348,8 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
                         query,
                         key,
                         value,
-                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        dropout_p=self._config.attention_dropout if self.training else 0.0,
+                        window_size=window_size,
+                        dropout_p=self._config.dropout if self.training else 0.0,
                         causal=True,
                         softmax_scale=self._softmax_scale,
                     )
@@ -389,3 +374,58 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
             input_ = input_.transpose(0, 1).contiguous()
         return self.dense(input_)
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        batch_dim: TensorDim = kwargs[AttentionKwargs.hidden_dims][1 if kwargs[AttentionKwargs.sequence_first] else 0]
+
+        # Using this one since `hidden_dims` may be sequence-tensor-parallel, and attention is not.
+        sequence_q_dim: TensorDim = kwargs[AttentionKwargs.sequence_q_dim]
+        sequence_k_dim: TensorDim = kwargs[AttentionKwargs.sequence_k_dim]
+
+        if config.global_:
+            batch_size, sequence_q = batch_dim.global_size, sequence_q_dim.global_size
+            # In case of sequence-data-parallel, we need to undo the shift in k-sequence-length.
+            sequence_k = sequence_k_dim.global_size - sequence_q_dim.size * (
+                sequence_q_dim.parallel_dim.size - sequence_q_dim.parallel_dim.rank - 1
+            )
+        else:
+            batch_size, sequence_q = batch_dim.size, sequence_q_dim.size
+            sequence_k = sequence_k_dim.size
+
+        # 2 for multiply and accumulate, 2 operations (Q * K, attn * V), double for backward + Q * K recomputation.
+        attn_compute_base = (
+            2
+            * (2 * config.forward + (5 if config.hardware else 4) * config.backward)
+            * self._config.heads
+            * self._config.head_size
+        )
+
+        if self._config.window_size is not None:
+            # Remove the part of the past that lies completely outside the window, if applicable.
+            sequence_k -= max(sequence_k - sequence_q - self._config.window_size, 0)
+
+        attention_compute = sequence_q * sequence_k * attn_compute_base
+
+        if (not config.hardware) or self._use_flash_attention:
+            # Remove non-causal part. (TODO: Support non-causal)
+            attention_compute -= (sequence_q * (sequence_q - 1) * attn_compute_base) // 2
+
+            if self._config.window_size is not None:
+                # Remove the part of the past that lies completely outside the window, if applicable.
+                fully_out_of_window = max(sequence_k - sequence_q - self._config.window_size, 0)
+                attention_compute -= fully_out_of_window * sequence_q * attn_compute_base
+                # Remove the part of the past that lies partially outside the window, if applicable.
+                partly_out_of_window = max(sequence_k - fully_out_of_window - self._config.window_size, 0)
+                attention_compute -= (partly_out_of_window * (partly_out_of_window + 1) * attn_compute_base) // 2
+
+        dense_input = TensorMeta.from_dims((batch_dim, sequence_q_dim, self._context_dims[-1]))
+
+        # TODO: Add marginal compute? (ex. softmax)
+        return sum(
+            (
+                self.query.get_compute_usage(input_, config),
+                self.key_value.get_compute_usage(input_, config),
+                attention_compute,
+                self.dense.get_compute_usage(dense_input, config),
+            )
+        )

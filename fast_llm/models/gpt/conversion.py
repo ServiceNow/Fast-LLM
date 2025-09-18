@@ -46,12 +46,32 @@ from fast_llm.models.gpt.external.diffusion_llama.configuration_diffusion_llama 
 from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class HiddenSizeParamConverter(ParamConverter):
+    """
+    Some HF models don't have a `head_dim` parameter, and instead use hidden_size // heads
+    """
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 3)
+        Assert.eq(len(self.export_names), 2)
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        hidden_size, heads, head_size = fast_llm_values
+        Assert.eq(head_size * heads, hidden_size)
+        return hidden_size, heads
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        hidden_size, heads = export_values
+        return hidden_size, heads, div(hidden_size, heads)
 
 
 class QueryWeightConverter(WeightConverter):
@@ -63,7 +83,7 @@ class QueryWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
         if self._config.transformer.mixer.rotary.complex_format:
-            query = convert_rotary_complex_to_real(query[:], self._config.transformer.mixer.kv_channels, 0)
+            query = convert_rotary_complex_to_real(query[:], self._config.transformer.mixer.head_size, 0)
         return (query,)
 
     def import_weight(
@@ -71,7 +91,7 @@ class QueryWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
         if self._config.transformer.mixer.rotary.complex_format:
-            query = convert_rotary_real_to_complex(query[:], self._config.transformer.mixer.kv_channels, 0)
+            query = convert_rotary_real_to_complex(query[:], self._config.transformer.mixer.head_size, 0)
         return (query,)
 
 
@@ -85,7 +105,7 @@ class KeyValueWeightConverter(WeightConverter):
         (key_value,) = weight
         key, value = key_value[:].chunk(2)
         if self._config.transformer.mixer.rotary.complex_format:
-            key = convert_rotary_complex_to_real(key, self._config.transformer.mixer.kv_channels, 0)
+            key = convert_rotary_complex_to_real(key, self._config.transformer.mixer.head_size, 0)
         return key, value
 
     def import_weight(
@@ -93,7 +113,7 @@ class KeyValueWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         key, value = weight
         if self._config.transformer.mixer.rotary.complex_format:
-            key = convert_rotary_real_to_complex(key[:], self._config.transformer.mixer.kv_channels, 0)
+            key = convert_rotary_real_to_complex(key[:], self._config.transformer.mixer.head_size, 0)
         key_value = torch.cat([key[:], value[:]])
         return (key_value,)
 
@@ -142,7 +162,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 fast_llm_names=(("transformer", "mixer", "rotary", "theta"),), export_names=(("rope_theta",),)
             ),
             MappedConfigParamConverter(
-                fast_llm_names=(("transformer", "mlp", "activation_type"),),
+                fast_llm_names=(("transformer", "mlp", "activation"),),
                 export_names=(("hidden_act",),),
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
@@ -152,19 +172,11 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 export_names=(("num_hidden_layers",),),
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "hidden_size"),),
-                export_names=(("hidden_size",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "mixer", "num_attention_heads"),),
-                export_names=(("num_attention_heads",),),
-            ),
-            RenameParamConverter(
                 fast_llm_names=(("transformer", "mixer", "head_groups"),),
                 export_names=(("num_key_value_heads",),),
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "mlp", "ffn_hidden_size"),),
+                fast_llm_names=(("transformer", "mlp", "intermediate_size"),),
                 export_names=(("intermediate_size",),),
             ),
             RenameParamConverter(
@@ -219,21 +231,21 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 f"{fast_llm_layer_name}.mixer.query",
                 f"{hf_layer_name}.self_attn.q_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mixer.add_linear_biases,
                 QueryWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.mixer.key_value",
                 (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mixer.add_linear_biases,
                 KeyValueWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.mixer.dense",
                 f"{hf_layer_name}.self_attn.o_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mixer.add_linear_biases,
                 WeightConverter,
             ),
             # Norm
@@ -264,14 +276,14 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 f"{fast_llm_layer_name}.mlp.layer_1",
                 (),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 cls=IgnoreExportWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
                 f"{fast_llm_layer_name}.mlp.layer_2",
                 (),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 cls=IgnoreExportWeightConverter,
             )
             converters += [IgnoreExportWeightConverter(f"{fast_llm_layer_name}.mlp.router.weight", ())]
@@ -349,9 +361,20 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            HiddenSizeParamConverter(
+                fast_llm_names=(
+                    ("transformer", "hidden_size"),
+                    ("transformer", "mixer", "heads"),
+                    ("transformer", "mixer", "head_size"),
+                ),
+                export_names=(("hidden_size",), ("num_attention_heads",)),
+            ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "mixer", "rotary", "type"),),
                 fast_llm_value=DefaultRotaryConfig.dynamic_type_name,
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "mixer", "add_linear_biases"),), fast_llm_value=True
             ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),),
@@ -361,7 +384,13 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "mlp", "gated"),), fast_llm_value=False),
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=True),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "mlp", "add_linear_biases"),), fast_llm_value=True
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("output_layer", "normalization", "type"),),
+                fast_llm_value="layer_norm",
+            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -371,13 +400,13 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
                 f"{fast_llm_prefix}.mlp.layer_1",
                 f"{hf_prefix}.mlp.c_fc",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.c_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -395,17 +424,34 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "mixer", "kv_channels"),),
+                fast_llm_names=(("transformer", "hidden_size"),),
+                export_names=(("hidden_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "mixer", "heads"),),
+                export_names=(("num_attention_heads",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "mixer", "head_size"),),
                 export_names=(("head_dim",),),
             ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "mixer", "add_linear_biases"),), fast_llm_value=False
+            ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "mlp", "gated"),), fast_llm_value=True),
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "mlp", "add_linear_biases"),), fast_llm_value=False
+            ),
             LLamaRotaryParamConverter(
                 fast_llm_names=(("transformer", "mixer", "rotary"),),
                 export_names=(
                     ("rope_theta",),
                     ("rope_scaling",),
                 ),
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("output_layer", "normalization", "type"),),
+                fast_llm_value="rms_norm",
             ),
         ]
 
@@ -484,14 +530,14 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -533,6 +579,14 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
             ),
+            HiddenSizeParamConverter(
+                fast_llm_names=(
+                    ("transformer", "hidden_size"),
+                    ("transformer", "mixer", "heads"),
+                    ("transformer", "mixer", "head_size"),
+                ),
+                export_names=(("hidden_size",), ("num_attention_heads",)),
+            ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "mlp", "gated"),), fast_llm_value=True),
             # TODO: Fix
             ConstantImportParamConverter(
@@ -545,6 +599,10 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
                     ("rope_scaling",),
                 ),
             ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("output_layer", "normalization", "type"),),
+                fast_llm_value="rms_norm",
+            ),
             IgnoreImportQwen2SlidingWindowParamsConverter(),
         ]
 
@@ -555,14 +613,14 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -601,20 +659,20 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         return super()._create_config_converters() + [
             ConstantImportParamConverter(fast_llm_names=(("transformer", "mlp", "type"),), fast_llm_value="moe"),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "mlp", "expert_routing_type"),), fast_llm_value=RoutingType.topk
+                fast_llm_names=(("transformer", "mlp", "routing"),), fast_llm_value=RoutingType.topk
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "mlp", "num_experts"),), export_names=(("num_local_experts",),)
+                fast_llm_names=(("transformer", "mlp", "experts"),), export_names=(("num_local_experts",),)
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "mlp", "num_experts_per_token"),),
+                fast_llm_names=(("transformer", "mlp", "experts_per_token"),),
                 export_names=(("num_experts_per_tok",),),
             ),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        num_experts = self._model.config.base_model.transformer.mlp.num_experts
+        num_experts = self._model.config.base_model.transformer.mlp.experts
         return [
             WeightConverter(f"{fast_llm_prefix}.mlp.router.weight", f"{hf_prefix}.block_sparse_moe.gate.weight"),
             SplitWeightConverter(
@@ -671,14 +729,14 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
                 # TODO: Fix
-                transformer_config.add_linear_biases,
+                transformer_config.mlp.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]

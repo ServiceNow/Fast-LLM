@@ -63,3 +63,15 @@ class Preprocessor(abc.ABC):
     @abc.abstractmethod
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         pass
+
+
+@dataclasses.dataclass
+class ResourceUsageConfig:
+    # Disable to get usage for current GPU only
+    global_: bool = True
+    # Enable to get hardware compute, i.e. include redundant computations.
+    hardware: bool = False
+    # Number of backward passes. Typically 1, may be 2 with full activation recomputation.
+    forward: int = 1
+    # Number of backward passes. Typically 1 for training, 0 for inference.
+    backward: int = 1

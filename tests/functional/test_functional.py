@@ -167,18 +167,18 @@ def test_dpo_loss():
 @requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
-    "activation_type", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
+    "activation", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
 )
-def test_mlp_recomputation(gated, activation_type):
+def test_mlp_recomputation(gated, activation):
     tokens = 1024
     hidden_size = 2048
-    ffn_hidden_size = 4096
+    intermediate_size = 4096
     std = 1 / 64
     input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
     output_grad = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
-    weight_1 = torch.normal(0, std, (ffn_hidden_size * (gated + 1), hidden_size), device="cuda", requires_grad=True)
-    bias_1 = torch.normal(0, std, (ffn_hidden_size * (gated + 1),), device="cuda", requires_grad=True)
-    weight_2 = torch.normal(0, std, (ffn_hidden_size, hidden_size), device="cuda", requires_grad=True)
+    weight_1 = torch.normal(0, std, (intermediate_size * (gated + 1), hidden_size), device="cuda", requires_grad=True)
+    bias_1 = torch.normal(0, std, (intermediate_size * (gated + 1),), device="cuda", requires_grad=True)
+    weight_2 = torch.normal(0, std, (intermediate_size, hidden_size), device="cuda", requires_grad=True)
     bias_2 = torch.normal(0, std, (hidden_size,), device="cuda", requires_grad=True)
     params = (weight_1, bias_1, weight_2, bias_2)
 
@@ -186,7 +186,7 @@ def test_mlp_recomputation(gated, activation_type):
         torch_mlp_activation(
             (torch.nn.functional.linear(input_, weight_1, bias_1)),
             gated,
-            activation_type,
+            activation,
         ),
         weight_2.t(),
         bias_2,
@@ -202,7 +202,7 @@ def test_mlp_recomputation(gated, activation_type):
             param.grad = None
             param.grad_buffer = torch.empty_like(param)
             param.param_grad_is_zero = True
-        output = mlp_autograd(input_, None, *params, gated, activation_type, None, False, True, recompute_level, True)
+        output = mlp_autograd(input_, None, *params, gated, activation, None, False, True, recompute_level, True)
         output.backward(output_grad)
         if i == 0:
             Assert.rms_close(output, output_ref, 1e-5)
@@ -228,7 +228,7 @@ def test_dropless_mlp():
     experts_per_token = 4
     tokens = 256
     hidden_size = 512
-    ffn_hidden_size = 1024
+    intermediate_size = 1024
     std = 1 / 64
     input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
     router_weight = torch.normal(0, std, (num_experts, hidden_size), device="cuda")
@@ -240,9 +240,9 @@ def test_dropless_mlp():
 
     output_grad = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
     weight_1 = torch.normal(
-        0, std, (ffn_hidden_size * 2 * num_experts, hidden_size), device="cuda", requires_grad=True
+        0, std, (intermediate_size * 2 * num_experts, hidden_size), device="cuda", requires_grad=True
     )
-    weight_2 = torch.normal(0, std, (ffn_hidden_size * num_experts, hidden_size), device="cuda", requires_grad=True)
+    weight_2 = torch.normal(0, std, (intermediate_size * num_experts, hidden_size), device="cuda", requires_grad=True)
     params = (weight_1, weight_2)
 
     for param in params:

@@ -69,8 +69,8 @@ def triton_rotary_(
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     # TODO: Improve block size heuristics.
     assert input_.stride(-1) == 1, f"{input_.shape} {input_.stride()}"
-    batch_size, seq_len, num_heads, kv_channels = input_.shape
-    rotary_dim = div(kv_channels, 2)
+    batch_size, seq_len, num_heads, head_size = input_.shape
+    rotary_dim = div(head_size, 2)
     rotary_block_size = triton.next_power_of_2(rotary_dim)
     head_block_size = triton.cdiv(TritonConfig.POINTWISE_BLOCK_SIZE, rotary_block_size)
     if head_block_size > num_heads:

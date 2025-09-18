@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
@@ -6,6 +7,7 @@ from torch.distributed import all_reduce
 
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
@@ -15,7 +17,7 @@ from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, re
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import BlockLayerBase
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
@@ -44,26 +46,18 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
     def __init__(
         self,
         config: ConfigType,
-        # TODO: Doesn't make much sense.
-        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         embeddings_config: LanguageModelEmbeddingsConfig,
         *,
-        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
         prediction_distance: int,
     ):
         super().__init__(
             config,
-            block_config,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=lr_scale,
             peft=peft,
         )
@@ -100,8 +94,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
-        self.final_norm = self._block_config.normalization.get_layer(
-            hidden_dim, lr_scale=self._lr_scale, peft=self._peft
+        self.final_norm = self._config.normalization.get_layer(
+            self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft
         )
 
         self._vocab_dim = TensorDim(
@@ -111,10 +105,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
         if self._prediction_distance == 0 and not self._config.tied_weight:
             # untie embedding weights
             self.output_weights = self._config.output_weight.get_parameter(
-                (self._vocab_dim, hidden_dim),
-                default_initialization=init_normal_(
-                    std=self._block_config.init_method_std,
-                ),
+                (self._vocab_dim, self._hidden_dim),
+                default_initialization=init_normal_(std=self._hidden_size**-0.5),
                 lr_scale=self._lr_scale,
                 peft=self._peft,
             )
@@ -155,6 +147,15 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[Conf
                 shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        # TODO: Add marginal compute? (loss)
+        return (
+            2
+            * (config.forward + 2 * config.backward)
+            * (input_.global_shape if config.global_ else input_).numel()
+            * (self._vocab_dim.global_size if config.global_ else self._vocab_dim.size)
+        )
 
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None

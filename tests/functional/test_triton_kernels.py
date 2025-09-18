@@ -82,12 +82,12 @@ def test_triton_add():
 
 @requires_cuda
 @pytest.mark.parametrize(
-    ("batch_size", "sequence_length", "num_heads", "kv_channels"),
+    ("batch_size", "sequence_length", "num_heads", "head_size"),
     [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134)],
 )
-def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
+def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(batch_size, sequence_length, num_heads, kv_channels, dtype=torch.bfloat16, device="cuda")
+    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
 
     y1 = apply_rotary_embeddings(
         x,
@@ -95,19 +95,19 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
         .get_layer(None)
         ._get_frequencies(
             sequence_length,
-            kv_channels,
+            head_size,
             device="cuda",
         ),
     )
 
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
-            convert_rotary_complex_to_real(x, kv_channels, 3),
+            convert_rotary_complex_to_real(x, head_size, 3),
             DefaultRotaryConfig(triton=True)
             .get_layer(None)
-            ._get_frequencies(sequence_length, kv_channels, device="cuda"),
+            ._get_frequencies(sequence_length, head_size, device="cuda"),
         ),
-        kv_channels,
+        head_size,
         3,
     )
     Assert.rms_close(y1, y2, 1e-3)
@@ -166,7 +166,7 @@ def test_triton_normalization(has_bias, zero_centered):
 @requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
-    "activation_type",
+    "activation",
     [
         ActivationType.gelu,
         ActivationType.silu,
@@ -176,15 +176,15 @@ def test_triton_normalization(has_bias, zero_centered):
     ],
 )
 @pytest.mark.parametrize("recompute", [True, False])
-def test_triton_mlp_activation(gated, activation_type, recompute):
+def test_triton_mlp_activation(gated, activation, recompute):
     assert TritonConfig.TRITON_ENABLED
     input_ = torch.randn(1024, 4096 * (2 if gated else 1), device="cuda", requires_grad=True)
     output_grad = torch.randn(1024, 4096, device="cuda")
 
-    output1, context = triton_mlp_activation_forward(input_, gated, activation_type)
+    output1, context = triton_mlp_activation_forward(input_, gated, activation)
     input_grad1, output3 = triton_mlp_activation_backward(output_grad, context, recompute)
 
-    output2 = torch_mlp_activation(input_, gated, activation_type)
+    output2 = torch_mlp_activation(input_, gated, activation)
     output2.backward(output_grad)
 
     Assert.rms_close(output1, output2, 1e-5)

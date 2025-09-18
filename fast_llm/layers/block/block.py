@@ -8,13 +8,14 @@ import torch
 from fast_llm.config import Config, Configurable
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer, Module
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
+from fast_llm.logging import get_model_debug_level, log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -22,10 +23,8 @@ logger = logging.getLogger(__name__)
 
 class DebugLayer:
     # TODO: Move elsewhere?
-    def __init__(self, name: str, debug_level: int = 0, debug_memory: bool = False):
-        self._name = name
-        self._debug_level = debug_level
-        self._debug_memory = debug_memory
+    def __init__(self, module: torch.nn.Module):
+        self._module = module
 
     def _get_meta(
         self, tensor: torch.Tensor, name: str, dims: tuple[TensorDim | str, ...], kwargs: dict[str, typing.Any]
@@ -47,8 +46,13 @@ class DebugLayer:
         )
 
     @functools.cached_property
+    def _name(self):
+        # Should be called after `module_name` is set in `BaseModel`
+        return getattr(self._module, "module_name", "unknown")
+
+    @property
     def enabled(self) -> bool:
-        return self._debug_level > 0 or self._debug_memory
+        return get_model_debug_level() > 0
 
     def __call__[
         T
@@ -62,14 +66,15 @@ class DebugLayer:
         global_: bool = True,
         log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     ) -> None:
-        # TODO: Local vs global?
-        if self._debug_memory:
+        if (level := get_model_debug_level()) == 0:
+            return
+        if level > 1:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
-        if self._debug_level > 0 and tensor is not None:
+        if tensor is not None:
             log_distributed_tensor(
                 "",
                 tensor,
-                level=self._debug_level,
+                level=level,
                 meta=self._get_meta(tensor, name, dims, kwargs),
                 global_=global_,
                 log_fn=log_fn,
@@ -79,7 +84,7 @@ class DebugLayer:
                 log_distributed_grad(
                     "",
                     tensor,
-                    level=self._debug_level,
+                    level=level,
                     meta=self._get_meta(tensor, name + " grad", dims, kwargs),
                     global_=global_,
                     log_fn=log_fn,
@@ -95,29 +100,22 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
     def __init__(
         self,
         config: ConfigType,
-        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         *,
-        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ):
         super().__init__(config, distributed_config)
-        self._block_config = block_config
         self._hidden_dim = hidden_dim
-        self._block_index = block_index
-        self._name = name
+        self._hidden_size = self._hidden_dim.global_size
         self._sequence_parallel: bool = self._distributed_config.sequence_tensor_parallel
-        self._debug = DebugLayer(
-            self._name,
-            self._block_config.debug_transformer,
-            self._block_config.debug_transformer_memory,
-        )
+        self._debug = DebugLayer(self)
         self._lr_scale = lr_scale
         self._peft = peft
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        raise NotImplementedError()
 
 
 class BlockLayer[ConfigType: Config](BlockLayerBase[ConfigType]):
@@ -141,28 +139,20 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
-    # TODO: Standardize to `mixer`
-    _mixer_module_name: typing.ClassVar[str] = "mixer"
-
     def __init__(
         self,
         config: ConfigType,
         distributed_config: DistributedConfig,
         *,
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
         return_input: bool = False,
     ):
         super().__init__(
             config,
-            config,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=lr_scale,
             peft=peft,
         )
@@ -174,33 +164,23 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
 
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
-        setattr(
-            self,
-            self._mixer_module_name,
-            self._config.mixer.get_layer(
-                self._config,
-                self._distributed_config,
-                self._hidden_dim,
-                self._block_index,
-                f"{self._name} mixer",
-                self._lr_scale,
-                peft=peft,
-            ),
+        self.mixer = self._config.mixer.get_layer(
+            self._distributed_config,
+            self._hidden_dim,
+            self._lr_scale,
+            peft=peft,
         )
 
         self.mlp = self._config.mlp.get_layer(
-            self._config,
             self._distributed_config,
             self._hidden_dim,
-            self._block_index,
-            f"{self._name} MLP",
             self._lr_scale,
             peft=peft,
         )
 
     def setup(self, distributed: Distributed) -> None:
         super().setup(distributed)
-        getattr(self, self._mixer_module_name).setup(distributed)
+        self.mixer.setup(distributed)
         self.mlp.setup(distributed)
 
     @torch.compile
@@ -209,7 +189,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
-        return residual + torch.dropout(input_, self._config.hidden_dropout, self.training)
+        return residual + torch.dropout(input_, self._config.dropout, self.training)
 
     def forward(
         self,
@@ -222,7 +202,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             dims = kwargs[BlockKwargs.hidden_dims]
             if self._return_input:
                 dims = (TensorDim("stacked_input_output", 2),) + dims
-            return TensorMeta.from_dims(dims, tensor_name=f"{self._name} output", dtype=input_.dtype)
+            return TensorMeta.from_dims(dims, tensor_name=f"{self.module_name} output", dtype=input_.dtype)
         generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         if self._debug.enabled:
             self._debug(None, "begin", kwargs[BlockKwargs.hidden_dims], kwargs)
@@ -230,7 +210,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_states = self.norm_1(input_)
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
-        hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
+        hidden_states, bias = self.mixer(hidden_states, kwargs)
         if self._debug.enabled:
             self._debug(
                 hidden_states if bias is None else hidden_states + bias,
@@ -260,3 +240,12 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         if self._return_input:
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        # TODO: Add marginal compute? (normalization, bias_dropout_add)
+        return sum(
+            (
+                self.mixer.get_compute_usage(input_, kwargs, config),
+                self.mlp.get_compute_usage(input_, kwargs, config),
+            )
+        )

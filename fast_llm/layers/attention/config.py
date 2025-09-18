@@ -1,4 +1,3 @@
-import functools
 import logging
 import typing
 import warnings
@@ -12,7 +11,7 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs, MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.attention.attention import Attention
@@ -61,7 +60,7 @@ class AttentionConfig(MixerConfig):
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
-    num_attention_heads: int = Field(default=8, desc="Number of attention heads.", hint=FieldHint.architecture)
+    heads: int = Field(default=8, desc="Number of attention heads.", hint=FieldHint.architecture)
     head_groups: int = Field(
         default=1,
         desc="Number of head group for grouped query attention.",
@@ -69,13 +68,18 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    kv_channels: int = Field(
-        default=None,
-        desc="Number of key and value channels, i.e., hidden dimension of each attention head. Default: hidden_size // num_attention_heads",
+    head_size: int = Field(
+        default=128,
+        desc="Number of key and value channels, i.e., hidden dimension of each attention head.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    attention_dropout: float = Field(
+    add_linear_biases: bool = Field(
+        default=True,
+        desc="Add biases to linear layers. May be overridden for individual layers.",
+        hint=FieldHint.architecture,
+    )
+    dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the attention intermediate states.",
         hint=FieldHint.feature,
@@ -91,25 +95,14 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
-    max_window_layers: int | None = Field(
-        default=None,
-        desc="The number of layers that use SWA (Sliding Window Attention). The bottom layers use SWA while the top use full attention.",
-        hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
-    )
-    attention_softmax_scale_power: float = Field(
+    softmax_scale_power: float = Field(
         default=0.5,
-        desc="The scaling power to apply to kv_channel in the attention calculation. "
+        desc="The scaling power to apply to head_size in the attention calculation. "
         " Under Standard Parameterization (SP): default to 0.5. "
-        " Under muP (if scaling kv_channels size): use 1. "
-        " Under muP (if scaling number of heads instead of kv_channels): use 0.5.",
+        " Under muP (if scaling head_size size): use 1. "
+        " Under muP (if scaling number of heads instead of head_size): use 0.5.",
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
-
-    def set_defaults(self, hidden_size: int):
-        if self.kv_channels is None:
-            with self._set_implicit_default():
-                self.kv_channels = div(hidden_size, self.num_attention_heads)
 
     def _validate(self) -> None:
         super()._validate()
@@ -117,7 +110,7 @@ class AttentionConfig(MixerConfig):
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
-        Assert.multiple(self.num_attention_heads, self.head_groups)
+        Assert.multiple(self.heads, self.head_groups)
 
     @property
     def layer_class(self) -> "type[Attention]":
@@ -125,18 +118,15 @@ class AttentionConfig(MixerConfig):
 
         return Attention
 
-    @functools.cached_property
-    def projection_size(self):
-        assert self._validated
-        return self.num_attention_heads * self.kv_channels
-
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
 
     def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
-        preprocessors: list[Preprocessor] = [self.rotary.get_layer(TensorDim("kv_channels", self.kv_channels))]
+        preprocessors: list[Preprocessor] = [
+            self.rotary.get_layer(TensorDim("head_size", self.head_size)),
+        ]
         if self.do_use_flash_attention(distributed_config):
             from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
 

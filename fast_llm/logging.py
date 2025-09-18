@@ -343,3 +343,15 @@ def log_memory_usage[
     if header is not None:
         formatted = f"{header}: {formatted}"
     return log(formatted, log_fn=log_fn)
+
+
+_model_debug_level = 0
+
+
+def get_model_debug_level() -> int:
+    return _model_debug_level
+
+
+def set_model_debug_level(level: int) -> None:
+    global _model_debug_level
+    _model_debug_level = level

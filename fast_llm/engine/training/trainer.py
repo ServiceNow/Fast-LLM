@@ -397,12 +397,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        model_tflops, hardware_tflops = self._multi_stage.get_tflops(
-                            PhaseType.training,
-                            time_per_iteration,
-                            self._config.batch.batch_size,
-                            self._config.batch.sequence_length,
+                        model_compute, hardware_compute = self._schedule[PhaseType.training][
+                            PhaseType.training.value.lower()
+                        ].compute_usage
+                        model_tflops = math.nan if model_compute is None else model_compute / time_per_iteration
+                        hardware_tflops = (
+                            math.nan if hardware_compute is None else hardware_compute / time_per_iteration
                         )
+
                         metrics_key = PhaseType.training.value
                         metrics[metrics_key] = {
                             "train_iters": self._config.training.train_iters,

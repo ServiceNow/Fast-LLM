@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class BackupAttentionPreprocessor(Preprocessor):
-    _kv_channels_dim: TensorDim
+    _head_size_dim: TensorDim
     _rotary_embedding_frequencies: torch.Tensor
     _mask: torch.Tensor
     _mask_value: torch.Tensor

@@ -3,6 +3,7 @@ import typing
 
 import torch
 
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
@@ -14,7 +15,8 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
-from fast_llm.tensor import ParameterMeta
+from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,9 @@ class LinearLike(torch.nn.Module):
         raise NotImplementedError()
 
     def backward(self, grad_output: torch.Tensor, context: typing.Any) -> torch.Tensor:
+        raise NotImplementedError()
+
+    def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
 
@@ -50,10 +55,23 @@ class LinearBase(LinearLike):
         self.weight = weight
         self.bias = bias
         self._transposed_weight = transposed_weight
+        if self._transposed_weight:
+            self._input_dim, self._output_dim = self.weight.dims
+        else:
+            self._output_dim, self._input_dim = self.weight.dims
 
     @property
     def transposed_weight(self) -> bool:
         return self._transposed_weight
+
+    def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
+        Assert.eq(input_.size(-1), self._input_dim.size)
+        return (
+            2
+            * (config.forward + 2 * config.backward)
+            * (input_.global_shape if config.global_ else input_).numel()
+            * (self._output_dim.global_size if config.global_ else self._output_dim.size)
+        )
 
 
 class Linear(LinearBase):

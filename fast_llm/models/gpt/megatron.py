@@ -27,7 +27,7 @@ def get_init_megatron(
             tensor_ = _init_position_embeddings_megatron(meta, tensor, distributed)
         elif "mlp.router.weight" in meta.tensor_name:
             tensor_ = _init_moe_router_megatron(meta, tensor, distributed)
-        elif isinstance(config.mlp, MoEMLPConfig) and config.mlp.num_experts > 1 and "mlp.layer_" in meta.tensor_name:
+        elif isinstance(config.mlp, MoEMLPConfig) and config.mlp.experts > 1 and "mlp.layer_" in meta.tensor_name:
             tensor_ = _init_moe_mlp_megatron(config, meta, tensor, distributed)
         elif "mlp.layer_2" in meta.tensor_name:
             tensor_ = _init_transposed_mlp_weight_megatron(meta, tensor, distributed)
@@ -62,19 +62,19 @@ def _init_attention_megatron(
     meta.param_init_method(
         meta,
         dense_tensor_ := tensor.new_empty(
-            config.mixer.kv_channels * config.mixer.num_attention_heads,
+            config.mixer.head_size * config.mixer.heads,
             config.hidden_size,
         ),
         generator,
     )
     #  QKV is split differently. (Assuming no tensor-parallel.)
-    heads_per_group = div(config.mixer.num_attention_heads, config.mixer.head_groups)
+    heads_per_group = div(config.mixer.heads, config.mixer.head_groups)
     meta.param_init_method(
         meta,
         qkv_tensor_ := tensor.new_empty(
             config.mixer.head_groups,
             heads_per_group + 2,
-            config.mixer.kv_channels,
+            config.mixer.head_size,
             config.hidden_size,
         ),
         generator,
@@ -97,9 +97,9 @@ def _init_attention_megatron(
     if isinstance(config.mixer.rotary, DefaultRotaryConfig) and config.mixer.rotary.complex_format:
         from fast_llm.layers.attention.rotary.config import convert_rotary_real_to_complex
 
-        # Megatron uses (2, kv_channels/2) for the complex split; we use (kv_channels/2, 2).
+        # Megatron uses (2, head_size/2) for the complex split; we use (head_size/2, 2).
         # TODO: Avoid unnecessarily changing the value and dense tensors.
-        tensor_ = convert_rotary_real_to_complex(tensor_.view_as(meta), config.mixer.kv_channels, kv_dim)
+        tensor_ = convert_rotary_real_to_complex(tensor_.view_as(meta), config.mixer.head_size, kv_dim)
     return tensor_
 
 
@@ -148,12 +148,12 @@ def _init_moe_mlp_megatron(
     # self.param_init_method(self, tensor, generator)
     state = generator.get_state()
     weight_1 = tensor.new_empty(
-        config.mlp.num_experts * (1 + config.mlp.gated) * config.mlp.ffn_hidden_size, config.hidden_size
+        config.mlp.experts * (1 + config.mlp.gated) * config.mlp.intermediate_size, config.hidden_size
     )
-    weight_2 = tensor.new_empty(config.mlp.num_experts * config.mlp.ffn_hidden_size, config.hidden_size)
-    for chunk_1, chunk_2 in zip(weight_1.chunk(config.mlp.num_experts), weight_2.chunk(config.mlp.num_experts)):
+    weight_2 = tensor.new_empty(config.mlp.experts * config.mlp.intermediate_size, config.hidden_size)
+    for chunk_1, chunk_2 in zip(weight_1.chunk(config.mlp.experts), weight_2.chunk(config.mlp.experts)):
         meta.param_init_method(meta, chunk_1, generator)
-        chunk_2_ = chunk_2.new_empty(config.hidden_size, config.mlp.ffn_hidden_size)
+        chunk_2_ = chunk_2.new_empty(config.hidden_size, config.mlp.intermediate_size)
         meta.param_init_method(meta, chunk_2_, generator)
         chunk_2.copy_(chunk_2_.t())
     if "layer_1.weight" in meta.tensor_name:

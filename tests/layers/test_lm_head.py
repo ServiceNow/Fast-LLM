@@ -105,7 +105,7 @@ VOCAB_SIZE = 500
     (
         ({}, {}, False),
         ({}, {"training_dtype": DataType.bfloat16}, False),
-        ({"transformer": {"full_precision_residual": True}}, {"training_dtype": DataType.bfloat16}, False),
+        ({"embeddings_layer": {"full_precision_residual": True}}, {"training_dtype": DataType.bfloat16}, False),
         ({"sequence_first": True}, {}, False),
         ({"output_layer": {"logit_z_loss": 1e-3}}, {}, False),
         ({"output_layer": {"logits_scale_factor": 5.0}}, {}, False),
@@ -163,12 +163,14 @@ def test_lm_head(
     config = GPTBaseModelConfig.from_dict(
         {
             "transformer": {
-                "normalization": {"type": "rms_norm"},
                 "hidden_size": HIDDEN_SIZE,
                 "num_layers": 0,
             },
             "embeddings_layer": {"vocab_size": VOCAB_SIZE},
-            "output_layer": {"cross_entropy_implementation": cross_entropy_impl},
+            "output_layer": {
+                "cross_entropy_implementation": cross_entropy_impl,
+                "normalization": {"type": "rms_norm"},
+            },
         },
         config_dict,
         update_type=UpdateType.update,
@@ -190,7 +192,7 @@ def test_lm_head(
         (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE) if sequence_first else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE),
         dtype=(
             distributed.config.optimization_dtype.torch
-            if config.transformer.full_precision_residual
+            if config.embeddings_layer.full_precision_residual
             else distributed.config.training_dtype.torch
         ),
         device=distributed.device,
@@ -237,7 +239,7 @@ def test_lm_head(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
             )
-            .normal_(config.transformer.init_method_std)
+            .normal_(config.transformer.hidden_size**-0.5)
             .requires_grad_(True)
         )
         kwargs[WORD_EMBEDDINGS_WEIGHT if config.output_layer.tied_weight else OUTPUT_WEIGHTS] = logit_weight

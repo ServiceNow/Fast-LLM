@@ -1,5 +1,6 @@
 import abc
 import dataclasses
+import functools
 import logging
 import typing
 import warnings
@@ -9,6 +10,7 @@ import torch
 import torch.utils
 import torch.utils.data
 
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
@@ -127,12 +129,12 @@ class Schedule(abc.ABC):
         self._multi_stage = multi_stage
         self._batch_config = batch_config
         self._schedule_config = schedule_config
-        self._distributed = distributed_config
+        self._distributed_config = distributed_config
         self._num_stages = len(self._multi_stage.stages)
         self._phase = phase
         self._is_training = self._phase.is_training
 
-        if self._batch_config.num_inputs < self._distributed.pipeline_parallel:
+        if self._batch_config.num_inputs < self._distributed_config.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
@@ -172,7 +174,7 @@ class Schedule(abc.ABC):
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
 
     def __iter__(self) -> typing.Iterator[Step]:
-        return self.iterate(self._distributed.pipeline_rank)
+        return self.iterate(self._distributed_config.pipeline_rank)
 
     def __repr__(self) -> str:
         return "Schedule with steps:\n" + "\n".join(
@@ -191,7 +193,7 @@ class Schedule(abc.ABC):
         return self._step_map[(type_, stage, data_index)]
 
     def _create_index(self) -> None:
-        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]
+        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed_config.pipeline_parallel)]
         self._step_map = {}
         for i, step in enumerate(self._steps):
             Assert.in_range(step.stage, 0, self._num_stages)
@@ -204,7 +206,7 @@ class Schedule(abc.ABC):
             step.global_index = i
             # TODO: More configurable placement?
 
-            step.pipeline_rank = step.stage % self._distributed.pipeline_parallel
+            step.pipeline_rank = step.stage % self._distributed_config.pipeline_parallel
             step.local_index = len(self._device_steps[step.pipeline_rank])
             self._device_steps[step.pipeline_rank].append(step)
             Assert.not_incl(map_index := step.map_index, self._step_map)
@@ -272,7 +274,7 @@ class Schedule(abc.ABC):
 
     def _setup_restore_steps(self, weight_buffer_indices: dict[int, int]) -> None:
         for rank, device_steps in enumerate(self._device_steps):
-            if rank != self._distributed.pipeline_rank:
+            if rank != self._distributed_config.pipeline_rank:
                 # TODO: Make restore schedule for all ranks (need all buffer indices)
                 continue
             buffer_contents, buffer_last_used = {}, {}
@@ -292,7 +294,7 @@ class Schedule(abc.ABC):
         if not self._is_training:
             return
         for rank, device_steps in enumerate(self._device_steps):
-            if rank != self._distributed.pipeline_rank:
+            if rank != self._distributed_config.pipeline_rank:
                 # TODO: Make restore schedule for all ranks (need all buffer indices)
                 continue
             buffer_last_steps = {}
@@ -314,12 +316,12 @@ class Schedule(abc.ABC):
             for stage, count in enumerate(reduction_count):
                 assert (count > 0) == (
                     stage >= self._first_grad_stage
-                    and (stage % self._distributed.pipeline_parallel == self._distributed.pipeline_rank)
+                    and (stage % self._distributed_config.pipeline_parallel == self._distributed_config.pipeline_rank)
                 )
 
     def _setup_timeline(self) -> None:
         # TODO: Include network time
-        idx = [0] * self._distributed.pipeline_parallel
+        idx = [0] * self._distributed_config.pipeline_parallel
         done = False
         while not done:
             done = True
@@ -380,11 +382,11 @@ class Schedule(abc.ABC):
                         recv_step.recv_event = torch.cuda.Event()
 
     def _validate_send_recv_steps(self) -> None:
-        times = [0.0] * self._distributed.pipeline_parallel
-        idx = [0] * self._distributed.pipeline_parallel
-        recv_idx = [0] * self._distributed.pipeline_parallel
-        statuses = ["Ok"] * self._distributed.pipeline_parallel
-        recv_queues: list[list[Step | None]] = [[] for _ in range(self._distributed.pipeline_parallel)]
+        times = [0.0] * self._distributed_config.pipeline_parallel
+        idx = [0] * self._distributed_config.pipeline_parallel
+        recv_idx = [0] * self._distributed_config.pipeline_parallel
+        statuses = ["Ok"] * self._distributed_config.pipeline_parallel
+        recv_queues: list[list[Step | None]] = [[] for _ in range(self._distributed_config.pipeline_parallel)]
         done = False
         while not done:
             done = True
@@ -519,3 +521,30 @@ class Schedule(abc.ABC):
                                 )
                             )
         return steps, first_grad_stage
+
+    def get_compute_usage(
+        self,
+        global_: bool = True,
+        hardware: bool = False,
+    ) -> int | None:
+        total = 0
+        try:
+            for step in self._steps if global_ else self._device_steps[self._distributed_config.pipeline_rank]:
+                if step.type_ == StepType.forward:
+                    total += self._multi_stage.stages[step.stage].get_compute_usage(
+                        step.meta_input,
+                        step.meta_kwargs,
+                        ResourceUsageConfig(
+                            global_=global_,
+                            hardware=hardware,
+                            forward=1,
+                            backward=int(self._is_training),
+                        ),
+                    )
+            return total
+        except NotImplementedError:
+            return None
+
+    @functools.cached_property
+    def compute_usage(self) -> tuple[int | None, int | None]:
+        return self.get_compute_usage(True, False), self.get_compute_usage(True, True)

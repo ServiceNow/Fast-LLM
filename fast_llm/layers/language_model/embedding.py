@@ -5,11 +5,11 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.block.block import BlockLayerBase
-from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
@@ -32,30 +32,22 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLay
     def __init__(
         self,
         config: ConfigType,
-        # TODO: Doesn't make much sense.
-        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         *,
-        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ):
         super().__init__(
             config,
-            block_config,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=lr_scale,
             peft=peft,
         )
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
-            if self._block_config.full_precision_residual
+            if self._config.full_precision_residual
             else self._distributed_config.training_dtype
         ).torch
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
@@ -69,13 +61,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLay
 
         self.word_embeddings_weight = self._config.word_embeddings.get_parameter(
             (vocab_dim, self._hidden_dim),
-            default_initialization=init_normal_(std=self._block_config.init_method_std),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.position_embeddings_weight = self._config.position_embeddings.get_parameter(
             (TensorDim("position_embeddings", self._config.num_position_embeddings), self._hidden_dim),
-            default_initialization=init_normal_(std=self._block_config.init_method_std),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
             allow_sequence_tensor_parallel=not self._vocab_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
@@ -113,7 +105,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLay
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         ):
-            embeddings = torch.dropout(embeddings, self._block_config.hidden_dropout, self.training)
+            embeddings = torch.dropout(embeddings, self._config.dropout, self.training)
         return embeddings.to(dtype=self._residual_dtype)
 
     def forward(
@@ -132,3 +124,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](BlockLay
         return self._forward(
             input_, kwargs.get(LanguageModelKwargs.position_ids), kwargs.get(LanguageModelKwargs.mask_inputs)
         )
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        # TODO: Add marginal compute? (embeddings)
+        return 0

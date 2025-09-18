@@ -46,8 +46,6 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     ssm_block_type: SSMBlockType | None = Field(init=False)
 
     def _validate(self):
-        self.ssm.set_defaults(self.transformer.hidden_size)
-
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():
                 self.hybrid_block_layout = [SSMBlockType.mamba2_discrete] * self.transformer.num_layers

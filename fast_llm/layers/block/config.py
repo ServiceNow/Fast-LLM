@@ -60,32 +60,23 @@ class BlockLayerConfig(BaseModelConfig):
     def layer_class(self) -> "type[BlockLayer]":
         raise NotImplementedError()
 
-    def set_defaults(self, hidden_size: int):
-        # Opportunity to set defaults that depend on the hidden size.
-        pass
-
     def get_layer(
         self,
-        block_config: "BlockConfig",
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "BlockLayer":
         return self.layer_class(
             self,
-            block_config,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
         )
 
     def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
+        # TODO: Move to actual layers?
         return []
 
 
@@ -130,14 +121,13 @@ class MixerConfig(BlockLayerConfig):
 
 
 @config_class()
-# TODO: Use composition instead
 class BlockConfig(BaseModelConfig):
     _abstract = False
     mixer: MixerConfig = Field()
     mlp: MLPBaseConfig = Field()
     # TODO: Review names
     normalization: NormalizationConfig = Field(
-        desc="Configuration for the normalization layers architecture.",
+        desc="Configuration for the block normalization layers.",
         hint=FieldHint.architecture,
     )
     lr_scale: float | None = Field(
@@ -147,32 +137,11 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.feature,
     )
     # TODO: Review names
-    hidden_dropout: float = Field(
+    dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the residual connections.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
-    )
-    full_precision_residual: bool = Field(
-        default=False,
-        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
-        hint=FieldHint.stability,
-    )
-    debug_transformer: int = Field(
-        default=0,
-        desc="Log the output of each operation in a transformer layer.",
-        hint=FieldHint.logging,
-        valid=check_field(Assert.geq, 0),
-    )
-    debug_transformer_memory: bool = Field(
-        default=False,
-        desc="Log the memory usage after each operation in a transformer layer..",
-        hint=FieldHint.logging,
-    )
-    add_linear_biases: bool = Field(
-        default=True,
-        desc="Add biases to linear layers. May be overridden for individual layers.",
-        hint=FieldHint.architecture,
     )
     # TODO: Move these, not specific to a single block.
     num_layers: int = Field(
@@ -187,32 +156,11 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    # TODO: Review initialization
-    init_method_std: float = Field(
-        default=None,
-        desc="Default scale for weight initialization. Default: hidden_size**-0.5",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            # Kept here for initialization order.
-            # TODO: Review initialization
-            if self.init_method_std is None:
-                self.init_method_std = self.hidden_size**-0.5
-
-        self.mixer.set_defaults(self.hidden_size)
-        self.mlp.set_defaults(self.hidden_size)
-
-        super()._validate()
 
     def get_layer(
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None = None,
         return_input: bool = False,
@@ -223,12 +171,11 @@ class BlockConfig(BaseModelConfig):
             self,
             distributed_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
             return_input=return_input,
         )
 
     def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        return self.mixer.get_preprocessors(distributed_config)
+        # TODO: Move to actual layers?
+        return self.mixer.get_preprocessors(distributed_config) + self.mlp.get_preprocessors(distributed_config)

@@ -35,8 +35,6 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         return block_config.get_layer(
             self._distributed_config,
             hidden_dim=self._hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=None,
             peft=self._config.peft,
             return_input=return_input,

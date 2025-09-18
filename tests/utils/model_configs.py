@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import enum
 import functools
@@ -6,6 +7,7 @@ import typing
 
 import pytest
 
+from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -56,11 +58,24 @@ class ModelTestingGroupAction(enum.StrEnum):
     not_implemented = "not_implemented"
 
 
+def _config_dict_to_args(config_dict: dict[str, typing.Any], keys=()):
+    """
+    Converts a config dict to cli arguments. Not generic but good enough for the tests.
+    """
+    args = []
+    for key, value in config_dict.items():
+        if isinstance(value, dict):
+            args += _config_dict_to_args(value, (*keys, key))
+        else:
+            args.append(f"{'.'.join((*keys, key))}={value}")
+    return args
+
+
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class ModelTestingConfig:
     name: str = None
     model_type: str
-    config_args: list[str]
+    config_dict: dict[str, typing.Any]
     megatron_args: list[str] | None
     checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
@@ -70,13 +85,17 @@ class ModelTestingConfig:
     skip_tests: tuple[str] = ()
 
     @functools.cached_property
+    def config_args(self):
+        return _config_dict_to_args(self.config_dict)
+
+    @functools.cached_property
     def trainer_config_class(self) -> type[TrainerConfig]:
         return TrainerConfig.get_subclass(self.model_type)
 
     @functools.cached_property
     def trainer_config(self) -> TrainerConfig:
         # See `RunnableConfig._from_parsed_args`
-        return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+        return self.trainer_config_class.from_dict(self.config_dict)
 
     @functools.cached_property
     def evaluators_config_class(self) -> type[EvaluatorsConfig]:
@@ -87,7 +106,7 @@ class ModelTestingConfig:
     @functools.cached_property
     def evaluators_config(self) -> EvaluatorsConfig:
         # See `RunnableConfig._from_parsed_args`
-        return self.evaluators_config_class.from_dict(self.evaluators_config_class._parse_updates(self.config_args))
+        return self.evaluators_config_class.from_dict(self.config_dict)
 
     @functools.cached_property
     def model_config_class(self) -> type[FastLLMModelConfig]:
@@ -119,79 +138,120 @@ def _update_and_add_testing_config(
     new_name: str,
     *,
     model_type: str | None = None,
-    extra_args: list[str] | None = None,
+    updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     megatron_args: list[str] | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
     **kwargs,
-):
+) -> ModelTestingConfig:
+
     config = MODEL_CONFIGS[old_name]
-    updates: dict[str, typing.Any] = {
-        "name": new_name,
-        "groups": groups,
-    }
-    if model_type is not None:
-        updates["model_type"] = model_type
-    if extra_args is not None:
-        updates["config_args"] = config.config_args + extra_args
+    config_dict = copy.deepcopy(config.config_dict)
+    if updates is not None:
+        for keys, update in updates.items():
+            set_nested_dict_value(config_dict, keys, update)
     if megatron_args is not ...:
         if megatron_args is None:
-            updates["megatron_args"] = None
-        elif config.megatron_args is None:
-            updates["megatron_args"] = megatron_args
-        else:
-            updates["megatron_args"] = config.megatron_args + megatron_args
-    updates.update(kwargs)
-
-    MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
+            megatron_args = None
+        elif config.megatron_args is not None:
+            megatron_args = config.megatron_args + megatron_args
+    new_config = dataclasses.replace(
+        config,
+        name=new_name,
+        model_type=config.model_type if model_type is None else model_type,
+        groups=groups,
+        config_dict=config_dict,
+        megatron_args=megatron_args,
+        **kwargs,
+    )
+    MODEL_CONFIGS[new_name] = new_config
+    return new_config
 
 
 MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
+# We use a smaller initialization scheme than the default to lower variance in layer outputs during comparisons.
+# This is as if we had a hidden size of 2048
+init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
+# Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
+init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
 
 MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
     model_type="gpt",
-    config_args=[
-        "training.logs.interval=1",
-        "run.tensor_logs.save=True",
-        "run.tensor_logs.show=False",
-        "model.base_model.embeddings_layer.position_embeddings.enabled=True",
-        "model.base_model.embeddings_layer.num_position_embeddings=512",
-        f"model.base_model.embeddings_layer.vocab_size={MODEL_TEST_VOCAB_SIZE}",
-        "model.base_model.transformer.num_layers=2",
-        "model.base_model.transformer.hidden_size=256",
-        "model.base_model.transformer.mixer.num_attention_heads=8",
-        "model.base_model.transformer.mixer.head_groups=8",
-        "model.base_model.transformer.init_method_std=0.022",
-        f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
-        f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
-        f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
-        f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
-        "model.multi_stage.debug_tensor_parallel=True",
-        "model.distributed.reproducible_init=True",
-        "model.distributed.timeout=20",
-        "training.train_iters=2",
-        "training.num_workers=0",
-        "training.timeout=30",
-        "batch.batch_size=8",
-        "batch.sequence_length=512",
-        "data.datasets.training.type=slice",
-        "data.datasets.training.end=0.969",
-        "data.datasets.training.dataset.type=memmap",
-        f"data.datasets.training.dataset.path={MODEL_DATASET_PREFIX}",
-        "data.datasets.validation.type=slice",
-        "data.datasets.validation.begin=0.969",
-        "data.datasets.validation.end=0.999",
-        "data.datasets.validation.dataset.type=memmap",
-        f"data.datasets.validation.dataset.path={MODEL_DATASET_PREFIX}",
-        "data.datasets.test.type=slice",
-        "data.datasets.test.begin=0.999",
-        "data.datasets.test.end=1",
-        "data.datasets.test.dataset.type=memmap",
-        f"data.datasets.test.dataset.path={MODEL_DATASET_PREFIX}",
-        "optimizer.learning_rate.base=0.0001",
-    ],
+    config_dict={
+        "run": {
+            "tensor_logs": {
+                "save": True,
+                "show": False,
+            },
+        },
+        "training": {
+            "logs": {"interval": 1},
+            "train_iters": 2,
+            "num_workers": 0,
+            "timeout": 30,
+        },
+        "model": {
+            "base_model": {
+                "embeddings_layer": {
+                    "word_embeddings": init_1,
+                    "position_embeddings": {"enabled": True, **init_1},
+                    "num_position_embeddings": 512,
+                    "vocab_size": MODEL_TEST_VOCAB_SIZE,
+                },
+                "transformer": {
+                    "mixer": {
+                        "query_layer": {"weight": init_1},
+                        "key_layer": {"weight": init_1},
+                        "value_layer": {"weight": init_1},
+                        "dense_layer": {"weight": init_2},
+                        "heads": 8,
+                        "head_groups": 8,
+                        "head_size": 32,
+                    },
+                    "mlp": {"layer_1": {"weight": init_1}, "layer_2": {"weight": init_2}, "intermediate_size": 1024},
+                    "num_layers": 2,
+                    "hidden_size": 256,
+                },
+                "output_layer": {"output_weight": init_1},
+            },
+            "multi_stage": {
+                "debug_param_init": _LOG_LEVEL,
+                "debug_layer_outputs": _LOG_LEVEL,
+                "debug_layer_gradients": _LOG_LEVEL,
+                "debug_all_param_gradients": _LOG_LEVEL,
+                "debug_tensor_parallel": True,
+            },
+            "distributed": {
+                "reproducible_init": True,
+                "timeout": 20,
+            },
+        },
+        "batch": {"batch_size": 8, "sequence_length": 512},
+        "data": {
+            "datasets": {
+                "training": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "end": 0.969,
+                },
+                "validation": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "begin": 0.969,
+                    "end": 0.999,
+                },
+                "test": {
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "type": "slice",
+                    "begin": 0.999,
+                    "end": 1,
+                },
+            }
+        },
+        "optimizer": {"learning_rate": {"base": 0.0001}},
+    },
     megatron_args=[
         "--num-layers=2",
         "--hidden-size=256",
@@ -210,7 +270,7 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--micro-batch-size=8",
         "--max-position-embeddings=512",
         "--seq-length=512",
-        "--init-method-std=0.022",
+        f"--init-method-std={2**-5.5}",
         "--lr=0.0001",
         "--num-workers=0",
         "--valid-num-workers=0",
@@ -239,7 +299,9 @@ _update_and_add_testing_config(
     # Tests MQA.
     "gpt2",
     "starcoder",
-    extra_args=["model.base_model.transformer.mixer.head_groups=1"],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "head_groups"): 1,
+    },
     megatron_args=["--group-query-attention"],
     checkpoint_format=None,
     groups={
@@ -256,11 +318,11 @@ _update_and_add_testing_config(
     # Tests intermediate between gpt2 and llama, closest converter to gpt2.
     "gpt2",
     "starcoder2",
-    extra_args=[
-        "model.base_model.transformer.mixer.head_groups=4",
-        "model.base_model.transformer.mixer.rotary.type=default",
-        "model.base_model.embeddings_layer.position_embeddings.enabled=False",
-    ],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "head_groups"): 4,
+        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "default",
+        ("model", "base_model", "embeddings_layer", "position_embeddings", "enabled"): False,
+    },
     megatron_args=[
         "--group-query-attention",
         "--num-query-groups=4",
@@ -283,14 +345,15 @@ _update_and_add_testing_config(
     # Main tested model.
     "starcoder2",
     "llama",
-    extra_args=[
-        "model.base_model.transformer.mlp.gated=True",
-        "model.base_model.transformer.mlp.activation_type=silu",
-        "model.base_model.transformer.add_linear_biases=False",
-        "model.base_model.transformer.normalization.type=rms_norm",
-        "model.base_model.transformer.mlp.ffn_hidden_size=1024",
-        "model.base_model.output_layer.tied_weight=False",
-    ],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "add_linear_biases"): False,
+        ("model", "base_model", "transformer", "mlp", "gated"): True,
+        ("model", "base_model", "transformer", "mlp", "activation"): "silu",
+        ("model", "base_model", "transformer", "mlp", "add_linear_biases"): False,
+        ("model", "base_model", "transformer", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "output_layer", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "output_layer", "tied_weight"): False,
+    },
     megatron_args=[
         "--swiglu",
         "--disable-bias-linear",
@@ -314,7 +377,9 @@ _update_and_add_testing_config(
     # Tests llama3-style rotary embeddings.
     "llama",
     "llama3",
-    extra_args=["model.base_model.transformer.mixer.rotary.type=llama3"],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "llama3",
+    },
     # Megatron doesn't support Llama3-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
@@ -332,7 +397,9 @@ _update_and_add_testing_config(
     # Tests yarn-style rotary embeddings.
     "llama",
     "llama_yarn",
-    extra_args=["model.base_model.transformer.mixer.rotary.type=yarn"],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "rotary", "type"): "yarn",
+    },
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
@@ -350,7 +417,7 @@ _update_and_add_testing_config(
     # Tests diffusion llama converter.
     "llama_yarn",
     "diffusion_llama",
-    extra_args=[],
+    updates={},
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
@@ -370,7 +437,9 @@ _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "llama_mtp",
-    extra_args=["model.base_model.output_layer.prediction_heads=4"],
+    updates={
+        ("model", "base_model", "output_layer", "prediction_heads"): 4,
+    },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
@@ -391,7 +460,9 @@ _update_and_add_testing_config(
     "llama",
     "qwen2",
     # TODO: replace
-    extra_args=["model.base_model.transformer.add_linear_biases=only_attn_qkv"],
+    updates={
+        ("model", "base_model", "transformer", "add_linear_biases"): "only_attn_qkv",
+    },
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
@@ -411,7 +482,7 @@ _update_and_add_testing_config(
     "qwen2",
     "dream",
     # TODO: replace only_attn_qkv
-    extra_args=[],
+    updates={},
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
@@ -431,7 +502,9 @@ _update_and_add_testing_config(
     # Tests sliding window attention, mistral converter.
     "llama",
     "mistral",
-    extra_args=["model.base_model.transformer.mixer.window_size=128"],
+    updates={
+        ("model", "base_model", "transformer", "mixer", "window_size"): 128,
+    },
     # Megatron doesn't support sliding windows.
     megatron_args=None,
     checkpoint_format=MistralGPTHuggingfaceCheckpointFormat,
@@ -450,11 +523,12 @@ _update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
-    extra_args=[
-        "model.base_model.transformer.mlp.type=moe",
-        "model.base_model.transformer.mlp.num_experts=4",
-        "model.base_model.transformer.mlp.num_experts_per_token=4",
-    ],
+    updates={
+        ("model", "base_model", "transformer", "mlp", "type"): "moe",
+        ("model", "base_model", "transformer", "mlp", "router", "weight"): init_1,
+        ("model", "base_model", "transformer", "mlp", "experts"): 4,
+        ("model", "base_model", "transformer", "mlp", "experts_per_token"): 4,
+    },
     megatron_args=[
         "--num-experts=4",
         "--moe-router-topk=4",
@@ -477,12 +551,16 @@ _update_and_add_testing_config(
     "llama",
     "llamba",
     model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.ssm.type=mamba",
-        "model.base_model.hybrid_block_layout=['t','m']",
-        "model.base_model.ssm.d_inner=512",
-        "model.base_model.ssm.state_size=16",
-    ],
+    updates={
+        ("model", "base_model", "ssm"): {
+            "type": "mamba",
+            "d_inner": 512,
+            "state_size": 16,
+            "dt_rank": 16,
+            "add_linear_biases": False,
+        },
+        ("model", "base_model", "hybrid_block_layout"): "['t','m']",
+    },
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
@@ -505,14 +583,17 @@ _update_and_add_testing_config(
     "llama",
     "hybrid_mamba2",
     model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2']",
-        "model.base_model.ssm.type=mamba_2",
-        "model.base_model.ssm.d_inner=512",
-        "model.base_model.ssm.state_size=8",
-        "model.base_model.ssm.d_xb=256",
-        # f"model.base_model.transformer.debug_transformer={_LOG_LEVEL}"
-    ],
+    updates={
+        ("model", "base_model", "ssm"): {
+            "type": "mamba_2",
+            "d_inner": 512,
+            "state_size": 8,
+            "dt_rank": 16,
+            "d_xb": 256,
+            "add_linear_biases": False,
+        },
+        ("model", "base_model", "hybrid_block_layout"): "['t','m2']",
+    },
     megatron_args=None,
     checkpoint_format=AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     groups={
@@ -537,15 +618,18 @@ _update_and_add_testing_config(
     "llama",
     "hybrid_discrete_mamba2",
     model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2d']",
-        "model.base_model.ssm.type=discrete_mamba_2",
-        "model.base_model.ssm.d_inner=512",
-        "model.base_model.ssm.state_size=8",
-        "model.base_model.ssm.n_qk_heads=8",
-        "model.base_model.ssm.n_v_heads=16",
-        "model.base_model.ssm.chunk_size=32",
-    ],
+    updates={
+        ("model", "base_model", "ssm"): {
+            "type": "discrete_mamba_2",
+            "d_inner": 512,
+            "state_size": 8,
+            "n_qk_heads": 8,
+            "n_v_heads": 16,
+            "chunk_size": 32,
+            "add_linear_biases": False,
+        },
+        ("model", "base_model", "hybrid_block_layout"): "['t','m2d']",
+    },
     megatron_args=None,
     checkpoint_format=AprielSSMHHybridHuggingfaceCheckpointFormat,
     groups={

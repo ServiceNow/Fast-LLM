@@ -89,14 +89,17 @@ class SSMConfig(MixerConfig):
     # [Mamba, Mamba2, DiscreteMamba2]
     # c_size [Mamba, Mamba2, DiscreteMamba2]?
     d_inner: int = Field(
-        default=None,
+        default=2048,
         desc="Inner dimension.",
         hint=FieldHint.core,
     )
 
-    def set_defaults(self, hidden_size: int):
-        if self.d_inner is None:
-            self.d_inner = 2 * hidden_size
+    # Model options
+    add_linear_biases: bool = Field(
+        default=True,
+        desc="Add biases to linear layers. May be overridden for individual layers.",
+        hint=FieldHint.architecture,
+    )
 
 
 @config_class()
@@ -120,15 +123,10 @@ class MambaBaseConfig(SSMConfig):
     # Model dimensions
     #  [Mamba, Mamba2]
     dt_rank: int = Field(
-        default=None,
-        desc="Rank of the Δ projection matrix. If 'None', will be set to ceil(hidden_size/16)",
+        default=64,
+        desc="Rank of the Δ projection matrix.",
         hint=FieldHint.architecture,
     )
-
-    def set_defaults(self, hidden_size: int):
-        super().set_defaults(hidden_size)
-        if self.dt_rank is None:
-            self.dt_rank = math.ceil(hidden_size / 16)
 
 
 @config_class(dynamic_type={MixerConfig: "mamba"})
@@ -186,7 +184,7 @@ class Mamba2Config(MambaBaseConfig):
     # Model dimensions
     # xb_size [Mamba2]
     d_xb: int = Field(
-        default=None,
+        default=1024,
         desc="Dimension of the xB in Mamba2 blocks.",
         hint=FieldHint.architecture,
     )
@@ -198,11 +196,6 @@ class Mamba2Config(MambaBaseConfig):
         desc="Whether to repeat x and B before (True) or after (False) the conv1d in Mamba2 blocks.",
         hint=FieldHint.architecture,
     )
-
-    def set_defaults(self, hidden_size: int):
-        super().set_defaults(hidden_size)
-        if self.d_xb is None:
-            self.d_xb = hidden_size
 
     @property
     def layer_class(self) -> "type[Mamba2]":
