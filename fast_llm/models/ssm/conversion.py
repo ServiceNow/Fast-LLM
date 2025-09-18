@@ -22,7 +22,7 @@ from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, Hu
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
-from fast_llm.layers.ssm.config import DTInitType, SSMBlockType
+from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
 from fast_llm.models.ssm.config import (
     AprielSSMHHybridHuggingfaceCheckpointFormat,
@@ -206,17 +206,6 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 ),
                 ignore_missing=True,
                 default_value=4,
-            ),
-            MappedConfigParamConverter(
-                fast_llm_names=(("ssm", "dt_init"),),
-                export_names=(
-                    (
-                        "ssm_cfg",
-                        "dt_init",
-                    ),
-                ),
-                fast_llm_value=lambda x: DTInitType.random if x == MISSING else DTInitType(x),
-                export_value=lambda x: x.value,
             ),
         ]
 

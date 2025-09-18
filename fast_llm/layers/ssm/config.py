@@ -2,16 +2,19 @@ import enum
 import math
 import typing
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.layers.block.config import MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba import Mamba
-    from fast_llm.layers.ssm.mamba2 import Mamba2
+    from fast_llm.tensor import ParameterMeta
 
 
 class SSMBlockType(enum.StrEnum):
@@ -44,11 +47,6 @@ class SSMBlockType(enum.StrEnum):
 class DTInitType(enum.StrEnum):
     constant = "constant"
     random = "random"
-
-    def get_init_method(self, scale: float) -> "Initializer":
-        from fast_llm.engine.config_utils.initialization import init_fill_, init_uniform_centered_
-
-        return init_fill_(scale) if self == DTInitType.constant else init_uniform_centered_(scale)
 
 
 @config_class()
@@ -96,15 +94,6 @@ class SSMConfig(MixerConfig):
         hint=FieldHint.core,
     )
 
-    # Learning rate
-    # lr_scale [MambaLayer, Mamba2, DiscreteMamba2]
-    mamba_lr_scale: float | None = Field(
-        default=None,
-        desc="Learning rate scale for Mamba blocks.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
-    )
-
     def set_defaults(self, hidden_size: int):
         if self.d_inner is None:
             self.d_inner = 2 * hidden_size
@@ -136,37 +125,10 @@ class MambaBaseConfig(SSMConfig):
         hint=FieldHint.architecture,
     )
 
-    # Initialization
-    # dt_bias_initialization_min [Mamba, Mamba2]
-    dt_min: float = Field(
-        default=0.001,
-        desc="Minimum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    # dt_bias_initialization_max [Mamba, Mamba2]
-    dt_max: float = Field(
-        default=0.1,
-        desc="Maximum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    # dt_bias_initialization_floor [Mamba, Mamba2]
-    dt_init_floor: float = Field(
-        default=1e-4,
-        desc="Minimum value for initializing dt",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-
     def set_defaults(self, hidden_size: int):
         super().set_defaults(hidden_size)
         if self.dt_rank is None:
             self.dt_rank = math.ceil(hidden_size / 16)
-
-    def _validate(self) -> None:
-        super()._validate()
-        Assert.geq(self.dt_max, self.dt_min)
 
 
 @config_class(dynamic_type={MixerConfig: "mamba"})
@@ -237,21 +199,6 @@ class Mamba2Config(MambaBaseConfig):
         hint=FieldHint.architecture,
     )
 
-    # Initialization
-    # dt_weight_initialization_method [Mamba2]
-    dt_init: DTInitType = Field(
-        default=DTInitType.random,
-        desc="Initialization method for dt",
-        hint=FieldHint.core,
-    )
-    # dt_weight_initialization_scale [Mamba2]
-    dt_scale: float = Field(
-        default=1.0,
-        desc="Scale for dt",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-
     def set_defaults(self, hidden_size: int):
         super().set_defaults(hidden_size)
         if self.d_xb is None:
@@ -308,3 +255,93 @@ class DiscreteMamba2Config(SSMConfig):
         from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 
         return DiscreteMamba2
+
+
+@config_class(dynamic_type={InitializationConfig: "mamba_dt_bias"})
+class MambaDTBiasInitializationConfig(InitializationConfig):
+    """
+    Configuration for the common Mamba DT bias initialization scheme.
+    """
+
+    _abstract = False
+    # dt_bias_initialization_min [Mamba, Mamba2]
+    min_step_size: float = Field(
+        default=0.001,
+        desc="Minimum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    # dt_bias_initialization_max [Mamba, Mamba2]
+    max_step_size: float = Field(
+        default=0.1,
+        desc="Maximum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    # dt_bias_initialization_floor [Mamba, Mamba2]
+    floor: float = Field(
+        default=1e-4,
+        desc="Minimum value for initializing dt",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.geq(self.max_step_size, self.min_step_size)
+
+    def get_initializer(self) -> Initializer:
+        return init_dtprojbias(self.min_step_size, self.max_step_size, self.floor)
+
+
+@config_class(dynamic_type={InitializationConfig: "mamba_a"})
+class MambaAInitializationConfig(InitializationConfig):
+    """
+    Initialization configuration for Mamba A parameter.
+    Not particularly useful outside the default A initialization, but still made available for convenience.
+    """
+
+    _abstract = False
+    # dt_bias_initialization_min [Mamba, Mamba2]
+    state_size: int = Field(
+        desc="State size. Needs to be repeated here so the initializer knows about it.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    # dt_bias_initialization_max [Mamba, Mamba2]
+    d_inner: int = Field(
+        desc="Inner dimension. Needs to be repeated here so the initializer knows about it.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+
+    def get_initializer(self) -> Initializer:
+        return init_a(self.state_size, self.d_inner)
+
+
+def init_dtprojbias(
+    min_step_size: float = 0.001, max_step_size: float = 0.1, floor: float = 1e-4
+) -> LambdaInitializer:
+    def init_(meta: "ParameterMeta", tensor: "torch.Tensor", generator: "torch.Generator"):  # noqa
+        import torch
+
+        tensor.uniform_(math.log(min_step_size), math.log(max_step_size), generator=generator).exp_().clamp_min_(floor)
+        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+        tensor.add_(torch.log(-torch.expm1(-tensor)))
+
+    return LambdaInitializer(init_)
+
+
+def init_a(d_state, d_inner) -> LambdaInitializer:
+    def init_(meta: "ParameterMeta", tensor: "torch.Tensor", generator: "torch.Generator") -> None:  # noqa
+        import torch
+
+        Assert.eq(tensor.numel(), d_state * d_inner)
+        torch.log(
+            torch.arange(1, d_state + 1, dtype=torch.float32, device=tensor.device)
+            .unsqueeze(0)
+            .expand(d_inner, d_state),
+            out=tensor,
+        )
+
+    return LambdaInitializer(init_, requires_global_initialization=True)

@@ -3,15 +3,15 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
-from fast_llm.layers.ssm.config import Mamba2Config
-from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias
-from fast_llm.utils import combine_lr_scales, div
+from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.ssm.config import Mamba2Config, init_a, init_dtprojbias
+from fast_llm.utils import div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -35,12 +35,24 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
         config: ConfigType,
         block_config: BlockConfig,
         distributed_config: DistributedConfig,
+        *,
+        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
     ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
+        super().__init__(
+            config,
+            block_config,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=lr_scale,
+            peft=peft,
+        )
 
         num_heads = div(self._config.d_inner, self._config.state_size)
         num_head_groups = div(self._config.d_xb, self._config.state_size)
@@ -72,61 +84,62 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
         self._local_xb_size = xb_dim.size
         convolution_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
 
-        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
-
         self.convolution = self._config.convolution_layer.get_layer(
             convolution_dim,
             default_activation=ActivationType.silu,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         # TODO: Use x_layer, b_layer, c_layer
         self.in_proj = self._config.z_layer.get_layer(
             hidden_dim,
             inner_projection_dim,
-            default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.dt_in_proj = self._config.dt_input_layer.get_layer(
             hidden_dim,
             dt_rank_dim,
-            default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
             default_add_bias=self._block_config.add_linear_biases,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.dt_proj = self._config.dt_layer.get_layer(
             dt_rank_dim,
             inner_dim,
-            default_weight_initializer=self._config.dt_init.get_init_method(
-                self._config.dt_rank**-0.5 * self._config.dt_scale
-            ),
-            default_bias_initializer=init_dtprojbias(
-                self._config.dt_max, self._config.dt_min, self._config.dt_init_floor
-            ),
+            default_weight_initialization=init_uniform_centered_(self._config.dt_rank**-0.5),
+            default_bias_initialization=init_dtprojbias(),
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.A_log = self._config.a_log_weight.get_parameter(
             (inner_dim, state_dim),
-            default_initializer=init_A(self._config.state_size, self._config.d_inner),
-            lr_scale=lr_scale,
+            default_initialization=init_a(self._config.state_size, self._config.d_inner),
             weight_decay=False,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         # D "skip" parameter
         self.D = self._config.d_weight.get_parameter(
             (inner_dim,),
-            default_initializer=init_ones_,
-            lr_scale=lr_scale,
+            default_initialization=init_ones_,
             weight_decay=False,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.out_proj = self._config.output_layer.get_layer(
             inner_dim,
             hidden_dim,
-            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
 
         if self._debug.enabled:

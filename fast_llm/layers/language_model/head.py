@@ -15,11 +15,17 @@ from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, re
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import BlockLayerBase
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.language_model.config import (
+    LanguageModelEmbeddingsConfig,
+    LanguageModelHeadConfig,
+    LanguageModelKwargs,
+    LanguageModelLossNames,
+)
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
 logger = logging.getLogger(__name__)
@@ -27,37 +33,46 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[ConfigType], Layer):
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](BlockLayerBase[ConfigType], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
+    TODO: Cleanup (dynamic type? composition?)
     """
+
+    _config: ConfigType
 
     def __init__(
         self,
         config: ConfigType,
+        # TODO: Doesn't make much sense.
+        block_config: BlockConfig,
         distributed_config: DistributedConfig,
+        embeddings_config: LanguageModelEmbeddingsConfig,
+        *,
+        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
-        # TODO: Unnecessary?
         block_index: int,
         name: str,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
         prediction_distance: int,
     ):
         super().__init__(
             config,
-            config.transformer,
+            block_config,
             distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            # TODO: Add lr scale?
-            None,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=lr_scale,
+            peft=peft,
         )
-        self._parallel_logits = self._distributed_config.tensor_parallel > 1 and config.parallel_embeddings
+        self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
-        self._sequence_parallel_logits = self._sequence_parallel and not self._config.parallel_embeddings
+        self._sequence_parallel_logits = self._sequence_parallel and not self._vocab_parallel
         if self._config.cross_entropy_splits is not None and self._sequence_parallel:
-            assert not self._parallel_logits
+            assert not self._vocab_parallel
 
         self._loss_coefficient = (
             self._config.prediction_loss_coefficient[prediction_distance]
@@ -74,9 +89,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
 
         if not self._config.enable_dpo:
-            self._cross_entropy_impl = self._config.cross_entropy_impl
+            self._cross_entropy_impl = self._config.cross_entropy_implementation
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
-                if self._parallel_logits:
+                if self._vocab_parallel:
                     self._cross_entropy_impl = CrossEntropyImpl.fused
                 elif TritonConfig.TRITON_ENABLED:
                     self._cross_entropy_impl = CrossEntropyImpl.triton
@@ -85,28 +100,24 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
-        self.final_norm = self._config.transformer.normalization.get_layer(hidden_dim)
+        self.final_norm = self._block_config.normalization.get_layer(
+            hidden_dim, lr_scale=self._lr_scale, peft=self._peft
+        )
 
         self._vocab_dim = TensorDim(
-            "vocab", self._config.vocab_size, self._parallel_dim if self._parallel_logits else None
+            "vocab", embeddings_config.vocab_size, self._parallel_dim if self._vocab_parallel else None
         )
         # Only the first head defines the output weights
-        if self._prediction_distance == 0 and not self._config.tie_word_embeddings:
+        if self._prediction_distance == 0 and not self._config.tied_weight:
             # untie embedding weights
-            self.output_weights = ParameterMeta.from_dims(
+            self.output_weights = self._config.output_weight.get_parameter(
                 (self._vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=self._config.init_method_std_embed,
-                    min_val=self._config.init_method_min_embed,
-                    max_val=self._config.init_method_max_embed,
+                default_initialization=init_normal_(
+                    std=self._block_config.init_method_std,
                 ),
-                lr_scale=self._config.output_lr_scale,
+                lr_scale=self._lr_scale,
+                peft=self._peft,
             )
-
-        # PEFT.
-        self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
-        if hasattr(self, "output_weights"):
-            self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -237,7 +248,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         return targets
 
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        if self._config.tie_word_embeddings:
+        if self._config.tied_weight:
             return kwargs[WORD_EMBEDDINGS_WEIGHT]
         if self._prediction_distance > 0:
             return kwargs[OUTPUT_WEIGHTS]
@@ -309,13 +320,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        group = self._parallel_dim.group if self._parallel_logits else None
+        group = self._parallel_dim.group if self._vocab_parallel else None
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
             bias=None,
             group=group,
-            sequence_parallel=self._sequence_parallel and self._parallel_logits,
+            sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
 
         if self._config.logit_z_loss > 0.0:

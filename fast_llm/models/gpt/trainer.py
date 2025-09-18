@@ -22,13 +22,13 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         parameters = super()._get_sampling_parameters(parameters, _return_dict=True)
         parameters.update(
             {
-                "vocab_size": self._config.model.base_model.vocab_size,
+                "vocab_size": self._config.model.base_model.embeddings_layer.vocab_size,
                 "sequence_length": self._config.batch.sequence_length,
                 "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
-                "use_preference_loss_spans": self._config.model.base_model.enable_dpo,
+                "use_preference_loss_spans": self._config.model.base_model.output_layer.enable_dpo,
                 "cross_document_attention": self._config.batch.cross_document_attention,
                 "truncate_documents": self._config.batch.truncate_documents,
-                "extra_tokens": self._config.model.base_model.prediction_heads,
+                "extra_tokens": self._config.model.base_model.output_layer.prediction_heads,
             }
         )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

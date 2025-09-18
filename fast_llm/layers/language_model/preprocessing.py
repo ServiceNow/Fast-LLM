@@ -6,7 +6,7 @@ import torch
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_dim import scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
+from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -18,9 +18,9 @@ class PositionEmbeddingPreprocessor(Preprocessor):
     _position_ids: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
-    def __init__(self, config: LanguageModelBaseConfig, distributed_config: DistributedConfig):
+    def __init__(self, config: LanguageModelEmbeddingsConfig, distributed_config: DistributedConfig):
         self._config = config
-        assert config.use_absolute_position_embeddings
+        assert config.position_embeddings.enabled
         self._distributed_config = distributed_config
 
     def _create_tensors(self, sequence_length: int, device: torch.device) -> None:
@@ -28,7 +28,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
             return
         self._tensor_cache_max_sequence_length = sequence_length
 
-        Assert.leq(sequence_length, self._config.num_absolute_position_embeddings)
+        Assert.leq(sequence_length, self._config.num_position_embeddings)
         self._position_ids = torch.arange(0, sequence_length, device=device, dtype=torch.int64)
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
@@ -63,10 +63,6 @@ class PositionEmbeddingPreprocessor(Preprocessor):
 
 
 class PreferenceSpanPreprocessor(Preprocessor):
-    def __init__(self, config: LanguageModelBaseConfig, distributed_config: DistributedConfig):
-        self._config = config
-        self._distributed_config = distributed_config
-
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         return
 

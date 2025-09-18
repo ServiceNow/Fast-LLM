@@ -1,7 +1,7 @@
 import typing
 
-from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import MoEMLPConfig
 from fast_llm.utils import Assert, div
 
@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
 
 
 def get_init_megatron(
-    meta: "ParameterMeta", config: TransformerConfig
+    meta: "ParameterMeta", config: BlockConfig
 ) -> typing.Callable[["torch.Tensor", "Distributed"], None]:
     def init_megatron(tensor: "torch.Tensor", distributed: "Distributed") -> None:
         Assert.eq(distributed.config.world_size, 1)
@@ -51,7 +51,7 @@ def set_megatron_distributed_seeds(config: "DistributedConfig") -> None:
 
 
 def _init_attention_megatron(
-    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    config: BlockConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ) -> "torch.Tensor":
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
@@ -141,7 +141,7 @@ def _init_moe_router_megatron(
 
 
 def _init_moe_mlp_megatron(
-    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    config: BlockConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ) -> "torch.Tensor":
     assert meta.param_init_method is not None
     generator = distributed.tp_init_generator if meta.is_tensor_parallel else distributed.pp_init_generator

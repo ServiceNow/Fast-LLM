@@ -56,12 +56,6 @@ class MLPConfig(MLPBaseConfig):
         desc="Set which of the MLP intermediate activations will be recomputed during the backward passes. This provides a trade-off between memory and speed.",
         hint=FieldHint.performance,
     )
-    lr_scale: float | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each expert.",
-        doc="May be used to freeze some experts by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
 
     def set_defaults(self, hidden_size: int):
         if self.ffn_hidden_size is None:
@@ -150,7 +144,7 @@ class MoEMLPConfig(MLPConfig):
         return MixtureOfExpertMLP
 
     @functools.cached_property
-    def num_unshared_experts(self):
+    def num_unshared_experts(self) -> int:
         return self.num_experts - self.num_shared_experts
 
     def _validate(self) -> None:

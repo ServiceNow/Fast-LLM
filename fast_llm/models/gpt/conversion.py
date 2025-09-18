@@ -24,9 +24,9 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.attention.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
+from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import RoutingType
 from fast_llm.layers.common.normalization.config import LayerNormalizationConfig
 from fast_llm.models.gpt.config import (
@@ -128,7 +128,16 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
-            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
+            ConstantImportParamConverter(
+                fast_llm_names=(
+                    (
+                        "embeddings_layer",
+                        "position_embeddings",
+                        "enabled",
+                    ),
+                ),
+                fast_llm_value=False,
+            ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "mixer", "rotary", "theta"),), export_names=(("rope_theta",),)
             ),
@@ -159,11 +168,21 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 export_names=(("intermediate_size",),),
             ),
             RenameParamConverter(
-                fast_llm_names=(("vocab_size",),),
+                fast_llm_names=(
+                    (
+                        "embeddings_layer",
+                        "vocab_size",
+                    ),
+                ),
                 export_names=(("vocab_size",),),
             ),
             RenameParamConverter(
-                fast_llm_names=(("tie_word_embeddings",),),
+                fast_llm_names=(
+                    (
+                        "output_layer",
+                        "tied_weight",
+                    ),
+                ),
                 export_names=(("tie_word_embeddings",),),
             ),
         ]
@@ -191,27 +210,27 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _create_transformer_layer_converters(
         self, fast_llm_layer_name: str, hf_layer_name: str, ignore_export: bool = False
     ) -> list[WeightConverter]:
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        transformer_config: BlockConfig = self._model.config.base_model.transformer
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         converters = []
         names_bias_cls = [
             # Self-attn
             (
-                f"{fast_llm_layer_name}.self_attn.query",
+                f"{fast_llm_layer_name}.mixer.query",
                 f"{hf_layer_name}.self_attn.q_proj",
                 # TODO: Fix
                 transformer_config.add_linear_biases,
                 QueryWeightConverter,
             ),
             (
-                f"{fast_llm_layer_name}.self_attn.key_value",
+                f"{fast_llm_layer_name}.mixer.key_value",
                 (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
                 # TODO: Fix
                 transformer_config.add_linear_biases,
                 KeyValueWeightConverter,
             ),
             (
-                f"{fast_llm_layer_name}.self_attn.dense",
+                f"{fast_llm_layer_name}.mixer.dense",
                 f"{hf_layer_name}.self_attn.o_proj",
                 # TODO: Fix
                 transformer_config.add_linear_biases,
@@ -262,7 +281,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     def _create_lm_head_converters(self) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
-        prediction_heads = self._model.config.base_model.prediction_heads
+        prediction_heads = self._model.config.base_model.output_layer.prediction_heads
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         converters = []
 
@@ -272,7 +291,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
         )
         # Output weights
-        if self._model.config.base_model.tie_word_embeddings:
+        if self._model.config.base_model.output_layer.tied_weight:
             converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
         else:
             converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
@@ -346,7 +365,7 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        transformer_config: BlockConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -459,7 +478,7 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
     architecture: typing.ClassVar[str] = "LlamaForCausalLM"
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        transformer_config: BlockConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -530,7 +549,7 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        transformer_config: BlockConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -635,13 +654,18 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
                 },
             ),
             RenameParamConverter(
-                fast_llm_names=(("prediction_heads",),),
+                fast_llm_names=(
+                    (
+                        "output_layer",
+                        "prediction_heads",
+                    ),
+                ),
                 export_names=(("prediction_heads",),),
             ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        transformer_config: BlockConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -662,7 +686,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
     # Override base method to handle the MTP heads
     def _create_lm_head_converters(self) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
-        prediction_heads = self._model.config.base_model.prediction_heads
+        prediction_heads = self._model.config.base_model.output_layer.prediction_heads
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         converters = []
 
@@ -687,7 +711,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
                 norm_bias,
             )
         # Output weights
-        if self._model.config.base_model.tie_word_embeddings:
+        if self._model.config.base_model.output_layer.tied_weight:
             converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
         else:
             converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))

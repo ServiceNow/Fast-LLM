@@ -38,9 +38,9 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
     assert model_testing_config.megatron_args is not None
 
     ignore_tensors = (
-        ".self_attn.query_key_value.",
-        ".self_attn.query.",
-        ".self_attn.key_value.",
+        ".mixer.query_key_value.",
+        ".mixer.query.",
+        ".mixer.key_value.",
         ".mlp.layer_2.weight",
         ".mlp.experts.",
     )

@@ -50,8 +50,10 @@ model:
       add_linear_biases: false
       init_method_std: 0.009021
       hidden_dropout: 0.0
-    vocab_size: 32000
-    tie_word_embeddings: false
+    embeddings_layer:
+      vocab_size: 32000
+    output_layer:
+      tied_weight: false
   multi_stage:
     zero_stage: 2
   distributed:

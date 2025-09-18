@@ -168,18 +168,24 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
     def _validate(self) -> None:
         super()._validate()
-        if (name := self.model.base_model.distillation_model) is None:
+        if (name := self.model.base_model.output_layer.distillation_model) is None:
             Assert.empty(self.reference_models)
         else:
             Assert.eq(self.reference_models.keys(), {name})
-        if self.model.base_model.use_absolute_position_embeddings:
-            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+        if self.model.base_model.embeddings_layer.position_embeddings.enabled:
+            Assert.geq(self.model.base_model.embeddings_layer.num_position_embeddings, self.batch.sequence_length)
         # if self.model.base_model.distillation_model is not None:
         #     # TODO: Support loss masking for distillation?
         #     assert not self.batch.use_loss_masking_spans
         for reference_model in self.reference_models.values():
-            Assert.none(reference_model.model.base_model.distillation_model)
+            Assert.none(reference_model.model.base_model.output_layer.distillation_model)
             # TODO: Support more LM head features.
-            Assert.none(reference_model.model.base_model.cross_entropy_splits)
-            Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
-            Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+            Assert.none(reference_model.model.base_model.output_layer.cross_entropy_splits)
+            Assert.eq(
+                reference_model.model.base_model.embeddings_layer.vocab_parallel,
+                self.model.base_model.embeddings_layer.vocab_parallel,
+            )
+            Assert.geq(
+                reference_model.model.base_model.output_layer.prediction_heads,
+                self.model.base_model.output_layer.prediction_heads,
+            )

@@ -1,7 +1,6 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.config import Config, Field, FieldHint, config_class
 
 if typing.TYPE_CHECKING:
     import torch
@@ -11,8 +10,22 @@ if typing.TYPE_CHECKING:
     from fast_llm.tensor import ParameterMeta
 
 
-@config_class()
-class PeftConfig(BaseModelConfig):
+@config_class(registry=True)
+class PeftConfig(Config):
+    _abstract = True
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is PeftConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return NoPeftConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
     def apply_linear(
         self,
         module: "LinearBase",
@@ -34,12 +47,12 @@ class PeftConfig(BaseModelConfig):
         return parameter
 
 
-@config_class()
+@config_class(dynamic_type={PeftConfig: "none"})
 class NoPeftConfig(PeftConfig):
     _abstract = False
 
 
-@config_class()
+@config_class(dynamic_type={PeftConfig: "lora"})
 class LoRAConfig(PeftConfig):
     _abstract = False
 

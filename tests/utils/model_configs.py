@@ -156,13 +156,14 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "training.logs.interval=1",
         "run.tensor_logs.save=True",
         "run.tensor_logs.show=False",
-        "model.base_model.max_position_embeddings=512",
+        "model.base_model.embeddings_layer.position_embeddings.enabled=True",
+        "model.base_model.embeddings_layer.num_position_embeddings=512",
+        f"model.base_model.embeddings_layer.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         "model.base_model.transformer.num_layers=2",
         "model.base_model.transformer.hidden_size=256",
         "model.base_model.transformer.mixer.num_attention_heads=8",
         "model.base_model.transformer.mixer.head_groups=8",
         "model.base_model.transformer.init_method_std=0.022",
-        f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
@@ -258,8 +259,7 @@ _update_and_add_testing_config(
     extra_args=[
         "model.base_model.transformer.mixer.head_groups=4",
         "model.base_model.transformer.mixer.rotary.type=default",
-        # Unused, but prevents issues with conversion tests.
-        "model.base_model.max_position_embeddings=2048",
+        "model.base_model.embeddings_layer.position_embeddings.enabled=False",
     ],
     megatron_args=[
         "--group-query-attention",
@@ -289,7 +289,7 @@ _update_and_add_testing_config(
         "model.base_model.transformer.add_linear_biases=False",
         "model.base_model.transformer.normalization.type=rms_norm",
         "model.base_model.transformer.mlp.ffn_hidden_size=1024",
-        "model.base_model.tie_word_embeddings=False",
+        "model.base_model.output_layer.tied_weight=False",
     ],
     megatron_args=[
         "--swiglu",
@@ -370,7 +370,7 @@ _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "llama_mtp",
-    extra_args=["model.base_model.prediction_heads=4"],
+    extra_args=["model.base_model.output_layer.prediction_heads=4"],
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
