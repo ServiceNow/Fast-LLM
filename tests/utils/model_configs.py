@@ -475,6 +475,7 @@ _update_and_add_testing_config(
     "llamba",
     model_type="hybrid_ssm",
     extra_args=[
+        "model.base_model.ssm.type=mamba",
         "model.base_model.hybrid_block_layout=['t','m']",
         "model.base_model.ssm.d_inner=512",
         "model.base_model.ssm.state_size=16",
@@ -503,6 +504,7 @@ _update_and_add_testing_config(
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2']",
+        "model.base_model.ssm.type=mamba_2",
         "model.base_model.ssm.d_inner=512",
         "model.base_model.ssm.state_size=8",
         "model.base_model.ssm.d_xb=256",
@@ -534,6 +536,7 @@ _update_and_add_testing_config(
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2d']",
+        "model.base_model.ssm.type=discrete_mamba_2",
         "model.base_model.ssm.d_inner=512",
         "model.base_model.ssm.state_size=8",
         "model.base_model.ssm.n_qk_heads=8",

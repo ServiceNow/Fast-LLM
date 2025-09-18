@@ -10,7 +10,7 @@ from fast_llm.layers.common.peft.config import LoRAConfig, NoPeftConfig, PeftCon
 from fast_llm.utils import div
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.common.linear import LinearBase, LinearLike
+    from fast_llm.layers.common.linear.linear import LinearBase, LinearLike
 
 
 class TransformerSubLayerName(str, enum.Enum):

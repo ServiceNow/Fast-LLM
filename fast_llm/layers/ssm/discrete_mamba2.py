@@ -4,15 +4,13 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
-from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_zeros_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig
-from fast_llm.layers.ssm.mamba import init_kaiming_
+from fast_llm.layers.ssm.config import DiscreteMamba2Config
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import combine_lr_scales, div
 
@@ -27,15 +25,7 @@ except (ImportError, RuntimeError):
     _mamba_available = False
 
 
-try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
-
-    _causal_conv1d_available = True
-except (ImportError, RuntimeError):
-    _causal_conv1d_available = False
-
-
-class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
+class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
     """
     This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
     """
@@ -65,7 +55,6 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
         inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, v_head_size_dim))
         bc_dim = CompositeTensorDim("bc", (head_groups_dim, state_dim))
-        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
 
         inner_projection_dim = ConcatenatedTensorDim(
             "inner_projection",
@@ -86,49 +75,42 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
 
         # TODO: double check initializations
         # Projections
-        self.in_proj = OutputParallelLinear(
+
+        # TODO: Use x_layer, b_layer, c_layer, a_log_layer
+        self.in_proj = self._config.z_layer.get_layer(
             hidden_dim,
             inner_projection_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(block_config.hidden_size),
+            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        if not config.add_bias_linear:
+        if self.in_proj.bias is None:
+            # TODO: Integrate to z_layer config?
             self.z_bias = ParameterMeta.from_dims(
                 (inner_dim,),
                 weight_decay=False,
                 init_method=init_zeros_,
                 lr_scale=lr_scale,
             )
-        self.conv1d_weight = ParameterMeta.from_dims(
-            (
-                convolution_dim,
-                scalar_dim,
-                convolution_kernel_dim,
-            ),
-            init_method=init_uniform_centered_(
-                (convolution_dim.global_size * self._config.conv_kernel_dimension) ** -0.5
-            ),
-            lr_scale=lr_scale,
-        )
-        self.conv1d_bias = ParameterMeta.from_dims(
-            (convolution_dim,),
-            init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
+
+        self.convolution = self._config.convolution_layer.get_layer(
+            convolution_dim,
+            default_activation=ActivationType.silu,
             lr_scale=lr_scale,
         )
         # D "skip" parameter
-        self.D = ParameterMeta.from_dims(
+        self.D = self._config.d_weight.get_parameter(
             (heads_dim,),
-            weight_decay=False,
-            init_method=init_ones_,
+            default_initializer=init_ones_,
             lr_scale=lr_scale,
+            weight_decay=False,
         )
-        self.out_proj = InputParallelLinear(
+        self.out_proj = self._config.output_layer.get_layer(
             inner_dim,
             hidden_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(self._config.d_inner),
+            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -167,7 +149,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         )
         # Convolutional layer
         # xbc: (batch, padded_sequence, local_heads * head_size + 2 * local_head_groups * state)
-        xBC = self.convolutional_forward(xBC, padded_length)
+        xBC = self.convolution(xBC.transpose(1, 2)).transpose(1, 2)
 
         x, B, C = torch.split(
             xBC,
@@ -210,37 +192,8 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             y = y.transpose(0, 1).contiguous()
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        a, b = self.out_proj(y)
         return self.out_proj(y)
 
     @torch.compile
     def _apply_a_log(self, x: torch.Tensor, A_log: torch.Tensor) -> torch.Tensor:
         return x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1)
-
-    def convolutional_forward(self, xBC, padded_len):
-        """Convolutional layer forward pass for the full sequence."""
-        if _causal_conv1d_available and self._config.activation_type in (
-            ActivationType.silu,
-            ActivationType.identity,
-        ):
-            xBC = _causal_conv1d_fn(
-                xBC.transpose(1, 2),
-                self.conv1d_weight.squeeze(1),
-                self.conv1d_bias,
-                activation=(
-                    None
-                    if self._config.activation_type == ActivationType.identity
-                    else self._config.activation_type.value
-                ),
-            ).transpose(1, 2)
-        else:
-            xBC = self._config.activation_type.activation_fn(
-                torch.nn.functional.conv1d(
-                    xBC.transpose(1, 2),
-                    self.conv1d_weight,
-                    bias=self.conv1d_bias,
-                    groups=self.conv1d_weight.shape[0],
-                    padding=self._config.conv_kernel_dimension - 1,
-                )[..., :padded_len].transpose(1, 2)
-            )
-        return xBC

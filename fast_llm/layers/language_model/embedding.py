@@ -10,7 +10,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.block.block import BlockLayerBase
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
@@ -61,25 +61,25 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
             self._vocab_start_index = self._distributed_config.tensor_rank * vocab_dim.size
             self._vocab_end_index = (self._distributed_config.tensor_rank + 1) * vocab_dim.size
 
-        self.word_embeddings_weight = ParameterMeta.from_dims(
+        self.word_embeddings_weight = self._config.word_embeddings_layer.get_parameter(
             (vocab_dim, self._hidden_dim),
-            init_method=init_normal_(
+            default_initializer=init_normal_(
                 std=config.init_method_std_embed,
                 min_val=config.init_method_min_embed,
                 max_val=config.init_method_max_embed,
             ),
-            lr_scale=config.embeddings_lr_scale,
+            lr_scale=self._config.embeddings_lr_scale,
         )
         if self._config.use_absolute_position_embeddings:
-            self.position_embeddings_weight = ParameterMeta.from_dims(
+            self.position_embeddings_weight = self._config.position_embeddings_layer.get_parameter(
                 (TensorDim("position_embeddings", self._config.max_position_embeddings), self._hidden_dim),
-                init_method=init_normal_(
+                default_initializer=init_normal_(
                     std=config.init_method_std_embed,
                     min_val=config.init_method_min_embed,
                     max_val=config.init_method_max_embed,
                 ),
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
-                lr_scale=config.embeddings_lr_scale,
+                lr_scale=self._config.embeddings_lr_scale,
             )
 
         # PEFT.

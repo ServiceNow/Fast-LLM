@@ -199,19 +199,22 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             (
                 f"{fast_llm_layer_name}.self_attn.query",
                 f"{hf_layer_name}.self_attn.q_proj",
-                transformer_config.add_qkv_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 QueryWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.key_value",
                 (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
-                transformer_config.add_qkv_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 KeyValueWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.dense",
                 f"{hf_layer_name}.self_attn.o_proj",
-                transformer_config.add_dense_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 WeightConverter,
             ),
             # Norm
@@ -241,13 +244,15 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             converters += self._get_weight_and_bias_converters(
                 f"{fast_llm_layer_name}.mlp.layer_1",
                 (),
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 cls=IgnoreExportWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
                 f"{fast_llm_layer_name}.mlp.layer_2",
                 (),
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 cls=IgnoreExportWeightConverter,
             )
             converters += [IgnoreExportWeightConverter(f"{fast_llm_layer_name}.mlp.router.weight", ())]
@@ -344,12 +349,17 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", transformer_config.add_mlp_bias
+                f"{fast_llm_prefix}.mlp.layer_1",
+                f"{hf_prefix}.mlp.c_fc",
+                # TODO: Fix
+                transformer_config.add_linear_biases,
+                Ω,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.c_proj",
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -463,13 +473,15 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -531,13 +543,15 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]
@@ -641,13 +655,15 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
+                # TODO: Fix
+                transformer_config.add_linear_biases,
                 MLPLayer2Converter,
             ),
         ]

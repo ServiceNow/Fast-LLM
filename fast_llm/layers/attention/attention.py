@@ -4,7 +4,7 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -12,7 +12,6 @@ from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
-from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.utils import combine_lr_scales, div
 
 try:
@@ -112,21 +111,20 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         )
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
-        self.query = OutputParallelLinear(
+        self.query = self._config.query_layer.get_layer(
             hidden_dim,
             query_dim,
-            bias=self._config.add_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_zeros_,
+            default_weight_initializer=init_method_qkv,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        self.key_value = OutputParallelLinear(
+        # TODO: Use value config.
+        self.key_value = self._config.query_layer.get_layer(
             hidden_dim,
             key_value_dim,
-            bias=self._config.add_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_zeros_,
+            default_weight_initializer=init_method_qkv,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -136,12 +134,11 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._rotary = self._config.rotary.get_layer(kv_channels_dim)
 
         # Output.
-        self.dense = InputParallelLinear(
+        self.dense = self._config.dense_layer.get_layer(
             dense_dim,
             hidden_dim,
-            bias=self._config.add_dense_bias,
-            weight_init_method=init_method_std_attn_proj,
-            bias_init_method=init_zeros_,
+            default_weight_initializer=init_method_std_attn_proj,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )

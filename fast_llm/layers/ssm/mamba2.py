@@ -3,17 +3,15 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_
-from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
-from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig
-from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias, init_kaiming_
-from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import Assert, combine_lr_scales, div
+from fast_llm.layers.ssm.config import Mamba2Config
+from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias
+from fast_llm.utils import combine_lr_scales, div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -22,17 +20,10 @@ try:
 except (ImportError, RuntimeError):
     _mamba_available = False
 
-try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
-
-    _causal_conv1d_available = True
-except (ImportError, RuntimeError):
-    _causal_conv1d_available = False
-
 logger = logging.getLogger(__name__)
 
 
-class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
+class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
@@ -50,7 +41,6 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         lr_scale: float | None,
     ):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
-        Assert.eq(self._config.activation_type, ActivationType.silu)
 
         num_heads = div(self._config.d_inner, self._config.state_size)
         num_head_groups = div(self._config.d_xb, self._config.state_size)
@@ -66,7 +56,6 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
 
         inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, state_dim))
         xb_dim = CompositeTensorDim("xb", (head_groups_dim, state_dim))
-        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
 
         # DT projection
         dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
@@ -81,73 +70,61 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
-        conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
+        convolution_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
 
         lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
-        self.conv1d_weight = ParameterMeta.from_dims(
-            (
-                conv1d_dim,
-                scalar_dim,
-                convolution_kernel_dim,
-            ),
-            init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+        self.convolution = self._config.convolution_layer.get_layer(
+            convolution_dim,
+            default_activation=ActivationType.silu,
             lr_scale=lr_scale,
         )
-        self.conv1d_bias = ParameterMeta.from_dims(
-            (conv1d_dim,),
-            init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
-            lr_scale=lr_scale,
-        )
-        self.in_proj = OutputParallelLinear(
+        # TODO: Use x_layer, b_layer, c_layer
+        self.in_proj = self._config.z_layer.get_layer(
             hidden_dim,
             inner_projection_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(block_config.hidden_size),
+            default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        self.dt_in_proj = Linear(
+        self.dt_in_proj = self._config.dt_input_layer.get_layer(
             hidden_dim,
             dt_rank_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(block_config.hidden_size),
+            default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._block_config.add_linear_biases,
             lr_scale=lr_scale,
         )
-        self.dt_proj = OutputParallelLinear(
+        self.dt_proj = self._config.dt_layer.get_layer(
             dt_rank_dim,
             inner_dim,
-            bias=False,
-            # Initialize special dt projection to preserve variance at initialization
-            weight_init_method=self._config.dt_init.get_init_method(
+            default_weight_initializer=self._config.dt_init.get_init_method(
                 self._config.dt_rank**-0.5 * self._config.dt_scale
+            ),
+            default_bias_initializer=init_dtprojbias(
+                self._config.dt_max, self._config.dt_min, self._config.dt_init_floor
             ),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        # define bias outside the linear layer since it's also used in the selective_scan_fn
-        self.dt_proj_bias = ParameterMeta.from_dims(
-            (inner_dim,),
-            init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
-            lr_scale=lr_scale,
-        )
-        self.A_log = ParameterMeta.from_dims(
+        self.A_log = self._config.a_log_weight.get_parameter(
             (inner_dim, state_dim),
-            init_method=init_A(self._config.state_size, self._config.d_inner),
+            default_initializer=init_A(self._config.state_size, self._config.d_inner),
             lr_scale=lr_scale,
             weight_decay=False,
         )
-        self.D = ParameterMeta.from_dims(
+        # D "skip" parameter
+        self.D = self._config.d_weight.get_parameter(
             (inner_dim,),
-            weight_decay=False,
-            init_method=init_ones_,
+            default_initializer=init_ones_,
             lr_scale=lr_scale,
+            weight_decay=False,
         )
-        self.out_proj = InputParallelLinear(
+        self.out_proj = self._config.output_layer.get_layer(
             inner_dim,
             hidden_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(self._config.d_inner),
+            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -173,12 +150,11 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
-        assert _causal_conv1d_available
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
         #   -> (batch/sequence, sequence/batch, local_inner_projection)
         inner_projection = self.in_proj(input_)
-        dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
+        dt = self.dt_proj(self.dt_in_proj(input_))
         # Standardize to (batch, sequence, local_inner_projection)
         if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
@@ -198,16 +174,15 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
         if self._config.repeat_kv_before_conv:
-            x = (
+            x = self.convolution(
                 x.unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
         else:
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
             x = (
-                x.unflatten(1, (self._local_head_groups, self._config.state_size))
+                self.convolution(x)
+                .unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
@@ -240,7 +215,7 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             c,
             self.D.float(),
             z,
-            delta_bias=self.dt_proj_bias.float(),
+            delta_bias=self.dt_proj.bias.float(),
             delta_softplus=True,
         )
 

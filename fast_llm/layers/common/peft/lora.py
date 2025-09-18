@@ -4,7 +4,7 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.layers.common.linear import Linear, LinearBase
+from fast_llm.layers.common.linear.linear import Linear, LinearBase
 
 
 def lora_linear(
@@ -50,9 +50,6 @@ def lora_linear(
         transposed_weight=module.transposed_weight,
         lr_scale=module.weight.lr_scale,
     )
-    # TODO: Implement proper backward pass.
-    module.lora_0.weight.auto_grad_accumulation = True
-    module.lora_1.weight.auto_grad_accumulation = True
 
     old_forward = module._forward
 

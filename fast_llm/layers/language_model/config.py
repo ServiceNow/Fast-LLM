@@ -2,6 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
@@ -41,23 +42,38 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
+    word_embeddings_layer: ParameterConfig = Field(
+        desc="Configuration for the word embedding (weight).",
+        hint=FieldHint.architecture,
+    )
+    position_embeddings_layer: ParameterConfig = Field(
+        desc="Configuration for the word embedding (weight).",
+        hint=FieldHint.architecture,
+    )
+    output_layer: ParameterConfig = Field(
+        desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
+        hint=FieldHint.architecture,
+    )
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: Move to `word_embeddings_layer`/`output_layer`?
     vocab_size: int = Field(
         default=49152,
         desc="Size of the vocabulary, i.e., number of vocabulary embeddings and logits.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: Move to `position_embeddings_layer.enabled`?
     use_position_embeddings: bool = Field(
         default=None,
         desc="Enable absolute position embeddings. Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
     )
+    # TODO: Move to `output_layer`? (dynamic type?)
     tie_word_embeddings: bool = Field(
         default=True,
         desc="Tie the output weights (logits) with the vocabulary embedding.",

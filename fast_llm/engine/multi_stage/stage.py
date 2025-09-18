@@ -22,8 +22,6 @@ logger = logging.getLogger(__name__)
 def _accumulate_grad_hook(buffer: torch.nn.Parameter, meta: ParameterMeta) -> typing.Callable[[tuple, tuple], None]:
     def hook(grad_inputs, grad_outputs):  # noqa
         if buffer.grad is not None:
-            if not meta.auto_grad_accumulation:
-                raise RuntimeError(f"Unexpected grad for parameter {meta.tensor_name}")
             accumulate_gradient(buffer, buffer.grad)
             buffer.grad = None
 

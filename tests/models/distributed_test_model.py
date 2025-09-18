@@ -25,6 +25,7 @@ def main(args: list[str] | None = None) -> None:
         world_size = DistributedConfig.default_world_size
         rank = DistributedConfig.default_rank
         group = pool.get_process_group(range(world_size), rank)
+        safe_barrier(group, "start")
 
         for name, config in DISTRIBUTED_TESTING_CONFIGS.items():
             if model_testing_config.should_skip(config):

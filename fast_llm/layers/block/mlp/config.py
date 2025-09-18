@@ -3,6 +3,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -21,8 +22,24 @@ class RoutingType(str, enum.Enum):
 
 @config_class()
 class MLPConfig(Config):
-    # TODO: Review names    # TODO: Separate MoE?
+    # TODO: Review names
+    # TODO: Separate MoE?
     _abstract = False
+    # TODO: Configure experts, gate/up separately?
+    layer_1: AffineLinearConfig = Field(
+        desc="Configuration for the first MLP layer.",
+        hint=FieldHint.architecture,
+    )
+    # TODO: Separate gate and up
+    layer_2: AffineLinearConfig = Field(
+        desc="Configuration for the second MLP layer.",
+        hint=FieldHint.architecture,
+    )
+    router: LinearConfig = Field(
+        # TODO: Improve default?
+        desc="Configuration for the MoE router.",
+        hint=FieldHint.feature,
+    )
     ffn_hidden_size: int = Field(
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
@@ -142,17 +159,6 @@ class MLPConfig(Config):
         desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
         hint=FieldHint.optional,
     )
-
-    @property
-    def add_mlp_bias(self) -> bool:
-        from fast_llm.layers.block.config import AddLinearBiasChoices
-
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
 
     def _validate(self) -> None:
         with self._set_implicit_default():
