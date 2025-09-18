@@ -86,9 +86,7 @@ class BackupAttentionPreprocessor(Preprocessor):
 
 class FlashAttnVarlenPreprocessor(Preprocessor):
     def __init__(self, config: AttentionConfig, distributed_config: DistributedConfig):
-        self._config = config
-        self._distributed_config = distributed_config
-        assert self._config.do_use_flash_attention(self._distributed_config)
+        assert config.do_use_flash_attention(distributed_config)
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
         """

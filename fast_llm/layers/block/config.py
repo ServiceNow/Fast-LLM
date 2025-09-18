@@ -1,9 +1,15 @@
+import typing
+
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.layers.block.mlp.config import MLPConfig
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.block.block import BlockLayer
 
 # TODO: Generalize these beyond language models? (Ex. vision)
 
@@ -33,9 +39,87 @@ class BlockKwargs:
 
 
 @config_class()
-# TODO: Use composition instead
-class BlockConfig(MLPConfig, BaseModelConfig):
+class BlockLayerConfig(BaseModelConfig):
+    """
+    A common class for mixers and mlps, which have the same interface.
+    """
 
+    _abstract = True
+    block: "BlockConfig" = Field(init=False)
+
+    @property
+    def layer_class(self) -> "type[BlockLayer]":
+        raise NotImplementedError()
+
+    def set_defaults(self, hidden_size: int):
+        # Opportunity to set defaults that depend on the hidden size.
+        pass
+
+    def get_layer(
+        self,
+        block_config: "BlockConfig",
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+        lr_scale: float | None,
+    ) -> "BlockLayer":
+        return self.layer_class(
+            self,
+            block_config,
+            distributed_config,
+            hidden_dim,
+            block_index,
+            name,
+            lr_scale,
+        )
+
+
+@config_class(registry=True)
+class MLPBaseConfig(BlockLayerConfig):
+    _abstract = True
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is MLPBaseConfig and cls.get_subclass(default.get("type")) is None:
+            from fast_llm.layers.block.mlp.config import MLPConfig
+
+            # Default subclass.
+            return MLPConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
+@config_class(registry=True)
+class MixerConfig(BlockLayerConfig):
+    """
+    Base config class for mixers.
+    """
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
+            from fast_llm.layers.attention.config import AttentionConfig
+
+            # Default subclass.
+            return AttentionConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
+@config_class()
+# TODO: Use composition instead
+class BlockConfig(BaseModelConfig):
+    mixer: MixerConfig = Field()
+    mlp: MLPBaseConfig = Field()
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",
@@ -110,3 +194,17 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
     )
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            # Kept here for initialization order.
+            # TODO: Review initialization
+            if self.init_method_std is None:
+                self.init_method_std = self.hidden_size**-0.5
+            if self.init_method_min is not None and self.init_method_max is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+
+        self.mixer.set_defaults(self.hidden_size)
+        self.mlp.set_defaults(self.hidden_size)
+
+        super()._validate()

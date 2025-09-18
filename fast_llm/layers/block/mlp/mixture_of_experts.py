@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingType
+from fast_llm.layers.block.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.utils import Assert, combine_lr_scales
@@ -18,18 +18,18 @@ from fast_llm.utils import Assert, combine_lr_scales
 logger = logging.getLogger(__name__)
 
 
-class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
+class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     """
     MoeLayer following implementation from
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346
     With custom routing implementation supporting both topk and sinkhorn routing
 
-    TODO: Merge with MLP?
     TODO: Bias
     TODO: Sequence-tensor-parallel
     TODO: Expert parallel
     """
 
+    _config: ConfigType
     _group: ProcessGroup
 
     def __init__(
@@ -44,7 +44,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
-        assert not config.add_linear_biases, "Biases not supported for MoE."
+        assert not block_config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self.router = self._config.router.get_layer(
             self._hidden_dim,
@@ -54,7 +54,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 min_val=self._block_config.init_method_min,
                 max_val=self._block_config.init_method_max,
             ),
-            lr_scale=combine_lr_scales(self._config.router_lr_scale, self._lr_scale),
+            lr_scale=combine_lr_scales(self._lr_scale, self._config.lr_scale),
         )
         dropless_moe = self._config.dropless_moe
         if dropless_moe and self._sequence_parallel:

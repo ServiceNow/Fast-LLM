@@ -75,14 +75,18 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         {
             "base_model": {
                 "transformer": {
+                    "mixer": {
+                        "rotary": {"type": "default"},
+                        "window_size": 32,
+                        "head_groups": 4,
+                    },
+                    "mlp": {
+                        "ffn_hidden_size": 4096,  # Implicit default, default value
+                        "activation_type": "silu",  # Implicit default, non-default value
+                    },
                     "normalization": {"type": "rms_norm"},  # Nested
-                    "rotary": {"type": "default"},
                     "num_layers": 12,  # Default
                     "hidden_size": 1024,  # Default
-                    "window_size": 32,
-                    "ffn_hidden_size": 4096,  # Implicit default, default value
-                    "activation_type": "silu",  # Implicit default, non-default value
-                    "head_groups": 4,
                 },
                 "tie_word_embeddings": False,
             },
@@ -98,11 +102,13 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
 
     base_model_update = {
         "transformer": {
+            "mixer": {
+                "head_groups": 1,  # Override to default
+            },
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
             "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
             "hidden_size": 512,  # Override, affects derived value (kv channels)
-            "head_groups": 1,  # Override to default
         },
         "vocab_size": 1000,
     }
@@ -115,7 +121,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             "pretrained": {"format": "fast_llm", "path": config_path, "load_config": load_config},
         }
     )
-    Assert.eq(pretrained_config.model.base_model.transformer.kv_channels, 64)
+    Assert.eq(pretrained_config.model.base_model.transformer.mixer.kv_channels, 64)
     serialized_config = pretrained_config.model.to_dict()
     expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
 
@@ -125,15 +131,21 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
             "transformer": {
+                "mixer": {
+                    "type": "attention",
+                    "rotary": {"type": "default"},
+                    "window_size": 32,
+                    "head_groups": 1,
+                },
+                "mlp": {
+                    "type": "mlp",
+                    "ffn_hidden_size": 4096,  # Implicit default, default value
+                    "activation_type": "silu",  # Implicit default, non-default value
+                },
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
-                "rotary": {"type": "default"},
                 "peft": {"type": "lora", "freeze_others": False, "layers": ["query", "value"]},
                 "num_layers": 12,
                 "hidden_size": 512,
-                "ffn_hidden_size": 4096,
-                "activation_type": "silu",
-                "head_groups": 1,
-                "window_size": 32,
             },
             "tie_word_embeddings": False,
             "vocab_size": 1000,
@@ -145,7 +157,9 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             "layers": ["query", "value"],
         }
         base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
-        base_model_update["transformer"]["rotary"] = {"type": "none"}
+        base_model_update["transformer"]["mixer"]["type"] = "attention"
+        base_model_update["transformer"]["mixer"]["rotary"] = {"type": "none"}
+        base_model_update["transformer"]["mlp"] = {"type": "mlp"}
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

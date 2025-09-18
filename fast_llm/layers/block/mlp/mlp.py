@@ -11,10 +11,12 @@ from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerSubLayerName
-from fast_llm.utils import Assert, combine_lr_scales
+from fast_llm.utils import combine_lr_scales
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
+    _config: ConfigType
+
     def __init__(
         self,
         config: ConfigType,
@@ -29,26 +31,15 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
 
-        init_method_1 = init_normal_(
-            std=self._config.init_method_std_mlp_1,
-            min_val=self._config.init_method_min_mlp_1,
-            max_val=self._config.init_method_max_mlp_1,
-        )
-        init_method_2 = init_normal_(
-            std=self._config.init_method_std_mlp_2,
-            min_val=self._config.init_method_min_mlp_2,
-            max_val=self._config.init_method_max_mlp_2,
-        )
-
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        lr_scale = combine_lr_scales(self._lr_scale, self._config.mlp_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.lr_scale)
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = self._config.layer_1.get_layer(
             hidden_dim,
             intermediate_1_dim,
-            default_weight_initializer=init_method_1,
+            default_weight_initializer=init_normal_(std=self._block_config.init_method_std),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
@@ -56,7 +47,9 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         self.layer_2 = self._config.layer_1.get_layer(
             intermediate_2_dim,
             hidden_dim,
-            default_weight_initializer=init_method_2,
+            default_weight_initializer=init_normal_(
+                std=self._block_config.init_method_std / max(2 * self._block_config.num_layers, 1) ** 0.5
+            ),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=True,
@@ -77,7 +70,9 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         return intermediate_1_dim, intermediate_2_dim
 
 
-class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
+class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
+    _config: MLPConfig
+
     def __init__(
         self,
         config: ConfigType,
@@ -88,7 +83,6 @@ class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         name: str,
         lr_scale: float | None,
     ):
-        Assert.eq(config.num_experts, 1)
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
     def forward(

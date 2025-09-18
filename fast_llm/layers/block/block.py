@@ -12,7 +12,7 @@ from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -174,8 +174,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         setattr(
             self,
             self._mixer_module_name,
-            self._mixer_class(
-                self._mixer_config,
+            self._mixer_config.get_layer(
                 self._config,
                 self._distributed_config,
                 self._hidden_dim,
@@ -185,12 +184,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             ),
         )
 
-        # TODO: Use dynamic type.
-        from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
-        from fast_llm.layers.block.mlp.mlp import MLP
-
-        self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config,
+        self.mlp = self._config.mlp.get_layer(
             self._config,
             self._distributed_config,
             self._hidden_dim,
@@ -199,14 +193,9 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             self._lr_scale,
         )
 
-    @functools.cached_property
-    @abc.abstractmethod
-    def _mixer_class(self) -> type[BlockLayer]:
-        pass
-
     @property
     @abc.abstractmethod
-    def _mixer_config(self) -> Config:
+    def _mixer_config(self) -> MixerConfig:
         pass
 
     def setup(self, distributed: Distributed) -> None:

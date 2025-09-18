@@ -94,17 +94,6 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
 
         self._softmax_scale = self._config.kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        init_method_qkv = init_normal_(
-            std=self._config.init_method_std_qkv,
-            min_val=self._config.init_method_min_qkv,
-            max_val=self._config.init_method_max_qkv,
-        )
-        init_method_std_attn_proj = init_normal_(
-            std=self._config.init_method_std_attn_proj,
-            min_val=self._config.init_method_min_attn_proj,
-            max_val=self._config.init_method_max_attn_proj,
-        )
-
         lr_scale = combine_lr_scales(
             self._lr_scale,
             self._config.attention_lr_scale,
@@ -114,7 +103,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.query = self._config.query_layer.get_layer(
             hidden_dim,
             query_dim,
-            default_weight_initializer=init_method_qkv,
+            default_weight_initializer=init_normal_(std=self._block_config.init_method_std),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
@@ -123,7 +112,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.key_value = self._config.query_layer.get_layer(
             hidden_dim,
             key_value_dim,
-            default_weight_initializer=init_method_qkv,
+            default_weight_initializer=init_normal_(std=self._block_config.init_method_std),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
@@ -137,7 +126,9 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.dense = self._config.dense_layer.get_layer(
             dense_dim,
             hidden_dim,
-            default_weight_initializer=init_method_std_attn_proj,
+            default_weight_initializer=init_normal_(
+                std=self._block_config.init_method_std / max(2 * self._block_config.num_layers, 1) ** 0.5,
+            ),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,

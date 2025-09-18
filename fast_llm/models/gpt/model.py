@@ -14,7 +14,7 @@ from fast_llm.layers.attention.block import TransformerBlock
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPLossNames, RoutingType
+from fast_llm.layers.block.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -39,7 +39,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     ):
         self._hidden_dim = TensorDim("hidden", config.transformer.hidden_size)
         super().__init__(config, distributed_config)
-        self._use_flash_attention = self._config.transformer.do_use_flash_attention(distributed_config)
+        self._use_flash_attention = self._config.transformer.mixer.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
@@ -51,12 +51,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
         self._preprocessors.append(
-            self._config.transformer.rotary.get_layer(TensorDim("kv_channels", self._config.transformer.kv_channels))
+            self._config.transformer.mixer.rotary.get_layer(
+                TensorDim("kv_channels", self._config.transformer.mixer.kv_channels)
+            )
         )
         if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._distributed_config))
+            self._preprocessors.append(
+                FlashAttnVarlenPreprocessor(self._config.transformer.mixer, self._distributed_config)
+            )
         else:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._distributed_config))
+            self._preprocessors.append(
+                BackupAttentionPreprocessor(self._config.transformer.mixer, self._distributed_config)
+            )
 
         if self._config.enable_dpo:  # TODO better way to pass in?
             self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._distributed_config))
@@ -390,8 +396,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     def loss_defs(self) -> list[LossDef]:
         loss_defs = []
         if (
-            self._config.transformer.num_experts > 1
-            and self._config.transformer.expert_routing_type == RoutingType.topk
+            isinstance(self._config.transformer.mlp, MoEMLPConfig)
+            and self._config.transformer.mlp.num_experts > 1
+            and self._config.transformer.mlp.expert_routing_type == RoutingType.topk
         ):
             loss_defs.append(
                 LossDef(
@@ -400,7 +407,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     count=self._config.transformer.num_layers,
                 )
             )
-            if self._config.transformer.expert_z_loss_coefficient:
+            if self._config.transformer.mlp.expert_z_loss_coefficient:
                 loss_defs.append(
                     LossDef(
                         name=MLPLossNames.router_z_loss,
@@ -453,16 +460,16 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
         # Query, key, value, dense.
         flops_per_iteration = (
             2
-            * (transformer_config.num_attention_heads + transformer_config.head_groups)
-            * transformer_config.kv_channels
+            * (transformer_config.mixer.num_attention_heads + transformer_config.mixer.head_groups)
+            * transformer_config.mixer.kv_channels
             * dense_flops_base
         )
         # MLP
         flops_per_iteration += (
-            (2 + transformer_config.gated)
-            * transformer_config.ffn_hidden_size
+            (2 + transformer_config.mlp.gated)
+            * transformer_config.mlp.ffn_hidden_size
             * dense_flops_base
-            * transformer_config.num_experts_per_token
+            * (transformer_config.mlp.num_experts_per_token if isinstance(transformer_config.mlp, MoEMLPConfig) else 1)
         )
 
         # LM-head
@@ -475,8 +482,8 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
         )
 
         # Attention-matrix computation
-        attn_flops_base = transformer_flops_base * transformer_config.projection_size
-        if transformer_config.window_size is None:
+        attn_flops_base = transformer_flops_base * transformer_config.mixer.projection_size
+        if transformer_config.mixer.window_size is None:
             # Ignore masked values (s**2/2)
             attn_flops = attn_flops_base * sequence_length
             model_tflops = flops_per_iteration + attn_flops
@@ -485,8 +492,8 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
             attn_flops = (
                 2
                 * attn_flops_base
-                * transformer_config.window_size
-                * (1 - transformer_config.window_size / 2 / sequence_length)
+                * transformer_config.mixer.window_size
+                * (1 - transformer_config.mixer.window_size / 2 / sequence_length)
             )
             model_tflops = flops_per_iteration + attn_flops
 

@@ -218,7 +218,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
                 else:
                     self.language_model_loss_factor = 0.0
             if self.use_position_embeddings is None:
-                self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
+                self.use_position_embeddings = isinstance(self.transformer.mixer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = self.transformer.init_method_std
             if self.init_method_max_embed is None:
