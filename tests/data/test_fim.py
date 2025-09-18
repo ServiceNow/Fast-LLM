@@ -7,7 +7,8 @@ from tests.data.common import (
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
-from tests.utils.dataset import DATASET_PREFIX, TOKENIZER_PATH, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_PREFIX, TOKENIZER_PATH
 
 GPT_FIM_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],

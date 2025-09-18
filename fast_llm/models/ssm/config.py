@@ -4,13 +4,18 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.checkpoint.config import CheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig, SSMDimNames
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, PretrainedGPTModelConfig
+from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig
+from fast_llm.models.gpt.config import (
+    GPTBaseModelConfig,
+    GPTBatchConfig,
+    GPTHuggingfaceCheckpointFormat,
+    PretrainedGPTModelConfig,
+)
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -45,42 +50,10 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         """
         Setup the tensor space for the model.
-        Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        d_inner: int = self.ssm.d_inner
-
-        # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.model_dim, self.transformer.hidden_size))
-        # Mamba-specific dimensions
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_dim, d_inner))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.state_dim, self.ssm.state_size))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, self.ssm.dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, self.ssm.dt_rank + self.ssm.state_size * 2))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
-
-        if SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout:
-            # Mamba2 specific dimensions
-            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
-            headdim = d_inner // self.ssm.n_v_heads
-            Assert.eq(self.ssm.n_v_heads, d_inner // headdim)
-            Assert.eq(d_inner % headdim, 0)
-            Assert.eq(self.ssm.n_v_heads % self.ssm.n_qk_heads, 0)
-
-            conv_dim = d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size
-            inner_proj_dim = 2 * d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size + self.ssm.n_v_heads
-
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.head_dim, headdim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.qk_heads, self.ssm.n_qk_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_discrete_mamba2, inner_proj_dim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
-        elif SSMBlockType.mamba2.value in self.hybrid_block_layout:
-            inner_proj_dim: int = 2 * self.ssm.d_xb + 2 * d_inner  # + self.ssm.dt_rank
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim_2, self.ssm.d_xb))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.c_heads, d_inner // self.ssm.state_size))
+        if self.ssm_block_type is not None:
+            self.ssm.setup_tensor_space(tensor_space, self.ssm_block_type)
 
     def _validate(self):
         with self._set_implicit_default(None):
@@ -111,8 +84,7 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
         self.ssm_block_type = ssm_block_types.pop() if ssm_block_types else None
 
 
-class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class LLambaHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "llamba"
 
     @classmethod
@@ -122,8 +94,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
-class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielSSMHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm"
 
     @classmethod
@@ -133,8 +104,7 @@ class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielSSMHuggingfaceCheckpointHandler
 
 
-class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielSSMHHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm_hybrid"
 
     @classmethod
@@ -144,8 +114,7 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielSSMHHybridHuggingfaceCheckpointHandler
 
 
-class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
 
     @classmethod
@@ -193,12 +162,6 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         logger.warning(
             "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
         )
-        if (
-            self.base_model.sequence_first
-            or self.distributed.sequence_data_parallel > 1
-            or self.distributed.sequence_tensor_parallel
-        ):
-            raise NotImplementedError(f"Sequence-first not supported for SSMs.")
         super()._validate()
 
 

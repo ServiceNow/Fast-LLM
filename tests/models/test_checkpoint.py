@@ -284,10 +284,15 @@ def test_load_pretrained(
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_huggingface_model(model_testing_config, get_convert_path):
     # Test that Fast-LLM's Hugging Face wrapper produces the same results as the converted Hugging Face model.
+    # TODO: Stress the importance of this test as the main correctness test for most models.
     # TODO: Review test. Move to test_generate?
     fast_llm_path = get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat)
     hf_path = get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat)
-    model_ref = model_testing_config.huggingface_model_for_causal_lm_class.from_pretrained(
+    try:
+        hf_class = model_testing_config.huggingface_model_for_causal_lm_class
+    except NotImplementedError:
+        pytest.skip(f"Hugging Face wrapper not implemented for {model_testing_config.name}.")
+    model_ref = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=get_convert_path(),
             format=DistributedCheckpointFormat,
@@ -298,8 +303,8 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         0, model_ref.config.fast_llm_config.base_model.vocab_size, size=(4, 100), dtype=torch.int64, device="cuda"
     )
     output_ref = model_ref(test_input)
-    model_from_fast_llm = model_testing_config.huggingface_model_for_causal_lm_class.from_pretrained(fast_llm_path)
-    model_from_hf = model_testing_config.huggingface_model_for_causal_lm_class.from_pretrained(
+    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path)
+    model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=hf_path,
             format=model_testing_config.checkpoint_format,
@@ -312,9 +317,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         if model_testing_config.name in ("diffusion_llama", "dream")
         else transformers.AutoModelForCausalLM
     )
-    model_as_hf = auto_model.from_pretrained(
-        hf_path, trust_remote_code=model_testing_config.checkpoint_format.trust_remote_code
-    ).cuda()
+    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),

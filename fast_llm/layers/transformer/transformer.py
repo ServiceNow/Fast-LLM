@@ -98,10 +98,11 @@ class BaseBlock(Layer, abc.ABC):
         self._block_index = block_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
         hidden_dim = self._tensor_space[TransformerDimNames.hidden]
-        # Note, layer_lr_scale does not impact the norms
+
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
+        lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
+        self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale)
+        self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale)
 
         # The mixer needs to be created here for backward-compatible weight ordering.
         setattr(self, self._mixer_module_name, self._create_mixer())
