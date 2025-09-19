@@ -4,7 +4,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
 from fast_llm.models.gpt.conversion.config import MixtralCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter, get_weight_and_bias_converters
+from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter, MLPLayer2Converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
@@ -50,16 +50,29 @@ class MixtralMLPConverter(LlamaMLPConverter):
         return [
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.router",
-                () if drop_on_export else (f"{hf_prefix}.router",),
-                config.add_linear_biases,
+                f"{hf_prefix}.gate",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_1",
+                tuple(f"{hf_prefix}.experts.{i}.{w}" for i in range(config.experts) for w in ("w1", "w3")),
+                False,
                 SplitWeightConverter,
                 drop_on_export=drop_on_export,
             ),
-            *super().get_converters(config, fast_llm_prefix, hf_prefix, drop_on_export=drop_on_export),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_2",
+                tuple(f"{hf_prefix}.experts.{i}.w2" for i in range(config.experts)),
+                False,
+                MLPLayer2Converter,
+                drop_on_export=drop_on_export,
+            ),
         ]
 
 
 class MixtralBlockConverter(MistralBlockConverter):
+    hf_mlp_name: typing.ClassVar[str] = "block_sparse_moe"
     mlp_converter_class: typing.ClassVar[type[MixtralMLPConverter]] = MixtralMLPConverter
 
 

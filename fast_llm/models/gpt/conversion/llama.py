@@ -354,6 +354,10 @@ class LlamaBlockConverter:
     mixer_converter_class: typing.ClassVar[type[LlamaAttentionConverter]] = LlamaAttentionConverter
     mlp_converter_class: typing.ClassVar[type[LlamaMLPConverter]] = LlamaMLPConverter
     normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
+    hf_mixer_name: typing.ClassVar[str] = "self_attn"
+    hf_mlp_name: typing.ClassVar[str] = "mlp"
+    hf_norm_1_name: typing.ClassVar[str] = "input_layernorm"
+    hf_norm_2_name: typing.ClassVar[str] = "post_attention_layernorm"
 
     @classmethod
     def import_config(cls, config: dict, hidden_size: int) -> dict:
@@ -380,25 +384,25 @@ class LlamaBlockConverter:
             *cls.mixer_converter_class.get_converters(
                 config.mixer,
                 f"{fast_llm_prefix}.mixer",
-                f"{hf_prefix}.self_attn",
+                f"{hf_prefix}.{cls.hf_mixer_name}",
                 drop_on_export,
             ),
             *cls.mlp_converter_class.get_converters(
                 config.mlp,
                 f"{fast_llm_prefix}.mlp",
-                f"{hf_prefix}.mlp",
+                f"{hf_prefix}.{cls.hf_mlp_name}",
                 drop_on_export,
             ),
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.input_layernorm",
+                f"{hf_prefix}.{cls.hf_norm_1_name}",
                 drop_on_export,
             ),
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.post_attention_layernorm",
+                f"{hf_prefix}.{cls.hf_norm_2_name}",
                 drop_on_export,
             ),
         ]
