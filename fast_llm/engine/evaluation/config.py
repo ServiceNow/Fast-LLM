@@ -98,6 +98,13 @@ class LmEvalEvaluatorConfig(EvaluatorConfig):
         " If not set, it is inferred from the Fast-LLM model config or tokenizer.",
     )
 
+    communication_timeout_sec: float = Field(
+        default=600.0,
+        desc="Maximum wait time (in seconds) for tensor-parallel or data-parallel model "
+        "operations such as forward, generate, or gathering data. Needed because some "
+        "ranks may have no data or post-processing can be slow, exceeding the default 60s timeout.",
+    )
+
     def get_evaluator(
         self,
         name: str,
