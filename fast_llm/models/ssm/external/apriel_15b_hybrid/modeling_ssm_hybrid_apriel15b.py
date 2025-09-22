@@ -1009,8 +1009,7 @@ class Mamba2(nn.Module):
             # simulate GQA by repeating heads in x,b, x -> v, B -> k, C -> q
             hidden_states = rearrange(
                 hidden_states,
-                "b (num_xb_heads head_dim) -> b num_xb_heads  head_dim",
-                l=seq_len,
+                "b (num_xb_heads head_dim) -> b num_xb_heads head_dim",
                 head_dim=self.head_dim,
                 num_xb_heads=self.num_xb_heads,
             )  # x is b x local_head_groups x l x head_dim
