@@ -2,9 +2,9 @@ from transformers import MistralConfig
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
-# TODO: split into mamba 2 and discrete mamba 2 configs ith a base dict
+# TODO: split into mamba 2 and discrete mamba 2 configs with a base dict
 ssm_config_default = {
-    # descrete mamba2
+    # discrete mamba2
     "d_state": 64,
     "n_v_heads": 32,
     "n_qk_heads": 32,
@@ -15,7 +15,7 @@ ssm_config_default = {
     "d_conv": 4,
     "d_inner": 32 * 128,
     # mamba2
-    "d_xb": None,  # willb e set to model dim
+    "d_xb": None,  # will be set to model dim
     "dt_rank": "auto",
     "dt_min": 0.001,
     "dt_max": 0.1,
@@ -23,6 +23,11 @@ ssm_config_default = {
     "dt_scale": 1.0,
     "dt_init_floor": 1e-4,
     "conv_bias": True,
+    # nemotron mamba2
+    "head_dim": 128,
+    "n_groups": 128,
+    # "num_heads": 128,
+    # "layer_norm_epsilon": 1e-5,
 }
 
 
@@ -30,11 +35,11 @@ class AprielSSMHybridConfig(MistralConfig):
     model_type = "apriel_ssm_thinker_hybrid"
 
     def __init__(self, hybrid_block_layout=["m2d"], ssm_cfg=None, **kwargs):
+        super().__init__(**kwargs)
         kwargs["sliding_window"] = None
         logger.warning(
             "Note! Sliding_window is not supported for AprielSSMHybridConfig (15B thinker does not use sliding window), setting to None"
         )
-        super().__init__(**kwargs)
         self.hybrid_block_layout = hybrid_block_layout
         self.head_dim = self.head_dim or self.hidden_size // self.num_attention_heads  # as in transformers 4.51.3
         self.ssm_cfg = ssm_cfg or ssm_config_default
