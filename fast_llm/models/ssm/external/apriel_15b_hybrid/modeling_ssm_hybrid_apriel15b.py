@@ -797,11 +797,12 @@ def pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int):
 
 
 class MambaRMSNormGated(torch.nn.Module):
-    def __init__(self, hidden_size, group_size, eps=1e-5):
+    def __init__(self, hidden_size, group_size, eps=1e-5, norm_before_gate=True):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
         self.group_size = group_size
+        self.norm_before_gate = norm_before_gate
 
     # jan28b version
     def forward(self, hidden_states, gate=None):
@@ -812,7 +813,7 @@ class MambaRMSNormGated(torch.nn.Module):
             z=gate,
             eps=self.variance_epsilon,
             group_size=self.group_size,
-            norm_before_gate=False,
+            norm_before_gate=self.norm_before_gate,
         )
 
 
