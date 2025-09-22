@@ -5,7 +5,7 @@ from torch.distributed import ProcessGroup, ReduceOp, all_reduce  # noqa
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton.normalization import triton_normalization_autograd
+from fast_llm.functional.triton.normalization import _layer_norm_bwd, _layer_norm_fwd, triton_normalization_autograd
 from fast_llm.layers.common.config import NormalizationImplementation, TPRMSNormImplementation
 from fast_llm.tensor import ParameterMeta, accumulate_gradient, init_ones_, init_zeros_
 from fast_llm.utils import Assert
@@ -293,6 +293,111 @@ class RMSNorm(torch.nn.Module):
         return torch.rms_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self._eps)
 
 
+class MambaRMSNormGated(torch.nn.Module):
+    def __init__(
+        self,
+        hidden_dim: TensorDim,
+        *,
+        eps=1e-5,
+        implementation: NormalizationImplementation = TPRMSNormImplementation.autograd_redstats,
+        weight_init_method=None,
+        zero_centered: bool = False,
+        lr_scale: float | None = None,
+        group_size: int | None = None,
+        norm_before_gate: bool = True,
+    ):
+        """
+        RMS Norm per group of size group_size
+        """
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.group_size = group_size
+        self.norm_before_gate = norm_before_gate
+
+        self._eps = eps
+        self._zero_centered = zero_centered
+
+        if weight_init_method is None:
+            weight_init_method = init_zeros_ if self._zero_centered else init_ones_
+        # self._forward = self._forward_distributed
+
+        self.weight = ParameterMeta.from_dims(  # local weights
+            (hidden_dim,),
+            init_method=weight_init_method,
+            weight_decay=False,
+            auto_grad_accumulation=True,
+            lr_scale=lr_scale,
+        )
+        self.normalized_shape = self.weight.shape
+
+    # def forward(self, input_: torch.Tensor) -> torch.Tensor:
+    #     return self._forward(input_)
+
+    def forward(self, input_: torch.Tensor, gate: torch.Tensor | None = None) -> torch.Tensor:
+        return LayerNormFn.apply(
+            input_, self.weight, None, gate, self._eps, self.group_size, self.norm_before_gate, True
+        )
+
+
+class LayerNormFn(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True, is_rms_norm=False):
+        """If z is not None, we do norm(x) * silu(z) if norm_before_gate, else norm(x * silu(z))"""
+
+        x_shape_og = x.shape
+        # reshape input data into 2D tensor
+        x = x.reshape(-1, x.shape[-1])
+        if x.stride(-1) != 1:
+            x = x.contiguous()
+        if z is not None:
+            assert z.shape == x_shape_og
+            z = z.reshape(-1, z.shape[-1])
+            if z.stride(-1) != 1:
+                z = z.contiguous()
+        weight = weight.contiguous()
+        if bias is not None:
+            bias = bias.contiguous()
+        y, mean, rstd = _layer_norm_fwd(
+            x,
+            weight,
+            bias,
+            eps,
+            z=z,
+            group_size=group_size,
+            norm_before_gate=norm_before_gate,
+            is_rms_norm=is_rms_norm,
+        )
+        ctx.save_for_backward(x, weight, bias, mean, rstd, z)
+        ctx.x_shape_og = x_shape_og
+        ctx.eps = eps
+        ctx.group_size = group_size
+        ctx.norm_before_gate = norm_before_gate
+        ctx.is_rms_norm = is_rms_norm
+        return y.reshape(x_shape_og)
+
+    @staticmethod
+    def backward(ctx, dy):
+        x, weight, bias, mean, rstd, z = ctx.saved_tensors
+        dy = dy.reshape(-1, dy.shape[-1])
+        if dy.stride(-1) != 1:
+            dy = dy.contiguous()
+        assert dy.shape == x.shape
+        dx, dw, db, dz = _layer_norm_bwd(
+            dy, x, weight, bias, ctx.eps, mean, rstd, z, ctx.group_size, ctx.norm_before_gate, ctx.is_rms_norm
+        )
+        return (
+            dx.reshape(ctx.x_shape_og),
+            dw,
+            db,
+            dz.reshape(ctx.x_shape_og) if dz is not None else None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
 class InputParallelGatedRMSNorm(torch.nn.Module):
     def __init__(
         self,
@@ -303,13 +408,11 @@ class InputParallelGatedRMSNorm(torch.nn.Module):
         weight_init_method=None,
         zero_centered: bool = False,
         lr_scale: float | None = None,
-        norm_before_gate: bool = True,
     ):
         super().__init__()
         # self.group = hidden_dim.parallel_group
         # self.n_groups = hidden_dim.parallel_dim.size
         self.hidden_dim = hidden_dim
-        self._norm_before_gate = norm_before_gate
         # self.hidden_dim_global = hidden_dim.parallel_dim.size * hidden_dim.size
 
         self._eps = eps

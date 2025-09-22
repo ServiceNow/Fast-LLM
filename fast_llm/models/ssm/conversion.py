@@ -227,6 +227,16 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 fast_llm_value=lambda x: DTInitType.random if x == MISSING else DTInitType(x),
                 export_value=lambda x: x.value,
             ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "norm_before_gate"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "norm_before_gate",
+                    ),
+                ),
+                default_value=False,
+            ),
         ]
 
     def _create_weight_converters(

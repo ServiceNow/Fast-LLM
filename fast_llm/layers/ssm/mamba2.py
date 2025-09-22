@@ -8,7 +8,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
-from fast_llm.layers.common.normalization import InputParallelGatedRMSNorm, RMSNorm
+from fast_llm.layers.common.normalization import MambaRMSNormGated
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames, SSMKwargs
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
@@ -321,7 +321,7 @@ class NemotronHMamba2(Mixer):
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         inner_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        # inner_dim_non_tp: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim_nontp]
+        inner_dim_non_tp: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim_nontp]
         c_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_state_dim]
         xb_dim = tensor_space[SSMDimNames.composite_head_groups_and_head]
         bb_dim = tensor_space[SSMDimNames.composite_head_groups_and_state]
@@ -408,18 +408,20 @@ class NemotronHMamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        if inner_dim.is_parallel:
-            self.norm = InputParallelGatedRMSNorm(
-                inner_dim,
-                eps=1e-5,
-                lr_scale=lr_scale,
-            )
-        else:
-            self.norm = RMSNorm(
-                inner_dim,
-                eps=1e-5,
-                lr_scale=lr_scale,
-            )
+        # no need to comunicate stats accross ranks, since we do norm per local heaed
+        self.norm = MambaRMSNormGated(
+            inner_dim,
+            eps=1e-5,
+            group_size=inner_dim.size // self._local_heads,
+            lr_scale=lr_scale,
+            norm_before_gate=config.norm_before_gate,
+        )
+        # else:
+        #     self.norm = RMSNorm(
+        #         inner_dim,
+        #         eps=1e-5,
+        #         lr_scale=lr_scale,
+        #     )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         """ """
@@ -518,8 +520,8 @@ class NemotronHMamba2(Mixer):
             z = z.transpose(0, 1).contiguous()
         # in tp need to to gather the y and z, cause norm does not
         # gate norm
-        y = self.norm(y)
-        y *= torch.nn.functional.silu(z)  # gate after the norm
+        y = self.norm(y, z)
+        # y *= torch.nn.functional.silu(z)  # gate after the norm
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         out = self.out_proj(y)

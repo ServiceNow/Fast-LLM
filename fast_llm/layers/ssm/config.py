@@ -250,6 +250,12 @@ class SSMConfig(LLMBlockConfig):
         hint=FieldHint.architecture,
     )
 
+    norm_before_gate: bool = Field(
+        default=False,
+        desc="Whether to apply the norm before the gate in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
