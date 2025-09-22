@@ -157,19 +157,18 @@ class ConcatenatedTensorDim(TensorDim):
         )
 
     def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
-        import torch
-
         return (
-            torch.concatenate(
-                [
+            self.merge_tensors(
+                tuple(
                     tensor_dim.local_to_global(tensor_, dim)
                     for tensor_, tensor_dim in zip(
-                        tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
+                        self.split_tensor(tensor, dim, False),
                         self._tensor_dims,
                         strict=True,
                     )
-                ],
+                ),
                 dim,
+                True,
             )
             if self.is_parallel
             else tensor
@@ -178,19 +177,18 @@ class ConcatenatedTensorDim(TensorDim):
     def local_to_global_partial(
         self, tensor: "torch.Tensor", dim: int = 0, fill_value: float | int = -1
     ) -> "torch.Tensor":
-        import torch
-
         return (
-            torch.concatenate(
-                [
+            self.merge_tensors(
+                tuple(
                     tensor_dim.local_to_global_partial(tensor_, dim)
                     for tensor_, tensor_dim in zip(
-                        tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
+                        self.split_tensor(tensor, dim, False),
                         self._tensor_dims,
                         strict=True,
                     )
-                ],
+                ),
                 dim,
+                True,
             )
             if self.is_parallel
             else tensor
@@ -199,23 +197,48 @@ class ConcatenatedTensorDim(TensorDim):
     def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> "torch.Tensor":
         if self.is_parallel and expand:
             raise NotImplementedError()
-        import torch
-
         return (
-            torch.concatenate(
-                [
+            self.merge_tensors(
+                tuple(
                     tensor_dim.global_to_local(tensor_, dim)
                     for tensor_, tensor_dim in zip(
-                        tensor.split([tensor_dim.global_size for tensor_dim in self._tensor_dims], dim),
+                        self.split_tensor(tensor, dim, True),
                         self._tensor_dims,
                         strict=True,
                     )
-                ],
+                ),
                 dim,
+                False,
             )
             if self.is_parallel
             else tensor
         )
+
+    def split_tensor(self, tensor: "torch.Tensor", dim: int = 0, global_: bool = False) -> tuple["torch.Tensor", ...]:
+        return tensor.split(
+            [(tensor_dim.global_size if global_ else tensor_dim.size) for tensor_dim in self._tensor_dims], dim
+        )
+
+    def merge_tensors(
+        self, tensors: tuple["torch.Tensor", ...], dim: int = 0, global_: bool = False
+    ) -> "torch.Tensor":
+        import torch
+
+        assert all(
+            tensor.size(dim) == (tensor_dim.global_size if global_ else tensor_dim.size)
+            for tensor, tensor_dim in zip(tensors, self._tensor_dims, strict=True)
+        )
+        return torch.concatenate(tensors, dim)
+
+    def get_split_ranges(self, global_: bool = False) -> tuple[tuple[int, int], ...]:
+        split_ranges = []
+        split_begin = 0
+        for tensor_dim in self._tensor_dims:
+            split_end = split_begin + (tensor_dim.global_size if global_ else tensor_dim.size)
+            split_ranges.append((split_begin, split_end))
+            split_begin = split_end
+        Assert.eq(split_begin, (self.global_size if global_ else self.size))
+        return tuple(split_ranges)
 
 
 scalar_dim = TensorDim("scalar", 1)

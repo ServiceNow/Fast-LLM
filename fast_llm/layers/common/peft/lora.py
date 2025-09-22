@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear.linear import Linear, LinearBase
 from fast_llm.tensor import ParameterMeta
+from fast_llm.utils import Assert
 
 
 def lora_linear(
@@ -13,8 +14,7 @@ def lora_linear(
     rank: int,
     alpha: float,
     dropout: float = 0.0,
-    out_channel_begin: int | None = None,
-    out_channel_end: int | None = None,
+    out_channel_ranges: tuple[tuple[int | None, int | None], ...] | None = None,
 ):
     module.weight.requires_grad = False
     in_dim = module._in_dim
@@ -25,20 +25,32 @@ def lora_linear(
     assert not out_dim.is_parallel, "LoRA not supported with tensor parallelism."
     if out_dim.parallel_dim is not None:
         out_dim = TensorDim(out_dim.name, out_dim.global_size)
-    if out_channel_begin is not None or out_channel_end is not None:
-        if out_channel_begin is None:
-            out_channel_begin = 0
-        if out_channel_end is None:
-            out_channel_end = out_dim.global_size
+
+    if out_channel_ranges is not None:
+        out_channel_range_map = []
+        lora_channel_begin = 0
+        # We construct a lora output dimension from the sum of the ranges and map it to the original output dimension.
         # TODO: This won't work with TP. Use Composite dim structure for proper split?
-        out_dim = TensorDim(out_dim.name, out_channel_end - out_channel_begin)
+        for out_channel_begin, out_channel_end in out_channel_ranges:
+            if out_channel_begin is None:
+                out_channel_begin = 0
+            if out_channel_end is None:
+                out_channel_end = out_dim.global_size
+            Assert.gt(out_channel_end, out_channel_begin)
+            lora_channel_end = lora_channel_begin + out_channel_end - out_channel_begin
+            out_channel_range_map.append(
+                ((out_channel_begin, out_channel_end), (lora_channel_begin, lora_channel_end))
+            )
+            lora_channel_begin = lora_channel_end
+        out_dim = TensorDim(f"lora_{out_dim.name}", lora_channel_begin)
 
     middle_dim = TensorDim("lora_middle", rank)
 
+    # TODO: Doesn't make sense for concatenated layers.
     module.lora_0 = Linear(
         ParameterMeta.from_dims(
             (in_dim, middle_dim),
-            init_method=module.weight.param_init_method,
+            init_method=module.weight._param_init_method,
             lr_scale=module.weight.lr_scale,
         ),
         None,
@@ -47,7 +59,7 @@ def lora_linear(
     module.lora_1 = Linear(
         ParameterMeta.from_dims(
             (middle_dim, out_dim),
-            init_method=module.weight.param_init_method,
+            init_method=module.weight._param_init_method,
             lr_scale=module.weight.lr_scale,
         ),
         None,
@@ -67,10 +79,14 @@ def lora_linear(
             lora_out = (alpha / rank) * module.lora_1(
                 module.lora_0(torch.dropout(input_, dropout, module.training) if dropout > 0.0 else input_)
             )
-            if out_channel_begin is None:
+            if out_channel_ranges is None:
                 output = output + lora_out
             else:
-                output.view(-1, layer_out.size(-1))[:, out_channel_begin:out_channel_end] += lora_out
+                # Add each piece individually.
+                for (out_channel_begin, out_channel_end), (lora_channel_begin, lora_channel_end) in out_channel_ranges:
+                    output.view(-1, layer_out.size(-1))[:, out_channel_begin:out_channel_end] += lora_out[
+                        lora_channel_begin:lora_channel_end
+                    ]
         return output.detach(), (input_, output)
 
     def backward(

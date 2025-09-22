@@ -7,7 +7,7 @@ import torch
 from fast_llm.core.distributed import ReduceOp
 from fast_llm.core.ops import reduce_op
 from fast_llm.engine.config_utils.initialization import Initialization, Initializer, LambdaInitializer
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
@@ -84,6 +84,7 @@ class TensorMeta(torch.Tensor):
         tensor_name: str,
         dims: tuple[TensorDim, ...],
         reductions: tuple[tuple[DistributedDim, ReduceOp], ...] = (),
+        **kwargs,
     ):
         return super().__new__(
             cls,
@@ -241,7 +242,7 @@ class ParameterMeta(TensorMeta):
         init_method: "Initialization | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None" = None,
         weight_decay: bool = True,
         # Pass a list to split the parameter in contiguous (dim=0) chunks of equal size for optimization.
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        lr_scale: float | None = None,
         requires_grad: bool = True,
         allow_sequence_tensor_parallel: bool = True,
         allow_no_grad: bool = False,
@@ -253,8 +254,8 @@ class ParameterMeta(TensorMeta):
             # Support non-wrapped callables for convenience.
             assert callable(init_method)
             init_method = LambdaInitializer(init_method)
-        self.param_init_method: Initializer | None = init_method
-        self.param_weight_decay = weight_decay
+        self._param_init_method: Initializer | None = init_method
+        self._param_weight_decay = weight_decay
         self._is_param = True
         self.param_grad_is_zero = False
         # Almost all parameters are either tensor-parallel or process tensor-sequence-parallel inputs.
@@ -264,67 +265,194 @@ class ParameterMeta(TensorMeta):
         # to support cases where gradients may not always be computed (ex. MOE layers).
         self.allow_no_grad = allow_no_grad
 
-        self.lr_scale = lr_scale if isinstance(lr_scale, tuple) else (lr_scale,)
-        self.requires_grad = requires_grad and any(lr_scale_ != 0 for lr_scale_ in self.lr_scale)
-        # Ensure the parameter is split in chunks of equal size.
-        Assert.multiple(self.dims[0].size, len(self.lr_scale))
+        self._lr_scale = lr_scale
+        self.requires_grad = requires_grad and self._lr_scale != 0
 
-    def __new__(
-        cls,
-        data: torch.Tensor,
-        *,
-        tensor_name: str = "",
-        dims: tuple[TensorDim, ...],
-        init_method: "Initializer | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None",
-        weight_decay: bool = True,
-        lr_scale: float | None | tuple[float | None, ...] = None,
-        allow_sequence_tensor_parallel: bool = True,
-        allow_no_grad: bool = False,
-    ):
-        return super().__new__(
-            cls,
-            data,
-            tensor_name=tensor_name,
-            dims=dims,
-        )
+    @property
+    def lr_scale(self) -> float | None:
+        return self._lr_scale
+
+    @property
+    def param_weight_decay(self) -> bool:
+        return self._param_weight_decay
 
     def __repr__(self, *, tensor_contents=()) -> str:
         return super().__repr__(
-            tensor_contents=(f"wd={self.param_weight_decay}", f"lr_scale={self.lr_scale}", *tensor_contents)
+            tensor_contents=(f"wd={self._param_weight_decay}", f"lr_scale={self._lr_scale}", *tensor_contents)
         )
 
     def init_parameter(self, tensor: torch.Tensor, distributed: Distributed) -> None:
-        assert self.param_init_method is not None
+        assert self._param_init_method is not None
         if (
             distributed.config.tensor_parallel == 1
             or distributed.config.reproducible_init
-            or self.param_init_method.requires_global_initialization
+            or self._param_init_method.requires_global_initialization
         ):
             generator = distributed.pp_init_generator
         else:
             generator = distributed.tp_init_generator if self.is_tensor_parallel else distributed.pp_init_generator
-        self.param_init_method(self, tensor, generator)
+        self._param_init_method(self, tensor, generator)
 
     @property
     def requires_global_initialization(self) -> bool:
-        return self.param_init_method.requires_global_initialization
+        return self._param_init_method.requires_global_initialization
 
     def save(self) -> dict[str, typing.Any]:
         return {
             "name": self.tensor_name,
             "dim_names": self.dim_names,
             "shape": tuple(self.shape),
-            "weight_decay": self.param_weight_decay,
+            "weight_decay": self._param_weight_decay,
             "sequence_tensor_parallel": self.sequence_tensor_parallel,
             "requires_grad": self.requires_grad,
             "tensor_parallel": self.is_tensor_parallel,
             "allow_no_grad": self.allow_no_grad,
-            "lr_scale": self.lr_scale,
+            "lr_scale": self._lr_scale,
         }
 
     def load(self, state: dict[str, typing.Any]) -> None:
         current = self.save()
         Assert.eq(state, current)
+
+    @property
+    def metas_for_grad(self) -> tuple["ParameterMeta", ...]:
+        return (self,)
+
+
+class ConcatenatedTensorMeta(TensorMeta):
+    def __init__(
+        self,
+        data: torch.Tensor,
+        *,
+        metas: tuple[ParameterMeta, ...],
+        dim_index: int,
+        _concatenate_check: bool = False,
+        **kwargs,
+    ):
+        super().__init__(data, **kwargs)
+        if not _concatenate_check:
+            raise RuntimeError(
+                f"Please instantiate {type(self).__name__} tensors through {type(self).__name__}.from_dict()"
+            )
+        self.metas = metas
+        self.dim_index = dim_index
+
+    @classmethod
+    def from_metas(
+        cls,
+        metas: tuple[ParameterMeta, ...],
+        *,
+        tensor_name: str = "",
+        dim_index: int = 0,
+        dim_name: str | None = None,
+        **kwargs,
+    ):
+        for meta in metas:
+            # TODO: Support recursion?
+            assert not isinstance(meta, ConcatenatedTensorMeta)
+        for meta in metas[1:]:
+            Assert.eq(meta.ndim, metas[0].ndim)
+            for index, dim in enumerate(meta.dims):
+                if index != dim_index:
+                    Assert.is_(dim, metas[0].dims[index])
+            Assert.eq(meta.dtype, metas[0].dtype)
+            Assert.eq(meta._reductions, metas[0]._reductions)
+
+        dims = list(metas[0].dims)
+        if dim_name is None:
+            dim_name = f"concatenated_{'_'.join([meta.dims[dim_index].name for meta in metas])}"
+        dims[dim_index] = ConcatenatedTensorDim(dim_name, tuple(meta.dims[dim_index] for meta in metas))
+        return cls.from_dims(
+            tuple(dims),
+            tensor_name=tensor_name,
+            dtype=metas[0].dtype,
+            _concatenate_check=True,
+            metas=metas,
+            dim_index=dim_index,
+            **kwargs,
+        )
+
+    def split_tensor(self, tensor: torch.Tensor) -> list[tuple[torch.Tensor, "TensorMeta"]]:
+        return [
+            (tensor_, meta_)
+            for tensor_, meta_ in zip(
+                self.dims[self.dim_index].split_tensor(tensor, self.dim_index, global_=True), self.metas, strict=True
+            )
+        ]
+
+
+class ConcatenatedParameterMeta(ConcatenatedTensorMeta, ParameterMeta):
+    def __init__(
+        self,
+        data: torch.Tensor,
+        *,
+        split_gradients: bool = False,
+        **kwargs,
+    ):
+        super().__init__(data, **kwargs)
+        self._split_gradients = split_gradients
+        if self._split_gradients:
+            Assert.eq(self.dim_index, 0)
+
+    @classmethod
+    def from_metas(
+        cls,
+        metas: tuple[ParameterMeta, ...],
+        *,
+        tensor_name: str = "",
+        dim_index: int = 0,
+        dim_name: str | None = None,
+        **kwargs,
+    ):
+        for meta in metas:
+            assert isinstance(meta, ParameterMeta)
+        split_gradients = False
+        # TODO: Support more varying attributes.
+        for meta in metas[1:]:
+            if meta._lr_scale != metas[0]._lr_scale or meta._param_weight_decay != metas[0]._param_weight_decay:
+                Assert.eq(dim_index, 0)
+                split_gradients = True
+            Assert.eq(meta.requires_grad, metas[0].requires_grad)
+            Assert.eq(meta.sequence_tensor_parallel, metas[0].sequence_tensor_parallel)
+            Assert.eq(meta.allow_no_grad, metas[0].allow_no_grad)
+
+        return super().from_metas(
+            metas,
+            tensor_name=tensor_name,
+            dim_index=dim_index,
+            dim_name=dim_name,
+            init_method=None,  # TODO
+            weight_decay=metas[0]._param_weight_decay,
+            lr_scale=None,
+            requires_grad=metas[0].requires_grad,
+            allow_sequence_tensor_parallel=metas[0].sequence_tensor_parallel,
+            split_gradients=split_gradients,
+            **kwargs,
+        )
+
+    @property
+    def lr_scale(self) -> float | None:
+        if self._split_gradients:
+            raise RuntimeError()
+        return super().lr_scale
+
+    @property
+    def param_weight_decay(self) -> bool:
+        if self._split_gradients:
+            raise RuntimeError()
+        return super().param_weight_decay
+
+    def init_parameter(self, tensor: torch.Tensor, distributed: Distributed) -> None:
+        for tensor_, meta_ in self.split_tensor(tensor):
+            meta_.init_parameter(tensor_, distributed)
+
+    @property
+    def requires_global_initialization(self) -> bool:
+        return True
+
+    @property
+    def metas_for_grad(self) -> tuple["ParameterMeta", ...]:
+        return self.metas if self._split_gradients else super().metas_for_grad
 
 
 def param_get_and_unset_is_zero(param: torch.Tensor) -> bool:
