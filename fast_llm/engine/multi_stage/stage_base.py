@@ -245,7 +245,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 for parameter_meta_ in parameter_meta.metas_for_grad:
                     # Metas for grad are contiguous.
                     buffer_end = buffer_begin + parameter_meta_.numel()
-                    if parameter_meta_.lr_scale == 0 or buffer_begin == buffer_end:
+                    if buffer_begin == buffer_end:
                         pass
                     elif (
                         optimizer_params := (parameter_meta_._param_weight_decay, parameter_meta_.lr_scale)

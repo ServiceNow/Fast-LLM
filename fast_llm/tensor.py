@@ -265,8 +265,8 @@ class ParameterMeta(TensorMeta):
         # to support cases where gradients may not always be computed (ex. MOE layers).
         self.allow_no_grad = allow_no_grad
 
-        self._lr_scale = lr_scale
-        self.requires_grad = requires_grad and self._lr_scale != 0
+        self._lr_scale = lr_scale if requires_grad else 0
+        self.requires_grad = self._lr_scale != 0
 
     @property
     def lr_scale(self) -> float | None:
@@ -386,12 +386,14 @@ class ConcatenatedParameterMeta(ConcatenatedTensorMeta, ParameterMeta):
         self,
         data: torch.Tensor,
         *,
-        split_gradients: bool = False,
+        split_optimization: bool = False,
         **kwargs,
     ):
         super().__init__(data, **kwargs)
-        self._split_gradients = split_gradients
-        if self._split_gradients:
+        # Split the parameter from the point of view of the optimizer so they can go in different param groups.
+        # Only possible if `dim_index == 0` because the optimizer requires contiguous parameters.
+        self._split_optimization = split_optimization
+        if self._split_optimization:
             Assert.eq(self.dim_index, 0)
 
     @classmethod
@@ -406,13 +408,12 @@ class ConcatenatedParameterMeta(ConcatenatedTensorMeta, ParameterMeta):
     ):
         for meta in metas:
             assert isinstance(meta, ParameterMeta)
-        split_gradients = False
+        split_optimization = False
         # TODO: Support more varying attributes.
         for meta in metas[1:]:
             if meta._lr_scale != metas[0]._lr_scale or meta._param_weight_decay != metas[0]._param_weight_decay:
                 Assert.eq(dim_index, 0)
-                split_gradients = True
-            Assert.eq(meta.requires_grad, metas[0].requires_grad)
+                split_optimization = True
             Assert.eq(meta.sequence_tensor_parallel, metas[0].sequence_tensor_parallel)
             Assert.eq(meta.allow_no_grad, metas[0].allow_no_grad)
 
@@ -421,24 +422,26 @@ class ConcatenatedParameterMeta(ConcatenatedTensorMeta, ParameterMeta):
             tensor_name=tensor_name,
             dim_index=dim_index,
             dim_name=dim_name,
-            init_method=None,  # TODO
-            weight_decay=metas[0]._param_weight_decay,
-            lr_scale=None,
-            requires_grad=metas[0].requires_grad,
+            init_method=None,  # Unused
+            weight_decay=True,  # Unused
+            lr_scale=None,  # Unused
+            # If partially frozen, this will place the whole parameter in the non-frozen shard,
+            # but skip the optimization step for
+            requires_grad=any(meta.requires_grad for meta in metas),
             allow_sequence_tensor_parallel=metas[0].sequence_tensor_parallel,
-            split_gradients=split_gradients,
+            split_optimization=split_optimization,
             **kwargs,
         )
 
     @property
     def lr_scale(self) -> float | None:
-        if self._split_gradients:
+        if self._split_optimization:
             raise RuntimeError()
         return super().lr_scale
 
     @property
     def param_weight_decay(self) -> bool:
-        if self._split_gradients:
+        if self._split_optimization:
             raise RuntimeError()
         return super().param_weight_decay
 
@@ -452,7 +455,7 @@ class ConcatenatedParameterMeta(ConcatenatedTensorMeta, ParameterMeta):
 
     @property
     def metas_for_grad(self) -> tuple["ParameterMeta", ...]:
-        return self.metas if self._split_gradients else super().metas_for_grad
+        return self.metas if self._split_optimization else super().metas_for_grad
 
 
 def param_get_and_unset_is_zero(param: torch.Tensor) -> bool:
