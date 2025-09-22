@@ -310,7 +310,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             # for nemotron mamba2, bias is a seperate parameter
             converters.append(
                 WeightConverter(
-                    f"layers.{offset+i+1}.mixer.dt_proj_bias",
+                    f"layers.{offset+i+1}.mixer.dt_bias",
                     f"{hf_base_prefix}model.layers.{i}.mixer.dt_bias",
                     self._model.config.base_model,
                 )

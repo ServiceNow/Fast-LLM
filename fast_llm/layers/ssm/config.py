@@ -265,11 +265,11 @@ class SSMConfig(LLMBlockConfig):
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = num_heads
         elif block_type == SSMBlockType.mamba2:
-            Assert.eq(self.head_dim, self.state_size)  # for MIL init
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = div(self.d_xb, self.state_size)
         elif block_type == SSMBlockType.nemotron_h_mamba2:
             # head dim and state size are not the same
+            Assert.eq(self.head_dim, self.state_size)  # for MIL init
             num_heads = self.n_groups  # div(self.d_inner, self.head_dim)
             num_head_groups = div(self.d_xb, self.head_dim)
         elif block_type == SSMBlockType.mamba2_discrete:

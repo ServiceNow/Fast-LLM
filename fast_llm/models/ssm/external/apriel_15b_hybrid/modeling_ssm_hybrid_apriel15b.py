@@ -830,7 +830,7 @@ class Mamba2(nn.Module):
         d_model,
         d_inner,
         d_xb=None,  # to mimic GQA, i.e. if we have e.g. 32 heads and 8 kv heads, i.e. 4 GQA groups, then d_xb should be head_dim * 8 (so that we can MIL init B and C from Ks and Vs)
-        d_state=16,
+        d_state=128,
         d_conv=4,
         head_dim=128,
         layer_norm_epsilon=1e-5,
@@ -839,6 +839,7 @@ class Mamba2(nn.Module):
         bias=False,
         layer_idx=None,
         n_groups=1,
+        norm_before_gate=False,
         # num_heads=128,
         # device=None,
         # dtype=None,
@@ -940,8 +941,12 @@ class Mamba2(nn.Module):
         A = torch.arange(1, self.num_heads + 1)
         self.A_log = nn.Parameter(torch.log(A))
         self.A_log._no_weight_decay = True
+        # self.norm = nn.RMSNorm(self.intermediate_size, eps=self.layer_norm_epsilon)
         self.norm = MambaRMSNormGated(
-            self.intermediate_size, eps=self.layer_norm_epsilon, group_size=self.intermediate_size // self.n_groups
+            self.intermediate_size,
+            eps=self.layer_norm_epsilon,
+            group_size=None,  # self.intermediate_size // self.n_groups, # this norm should actually work per head, leave it here just to eval a checkpoint trained like this
+            norm_before_gate=norm_before_gate,
         )
         self.D = nn.Parameter(torch.ones(self.num_heads))
         self.D._no_weight_decay = True
@@ -1010,7 +1015,7 @@ class Mamba2(nn.Module):
             # simulate GQA by repeating heads in x,b, x -> v, B -> k, C -> q
             hidden_states = rearrange(
                 hidden_states,
-                "b (num_xb_heads head_dim) -> b num_xb_heads head_dim",
+                "b (num_xb_heads head_dim) -> b num_xb_heads  head_dim",
                 head_dim=self.head_dim,
                 num_xb_heads=self.num_xb_heads,
             )  # x is b x local_head_groups x l x head_dim
@@ -1053,6 +1058,7 @@ class Mamba2(nn.Module):
             )
             hidden_states = hidden_states.view(batch_size, self.num_heads * self.head_dim)
             hidden_states = self.norm(hidden_states, gate)
+            # hidden_states *= torch.nn.functional.silu(gate)
 
             # 4. Final linear projection
             out = self.out_proj(hidden_states)[:, None, ...]
@@ -1175,6 +1181,7 @@ class Mamba2(nn.Module):
 
                 # Multiply "gate" branch and apply extra normalization layer
                 scan_output = self.norm(scan_output, gate)
+                # scan_output *= torch.nn.functional.silu(gate)
 
                 # 4. Final linear projection
                 out = self.out_proj(scan_output)

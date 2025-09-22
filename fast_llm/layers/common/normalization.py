@@ -306,10 +306,11 @@ class InputParallelGatedRMSNorm(torch.nn.Module):
         norm_before_gate: bool = True,
     ):
         super().__init__()
-        self.group = hidden_dim.parallel_group
-        self.n_groups = hidden_dim.parallel_dim.size
+        # self.group = hidden_dim.parallel_group
+        # self.n_groups = hidden_dim.parallel_dim.size
+        self.hidden_dim = hidden_dim
         self._norm_before_gate = norm_before_gate
-        self.hidden_dim_global = hidden_dim.parallel_dim.size * hidden_dim.size
+        # self.hidden_dim_global = hidden_dim.parallel_dim.size * hidden_dim.size
 
         self._eps = eps
         self._zero_centered = zero_centered
@@ -342,10 +343,12 @@ class InputParallelGatedRMSNorm(torch.nn.Module):
         return _TPRMSNormFnRedTensor.apply(input_, self.normalized_shape, self.weight, self._eps)
 
     def _forward_distributed(self, input_: torch.Tensor) -> torch.Tensor:
-        return _TPRMSNormFn.apply(input_, self.weight, self._eps, self.group, self.hidden_dim_global)
+        return _TPRMSNormFn.apply(input_, self.weight, self._eps, self.hidden_dim.parallel_group, self.hidden_dim.size)
 
     def _forward_tc_distributed(self, input_: torch.Tensor) -> torch.Tensor:
-        return rms_norm_distributed(input_, self.weight, self._eps, self.group, self.hidden_dim_global)
+        return rms_norm_distributed(
+            input_, self.weight, self._eps, self.hidden_dim.parallel_group, self.hidden_dim.size
+        )
 
 
 class _TPRMSNormFn(torch.autograd.Function):

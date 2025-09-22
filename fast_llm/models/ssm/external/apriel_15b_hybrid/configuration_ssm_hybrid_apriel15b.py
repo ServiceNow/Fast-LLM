@@ -26,6 +26,7 @@ ssm_config_default = {
     # nemotron mamba2
     "head_dim": 128,
     "n_groups": 128,
+    "norm_before_gate": True,
     # "num_heads": 128,
     # "layer_norm_epsilon": 1e-5,
 }
@@ -36,6 +37,10 @@ class AprielSSMHybridConfig(MistralConfig):
 
     def __init__(self, hybrid_block_layout=["m2d"], ssm_cfg=None, **kwargs):
         super().__init__(**kwargs)
+        kwargs["sliding_window"] = None
+        logger.warning(
+            "Note! Sliding_window is not supported for AprielSSMHybridConfig (15B thinker does not use sliding window), setting to None"
+        )
         self.hybrid_block_layout = hybrid_block_layout
         self.head_dim = self.head_dim or self.hidden_size // self.num_attention_heads  # as in transformers 4.51.3
         self.ssm_cfg = ssm_cfg or ssm_config_default
