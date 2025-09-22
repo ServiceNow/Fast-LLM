@@ -945,8 +945,7 @@ class Mamba2(nn.Module):
         self.norm = MambaRMSNormGated(
             self.intermediate_size,
             eps=self.layer_norm_epsilon,
-            group_size=self.intermediate_size
-            // self.n_groups,  # this norm should actually work per head, leave it here just to eval a checkpoint trained like this
+            group_size=self.intermediate_size // self.n_groups,  # per head norm
             norm_before_gate=norm_before_gate,
         )
         self.D = nn.Parameter(torch.ones(self.num_heads))
