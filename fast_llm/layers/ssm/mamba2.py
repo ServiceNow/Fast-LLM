@@ -409,6 +409,7 @@ class NemotronHMamba2(Mixer):
             lr_scale=lr_scale,
         )
         # no need to comunicate stats accross ranks, since we do norm per local heaed
+        # with single head this might fail
         self.norm = MambaRMSNormGated(
             inner_dim,
             eps=1e-5,
