@@ -136,7 +136,7 @@ class Run:
             self._distributed.config.data_rank == 0 and self._distributed.config.tensor_rank == 0
         )
         config_dict = config.to_dict()
-        config_dict_verbose = config.to_dict(verbose=FieldVerboseLevel.performance)
+        config_dict_verbose = config.to_dict(verbose=FieldVerboseLevel.debug)
 
         if self._config.experiment_dir is not None:
             self._experiment_directory = self._config.experiment_dir.resolve()

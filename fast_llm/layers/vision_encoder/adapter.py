@@ -1,0 +1,55 @@
+import typing
+
+import torch
+
+from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.functional.triton.mlp import torch_mlp_activation
+from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames
+from fast_llm.tensor import TensorMeta, init_normal_
+
+
+class VisionAdapter(Layer):
+    """
+    Vision adapter layer for the LLM.
+    """
+
+    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
+        super().__init__()
+        input_dim = tensor_space[VisionEncoderDimNames.out_channels]
+        self._activation_type = config.adapter_activation_type
+        self.layer_1 = Linear(
+            input_dim,
+            tensor_space[VisionEncoderDimNames.adapter_size],
+            bias=True,
+            weight_init_method=init_normal_(std=config.adapter_init_method_std),
+            bias_init_method=init_normal_(std=config.adapter_init_method_std),
+            lr_scale=config.adapter_lr_scale,
+        )
+        self.layer_2 = Linear(
+            tensor_space[VisionEncoderDimNames.adapter_size],
+            tensor_space[TransformerDimNames.hidden],
+            bias=True,
+            weight_init_method=init_normal_(std=config.adapter_init_method_std),
+            bias_init_method=init_normal_(std=config.adapter_init_method_std),
+            lr_scale=config.adapter_lr_scale,
+        )
+
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> torch.Tensor:
+        if isinstance(input_, TensorMeta):
+            return TensorMeta.from_dims(
+                kwargs[TransformerKwargs.hidden_dims],
+                tensor_name="Vision adapter output",
+                dtype=input_.dtype,
+            )
+        return self.layer_2(
+            torch_mlp_activation(input_=self.layer_1(input_), gated=False, activation_type=self._activation_type)
+        )

@@ -340,7 +340,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                         max_seqlen_k=kwargs.get(AttentionKwargs.max_seqlen_k),
                         dropout_p=self._config.dropout if self.training else 0.0,
                         window_size=window_size,
-                        causal=True,
+                        causal=self._config.causal,
                         softmax_scale=self._softmax_scale,
                     ).view(*out_dims)
                 else:
@@ -350,7 +350,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                         value,
                         window_size=window_size,
                         dropout_p=self._config.dropout if self.training else 0.0,
-                        causal=True,
+                        causal=self._config.causal,
                         softmax_scale=self._softmax_scale,
                     )
             input_ = input_.flatten(-2)

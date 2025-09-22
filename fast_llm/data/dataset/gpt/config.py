@@ -72,6 +72,10 @@ class GPTSamplingParameters(SamplingParameters):
     use_preference_loss_spans: bool = False
     cross_document_attention: bool = True
     truncate_documents: bool = True
+    patch_size: int | None = None
+    max_image_size: int | None = None
+    image_break_token: int | None = None
+    image_end_token: int | None = None
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
@@ -138,11 +142,18 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         desc="Expected number of tokens in the dataset.",
         hint=FieldHint.optional,
     )
+    num_pixels: int | None = Field(
+        default=None,
+        desc="Expected number of pixels in the dataset.",
+        hint=FieldHint.optional,
+    )
 
     def build(self) -> "GPTMemmapDataset":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
-        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
+        return GPTMemmapDataset(
+            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens, self.num_pixels
+        )
 
 
 @config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated"})
