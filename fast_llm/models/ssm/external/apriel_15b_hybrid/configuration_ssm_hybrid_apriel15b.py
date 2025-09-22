@@ -26,6 +26,7 @@ ssm_config_default = {
     # nemotron mamba2
     "head_dim": 128,
     "n_groups": 128,
+    "norm_before_gate": True,
     # "num_heads": 128,
     # "layer_norm_epsilon": 1e-5,
 }
