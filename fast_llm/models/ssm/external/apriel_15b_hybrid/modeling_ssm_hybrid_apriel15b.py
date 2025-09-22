@@ -1010,7 +1010,6 @@ class Mamba2(nn.Module):
             hidden_states = rearrange(
                 hidden_states,
                 "b (num_xb_heads head_dim) -> b num_xb_heads  head_dim",
-                l=seq_len,
                 head_dim=self.head_dim,
                 num_xb_heads=self.num_xb_heads,
             )  # x is b x local_head_groups x l x head_dim
