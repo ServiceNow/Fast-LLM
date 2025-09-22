@@ -80,6 +80,11 @@ class AttentionConfig(MixerConfig):
         desc="Add biases to linear layers. May be overridden for individual layers.",
         hint=FieldHint.architecture,
     )
+    causal: bool = Field(
+        default=True,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )
     dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the attention intermediate states.",

@@ -135,3 +135,11 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         from fast_llm.layers.attention.rotary.rotary import YarnRotary
 
         return YarnRotary
+
+
+@config_class(dynamic_type={RotaryConfig: "rope_2d"})
+class Rotary2DConfig(DefaultRotaryConfig):
+    def _get_configurable_class(self) -> "type[Rotary2D]":
+        from fast_llm.layers.transformer.rotary.rotary import Rotary2D
+
+        return Rotary2D

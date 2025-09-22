@@ -42,6 +42,18 @@ class TextColumnConfig(SourceSchemaConfig):
     )
 
 
+@config_class(dynamic_type={SourceSchemaConfig: "text_image_column"})
+class TextImageColumnConfig(TextColumnConfig):
+    images_column: str = Field(
+        default="images",
+        desc="Field containing images relevant to a document.",
+    )
+    image_positions_column: None | str = Field(
+        default="image_positions",
+        desc="Field containing image positions within a document.",
+    )
+
+
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
@@ -174,6 +186,11 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     tokenizer: TokenizerConfig = Field(
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
+    )
+    image_patch_size: int = Field(
+        default=16,
+        desc="Patch size for images. This is used solely for computing the number of tokens in an image to get an even split.",
+        hint=FieldHint.optional,
     )
     splits: dict[str, float] | None = Field(
         default=None,

@@ -11,7 +11,13 @@ from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import (
+    CrossEntropyImpl,
+    DistillationLossImpl,
+    ReverseKLImpl,
+    TargetFormat,
+    TritonConfig,
+)
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
@@ -242,10 +248,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     ).flatten()
             else:
                 lm_target = None
-
-        targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
-            targets = [None if target is None else split_op(target, self._parallel_dim.group, 0) for target in targets]
+        targets = (dpo_target, lm_target, distillation_target)
+        # If we do distillation, no need to split it here as it has already been split in the embedding layer!
+        # if we do CPT/language modeling, we need to split the targets here!
+        if (
+            self._config.distillation_model is not None
+            and self._sequence_parallel_logits
+            and not self._parallel_embeddings
+            and not self._sequence_parallel
+        ) or (self._config.distillation_model is None and self._sequence_parallel_logits):
+            # We dont split targets if they already have been split in the embedding layer!
+            targets = [
+                None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
+                for target in targets
+            ]
+        # Loss mask may need to be split. It was not split in the embedding layer as it is not used there.
+        if loss_mask is not None and self._sequence_parallel_logits:
+            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
+        targets = (*targets, loss_mask)
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
             targets = None
@@ -305,14 +325,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     logit_input_grad_.copy_(grad_)
                 loss = loss_ if loss is None else loss + loss_
                 del grad_, loss_
-        loss_count = (self._config.cross_entropy_splits or 1) * (
-            self._parallel_dim.size if self._sequence_parallel_logits else 1
-        )
-        if loss_count != 1:
-            loss.div_(loss_count)
-        if self._sequence_parallel_logits:
-            # TODO: Async
-            all_reduce(loss, group=self._parallel_dim.group)
+        assert self._cross_entropy_splits is None, "This is not supported for now"
+        # loss_count = (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
+        # if loss_count != 1:
+        #     loss.div_(loss_count)
+        # if self._sequence_parallel_logits:
+        #     # TODO: Async
+        #     all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
     def _logits_cross_entropy_forward_backward(
@@ -343,13 +362,34 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                 LanguageModelLossNames.z_loss,
                 logits_scale_factor=self._config.logits_scale_factor,
             )
-        if self._debug.enabled and self._config.cross_entropy_splits is None:
-            sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
-            batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
-            dims = (
-                (sequence_dim, batch_dim, self._vocab_dim)
-                if kwargs[LanguageModelKwargs.sequence_first]
-                else (batch_dim, sequence_dim, self._vocab_dim)
+        if self._debug_transformer and self._cross_entropy_splits is None:
+            vocab_dim = self._tensor_space[
+                LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
+            ]
+            dims = [*kwargs[TransformerKwargs.hidden_dims][:-1], vocab_dim]
+            sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+            dims[sequence_index] = (
+                TensorDim(
+                    TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                )
+                if self._sequence_parallel_logits
+                else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+            )
+
+            dim_names = (
+                [TransformerDimNames.sequence_q_tp, LanguageModelDimNames.vocab]
+                if self._sequence_parallel_logits
+                else [TransformerDimNames.sequence_q, LanguageModelDimNames.vocab_tp]
+            )
+
+            dim_names.insert(int(kwargs[TransformerKwargs.sequence_first]), TransformerDimNames.batch)
+            log_distributed_tensor(
+                "",
+                logits,
+                level=self._debug_transformer,
+                meta=TensorMeta.from_dims(tuple(dims), tensor_name="transformer logits", dtype=logits.dtype),
+                distributed=self._tensor_space.distributed,
+                scale=self._logits_scale_factor,
             )
             self._debug(logits, "Language model logits", dims, kwargs, scale=self._config.logits_scale_factor)
 
@@ -385,8 +425,31 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None and self._config.distillation_loss_factor > 0.0:
-            if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+        if distillation_target is not None and self._distillation_loss_factor > 0.0:
+            if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+                local_valid_tokens = total_valid_tokens = logits.shape[0]
+                if logits.shape[-1] != self._config.vocab_size:
+                    reverse_kl_impl = ReverseKLImpl.tp
+                    assert loss_mask is None, "Loss mask is not implemented for TP (vocab dim) reverse KL yet"
+                elif self._sequence_parallel_logits:
+                    # grad_output already reflects scaling 1/ number of ranks (group_size), see _forward_backward
+                    reverse_kl_impl = ReverseKLImpl.stp
+                    if loss_mask is not None:
+                        local_valid_tokens = loss_mask.sum()
+                        total_valid_tokens = local_valid_tokens.clone()
+                        all_reduce(
+                            total_valid_tokens, op=ReduceOp.SUM, group=self._tensor_space.distributed.tensor_group
+                        )
+                    else:
+                        local_valid_tokens = logits.shape[0]
+                        total_valid_tokens = local_valid_tokens * self._group_size
+                    # in the loss function we compute grads w.r.t sum of losses,
+                    # so we need to multiply back by the group size and divide by the number of valid tokens to get the correct scaling
+                    # note, the function returns the sum of local losses, so we need to handle this properly for reporting
+                    grad_output *= self._group_size / total_valid_tokens  # multiply back by the group size
+                else:
+                    reverse_kl_impl = ReverseKLImpl.no_tp
+
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -398,8 +461,15 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    reverse_kl_impl=reverse_kl_impl,
+                    total_valid_tokens=total_valid_tokens,
                 )
-            elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
+                if self._sequence_parallel_logits:
+                    # distillation_loss is local sum, so we need to divide by the number of valid tokens to get the correct scaling
+                    all_reduce(distillation_loss, op=ReduceOp.SUM, group=self._tensor_space.distributed.tensor_group)
+                    distillation_loss /= total_valid_tokens  # final global loss
+
+            elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,

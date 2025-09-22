@@ -16,9 +16,12 @@ from fast_llm.models.gpt.conversion.config import (
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
     LlamaCheckpointFormat,
+    LlavaCheckpointFormat,
+    LlavaHybridCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
     MTPLlamaCheckpointFormat,
+    PixtralCheckpointFormat,
     Qwen2CheckpointFormat,
 )
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
@@ -104,6 +107,9 @@ class GPTModelConfig(FastLLMModelConfig):
         DiffusionDreamCheckpointFormat,
         DiffusionLlamaCheckpointFormat,
         AprielHybridSSMCheckpointFormat,
+        PixtralCheckpointFormat,
+        LlavaCheckpointFormat,
+        LlavaHybridCheckpointFormat,
     )
 
     @classmethod
@@ -123,6 +129,25 @@ class GPTModelConfig(FastLLMModelConfig):
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM
+
+    @classmethod
+    def get_checkpoint_format(cls, format: type[CheckpointFormat]) -> type[CheckpointFormat]:
+        if isinstance(format, type) and issubclass(format, CheckpointFormat):
+            format_ = cls.get_checkpoint_format(format.name)
+            Assert.is_(format, format_)
+            return format_
+        elif isinstance(format, dict):
+            for format_ in cls.checkpoint_formats:
+                if format_.name == format["name"]:
+                    if (vision_name := format.get("vision_name")) is not None:
+                        format_.vision_name = vision_name
+                    if (text_name := format.get("text_name")) is not None:
+                        format_.text_name = text_name
+                    return format_
+        for format_ in cls.checkpoint_formats:
+            if format_.name == format:
+                return format_
+        raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
 
 @config_class()
@@ -176,6 +201,10 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
                 self.model.base_model.embeddings_layer.vocab_parallel,
             )
             Assert.geq(output_layer.prediction_heads, output_layer.prediction_heads)
+
+        if self.model.base_model.vision_encoder.enabled:
+            assert self.batch.max_image_size is not None, "max_image_size must be set when using vision encoder"
+            Assert.gt(self.batch.max_image_size, 0)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

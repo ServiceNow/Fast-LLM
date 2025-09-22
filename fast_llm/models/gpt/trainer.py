@@ -31,4 +31,13 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "extra_tokens": self._config.model.base_model.output_layer.prediction_heads,
             }
         )
+        if self._config.model.base_model.vision_encoder.enabled:
+            parameters.update(
+                {
+                    "patch_size": self._config.model.base_model.vision_encoder.patch_size,
+                    "max_image_size": self._config.batch.max_image_size,
+                    "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
+                    "image_end_token": self._config.model.base_model.vision_encoder.image_end_token,
+                }
+            )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

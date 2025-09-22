@@ -1,7 +1,7 @@
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
-from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
+from fast_llm.functional.config import CrossEntropyImpl, ReverseKLImpl, TargetFormat
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
 from fast_llm.utils import Assert
 
@@ -47,6 +47,19 @@ def _torch_cross_entropy_forward_backward(
             loss.backward(torch.full_like(loss, grad_output))
             grad = logits_.grad.detach().to(logits.dtype)
     return loss.detach_(), grad
+
+
+def distributed_log_softmax(logits: torch.Tensor, group: ProcessGroup, dim: int = -1):
+    logits = logits.float()
+    local_max = logits.max(dim=dim, keepdim=True)[0]
+    all_reduce(local_max, op=ReduceOp.MAX, group=group)
+
+    logits_shifted = logits - local_max
+    exp_logits = torch.exp(logits_shifted)
+    sum_exp = exp_logits.sum(dim=dim, keepdim=True)
+    all_reduce(sum_exp, op=ReduceOp.SUM, group=group)
+
+    return logits_shifted - sum_exp.log()  # log_softmax
 
 
 @torch.compile
@@ -151,7 +164,8 @@ def _fused_cross_entropy_forward_backward(
 
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+        all_reduce(loss, op=ReduceOp.SUM, group=group)
+        loss /= group.size()
 
     return loss, grad
 
@@ -213,20 +227,30 @@ def cross_entropy_forward_backward(
         )
 
 
-def _torch_reverse_kl_forward_backward(
+def _torch_reverse_kl_forward_backward_vocab_parallel(
     logits: torch.Tensor,
     target: torch.Tensor,
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
-    logits_scale_factor: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
+    **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Reverse KL using PyTorch's native kl_div function.
-    Much simpler and more reliable than custom implementation!
+    This is used for TP version where we split accross vocab dimantion.
+    This works with sequence-tensor-parallel (distributing over the sequence dimention) as well as a non-TP case.
+    In sequence-tensor-parallel, where we split along sequence dim., we compute per split loss and then average the loss.
     """
+    Assert.eq(
+        teacher_softmax_temperature,
+        1,
+        msg="Teacher softmax temperature must be 1 for sequence-tensor-parallel reverse KL",
+    )
+    Assert.eq(logits_scale_factor, 1, msg="Logits scale factor must be 1 for sequence-tensor-parallel reverse KL")
+    # TODO: merge into single function _torch_reverse_kl_forward_backward
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
     Assert.eq(target.shape, logits.shape)
     assert target.dtype.is_floating_point, target.dtype
@@ -234,32 +258,78 @@ def _torch_reverse_kl_forward_backward(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temperature), group)
-    # # teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
-    # teacher_probs = torch.clamp(teacher_probs, min=1e-7)  # or even 1e-6
-    # teacher_log_probs = torch.log(teacher_probs)
+    teacher_log_probs = distributed_log_softmax(target.float(), group=group)
+    batch_size = logits.shape[0]
+    with torch.enable_grad():
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
+        student_log_probs = distributed_log_softmax(logits_, group=group)
 
+        # Reverse KL: input=teacher_log_probs, target=student_probs
+        if loss_mask is None:
+            loss = torch.nn.functional.kl_div(
+                teacher_log_probs,  # input = log(p)
+                student_log_probs,  # target = log(q)
+                reduction="sum",
+                log_target=True,
+            )
+        else:
+            # Apply loss mask - this requires some reshaping
+            raise NotImplementedError("Loss mask not implemented with TP for reverse KL , it must be doublechecked")
+            loss_per_sample = torch.nn.functional.kl_div(
+                teacher_log_probs, student_log_probs, reduction="none", log_target=True
+            ).sum(dim=-1)
+            loss = (loss_per_sample * loss_mask).sum()
+
+        if group is not None and target_format != TargetFormat.labels:
+            all_reduce(loss, op=ReduceOp.SUM, group=group)
+            loss /= batch_size
+
+        if grad_output is not None:
+            loss.backward(torch.full_like(loss, grad_output))
+            grad = logits_.grad.to(logits.dtype)
+        else:
+            grad = None
+
+    return loss.detach_(), grad
+
+
+def _torch_reverse_kl_forward_backward_no_tp(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    grad_output: float | None,
+    logits_scale_factor: float,
+    target_format: TargetFormat,
+    teacher_softmax_temperature: float = 1.0,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Reverse KL using PyTorch's native kl_div function.
+    THis is only used for no-TP case.
+    """
+    Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+    Assert.eq(target.shape, logits.shape)
+    assert target.dtype.is_floating_point, target.dtype
+    if loss_mask is not None:
+        Assert.eq(loss_mask.shape, logits.shape[:-1])
     # Scale target logits more carefully
     scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
+    # Clamp to prevent extreme values that cause NaNs in log_softmax
+    scaled_target = torch.clamp(scaled_target, min=-100.0, max=100.0)
 
-    # Clamp to prevent extreme values before log_softmax
-    scaled_target = torch.clamp(scaled_target, min=-50, max=50)
-    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+    teacher_log_probs = torch.log_softmax(scaled_target.float(), dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
     # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
 
     with torch.enable_grad():
-        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
 
-        # Use log_softmax for consistency instead of _fused_softmax
         scaled_logits = logits_ * logits_scale_factor
-        scaled_logits = torch.clamp(scaled_logits, min=-50, max=50)
-        student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
-
-        # Convert to probabilities for kl_div
-        # student_probs_ = torch.exp(student_log_probs)
+        # Clamp to prevent extreme values that cause NaNs in log_softmax
+        scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
+        student_log_probs = torch.log_softmax(scaled_logits.float(), dim=-1)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
@@ -274,18 +344,98 @@ def _torch_reverse_kl_forward_backward(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask).mean()
-
-        if group is not None and target_format != TargetFormat.labels:
-            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+            loss = (loss_per_sample * loss_mask).sum() / loss_mask.sum()
 
         if grad_output is not None:
+            # note, we never get here in TP over seq. dim.
             loss.backward(torch.full_like(loss, grad_output))
             grad = logits_.grad.to(logits.dtype)
         else:
             grad = None
 
     return loss.detach_(), grad
+
+
+def _torch_reverse_kl_forward_backward_sequence_tensor_parallel(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    grad_output: float | None,
+    logits_scale_factor: float,
+    target_format: TargetFormat,
+    teacher_softmax_temperature: float = 1.0,
+    total_valid_tokens: int | None = None,  # total number of unmasked tokens in the batch
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Reverse KL using PyTorch's native kl_div function.
+    THis is only used for sequence-tensor-parallel case where we split over sequence dimension.
+    """
+    Assert.eq(
+        total_valid_tokens is not None,
+        msg="Total valid tokens must be provided for sequence-tensor-parallel reverse KL",
+    )
+    Assert.eq(
+        teacher_softmax_temperature,
+        1,
+        msg="Teacher softmax temperature must be 1 for sequence-tensor-parallel reverse KL",
+    )
+    Assert.eq(logits_scale_factor, 1, msg="Logits scale factor must be 1 for sequence-tensor-parallel reverse KL")
+    Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+    Assert.eq(target.shape, logits.shape)
+    assert target.dtype.is_floating_point, target.dtype
+    if loss_mask is not None:
+        Assert.eq(loss_mask.shape, logits.shape[:-1])
+    # Scale target logits more carefully
+    scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
+    # Clamp to prevent extreme values that cause NaNs in log_softmax
+    scaled_target = torch.clamp(scaled_target, min=-100.0, max=100.0)
+
+    teacher_log_probs = torch.log_softmax(scaled_target.float(), dim=-1)
+
+    # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
+    # Use kl_div with: input=log(p), target=q, log_target=False
+    # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
+
+    with torch.enable_grad():
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
+
+        scaled_logits = logits_ * logits_scale_factor
+        # Clamp to prevent extreme values that cause NaNs in log_softmax
+        scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
+        student_log_probs = torch.log_softmax(scaled_logits.float(), dim=-1)
+
+        # Reverse KL: input=teacher_log_probs, target=student_probs
+        if loss_mask is None:
+            loss = torch.nn.functional.kl_div(
+                teacher_log_probs,  # input = log(p)
+                student_log_probs,  # target = log(q)
+                reduction="sum",
+                log_target=True,
+            )
+        else:
+            # Apply loss mask - this requires some reshaping
+            loss_per_sample = torch.nn.functional.kl_div(
+                teacher_log_probs, student_log_probs, reduction="none", log_target=True
+            ).sum(dim=-1)
+            loss = (loss_per_sample * loss_mask).sum()  # this can be 0.0 if all tokens are masked
+
+        if grad_output is not None:
+            # note, if we compute gradient w.r.t sum of losses,
+            # and grad_output should reflect the scaling by 1/valid samples
+            loss.backward(torch.full_like(loss, grad_output))
+            grad = logits_.grad.to(logits.dtype)
+        else:
+            grad = None
+
+    return loss.detach_(), grad
+
+
+REVERSE_KL_IMPLEMENTATIONS = {
+    ReverseKLImpl.no_tp: _torch_reverse_kl_forward_backward_no_tp,
+    ReverseKLImpl.tp: _torch_reverse_kl_forward_backward_vocab_parallel,
+    ReverseKLImpl.stp: _torch_reverse_kl_forward_backward_sequence_tensor_parallel,
+}
 
 
 def reverse_kl_forward_backward(
@@ -297,6 +447,8 @@ def reverse_kl_forward_backward(
     logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
+    reverse_kl_impl: ReverseKLImpl = ReverseKLImpl.no_tp,
+    total_valid_tokens: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Compute reverse KL divergence: KL(q||p) where q is the predicted distribution (student) and p is the target (teacher).
@@ -339,7 +491,15 @@ def reverse_kl_forward_backward(
         assert target.dtype.is_floating_point, target.dtype
         if loss_mask is not None:
             Assert.eq(loss_mask.shape, logits.shape[:-1])
-    # TODO: implement fused?
-    return _torch_reverse_kl_forward_backward(
-        logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group, teacher_softmax_temperature
+    # TODO: implement fused reverse KL?
+    return REVERSE_KL_IMPLEMENTATIONS[reverse_kl_impl](
+        logits=logits,
+        target=target,
+        loss_mask=loss_mask,
+        grad_output=grad_output,
+        logits_scale_factor=logits_scale_factor,
+        target_format=target_format,
+        teacher_softmax_temperature=teacher_softmax_temperature,
+        group=group,
+        total_valid_tokens=total_valid_tokens,
     )
