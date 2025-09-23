@@ -38,6 +38,16 @@ class NormalizationImplementation(str, enum.Enum):
     triton = "triton"
 
 
+class TPRMSNormImplementation(str, enum.Enum):
+    """
+    An enum for the available implementations of rms norm.
+    """
+
+    fused_redtensor = "fused_redtensor"
+    autograd_redstats = "autograd_redstats"
+    torch_comp_redstats = "torch_comp_redstats"
+
+
 @config_class(registry=True)
 class NormalizationConfig(BaseModelConfig):
     pass
