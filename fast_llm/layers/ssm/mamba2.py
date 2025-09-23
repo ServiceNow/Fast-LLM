@@ -404,7 +404,7 @@ class NemotronHMamba2(Mixer):
             inner_dim,
             hidden_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(self._config.d_inner),
+            weight_init_method=init_kaiming_(inner_dim.size),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -514,14 +514,12 @@ class NemotronHMamba2(Mixer):
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.view(batch, sequence_length, -1)
+        y = self.norm(y, z)
 
         if kwargs[TransformerKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
-            z = z.transpose(0, 1).contiguous()
-        # in tp need to to gather the y and z, cause norm does not
-        # gate norm
-        y = self.norm(y, z)
+
         # y *= torch.nn.functional.silu(z)  # gate after the norm
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)

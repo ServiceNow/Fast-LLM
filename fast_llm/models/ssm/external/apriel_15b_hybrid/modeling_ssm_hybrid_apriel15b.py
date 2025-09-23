@@ -828,7 +828,6 @@ class Mamba2(nn.Module):
     def __init__(
         self,
         d_model,
-        d_inner,
         d_xb=None,  # to mimic GQA, i.e. if we have e.g. 32 heads and 8 kv heads, i.e. 4 GQA groups, then d_xb should be head_dim * 8 (so that we can MIL init B and C from Ks and Vs)
         d_state=128,
         d_conv=4,
@@ -945,7 +944,8 @@ class Mamba2(nn.Module):
         self.norm = MambaRMSNormGated(
             self.intermediate_size,
             eps=self.layer_norm_epsilon,
-            group_size=self.intermediate_size // self.n_groups,  # per head norm
+            group_size=self.intermediate_size
+            // self.n_groups,  # this norm should actually work per head, leave it here just to eval a checkpoint trained like this
             norm_before_gate=norm_before_gate,
         )
         self.D = nn.Parameter(torch.ones(self.num_heads))

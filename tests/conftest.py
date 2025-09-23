@@ -78,7 +78,7 @@ class WorkerResources:
     rendezvous_port: int
 
 
-MAX_TEST_MEMORY = 70e9
+MAX_TEST_MEMORY = 5e9
 CUDA_CONTEXT_SIZE = 7e8
 TORCHRUN_DEFAULT_PORT = 25900
 
