@@ -1,5 +1,4 @@
 import torch
-import torch.distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp, all_reduce  # noqa
 
 from fast_llm.engine.config_utils.run import log_main_rank
@@ -340,7 +339,6 @@ class MambaRMSNormGated(torch.nn.Module):
 
 
 class LayerNormFn(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True, is_rms_norm=False):
         """If z is not None, we do norm(x) * silu(z) if norm_before_gate, else norm(x * silu(z))"""
@@ -396,120 +394,3 @@ class LayerNormFn(torch.autograd.Function):
             None,
             None,
         )
-
-
-class InputParallelGatedRMSNorm(torch.nn.Module):
-    def __init__(
-        self,
-        hidden_dim: TensorDim,
-        *,
-        eps=1e-5,
-        implementation: NormalizationImplementation = TPRMSNormImplementation.autograd_redstats,
-        weight_init_method=None,
-        zero_centered: bool = False,
-        lr_scale: float | None = None,
-    ):
-        super().__init__()
-        # self.group = hidden_dim.parallel_group
-        # self.n_groups = hidden_dim.parallel_dim.size
-        self.hidden_dim = hidden_dim
-        # self.hidden_dim_global = hidden_dim.parallel_dim.size * hidden_dim.size
-
-        self._eps = eps
-        self._zero_centered = zero_centered
-
-        if weight_init_method is None:
-            weight_init_method = init_zeros_ if self._zero_centered else init_ones_
-        if implementation == TPRMSNormImplementation.fused_redtensor:
-            raise NotImplementedError("Fused red tensor implementation is not implemented yet.")
-            self._forward = self._forward_fused_red_tensor
-        elif implementation == TPRMSNormImplementation.autograd_redstats:
-            self._forward = self._forward_distributed
-        elif implementation == TPRMSNormImplementation.torch_comp_redstats:
-            self._forward = self._forward_tc_distributed
-        else:
-            raise NotImplementedError(implementation)
-
-        self.weight = ParameterMeta.from_dims(  # local weights
-            (hidden_dim,),
-            init_method=weight_init_method,
-            weight_decay=False,
-            auto_grad_accumulation=True,
-            lr_scale=lr_scale,
-        )
-        self.normalized_shape = self.weight.shape
-
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_)
-
-    def _forward_fused_red_tensor(self, input_: torch.Tensor) -> torch.Tensor:
-        return _TPRMSNormFnRedTensor.apply(input_, self.normalized_shape, self.weight, self._eps)
-
-    def _forward_distributed(self, input_: torch.Tensor) -> torch.Tensor:
-        return _TPRMSNormFn.apply(input_, self.weight, self._eps, self.hidden_dim.parallel_group, self.hidden_dim.size)
-
-    def _forward_tc_distributed(self, input_: torch.Tensor) -> torch.Tensor:
-        return rms_norm_distributed(
-            input_, self.weight, self._eps, self.hidden_dim.parallel_group, self.hidden_dim.size
-        )
-
-
-class _TPRMSNormFn(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, w, eps: float, group, H_global: int):
-        x_dtype = x.dtype
-        x = x.float().contiguous()
-        w = w.float()
-
-        # global stats
-        ss_local = x.square().sum(dim=-1, keepdim=True)  # [S,B,1]
-        # ss_global = ss_local.sum(dim=0)
-        ss_global = torch.distributed.nn.functional.all_reduce(ss_local, op=dist.ReduceOp.SUM, group=group)
-        inv_rms = torch.rsqrt(ss_global / float(H_global) + eps)  # [S,B,1]
-
-        y = (x * inv_rms) * w  # [S,B,H_local
-
-        # Save minimal stuff for backward
-        ctx.save_for_backward(x, w, inv_rms)
-        ctx.group = group
-        ctx.H = H_global
-        return y.to(dtype=x_dtype)
-
-    @staticmethod
-    def backward(ctx, gy):
-        x, w, inv_rms = ctx.saved_tensors
-        group, H = ctx.group, ctx.H
-
-        gy = gy.float()
-        x = x.float()
-        w = w.float()
-        inv_rms = inv_rms.float()
-
-        gy_pre = gy
-
-        # RMSNorm backward for y_pre = (x_g * inv_rms) * w
-        # Note: when gate-before, x_g = x * gate
-        x_eff = x
-        gw = gy_pre * w  # [B,S,H_local]
-        local_dot = (gw * x_eff).sum(dim=-1, keepdim=True)  # [B,S,1]
-        global_dot = torch.distributed.nn.functional.all_reduce(local_dot, op=dist.ReduceOp.SUM, group=group)
-        inv_rms3 = inv_rms * inv_rms * inv_rms
-        gx = inv_rms * gw - (inv_rms3 / float(H)) * x_eff * global_dot
-
-        gw = (gy_pre * (x_eff * inv_rms)).sum(dim=(0, 1))  # [H_local]
-
-        return gx, gw, None, None, None, None
-
-
-@torch.compile
-def rms_norm_distributed(x, w, eps: float, group: dist.ProcessGroup, H_global: int):
-    # Shapes: x [B,S,H_local], w [H_local], z None or [B,S,1]/[B,S,H_local]
-    x_dtype = x.dtype
-    x = x.float()
-    w = w.float()
-    # Tokenwise global stats
-    ss_local = x.square().sum(dim=-1, keepdim=True)  # [B,S,1]
-    ss_global = torch.distributed.nn.functional.all_reduce(ss_local, op=dist.ReduceOp.SUM, group=group)
-    inv_rms = torch.rsqrt(ss_global / float(H_global) + eps)
-    y = (x * inv_rms) * w
-    return y.to(dtype=x_dtype)

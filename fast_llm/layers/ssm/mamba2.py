@@ -405,8 +405,7 @@ class NemotronHMamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        # no need to comunicate stats accross ranks, since we do norm per local heaed
-        # with single head this might fail
+        # no need to comunicate stats accross ranks, since we do norm per local heaed here. Would not  work if we have a single head, since then we would really need to distribute.
         self.norm = MambaRMSNormGated(
             inner_dim,
             eps=1e-5,
@@ -414,12 +413,6 @@ class NemotronHMamba2(Mixer):
             lr_scale=lr_scale,
             norm_before_gate=config.norm_before_gate,
         )
-        # else:
-        #     self.norm = RMSNorm(
-        #         inner_dim,
-        #         eps=1e-5,
-        #         lr_scale=lr_scale,
-        #     )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         """ """
