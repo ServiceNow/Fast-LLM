@@ -88,9 +88,6 @@ class Mamba2(Mixer):
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
 
-        state_size = tensor_space[SSMDimNames.state].size
-        div(self._local_inner_size, state_size)
-
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
             (
