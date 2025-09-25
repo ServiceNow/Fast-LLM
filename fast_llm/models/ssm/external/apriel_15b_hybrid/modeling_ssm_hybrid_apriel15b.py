@@ -1337,10 +1337,10 @@ class Mamba(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
-        # mamba_mask = (
-        #     None if seqlen == 1 else mamba_mask
-        # )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
-        # hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
+        mamba_mask = (
+            None if seqlen == 1 else mamba_mask
+        )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
+        hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
 
         ssm_state, conv_state = None, None
         use_precomputed_states = False
@@ -1429,10 +1429,10 @@ class Mamba(nn.Module):
                     weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     bias=self.conv1d.bias,
                     activation=self.activation,
-                )  # .transpose(1, 2)
-        # x = apply_mask_to_padding_states(x, mamba_mask).transpose(
-        #     1, 2
-        # )  # zero out everything that comes from padding tokens
+                ).transpose(1, 2)
+        x = apply_mask_to_padding_states(x, mamba_mask).transpose(
+            1, 2
+        )  # zero out everything that comes from padding tokens
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
