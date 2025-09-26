@@ -9,6 +9,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.vision.config import VisionEncoderConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -31,9 +32,12 @@ class LanguageModelLossNames:
 
 
 class LanguageModelKwargs(BlockKwargs):
+    token_ids = "token_ids"
     position_ids = "position_ids"
+    embedding_map = "embedding_map"
     # TODO: These are generic
     labels = "labels"
+    tokens = "tokens"
     phase = "phase"
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
@@ -47,6 +51,10 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
     word_embeddings: ParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
+    )
+    vision_encoder: VisionEncoderConfig = Field(
+        desc="Configuration for the vision encoder that transforms images into embeddings.",
+        hint=FieldHint.optional,
     )
     position_embeddings: OptionalParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",

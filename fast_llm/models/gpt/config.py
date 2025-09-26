@@ -16,9 +16,12 @@ from fast_llm.models.gpt.conversion.config import (
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
     LlamaCheckpointFormat,
+    LlavaCheckpointFormat,
+    LlavaHybridCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
     MTPLlamaCheckpointFormat,
+    PixtralCheckpointFormat,
     Qwen2CheckpointFormat,
 )
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
@@ -104,6 +107,9 @@ class GPTModelConfig(FastLLMModelConfig):
         DiffusionDreamCheckpointFormat,
         DiffusionLlamaCheckpointFormat,
         AprielHybridSSMCheckpointFormat,
+        PixtralCheckpointFormat,
+        LlavaCheckpointFormat,
+        LlavaHybridCheckpointFormat,
     )
 
     @classmethod
