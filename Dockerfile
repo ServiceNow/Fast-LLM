@@ -29,9 +29,8 @@ ENV PIP_CONSTRAINT=""
 # There is no pre-build mamba image for pytorch 2.8, we build it before the rest to avoid rebuilds.
 # We need to compile from the repo because of https://github.com/state-spaces/mamba/issues/720 (same for causal-conv1d)
 # We set the number of workers to avoid OOM when compiling on laptop. (TODO: Can we make it configurable?)
-# Using varlen_mamba for variable length sequence support
 RUN MAX_JOBS=2 pip install --no-build-isolation  "causal-conv1d@git+https://github.com/Dao-AILab/causal-conv1d@2a288a1"
-RUN MAX_JOBS=2 pip install --no-build-isolation "mamba_ssm[causal-conv1d]@git+https://github.com/jxiw/varlen_mamba@varlen_mamba"
+RUN MAX_JOBS=2 pip install --no-build-isolation "mamba_ssm[causal-conv1d]@git+https://github.com/state-spaces/mamba@4a8a2a2"
 # Copy dependency files with universal write permissions for all users.
 COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
 COPY --chmod=777 ./fast_llm_external_models/__init__.py fast_llm_external_models/
