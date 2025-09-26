@@ -3,7 +3,7 @@ import typing
 import numpy as np
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingParameters, ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.utils import Assert
@@ -78,17 +78,11 @@ class SimpleGPTIndexedDataset(GPTIndexedDataset):
     def __len__(self) -> int:
         return len(self._samples)
 
-    def get_document_sizes(self, parameters: GPTSamplingParameters | None = None) -> np.ndarray:
-        doc_sizes = []
-        im_sizes = []
-        for index in range(len(self)):
-            doc_size, im_size = self.get_document_size(index)
-            doc_sizes.append(doc_size)
-            im_sizes.append(im_size)
-        return np.array(doc_sizes, dtype=np.int64), np.array(im_sizes, dtype=np.int64)
+    def get_document_sizes(self) -> np.ndarray:
+        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
 
-    def get_document_size(self, index: int, parameters: GPTSamplingParameters | None = None) -> int:
-        return len(self._samples[index]), []
+    def get_document_size(self, index: int) -> int:
+        return len(self._samples[index])
 
     def name(self) -> str:
         return "dataset"

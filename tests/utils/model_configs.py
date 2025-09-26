@@ -16,7 +16,6 @@ from fast_llm.models.gpt.conversion.config import (
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
     LlamaCheckpointFormat,
-    LlavaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
     MTPLlamaCheckpointFormat,
@@ -679,77 +678,6 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
     skip_tests=("sdp", "ms"),
-)
-
-_update_and_add_testing_config(
-    # Tests hybrid Mamba, llamba converter.
-    "llama",
-    "llava",
-    extra_args=[
-        "batch.max_image_size=128",
-        "model.base_model.vision_encoder.type=pixtral",
-        "model.base_model.vision_encoder.patch_norm.type=rms_norm",
-        "model.base_model.vision_encoder.transformer.add_linear_biases=False",
-        "model.base_model.vision_encoder.transformer.causal=False",
-        "model.base_model.vision_encoder.transformer.normalization.type=rms_norm",
-        "model.base_model.vision_encoder.transformer.type=image_encoder",
-        "model.base_model.vision_encoder.transformer.gated=True",
-        "model.base_model.vision_encoder.transformer.num_layers=2",
-        "model.base_model.vision_encoder.transformer.hidden_size=256",
-        "model.base_model.vision_encoder.transformer.num_attention_heads=8",
-        "model.base_model.vision_encoder.transformer.head_groups=8",
-        "model.base_model.vision_encoder.transformer.init_method_std=0.022",
-        "model.base_model.vision_encoder.transformer.rotary.type=rope_2d",
-        "model.base_model.vision_encoder.adapter_size=256",
-        "model.distributed.training_dtype=torch.bfloat16",
-    ],
-    megatron_args=None,
-    checkpoint_format=LlavaCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
-    compare_factor=8.0,
-)
-
-_update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "hybrid_mamba2",
-    "vision_hybrid_mamba2",
-    model_type="hybrid_ssm",
-    extra_args=[
-        "batch.max_image_size=128",
-        "model.base_model.vision_encoder.type=pixtral",
-        "model.base_model.vision_encoder.patch_norm.type=rms_norm",
-        "model.base_model.vision_encoder.transformer.add_linear_biases=False",
-        "model.base_model.vision_encoder.transformer.causal=False",
-        "model.base_model.vision_encoder.transformer.normalization.type=rms_norm",
-        "model.base_model.vision_encoder.transformer.type=image_encoder",
-        "model.base_model.vision_encoder.transformer.gated=True",
-        "model.base_model.vision_encoder.transformer.num_layers=2",
-        "model.base_model.vision_encoder.transformer.hidden_size=256",
-        "model.base_model.vision_encoder.transformer.num_attention_heads=8",
-        "model.base_model.vision_encoder.transformer.head_groups=8",
-        "model.base_model.vision_encoder.transformer.init_method_std=0.022",
-        "model.base_model.vision_encoder.transformer.rotary.type=rope_2d",
-        "model.base_model.vision_encoder.adapter_size=512",
-        "model.distributed.training_dtype=torch.bfloat16",
-    ],
-    megatron_args=None,
-    checkpoint_format=LlavaHybridHuggingfaceCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
-    compare_factor=16.0,
 )
 
 
