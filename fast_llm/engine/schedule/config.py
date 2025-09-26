@@ -48,12 +48,6 @@ class BatchConfig(Config):
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",
         hint=FieldHint.setup,
     )
-    # Image inputs
-    max_image_size: int | None = Field(
-        default=None,
-        desc="Maximum image height and width",
-        hint=FieldHint.optional,
-    )
 
     def setup(self, distributed_config: DistributedConfig) -> None:
         self._distributed = distributed_config
