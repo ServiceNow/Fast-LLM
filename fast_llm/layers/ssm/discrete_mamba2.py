@@ -43,6 +43,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         super().__init__(
             config,
@@ -50,6 +51,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_bias=return_bias,
         )
         state_dim = TensorDim("state", self._config.state_size)
         v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
@@ -128,7 +130,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]
             peft=self._peft,
         )
 
-    def forward(
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],

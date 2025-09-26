@@ -203,7 +203,7 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
         )
 
 
-class Rotary2D[ConfigType: DefaultRotaryConfig](DefaultRotary[Rotary2DConfig]):
+class Rotary2D[ConfigType: Rotary2DConfig](DefaultRotary[ConfigType]):
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_num_patches: int = -1
 

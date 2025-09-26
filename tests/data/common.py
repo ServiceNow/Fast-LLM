@@ -218,16 +218,11 @@ class MockGPTMemmapDataset(GPTIndexedDataset):
     def __len__(self) -> int:
         return self._config.num_documents
 
-    def get_document_sizes(self) -> np.ndarray:
-        return np.full(self._config.num_documents, self._config.num_tokens_per_document, dtype=np.int64), np.array(
-            [], dtype=np.int64
-        )
+    def get_document_sizes(self, parameters: GPTSamplingParameters | None = None) -> np.ndarray:
+        return np.full(self._config.num_documents, self._config.num_tokens_per_document, dtype=np.int64)
 
-    def get_document_size(self, index: int) -> int:
+    def get_document_size(self, index: int, parameters: GPTSamplingParameters | None = None) -> int:
         return self._config.num_tokens_per_document
 
     def get(self, index: int, *args, **kwargs) -> typing.Any:
         raise NotImplementedError()
-
-    def has_images(self) -> bool:
-        return False

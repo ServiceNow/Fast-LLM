@@ -32,8 +32,8 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
-    images: list[torch.Tensor] | None = None
-    image_positions: list[torch.Tensor] | None = None
+    images: list[list[torch.Tensor]] | None = None
+    image_positions: list[list[torch.Tensor]] | None = None
     chosen_spans: list[torch.Tensor] | None = None
     rejected_spans: list[torch.Tensor] | None = None
 
@@ -51,28 +51,24 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         stacked_rejected_spans = [torch.from_numpy(sample.rejected_span) for sample in batch]
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
-    has_images = False
-    batch_images = []
-    for sample in batch:
-        if sample.images is not None:
-            batch_images.append([torch.from_numpy(image) for image in sample.images])
-            has_images = True
-        else:
-            batch_images.append([])
-    batch_image_positions = []
-    for sample in batch:
-        if sample.image_positions is not None:
-            batch_image_positions.append(torch.from_numpy(sample.image_positions))
-        else:
-            batch_image_positions.append([])
+    has_images = any(sample.images is not None for sample in batch)
+    if has_images:
+        images = [
+            [] if sample.images is None else [torch.from_numpy(image) for image in sample.images] for sample in batch
+        ]
+        image_positions = [
+            [] if sample.image_positions is None else torch.from_numpy(sample.image_positions) for sample in batch
+        ]
+    else:
+        images, image_positions = None, None
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
         chosen_spans=stacked_chosen_spans,
         rejected_spans=stacked_rejected_spans,
-        images=batch_images if has_images else None,
-        image_positions=batch_image_positions if has_images else None,
+        images=images,
+        image_positions=image_positions,
     )
 
 

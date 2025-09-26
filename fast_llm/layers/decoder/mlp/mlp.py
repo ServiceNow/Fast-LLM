@@ -28,6 +28,7 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         super().__init__(
             config,
@@ -35,6 +36,7 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_bias=return_bias,
         )
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, self._intermediate_2_dim = self._get_intermediate_dims()
@@ -102,7 +104,7 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
 class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     _config: MLPConfig
 
-    def forward(
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],

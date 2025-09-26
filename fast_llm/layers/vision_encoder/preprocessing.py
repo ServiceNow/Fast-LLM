@@ -5,15 +5,16 @@ import torch
 import torchvision.transforms.v2 as torchvision_transforms
 
 from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerDimNames, VisionTransformerKwargs
-from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
+from fast_llm.layers.vision_encoder.config import ImageNormalizationConfig, VisionEncoderConfig, VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 
-def get_num_patches(height: int, width: int, patch_size: int) -> tuple[int, int]:
+def get_num_patches(height: int, width: int, patch_size: int) -> int:
     """
     Calculate the number of patches in height and width dimensions.
     """
@@ -49,43 +50,20 @@ def get_resize_dims(height: int, width: int, max_height: int, max_width: int, pa
     return patch_size * math.ceil(height / patch_size), patch_size * math.ceil(width / patch_size)
 
 
-def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
-    target_height, target_width = get_resize_dims(
-        image.size(1), image.size(2), max_height, max_width, patch_size=patch_size
-    )
-    height, width = image.size(1), image.size(2)
-    while height > 2 * target_height or width > 2 * target_width:
-        # cap the resizing to half of the current size as a workaround for large images
-        # See pytorch issue: https://github.com/pytorch/pytorch/issues/103589
-        intermediate_max_width = max(target_width, width // 2)
-        intermediate_max_height = max(target_height, height // 2)
-        height, width = get_resize_dims(
-            height, width, intermediate_max_height, intermediate_max_width, patch_size=patch_size
-        )
+def resize(image: torch.Tensor, target_height: int, target_width: int) -> torch.Tensor:
+    # cap the resizing to half of the current size as a workaround for large images
+    # See pytorch issue: https://github.com/pytorch/pytorch/issues/103589
+    while max(image.size(1) / target_height, image.size(2) / target_width) > 2:
         image = torchvision_transforms.functional.resize(
-            image, size=(height, width), interpolation=torchvision_transforms.InterpolationMode.BICUBIC
+            image,
+            size=(math.ceil(image.size(1) / 2), math.ceil(image.size(2) / 2)),
+            interpolation=torchvision_transforms.InterpolationMode.BICUBIC,
         )
 
     # TODO: options for interpolation mode?
     return torchvision_transforms.functional.resize(
         image, size=(target_height, target_width), interpolation=torchvision_transforms.InterpolationMode.BICUBIC
     )
-
-
-def normalize(image: torch.Tensor, mean: list[float], std: list[float]) -> torch.Tensor:
-    """
-    Normalize the image using the specified mean and standard deviation.
-    """
-    return torchvision_transforms.functional.normalize(image, mean=mean, std=std)
-
-
-def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
-    """
-    Pad images on the right and bottom with 0s untitl max_height and max_width
-    """
-    width_padding = max(0, max_height - image.size(1))
-    depth_padding = max(0, max_width - image.size(2))
-    return torchvision_transforms.functional.pad(image, (0, 0, depth_padding, width_padding), 0)
 
 
 def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, patch_size: int) -> torch.Tensor:
@@ -111,57 +89,36 @@ def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, pat
 def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tensor:
     patch_height = height // patch_size
     patch_width = width // patch_size
-    mesh = torch.meshgrid(torch.arange(patch_height), torch.arange(patch_width), indexing="ij")
-    h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
-    ids = h_grid * max_size + v_grid
-    return ids[:, 0]
+    return torch.arange(patch_height).repeat_interleave(patch_width) * max_size + torch.arange(patch_width).repeat(
+        patch_height
+    )
 
 
 class VisionPreprocessor(Preprocessor):
-    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
+    def __init__(self, config: VisionEncoderConfig, distributed: Distributed):
         self._config = config
-        self._tensor_space = tensor_space
-        self._distributed_config = self._tensor_space.distributed_config
+        self._distributed = distributed
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         kwargs[VisionEncoderKwargs.image_patches_meta] = TensorMeta.from_dims(
             (
                 TensorDim(
-                    VisionTransformerDimNames.batch,
-                    kwargs[TransformerKwargs.micro_batch_size] * kwargs[TransformerKwargs.sequence_q_dim].size,
+                    "vision_batch",
+                    kwargs[AttentionKwargs.micro_batch_size] * kwargs[AttentionKwargs.sequence_q_dim].size,
                 ),
-                TensorDim(VisionEncoderDimNames.in_channels, 3),
-                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
-                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
+                TensorDim("in_channels", 3),
+                TensorDim("patch_size", self._config.patch_size),
+                TensorDim("patch_size", self._config.patch_size),
             ),
-            dtype=self._distributed_config.training_dtype.torch,
+            dtype=self._distributed.config.training_dtype.torch,
         )
 
     def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
-        images = kwargs.get(VisionEncoderKwargs.images)
         max_image_size = kwargs.get(VisionEncoderKwargs.max_image_size)
-        im_width = kwargs.get(VisionEncoderKwargs.max_image_size)
-        patch_size = kwargs[VisionEncoderKwargs.patch_size]
-        image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
-        image_sizes = [
-            [get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=patch_size) for im in ims]
-            for ims in images
-        ]
-        kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
-        images = [
-            [
-                normalize(
-                    resize(image, max_image_size, im_width, patch_size).to(
-                        dtype=self._tensor_space.distributed_config.training_dtype.torch
-                    )
-                    / kwargs[VisionEncoderKwargs.image_rescale_factor],
-                    mean=kwargs[VisionEncoderKwargs.image_mean],
-                    std=kwargs[VisionEncoderKwargs.image_std],
-                )
-                for image in imgs
-            ]
-            for imgs in images
-        ]
+        patch_size = self._config.patch_size
+        image_sizes = []
+
+        norm_config: ImageNormalizationConfig = kwargs["norm_config"]
 
         if LanguageModelKwargs.labels in kwargs:
             labels = kwargs[LanguageModelKwargs.labels]
@@ -169,113 +126,113 @@ class VisionPreprocessor(Preprocessor):
                 # If image break or end token is present, we need to replace image token ids to -100 in labels
                 # TODO: avoid double cloning labels in case of loss masking spans?
                 labels = labels.clone()
-
         patches = []
         patch_position_ids = []
-        cu_seqlens = [0]
-        max_seqlen = -1
-        kwargs.get(TransformerKwargs.sequence_first)
-        for idx, (imgs, sizes, positions) in enumerate(zip(images, image_sizes, image_positions)):
-            # add an empty tensor for clean concatenation in case of no images
-            seq_patches = [
-                torch.tensor([]).to(
-                    dtype=self._tensor_space.distributed_config.training_dtype.torch,
-                    device=self._tensor_space.distributed.device,
+        sequence_lengths = [0]
+        max_sequence_length = -1
+        kwargs.get(AttentionKwargs.sequence_first)
+
+        for sample_index, (sample_images_, positions) in enumerate(
+            zip(kwargs[VisionEncoderKwargs.images], kwargs.get(VisionEncoderKwargs.image_positions), strict=True)
+        ):
+            image_sizes.append(sample_image_sizes := [])
+
+            sample_sequence_length = 0
+
+            for image, position in zip(sample_images_, positions, strict=True):
+                height, width = get_resize_dims(
+                    image.size(1), image.size(2), max_image_size, max_image_size, patch_size=patch_size
                 )
-            ]
-            sample_cu_seqlen = 0
-            for image, size, position in zip(imgs, sizes, positions):
-                seqlen = get_num_patches(*size, patch_size)
-                num_tokens = get_num_image_tokens(
-                    *size,
-                    patch_size=patch_size,
-                    image_break=self._config.image_break_token is not None,
-                    image_end=self._config.image_end_token is not None,
+
+                sample_image_sizes.append((height, width))
+
+                image = resize(image, height, width)
+
+                # TODO: Normalize with constant dtype instead?
+                image = image.to(dtype=self._distributed.config.training_dtype.torch)
+
+                image = torchvision_transforms.functional.normalize(
+                    image / norm_config.rescale_factor,
+                    mean=[norm_config.mean_r, norm_config.mean_g, norm_config.mean_b],
+                    std=[norm_config.std_r, norm_config.std_g, norm_config.std_b],
                 )
-                if LanguageModelKwargs.labels in kwargs:
-                    # set labels for image patches to -100
-                    labels[idx, max(position - 1, 0) : position + num_tokens - 1] = -100
-                if seqlen > max_seqlen:
-                    max_seqlen = seqlen
-                cu_seqlens.append(cu_seqlens[-1] + seqlen)
-                sample_cu_seqlen += seqlen
-                seq_patches.append(
-                    torch.cat(
-                        [
-                            torch.nn.functional.unfold(image, kernel_size=patch_size, stride=patch_size).T.reshape(
-                                -1, 3, patch_size, patch_size
-                            ),
-                        ]
+                patches.extend(
+                    torch.nn.functional.unfold(image, kernel_size=patch_size, stride=patch_size).T.reshape(
+                        -1, 3, patch_size, patch_size
                     )
                 )
-            padding_size = kwargs[TransformerKwargs.sequence_length] - sample_cu_seqlen
-            if padding_size > max_seqlen:
-                max_seqlen = padding_size
-            cu_seqlens.append(kwargs[TransformerKwargs.sequence_length] * (idx + 1))
+
+                num_height_patches = div(height, patch_size)
+                num_width_patches = div(width, patch_size)
+                grid_height = torch.arange(num_height_patches).repeat_interleave(num_width_patches)
+                grid_width = torch.arange(num_width_patches).repeat(num_height_patches)
+                grid_height * div(max_image_size, patch_size) + grid_width
+                patch_position_ids.append(grid_height * div(max_image_size, patch_size) + grid_width)
+
+                if LanguageModelKwargs.labels in kwargs:
+                    num_tokens = get_num_image_tokens(
+                        height,
+                        width,
+                        patch_size=patch_size,
+                        image_break=self._config.image_break_token is not None,
+                        image_end=self._config.image_end_token is not None,
+                    )
+                    # set labels for image patches to -100
+                    labels[sample_index, max(position - 1, 0) : position + num_tokens - 1] = -100
+
+                sequence_lengths.append(sequence_length := num_height_patches * num_width_patches)
+                if sequence_length > max_sequence_length:
+                    max_sequence_length = sequence_length
+                sample_sequence_length += sequence_length
+
+            # TODO: No need for padding with varlen?
+            padding_size = kwargs[AttentionKwargs.sequence_length] - sample_sequence_length
+            if padding_size > max_sequence_length:
+                max_sequence_length = padding_size
+            sequence_lengths.append(padding_size)
+
             patches.append(
-                torch.cat(
-                    [
-                        *seq_patches,
-                        torch.zeros(padding_size, 3, patch_size, patch_size).to(
-                            dtype=self._tensor_space.distributed_config.training_dtype.torch,
-                            device=self._tensor_space.distributed.device,
-                        ),
-                    ]
-                )
-            )
-            if sizes:
-                position_ids = torch.cat(
-                    [position_ids_in_meshgrid(*size, max_image_size // patch_size, patch_size) for size in sizes]
-                ).to(device=self._tensor_space.distributed.device)
-            else:
-                position_ids = torch.tensor(
-                    [],
-                    dtype=torch.int64,
+                torch.zeros(padding_size, 3, patch_size, patch_size).to(
+                    dtype=self._tensor_space.distributed_config.training_dtype.torch,
                     device=self._tensor_space.distributed.device,
-                )
-            # We pad at the end instead of padding at the position in meshgrid because flash attention does not support custom attention masks
-            patch_position_ids.append(
-                torch.cat(
-                    [
-                        position_ids,
-                        torch.full((padding_size,), 0).to(device=self._tensor_space.distributed.device),
-                    ]
-                )
+                ),
             )
-            assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
-        patches = torch.cat(patches)
-        patch_position_ids = torch.cat(patch_position_ids)
-        kwargs[VisionEncoderKwargs.image_patches] = patches
-        kwargs[VisionTransformerKwargs.patch_position_ids] = patch_position_ids
+            patch_position_ids.append(torch.full((padding_size,), 0, dtype=torch.int64))
+
+        kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
+        kwargs[VisionEncoderKwargs.image_patches] = torch.cat(patches).to(device=self._distributed.device)
+        kwargs[VisionTransformerKwargs.patch_position_ids] = torch.cat(patch_position_ids).to(
+            device=self._distributed.device
+        )
         kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
             kwargs[VisionEncoderKwargs.rope_theta],
             kwargs[VisionEncoderKwargs.kv_channels],
             max_image_size,
             patch_size,
-        ).to(device=self._tensor_space.distributed.device)
-        kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size * im_width, patch_size**2)
+        ).to(device=self._distributed.device)
+        kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size**2, patch_size**2)
         # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
         kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
-            cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
+            cu_seqlens, device=self._distributed.device, dtype=torch.int32
         )
         kwargs[VisionTransformerKwargs.cu_seqlens_k] = torch.tensor(
-            cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
+            cu_seqlens, device=self._distributed.device, dtype=torch.int32
         )
-        kwargs[VisionTransformerKwargs.max_seqlen_q] = max_seqlen
-        kwargs[VisionTransformerKwargs.max_seqlen_k] = max_seqlen
+        kwargs[VisionTransformerKwargs.max_seqlen_q] = max_sequence_length
+        kwargs[VisionTransformerKwargs.max_seqlen_k] = max_sequence_length
         if LanguageModelKwargs.labels in kwargs:
             kwargs[LanguageModelKwargs.labels] = labels
 
         # TODO: add proper preprocessing for attention-mask when not using flash attention
         # Following is just a dummy code to run the tests.
         kwargs[self._config.transformer._transformer_kwargs.attention_mask] = torch.ones(
-            (1, 1, kwargs[TransformerKwargs.sequence_length], 1, kwargs[TransformerKwargs.sequence_length]),
+            (1, 1, kwargs[AttentionKwargs.sequence_length], 1, kwargs[AttentionKwargs.sequence_length]),
             dtype=torch.bool,
             device=self._tensor_space.distributed.device,
         )
         kwargs[self._config.transformer._transformer_kwargs.attention_mask_value] = torch.full(
             [],
-            torch.finfo(self._distributed_config.training_dtype.torch).min,
-            dtype=self._distributed_config.training_dtype.torch,
-            device=self._tensor_space.distributed.device,
+            torch.finfo(self._distributed.config.training_dtype.torch).min,
+            dtype=self._distributed.config.training_dtype.torch,
+            device=self._distributed.device,
         )

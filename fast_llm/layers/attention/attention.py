@@ -64,6 +64,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         super().__init__(
             config,
@@ -71,6 +72,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_bias=return_bias,
         )
         self._use_flash_attention = self._config.do_use_flash_attention(self._distributed_config)
 
@@ -273,7 +275,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         input_grad.add_(self.key_value.backward(key_value_grad, context.pop("key_value")))
         return input_grad
 
-    def forward(
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],

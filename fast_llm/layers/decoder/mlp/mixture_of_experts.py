@@ -46,6 +46,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         Assert.gt(config.experts, 1)
         # TODO: Implement?
@@ -56,6 +57,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_bias=return_bias,
         )
         self.router = self._config.router.get_layer(
             self._hidden_dim,
@@ -83,9 +85,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             CompositeTensorDim("moe_intermediate_2", (experts_dim, intermediate_2_dim)),
         )
 
-    def forward(
+    def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, None]:
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
