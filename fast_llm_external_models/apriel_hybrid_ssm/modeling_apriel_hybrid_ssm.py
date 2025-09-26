@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, can_return_tuple, logging
+from transformers.utils import LossKwargs, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
@@ -357,13 +357,7 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
         if len(self.key_cache) <= layer_idx:
             return 0
-        is_empty_layer = (
-            len(self.key_cache) == 0  # no cache in any layer
-            or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-            or not self.key_cache[layer_idx].numel()  # the layer has no cache
-        )
-        return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
-        # return self.key_cache[layer_idx].shape[-2]
+        return self.key_cache[layer_idx].shape[-2]
 
     def reset(self):
         self.conv_states.zero_()
@@ -892,7 +886,7 @@ class Mamba2(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        mamba_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         return_mixer_matrix=False,
         **kwargs,
     ):
@@ -904,10 +898,6 @@ class Mamba2(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
-        # mamba_mask = (
-        #     None if seqlen == 1 else mamba_mask
-        # )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
-        # hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
 
         ssm_state, conv_state = None, None
         use_precomputed_states = False
@@ -988,7 +978,7 @@ class Mamba2(nn.Module):
                 # Update state (B D W)
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen]).transpose(1, 2)
+                x = self.act(self.conv1d(x)[..., :seqlen])
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -996,10 +986,7 @@ class Mamba2(nn.Module):
                     weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     bias=self.conv1d.bias,
                     activation=self.activation,
-                )  # .transpose(1, 2)
-        # x = apply_mask_to_padding_states(x, mamba_mask).transpose(
-        #     1, 2
-        # )  # zero out everything that comes from padding tokens
+                )
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -1054,14 +1041,14 @@ class Mamba2(nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbc = self.in_proj(hidden_states_input)
-        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
+        zxbcdt = self.in_proj(hidden_states_input)
+        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
 
         B = rearrange(B, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
         B = torch.repeat_interleave(B, dim=1, repeats=self.repeat_group)
         C = rearrange(C, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(self.dt_in_proj(hidden_states_input))  # B, d_inner
+        dt = self.dt_proj(dt)  # B, d_inner
 
         if self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
@@ -1228,42 +1215,6 @@ class AprielHybridSSMModel(MistralModel):
 
         # Initialize weights and apply final processing
         self.post_init()
-
-    @can_return_tuple
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
-    ) -> BaseModelOutputWithPast:
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        if use_cache and past_key_values is None:
-            # for the case where prepare_inputs_for_generation is not called to create the cache (as in fast-llm test)
-            batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
-            past_key_values = HybridMambaAttentionDynamicCache(self.config, batch_size, self.dtype, device=self.device)
-        output = super().forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            cache_position=cache_position,
-            **flash_attn_kwargs,
-        )
-        past_key_values: HybridMambaAttentionDynamicCache = output.past_key_values
-        if past_key_values and not past_key_values.has_previous_state:
-            past_key_values.has_previous_state = True
-        return output
 
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
@@ -1446,7 +1397,6 @@ class AprielHybridSSMForCausalLM(AprielHybridSSMPreTrainedModel, GenerationMixin
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
-            mamba_mask=attention_mask,  # non-expended mask
             **kwargs,
         )
 

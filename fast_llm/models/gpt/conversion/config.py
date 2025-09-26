@@ -47,27 +47,3 @@ class DiffusionLlamaCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class AprielHybridSSMCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_hybrid_ssm"
-
-
-class LlavaCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "llava"
-    # Using default values for vision and text models. Can be overridden in the config
-    vision_name: typing.ClassVar[str] = "pixtral"
-    text_name: typing.ClassVar[str] = "mistral"
-
-
-class PixtralCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "pixtral"
-
-
-class LlavaHybridCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "llava_hybrid"
-    vision_name: typing.ClassVar[str] = "pixtral"
-    text_name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
-    trust_remote_code: typing.ClassVar[bool] = True
-
-    @classmethod
-    def get_handler_class(cls) -> type[CheckpointHandler]:
-        from fast_llm.models.ssm.conversion import LlavaHybridHuggingfaceCheckpointHandler
-
-        return LlavaHybridHuggingfaceCheckpointHandler
