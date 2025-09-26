@@ -123,16 +123,3 @@ class Block[ConfigType: Config](BaseBlock[ConfigType], Layer):
     """
     Base class for actual blocks, i.e., base blocks that are also `Layers`.
     """
-
-    def __init__(
-        self,
-        config: ConfigType,
-        distributed_config: DistributedConfig,
-        *,
-        hidden_dim: TensorDim,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-        return_input: bool = False,
-    ):
-        super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
-        self._return_input = return_input

@@ -395,7 +395,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
                     peft=self.peft,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=self.output_layer.prediction_heads > 1 and i == len(self.decoder) - 1,
+                    # TODO: Not all blocks support this argument.
+                    **(
+                        {"return_input": True}
+                        if self.output_layer.prediction_heads > 1 and i == len(self.decoder) - 1
+                        else {}
+                    ),
                 )
                 for i in range(len(self.decoder))
             ],

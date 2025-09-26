@@ -52,17 +52,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         lr_scale: float | None,
         peft: PeftConfig | None,
         prediction_distance: int,
-        return_input: bool = False,
     ):
-        if return_input:
-            raise NotImplementedError()
         super().__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
-            return_input=return_input,
         )
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)

@@ -87,7 +87,6 @@ class BlockConfig(BaseBlockConfig):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-        return_input: bool = False,
     ) -> "Block":
         return self.layer_class(
             self,
@@ -95,7 +94,6 @@ class BlockConfig(BaseBlockConfig):
             hidden_dim=hidden_dim,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
-            return_input=return_input,
         )
 
 

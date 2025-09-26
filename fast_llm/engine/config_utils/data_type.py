@@ -9,7 +9,7 @@ if typing.TYPE_CHECKING:
     from triton import language as tl
 
 
-class DataType(str, enum.Enum):
+class DataType(enum.StrEnum):
     """
     An enum to represent data types independently of third party libraries,
     so we can swap them more easily and allow for lazy imports.
