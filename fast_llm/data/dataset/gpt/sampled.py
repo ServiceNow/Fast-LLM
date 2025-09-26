@@ -14,7 +14,7 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
+from fast_llm.layers.vision.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert, div
 
 try:

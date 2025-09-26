@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.vision_encoder.config import ImageNormalizationConfig, VisionEncoderConfig, VisionEncoderKwargs
+from fast_llm.layers.vision.config import ImageNormalizationConfig, VisionEncoderConfig, VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
@@ -130,7 +130,6 @@ class VisionPreprocessor(Preprocessor):
         patch_position_ids = []
         sequence_lengths = [0]
         max_sequence_length = -1
-        kwargs.get(AttentionKwargs.sequence_first)
 
         for sample_index, (sample_images_, positions) in enumerate(
             zip(kwargs[VisionEncoderKwargs.images], kwargs.get(VisionEncoderKwargs.image_positions), strict=True)

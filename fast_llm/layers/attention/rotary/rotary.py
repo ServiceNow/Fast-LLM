@@ -17,7 +17,7 @@ from fast_llm.layers.attention.rotary.config import (
     RotaryConfig,
     YarnRotaryConfig,
 )
-from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
+from fast_llm.layers.vision.config import VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 

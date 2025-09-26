@@ -9,7 +9,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.vision_encoder.config import VisionEncoderConfig
+from fast_llm.layers.vision.config import VisionEncoderConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -32,7 +32,9 @@ class LanguageModelLossNames:
 
 
 class LanguageModelKwargs(BlockKwargs):
+    token_ids = "token_ids"
     position_ids = "position_ids"
+    embedding_map = "embedding_map"
     # TODO: These are generic
     labels = "labels"
     tokens = "tokens"

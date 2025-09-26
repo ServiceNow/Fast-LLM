@@ -8,7 +8,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.vision_encoder.config import PatchConvolutionConfig, VisionEncoderKwargs
+from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 
 
