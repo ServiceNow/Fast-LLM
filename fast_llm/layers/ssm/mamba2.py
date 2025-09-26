@@ -41,13 +41,10 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         super().__init__(
-            config,
-            distributed_config,
-            hidden_dim=hidden_dim,
-            lr_scale=lr_scale,
-            peft=peft,
+            config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft, return_bias=return_bias
         )
 
         num_heads = div(self._config.d_inner, self._config.state_size)
@@ -153,7 +150,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
             BlockDimNames.sequence_q,
         )
 
-    def forward(
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],

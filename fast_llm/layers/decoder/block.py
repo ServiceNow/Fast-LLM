@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.block import BaseBlock, Block
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -19,13 +19,39 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
-class BlockWithBias[ConfigType: Config](BaseBlock[ConfigType]):
+class BlockWithBias[ConfigType: Config](Block[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
 
-    @abc.abstractmethod
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        return_bias: bool = True,
+    ):
+        super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
+        self._return_bias = return_bias
+
     def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | torch.Tensor:
+        output, bias = self._forward(input_, kwargs, losses, metrics)
+        if self._return_bias:
+            return output, bias
+        else:
+            return output if bias is None else output + bias
+
+    @abc.abstractmethod
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],
@@ -58,7 +84,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             peft=peft,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
-        self._return_input: bool = return_input
+        self._return_input = return_input
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
         self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
@@ -70,6 +96,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._hidden_dim,
             self._lr_scale,
             peft=peft,
+            return_bias=True,
         )
 
         self.mlp = self._config.mlp.get_layer(
@@ -77,6 +104,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._hidden_dim,
             self._lr_scale,
             peft=peft,
+            return_bias=True,
         )
 
     def setup(self, distributed: Distributed) -> None:

@@ -36,17 +36,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-        return_input: bool = False,
     ):
-        if return_input:
-            raise NotImplementedError()
         super().__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
-            return_input=return_input,
         )
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
