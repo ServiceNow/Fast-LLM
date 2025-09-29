@@ -14,7 +14,8 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert
+from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
+from fast_llm.utils import Assert, div
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTSample:
     token_ids: np.ndarray
+    images: np.ndarray | None = None
+    image_positions: np.ndarray | None = None
     loss_masking_spans: np.ndarray | None = None
     chosen_span: np.ndarray | None = None
     rejected_span: np.ndarray | None = None
@@ -92,6 +95,11 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._truncate_documents = sampling.parameters.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
+        if self._indexed_dataset.has_images and self._truncate_documents:
+            raise RuntimeError(
+                "Truncating documents with images is not yet supported. Please turn off truncation to use images."
+            )
+
         if sampling.cache_directory is None:
             self._document_shuffling = MemmapArray()
             self._token_cumsum_shuffled = MemmapArray()
@@ -133,9 +141,33 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
+        document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes = torch.from_numpy(document_sizes).to(self._device)
+        if image_sizes:
+            image_token_sizes = []
+            for i, sizes in enumerate(image_sizes):
+                image_token_sizes.append(
+                    sum(
+                        get_num_image_tokens(
+                            *get_resize_dims(
+                                *size,
+                                self._parameters.max_image_size,
+                                self._parameters.max_image_size,
+                                self._parameters.patch_size,
+                            ),
+                            self._parameters.patch_size,
+                            image_break=self._parameters.image_break_token is not None,
+                            image_end=self._parameters.image_end_token is not None,
+                        )
+                        for size in sizes
+                    )
+                )
+            image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+        else:
+            image_token_sizes = torch.zeros_like(document_sizes)
+
         documents_per_epoch = document_sizes.numel()
-        tokens_per_epoch = document_sizes.sum().item()
+        tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
 
         # Calculate basic stats.
         if not self._truncate_documents:
@@ -143,14 +175,14 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes > self._parameters.sequence_length + 1
+            long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
             ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
-            tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
+            tokens_per_epoch = (document_sizes[~long_docs_filter] + image_token_sizes[~long_docs_filter]).sum().item()
             if tokens_per_epoch == 0:
                 raise RuntimeError(
                     f" > No documents shorter than {self._parameters.sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
@@ -193,7 +225,10 @@ class GPTSampledIndexedDataset(SampledDataset):
             "num_samples": self._parameters.num_samples,
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._parameters.sequence_length,
+            "patch_size": self._parameters.patch_size,
             "truncate_documents": self._truncate_documents,
+            "image_break_token": self._parameters.image_break_token,
+            "image_end_token": self._parameters.image_end_token,
             "config": self._config.to_dict(),
         }
         if self._truncate_documents:
@@ -294,7 +329,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
         if unshuffled_epochs > 0:
             token_cumsum_unshuffled, unshuffled_tokens = self._get_token_cumsum(
-                document_sizes,
+                document_sizes + image_token_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
@@ -317,6 +352,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                     document_shuffling.to(
                         dtype=torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32
                     )
+                ]
+                + image_token_sizes[
+                    document_shuffling.to(torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32)
                 ],
                 offset=self._unshuffled_tokens,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
@@ -442,6 +480,10 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         token_ids = []
         loss_masking_spans = []
+        images = []
+        image_positions = []
+        image_tokens_added = 0
+        text_tokens_added = 0
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -449,7 +491,28 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size = self._indexed_dataset.get_document_size(document_index)
+            text_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
+
+            resized_image_lengths = [
+                get_resize_dims(
+                    *image_length,
+                    self._parameters.max_image_size,
+                    self._parameters.max_image_size,
+                    self._parameters.patch_size,
+                )
+                for image_length in image_lengths
+            ]
+            image_sizes = [
+                get_num_image_tokens(
+                    *image_length,
+                    self._parameters.patch_size,
+                    image_break=self._parameters.image_break_token is not None,
+                    image_end=self._parameters.image_end_token is not None,
+                )
+                for image_length in resized_image_lengths
+            ]
+            image_tokens = sum(image_sizes)
+            document_size = text_size + image_tokens
 
             if not self._truncate_documents:
                 if document_size > self._parameters.sequence_length + 1:
@@ -468,21 +531,97 @@ class GPTSampledIndexedDataset(SampledDataset):
                     else:
                         # Move on to the next sample.
                         token_count += padding_size
+                        continue
+                elif document_size + tokens_in_sample == self._parameters.sequence_length + 1:
+                    if token_count + document_size == token_start:
+                        token_count += document_size
+                        document_sampling_index += 1
+                        continue
 
             # Determine if the document belongs to the requested sample.
             if token_count + document_size > token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
-                token_end_index_in_document = min(token_end - token_count, document_size)
+                token_end_index_in_document = min(token_end - token_count, text_size)
                 sample = self._indexed_dataset.get(
                     document_index,
                     offset=token_start_index_in_document,
                     length=token_end_index_in_document - token_start_index_in_document,
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
-                token_ids.append(sample.token_ids)
+                start_pos = 0
+                has_images = sample.image_positions is not None
+                if has_images:
+                    sample_token_ids = []
+                    for idx, im_position in enumerate(sample.image_positions):
+                        # add placeholder masked tokens for images
+                        # if image_break_token is set, it is appended after every row
+                        # if image_end_token is set, it is appended at the end of the image instead  of image_break_token
+                        text_part = sample.token_ids[start_pos:im_position]
+                        if self._parameters.image_break_token is not None:
+                            height, width = resized_image_lengths[idx]
+                            num_patches_h = div(height, self._parameters.patch_size)
+                            num_patches_w = div(width, self._parameters.patch_size)
+                            image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
+                            # account for break tokens after each row
+                            for row in range(num_patches_h - 1):
+                                position = (row + 1) * num_patches_w + row
+                                image_token_array[position] = self._parameters.image_break_token
+                            # handle the last row separately
+                            last_row_position = num_patches_h * num_patches_w + num_patches_h - 1
+                            if self._parameters.image_end_token is not None:
+                                image_token_array[last_row_position] = self._parameters.image_end_token
+                            else:
+                                image_token_array[last_row_position] = self._parameters.image_break_token
+                        else:
+                            image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
+                            if self._parameters.image_end_token is not None:
+                                image_token_array[-1] = self._parameters.image_end_token
+                        sample_token_ids.append(np.concatenate([text_part, image_token_array], dtype=np.int64))
+                        text_tokens_added += len(text_part)
+                        image_positions.append(text_tokens_added + image_tokens_added)
+                        image_tokens_added += image_sizes[idx]
+                        start_pos = im_position
+                    # Add the last text segment after the last image
+                    sample_token_ids.append(sample.token_ids[start_pos:])
+                    text_tokens_added += len(sample_token_ids[-1])
+                    token_ids.append(np.concatenate(sample_token_ids))
+                else:
+                    token_ids.append(sample.token_ids[start_pos:])
+                    text_tokens_added += len(token_ids[-1])
+                if sample.images:
+                    images.append(sample.images)
+                else:
+                    images.append([])
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
+                        prev_image_tokens = 0
+                        image_idx = 0
+                        image_position = (
+                            sample.image_positions[image_idx]
+                            if has_images and image_idx < len(sample.image_positions)
+                            else float("inf")
+                        )
+                        while image_position < loss_masking_span[0]:
+                            prev_image_tokens += image_sizes[image_idx]
+                            image_idx += 1
+                            image_position = (
+                                sample.image_positions[image_idx]
+                                if has_images and image_idx < len(sample.image_positions)
+                                else float("inf")
+                            )
+                        span_image_tokens = 0
+                        while image_position <= loss_masking_span[1]:
+                            span_image_tokens += image_sizes[image_idx]
+                            image_idx += 1
+                            image_position = (
+                                sample.image_positions[image_idx]
+                                if has_images and image_idx < len(sample.image_positions)
+                                else float("inf")
+                            )
+                        loss_masking_span[0] += prev_image_tokens
+                        loss_masking_span[1] += prev_image_tokens + span_image_tokens
+                        prev_image_tokens += span_image_tokens
                         span = np.clip(
                             loss_masking_span + token_count - token_start,
                             0,
@@ -506,9 +645,17 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._parameters.use_loss_masking_spans
             else None
         )
+        images = [im for img_list in images for im in img_list] if images else None
+        image_positions = np.array(image_positions) if image_positions else None
         Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
+        return GPTSample(
+            token_ids=token_ids,
+            loss_masking_spans=loss_masking_spans,
+            sequence_lengths=sequence_lengths,
+            images=images,
+            image_positions=image_positions,
+        )
 
     @property
     def name(self) -> str:
