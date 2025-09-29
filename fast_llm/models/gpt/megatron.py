@@ -20,7 +20,7 @@ def get_init_megatron(
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:
             # Generator unused.
-            return meta.param_init_method(meta, tensor, distributed.tp_init_generator)
+            return _get_init_method(meta)(meta, tensor, distributed.tp_init_generator)
         if "query" in meta.tensor_name or "key_value" in meta.tensor_name or "dense" in meta.tensor_name:
             tensor_ = _init_attention_megatron(config, meta, tensor, distributed, hidden_size)
         elif "position_embeddings" in meta.tensor_name:
@@ -33,7 +33,7 @@ def get_init_megatron(
             tensor_ = _init_transposed_mlp_weight_megatron(meta, tensor, distributed)
         else:
             # Word embedding (override generator), layer norm (generator unused), other mlp weights.
-            return meta.param_init_method(meta, tensor, distributed.tp_init_generator)
+            return _get_init_method(meta)(meta, tensor, distributed.tp_init_generator)
         tensor.copy_(tensor_.reshape_as(tensor))
 
     return init_megatron
@@ -59,11 +59,11 @@ def _init_attention_megatron(
 ) -> "torch.Tensor":
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
-    assert meta.param_init_method is not None
+    init_method = _get_init_method(meta)
     generator = distributed.tp_init_generator
     state = generator.get_state()
     # Initialize a mock dense layer to advance the random state
-    meta.param_init_method(
+    init_method(
         meta,
         dense_tensor_ := tensor.new_empty(
             config.mixer.head_size * config.mixer.heads,
@@ -73,7 +73,7 @@ def _init_attention_megatron(
     )
     #  QKV is split differently. (Assuming no tensor-parallel.)
     heads_per_group = div(config.mixer.heads, config.mixer.head_groups)
-    meta.param_init_method(
+    init_method(
         meta,
         qkv_tensor_ := tensor.new_empty(
             config.mixer.head_groups,
@@ -107,16 +107,23 @@ def _init_attention_megatron(
     return tensor_
 
 
+def _get_init_method(meta: "ParameterMeta"):
+    from fast_llm.tensor import ConcatenatedParameterMeta
+
+    # For concatenated parameters (ex. key_value), either initialization is good enough.
+    return (meta.metas[0] if isinstance(meta, ConcatenatedParameterMeta) else meta)._param_init_method
+
+
 def _init_position_embeddings_megatron(
     meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ) -> "torch.Tensor":
     import torch
 
     # Megatron initializes the position embeddings on cpu twice.
-    assert meta.param_init_method is not None
     generator = distributed.default_cpu_generator
-    meta.param_init_method(meta, tensor_ := torch.empty(tensor.shape, dtype=tensor.dtype), generator)
-    meta.param_init_method(meta, tensor_, generator)
+    init_method = _get_init_method(meta)
+    init_method(meta, tensor_ := torch.empty(tensor.shape, dtype=tensor.dtype), generator)
+    init_method(meta, tensor_, generator)
     return tensor_
 
 
@@ -126,8 +133,7 @@ def _init_transposed_mlp_weight_megatron(
     import torch
 
     # Megatron never transposes the mlp layer 2 weight.
-    assert meta.param_init_method is not None
-    meta.param_init_method(meta, tensor_ := torch.empty_like(tensor), distributed.tp_init_generator)
+    _get_init_method(meta)(meta, tensor_ := torch.empty_like(tensor), distributed.tp_init_generator)
     return tensor_.view(meta.size(1), meta.size(0)).t()
 
 
@@ -137,8 +143,7 @@ def _init_moe_router_megatron(
     import torch
 
     # Megatron initializes the router on cpu.
-    assert meta.param_init_method is not None
-    meta.param_init_method(
+    _get_init_method(meta)(
         meta, tensor_ := torch.empty(tensor.shape, dtype=tensor.dtype), distributed.default_cpu_generator
     )
     return tensor_
@@ -151,18 +156,17 @@ def _init_moe_mlp_megatron(
     distributed: "Distributed",
     hidden_size: int,
 ) -> "torch.Tensor":
-    assert meta.param_init_method is not None
     generator = distributed.tp_init_generator if meta.is_tensor_parallel else distributed.pp_init_generator
-    # self.param_init_method(self, tensor, generator)
+    init_method = _get_init_method(meta)
     state = generator.get_state()
     weight_1 = tensor.new_empty(
         config.mlp.experts * (1 + config.mlp.gated) * config.mlp.intermediate_size, hidden_size
     )
     weight_2 = tensor.new_empty(config.mlp.experts * config.mlp.intermediate_size, hidden_size)
     for chunk_1, chunk_2 in zip(weight_1.chunk(config.mlp.experts), weight_2.chunk(config.mlp.experts)):
-        meta.param_init_method(meta, chunk_1, generator)
+        init_method(meta, chunk_1, generator)
         chunk_2_ = chunk_2.new_empty(hidden_size, config.mlp.intermediate_size)
-        meta.param_init_method(meta, chunk_2_, generator)
+        init_method(meta, chunk_2_, generator)
         chunk_2.copy_(chunk_2_.t())
     if "layer_1.weight" in meta.tensor_name:
         # Keep the original random state for weight_2.

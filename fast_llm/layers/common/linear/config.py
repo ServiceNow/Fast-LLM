@@ -200,7 +200,7 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
         if default_bias_initialization is None:
             default_bias_initialization = init_uniform_centered_((in_dim.global_size * kernel_dim.global_size) ** -0.5)
 
-        lr_scale = (combine_lr_scales(lr_scale, self.lr_scale),)
+        lr_scale = combine_lr_scales(lr_scale, self.lr_scale)
         weight = self.weight.get_parameter(
             (in_dim, scalar_dim, kernel_dim),
             default_initialization=default_weight_initialization,
