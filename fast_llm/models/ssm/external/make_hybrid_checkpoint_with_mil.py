@@ -70,10 +70,11 @@ def convert_layers(transformer, mamba_config, hybrid_block_layout, init_with_kqv
 
 
 @click.command()
-@click.option("--m2_indexes", type=int, nargs="-1", required=True)
+@click.option("--m2_indexes", type=int, multiple=True, required=True)
 @click.option("--hybrid_checkpoint", type=str, required=True)
 @click.option("--save_dir", type=str, required=True)
 def main(m2_indexes: list, hybrid_checkpoint: str, save_dir: str):
+    print(f"m2_indexes: {m2_indexes}")
     m2_indexes = list(m2_indexes)  # convert tuple -> list
     path_base = "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"
     transformer = AutoModelForCausalLM.from_pretrained(path_base, trust_remote_code=True)
@@ -82,7 +83,7 @@ def main(m2_indexes: list, hybrid_checkpoint: str, save_dir: str):
     hybrid_block_layout = hybrid_config.hybrid_block_layout
     for m2_index in m2_indexes:
         hybrid_block_layout[m2_index] = "m2"
-    print(hybrid_block_layout)
+    print(f"hybrid_block_layout: {hybrid_block_layout}")
 
     convert_layers(transformer, hybrid_config, hybrid_block_layout, True, torch.bfloat16)
     hybrid_config.ssm_cfg["activation"] = "silu"
