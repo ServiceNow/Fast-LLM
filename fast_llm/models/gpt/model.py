@@ -282,40 +282,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
 
-                # TODO ====== Preference spans ======
-                if batch.chosen_spans is not None:
-                    chosen_valid_spans = []
-                    for spans in batch.chosen_spans:
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[0].clamp_(min=sequence_offset)
-                            valid_spans[1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
-
-                            chosen_valid_spans.append(valid_spans)
-                    kwargs[LanguageModelKwargs.chosen_spans] = chosen_valid_spans
-
-                    rejected_valid_spans = []
-                    for spans in batch.rejected_spans:
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[0].clamp_(min=sequence_offset)
-                            valid_spans[1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
-
-                            rejected_valid_spans.append(valid_spans)
-                    kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
-
-            kwargs.update(reference_logits[i])
-
             # TODO ====== Turn into super() call ======
             self.embeddings.preprocess(tokens, kwargs)
             self.decoder.preprocess(tokens, kwargs)
