@@ -26,7 +26,7 @@ def reduce_op(
     return (input_, handle) if async_op else input_
 
 
-def split_op(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:
+def split_op(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
     if group:
@@ -139,11 +139,11 @@ class _Split(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
     @staticmethod
-    def symbolic(graph, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:  # noqa
+    def symbolic(graph, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:  # noqa
         return split_op(input_, group, dim)
 
     @staticmethod
-    def forward(ctx, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:  # noqa
+    def forward(ctx, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:  # noqa
         ctx.group = group
         ctx.dim = dim
         return split_op(input_, group, dim)
@@ -209,7 +209,7 @@ def reduce_backward(input_: torch.Tensor, group: ProcessGroup | None) -> torch.T
 
 
 @torch._dynamo.disable  # noqa
-def split(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:
+def split(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:
     return _Split.apply(input_, group, dim)
 
 

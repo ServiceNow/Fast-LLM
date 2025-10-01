@@ -4,12 +4,13 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.conversion.config import (
     AprielHybridSSMCheckpointFormat,
     AutoGPTHuggingfaceCheckpointFormat,
@@ -26,7 +27,7 @@ from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-    from fast_llm.models.gpt.model import GPTInferenceRunner, GPTModel
+    from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
     from fast_llm.models.gpt.trainer import GPTTrainer
 
 logger = logging.getLogger(__name__)
@@ -80,13 +81,19 @@ class GPTBatchConfig(BatchConfig):
 
 
 @config_class()
-class GPTBaseModelConfig(LanguageModelBaseConfig):
+class GPTBaseModelConfig(LanguageModelConfig, BaseModelConfig):
     _abstract = False
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )
+
+    @property
+    def base_model_class(self) -> type["GPTBaseModel"]:
+        from fast_llm.models.gpt.model import GPTBaseModel
+
+        return GPTBaseModel
 
 
 @config_class(dynamic_type={FastLLMModelConfig: "gpt"})

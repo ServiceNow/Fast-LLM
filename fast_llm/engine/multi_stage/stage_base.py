@@ -6,7 +6,7 @@ import torch._dynamo  # noqa
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import check_parallel_match
-from fast_llm.engine.base_model.base_model import BaseModel, Layer
+from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -28,24 +28,17 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         self,
         *,
         config: StageConfig,
-        base_model: BaseModel | list[Layer],
+        layers: list[Layer],
         distributed_config: DistributedConfig,
-        begin: int,
-        end: int,
         index: int,
     ):
         super().__init__(config)
         self._distributed_config = distributed_config.validate()
-        Assert.in_range(begin, 0, end)
-        Assert.leq(end, len(base_model))
-
         self._fsdp_rank = self._distributed_config.data_rank
         self._fsdp_size = self._distributed_config.data_parallel
         self._is_setup = False
         self._index = index
-
-        self._layers = [torch.compile(layer) if self._config.compile_all else layer for layer in base_model[begin:end]]
-        self._layer_range = list(range(begin, end))
+        self._layers = layers
 
         parameter_metas, frozen_metas = self._get_parameter_metas()
         self._parameter_metas = parameter_metas + frozen_metas

@@ -1,7 +1,6 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import LossDef, Preprocessor
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -96,7 +95,7 @@ class DecoderBlockConfig(BlockConfig):
 
         return DecoderBlock
 
-    def get_block(
+    def get_layer(
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
@@ -112,9 +111,3 @@ class DecoderBlockConfig(BlockConfig):
             peft=peft,
             return_input=return_input,
         )
-
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        return self.mixer.get_preprocessors(distributed_config) + self.mlp.get_preprocessors(distributed_config)
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)

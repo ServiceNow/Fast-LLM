@@ -127,3 +127,30 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (embeddings)
         return 0
+
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        if not self._config.position_embeddings.enabled:
+            return
+        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], batch.device)
+        sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
+        sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
+        if (sequence_lengths := kwargs.get(LanguageModelKwargs.sequence_lengths)) is not None:
+            position_ids = torch.stack(
+                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+            ).to(batch.device, dtype=torch.int64)
+            position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
+            if kwargs[LanguageModelKwargs.sequence_first]:
+                position_ids = position_ids.transpose(0, 1)
+            kwargs[LanguageModelKwargs.position_ids] = position_ids
+        else:
+            kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
+                sequence_k - sequence_q : sequence_k
+            ].unsqueeze(int(kwargs[LanguageModelKwargs.sequence_first]))
+
+    def _create_position_embeddings(self, sequence_length: int, device: torch.device) -> None:
+        if sequence_length <= self._tensor_cache_max_sequence_length:
+            return
+        self._tensor_cache_max_sequence_length = sequence_length
+
+        Assert.leq(sequence_length, self._config.num_position_embeddings)
+        self._position_ids = torch.arange(0, sequence_length, device=device, dtype=torch.int64)

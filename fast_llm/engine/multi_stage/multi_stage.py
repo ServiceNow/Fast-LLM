@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
-    base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
     _flat_shard: torch.Tensor
     _shards: dict[str, torch.Tensor]
@@ -46,7 +45,8 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         stage_filter: set | None = None,
     ):
         super().__init__(config)
-        self._base_model = self.base_model_class(self._config.base_model, self._config.distributed)
+        self._base_model = self._config.base_model.get_base_model(self._config.distributed)
+        self._layers = self._base_model.get_layers()
         self._training = None
         self._verbose = verbose
         self._stage_filter = stage_filter
@@ -67,10 +67,8 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self._stages = [
             Stage(
                 config=self._config.multi_stage,
-                base_model=self._base_model,
+                layers=self._layers[stage_splits[i] : stage_splits[i + 1]],
                 distributed_config=self._config.distributed,
-                begin=stage_splits[i],
-                end=stage_splits[i + 1],
                 index=i,
             )
             for i in (range(self._num_stages))
@@ -510,12 +508,9 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         # Create stages (greedy split, could do better).
         stage_splits = [0]
         layer_counter, last_counter = 0, 0
-        for i, layer in enumerate(self._base_model):
+        for i, layer in enumerate(self._layers):
             layer_counter += layer.layer_count  # noqa
-            if (
-                layer_counter >= last_counter + self._config.multi_stage.layers_per_stage
-                or i == len(self._base_model) - 1
-            ):
+            if layer_counter >= last_counter + self._config.multi_stage.layers_per_stage or i == len(self._layers) - 1:
                 stage_splits.append(i + 1)
                 last_counter = layer_counter
         return stage_splits

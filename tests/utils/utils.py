@@ -41,7 +41,7 @@ def get_stage(base_model: BaseModel | list[Layer], distributed: Distributed):
     # Create a fast-llm stage which allocates and initializes meta tensors correctly.
     stage = Stage(
         config=StageConfig(),
-        base_model=base_model,
+        layers=base_model,
         distributed_config=distributed.config,
         begin=0,
         end=1,

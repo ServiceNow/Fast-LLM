@@ -5,8 +5,7 @@ import typing
 import torch
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.rotary.config import (
@@ -16,7 +15,6 @@ from fast_llm.layers.attention.rotary.config import (
     RotaryConfig,
     YarnRotaryConfig,
 )
-from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 
@@ -41,7 +39,7 @@ def apply_rotary_embeddings(tensor: torch.Tensor, rope_frequencies: torch.Tensor
     return torch.view_as_real(complex_tensor * rope_frequencies).view_as(tensor).type_as(tensor)
 
 
-class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module, Preprocessor):
+class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module):
     def __init__(
         self,
         config: ConfigType,
@@ -56,18 +54,15 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        pass
+
 
 class NoRotary[ConfigType: NoRotaryConfig](Rotary[ConfigType]):
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return query, key
-
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        pass
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        pass
 
 
 class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
@@ -81,26 +76,6 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
             :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
         ]
         kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[AttentionKwargs.rotary_freq_q] = TensorMeta.from_dims(
-            (
-                scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
-                scalar_dim,
-                self._head_size_dim,
-            ),
-            tensor_name=AttentionKwargs.rotary_freq_q,
-        )
-        kwargs[AttentionKwargs.rotary_freq_k] = TensorMeta.from_dims(
-            (
-                scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
-                scalar_dim,
-                self._head_size_dim,
-            ),
-            tensor_name=AttentionKwargs.rotary_freq_k,
-        )
 
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
