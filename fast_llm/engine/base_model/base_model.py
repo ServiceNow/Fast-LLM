@@ -95,7 +95,13 @@ class LayerWithNamespace(Layer):
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
-        return self._layer.forward(input_, kwargs[self._namespace], losses, metrics)
+        if self._namespace in kwargs:
+            kwargs = kwargs[self._namespace]
+        else:
+            # TODO: Forward meta doesn't go through preprocessing so doesn't have a namespace.
+            #   Using kwargs as-is since it's generally unused.
+            assert isinstance(input_, TensorMeta)
+        return self._layer.forward(input_, kwargs.get(self._namespace, kwargs), losses, metrics)
 
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         assert self._namespace not in kwargs

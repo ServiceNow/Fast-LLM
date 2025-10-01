@@ -148,18 +148,18 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     def _validate(self) -> None:
         if self.batch.sequence_length is None:
             # TODO: Drop this.
-            self.batch.sequence_length = self.model.base_model.embeddings_layer.num_position_embeddings
+            self.batch.sequence_length = self.model.base_model.embeddings.num_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
-        if self.model.base_model.embeddings_layer.position_embeddings.enabled:
-            Assert.geq(self.model.base_model.embeddings_layer.num_position_embeddings, self.batch.sequence_length)
+        if self.model.base_model.embeddings.position_embeddings.enabled:
+            Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.batch.sequence_length)
 
-        distillation_model = self.model.base_model.output_layer.distillation_model
-        dpo_reference_model = self.model.base_model.output_layer.dpo_reference_model
+        distillation_model = self.model.base_model.head.distillation_model
+        dpo_reference_model = self.model.base_model.head.dpo_reference_model
 
-        if self.model.base_model.output_layer.enable_dpo:
+        if self.model.base_model.head.enable_dpo:
             assert dpo_reference_model is not None
             Assert.none(distillation_model)
         else:
@@ -173,14 +173,14 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.eq(self.reference_models.keys(), expected_names)
 
         for reference_model in self.reference_models.values():
-            output_layer = reference_model.model.base_model.output_layer
+            output_layer = reference_model.model.base_model.head
             Assert.none(output_layer.distillation_model)
             Assert.none(output_layer.dpo_reference_model)
             # TODO: Support more LM head features.
             Assert.none(output_layer.cross_entropy_splits)
             Assert.eq(
-                reference_model.model.base_model.embeddings_layer.vocab_parallel,
-                self.model.base_model.embeddings_layer.vocab_parallel,
+                reference_model.model.base_model.embeddings.vocab_parallel,
+                self.model.base_model.embeddings.vocab_parallel,
             )
             Assert.geq(output_layer.prediction_heads, output_layer.prediction_heads)
 

@@ -25,7 +25,6 @@ from fast_llm.layers.language_model.config import (
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
@@ -100,7 +99,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             "vocab", embeddings_config.vocab_size, self._parallel_dim if self._vocab_parallel else None
         )
         # Only the first head defines the output weights
-        if self._prediction_distance == 0 and not self._config.tied_weight:
+        # TODO ====== tied_weight ======
+        if self._prediction_distance == 0:  # and not self._config.tied_weight:
             # untie embedding weights
             self.output_weights = self._config.output_weight.get_parameter(
                 (self._vocab_dim, self._hidden_dim),
@@ -245,8 +245,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         return targets
 
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        if self._config.tied_weight:
-            return kwargs[WORD_EMBEDDINGS_WEIGHT]
+        # TODO ====== tied_weight ======
+        # if self._config.tied_weight:
+        #    return kwargs[WORD_EMBEDDINGS_WEIGHT]
         if self._prediction_distance > 0:
             return kwargs[OUTPUT_WEIGHTS]
         return self.output_weights

@@ -74,7 +74,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
-                "embeddings_layer": {
+                "embeddings": {
                     "hidden_size": 1024,  # Default
                 },
                 "decoder": {
@@ -92,7 +92,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     },
                     "num_blocks": 12,  # Default
                 },
-                "output_layer": {"tied_weight": False},
+                "tied_embedding_weight": False,
             },
             "multi_stage": {"zero_stage": 3},
             "distributed": {"compute_dtype": "bfloat16"},
@@ -105,7 +105,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config.save_metadata(save_config)
 
     base_model_update = {
-        "embeddings_layer": {"hidden_size": 512, "vocab_size": 1000},
+        "embeddings": {"hidden_size": 512, "vocab_size": 1000},
         "decoder": {
             "block": {
                 "mixer": {
@@ -134,7 +134,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     expected_config["distributed"].update({"seed": 1234, "compute_dtype": "float16"})
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
-            "embeddings_layer": {
+            "embeddings": {
                 "hidden_size": 512,
                 "vocab_size": 1000,
             },
@@ -157,7 +157,8 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 },
                 "num_blocks": 12,
             },
-            "output_layer": {"tied_weight": False, "normalization": {"type": "layer_norm"}},
+            "head": {"normalization": {"type": "layer_norm"}},
+            "tied_embedding_weight": False,
             "peft": {"type": "lora", "freeze_others": False},
         }
     else:
@@ -167,7 +168,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         base_model_update["decoder"]["block"]["mixer"]["type"] = "attention"
         base_model_update["decoder"]["block"]["mixer"]["rotary"] = {"type": "none"}
         base_model_update["decoder"]["block"]["mlp"] = {"type": "mlp"}
-        base_model_update["output_layer"] = {"normalization": {"type": "layer_norm"}}
+        base_model_update["head"] = {"type": "language_model_head", "normalization": {"type": "layer_norm"}}
         base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 

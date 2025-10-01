@@ -538,18 +538,18 @@ class LlamaBaseModelConverter:
     def export_config(cls, config: GPTBaseModelConfig) -> dict:
         Assert.custom(isinstance, config, GPTBaseModelConfig)
         return safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings_layer),
+            cls.embeddings_converter_class.export_config(config.embeddings),
             cls.decoder_converter_class.export_config(config.decoder),
-            cls.head_converter_class.export_config(config.output_layer),
+            cls.head_converter_class.export_config(config.head),
         )
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
-            *cls.embeddings_converter_class.get_converters(config.embeddings_layer, "layers.0", "model"),
+            *cls.embeddings_converter_class.get_converters(config.embeddings, "layers.0", "model"),
             *cls.decoder_converter_class.get_converters(config.decoder, "layers", "model.layers"),
             *cls.head_converter_class.get_converters(
-                config.output_layer, config.decoder[len(config.decoder) - 1], "layers", len(config.decoder) + 1
+                config.head, config.decoder[len(config.decoder) - 1], "layers", len(config.decoder) + 1
             ),
         ]
 
@@ -557,7 +557,7 @@ class LlamaBaseModelConverter:
         self,
     ) -> list[WeightConverter]:
         base_model_config = self._model.config.base_model
-        self.embeddings_converter_class.get_converters(base_model_config.embeddings_layer, "layers.0", "model")
+        self.embeddings_converter_class.get_converters(base_model_config.embeddings, "layers.0", "model")
         converters = self.decoder_converter_class.get_converters(base_model_config.decoder, "layers", "model.layers")
         self.head_converter_class.get_converters(
             base_model_config.decoder, base_model_config.decoder.block, "layers", len(base_model_config.decoder) + 1

@@ -189,7 +189,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         },
         "model": {
             "base_model": {
-                "embeddings_layer": {
+                "embeddings": {
                     "word_embeddings": init_1,
                     "position_embeddings": {"enabled": True, **init_1},
                     "hidden_size": 256,
@@ -215,7 +215,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                     },
                     "num_blocks": 2,
                 },
-                "output_layer": {"output_weight": init_1},
+                "head": {"output_weight": init_1},
+                "tied_embedding_weight": True,
             },
             "multi_stage": {
                 "debug_param_init": _LOG_LEVEL,
@@ -324,7 +325,7 @@ _update_and_add_testing_config(
     updates={
         ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 4,
         ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "default",
-        ("model", "base_model", "embeddings_layer", "position_embeddings", "enabled"): False,
+        ("model", "base_model", "embeddings", "position_embeddings", "enabled"): False,
     },
     megatron_args=[
         "--group-query-attention",
@@ -354,8 +355,8 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "mlp", "activation"): "silu",
         ("model", "base_model", "decoder", "block", "mlp", "add_linear_biases"): False,
         ("model", "base_model", "decoder", "block", "normalization", "type"): "rms_norm",
-        ("model", "base_model", "output_layer", "normalization", "type"): "rms_norm",
-        ("model", "base_model", "output_layer", "tied_weight"): False,
+        ("model", "base_model", "head", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "tied_embedding_weight"): False,
     },
     megatron_args=[
         "--swiglu",
@@ -441,7 +442,7 @@ _update_and_add_testing_config(
     "llama",
     "mtp_llama",
     updates={
-        ("model", "base_model", "output_layer", "prediction_heads"): 2,
+        ("model", "base_model", "head", "prediction_heads"): 2,
     },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,

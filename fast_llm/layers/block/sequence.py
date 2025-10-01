@@ -1,4 +1,5 @@
 import collections
+import functools
 
 import torch.nn
 
@@ -30,8 +31,9 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
             lr_scale=lr_scale,
             peft=peft,
         )
+
         self.extend(
-            layers := [
+            [
                 self._config.block.get_layer(
                     distributed_config,
                     hidden_dim,
@@ -41,18 +43,21 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
                 for _ in range(self._config.num_blocks)
             ]
         )
+
+    @functools.cached_property
+    def _layers_with_namespace(self) -> list[Layer]:
+        # This needs to be in a property because `module_name` is set after `__init__`.
         # Wrap all blocks in a namespace using the unique module name of the first one.
-        namespace = layers[0].module_name if self._config.num_blocks > 0 else ""
-        # Note: Pytorch won't redundantly register modules  because it doesn't look into lists.
-        self._layers_with_namespace = [
-            LayerWithNamespace(sublayer, namespace) for layer in layers for sublayer in layer.get_layers()
-        ]
+        namespace = self[0].module_name if self._config.num_blocks > 0 else ""
+        return [LayerWithNamespace(sublayer, namespace) for layer in self for sublayer in layer.get_layers()]
 
     def get_layers(self) -> list["Layer"]:
         return self._layers_with_namespace
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self[0].get_loss_definitions(count=count * self.num_blocks) if self._config.num_blocks > 0 else []
+        return (
+            self[0].get_loss_definitions(count=count * self._config.num_blocks) if self._config.num_blocks > 0 else []
+        )
 
 
 class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[ConfigType], torch.nn.ModuleList):
@@ -75,7 +80,7 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
             peft=peft,
         )
         self.extend(
-            layers := [
+            [
                 self._config.blocks[name].get_layer(
                     distributed_config,
                     hidden_dim,
@@ -85,16 +90,19 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
                 for name in self._config.expanded_pattern
             ]
         )
+
+    @functools.cached_property
+    def _layers_with_namespace(self) -> list[Layer]:
+        # This needs to be in a property because `module_name` is set after `__init__`.
         # Wrap each set of blocks with identical config in a namespace
         # using the unique module name of the first such block.
-        # Note: Pytorch won't redundantly register modules  because it doesn't look into lists.
-        self._layers_with_namespace = [
-            LayerWithNamespace(sublayer, layers[self._config.preprocessing_layers[name]].module_name)
-            for name, layer in zip(self._config.expanded_pattern, layers)
+        return [
+            LayerWithNamespace(sublayer, self[self._config.preprocessing_layers[name]].module_name)
+            for name, layer in zip(self._config.expanded_pattern, self)
             for sublayer in layer.get_layers()
         ]
 
-    def get_layers(self) -> list["Layer"]:
+    def get_layers(self) -> list[Layer]:
         return self._layers_with_namespace
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:

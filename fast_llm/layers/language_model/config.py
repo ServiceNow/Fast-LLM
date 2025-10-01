@@ -1,3 +1,4 @@
+import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -116,8 +117,13 @@ class LanguageModelHeadBaseConfig(BlockConfig):
             peft=peft,
         )
 
+    @property
+    @abc.abstractmethod
+    def max_prediction_distance(self) -> int:
+        pass
 
-@config_class(dynamic_type={LanguageModelHeadBaseConfig: "default"})
+
+@config_class(dynamic_type={LanguageModelHeadBaseConfig: "language_model_head"})
 class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
@@ -238,6 +244,10 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                     self.language_model_loss_factor = 0.0
         super()._validate()
 
+    @property
+    def max_prediction_distance(self) -> int:
+        return 1
+
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
 class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
@@ -287,6 +297,10 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
             count=count * self.prediction_heads
         )
 
+    @property
+    def max_prediction_distance(self) -> int:
+        return self.prediction_heads
+
 
 @config_class()
 class LanguageModelConfig(ModuleConfig):
@@ -295,8 +309,8 @@ class LanguageModelConfig(ModuleConfig):
         desc="Configuration for the language model decoder.",
         hint=FieldHint.architecture,
     )
-    embeddings_layer: LanguageModelEmbeddingsConfig = Field()
-    output_layer: LanguageModelHeadBaseConfig = Field()
+    embeddings: LanguageModelEmbeddingsConfig = Field()
+    head: LanguageModelHeadBaseConfig = Field()
     # TODO: Allow overriding in sub-models?
     peft: PeftConfig = Field(
         desc="Configuration for parameter-efficient fine tuning.",
