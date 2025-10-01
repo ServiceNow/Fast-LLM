@@ -95,7 +95,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._num_stages = len(self._stages)
         self._loss_definitions = {
             loss_definition.name: loss_definition
-            for loss_definition in self._multi_stage.base_model.config.get_loss_definitions()
+            for loss_definition in self._multi_stage.base_model.get_loss_definitions()
         }
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:

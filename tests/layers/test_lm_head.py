@@ -248,6 +248,7 @@ def test_lm_head(
     else:
         logit_weight = None
 
+    # TODO ====== Fix ======
     for prediction_distance, layer_index in enumerate(model.model_head_indices):
         # Prepare the LM head
         head: LanguageModelHead = model[layer_index]

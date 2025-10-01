@@ -4,13 +4,10 @@ import typing
 import torch
 import torchvision.transforms.v2 as torchvision_transforms
 
-from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.vision.config import ImageNormalizationConfig, VisionEncoderConfig, VisionEncoderKwargs
-from fast_llm.tensor import TensorMeta
+from fast_llm.layers.vision.config import ImageNormalizationConfig, VisionEncoderConfig
 from fast_llm.utils import div
 
 
@@ -66,26 +63,6 @@ def resize(image: torch.Tensor, target_height: int, target_width: int) -> torch.
     )
 
 
-def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, patch_size: int) -> torch.Tensor:
-    freqs = 1.0 / (rope_theta ** (torch.arange(0, kv_channels, 2).float() / kv_channels))
-    max_patches_per_side = max_image_size // patch_size
-
-    h = torch.arange(max_patches_per_side)
-    w = torch.arange(max_patches_per_side)
-
-    freqs_h = torch.outer(h, freqs[::2]).float()
-    freqs_w = torch.outer(w, freqs[1::2]).float()
-    inv_freq = torch.cat(
-        [
-            freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
-            freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
-        ],
-        dim=-1,
-    ).reshape(-1, kv_channels // 2)
-
-    return torch.cat((inv_freq, inv_freq), dim=-1)
-
-
 def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tensor:
     patch_height = height // patch_size
     patch_width = width // patch_size
@@ -94,24 +71,10 @@ def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tenso
     )
 
 
-class VisionPreprocessor(Preprocessor):
+class VisionPreprocessor:
     def __init__(self, config: VisionEncoderConfig, distributed: Distributed):
         self._config = config
         self._distributed = distributed
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[VisionEncoderKwargs.image_patches_meta] = TensorMeta.from_dims(
-            (
-                TensorDim(
-                    "vision_batch",
-                    kwargs[AttentionKwargs.micro_batch_size] * kwargs[AttentionKwargs.sequence_q_dim].size,
-                ),
-                TensorDim("in_channels", 3),
-                TensorDim("patch_size", self._config.patch_size),
-                TensorDim("patch_size", self._config.patch_size),
-            ),
-            dtype=self._distributed.config.training_dtype.torch,
-        )
 
     def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
         max_image_size = kwargs.get(VisionEncoderKwargs.max_image_size)
@@ -203,12 +166,6 @@ class VisionPreprocessor(Preprocessor):
         kwargs[VisionTransformerKwargs.patch_position_ids] = torch.cat(patch_position_ids).to(
             device=self._distributed.device
         )
-        kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
-            kwargs[VisionEncoderKwargs.rope_theta],
-            kwargs[VisionEncoderKwargs.kv_channels],
-            max_image_size,
-            patch_size,
-        ).to(device=self._distributed.device)
         kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size**2, patch_size**2)
         # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
         kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(

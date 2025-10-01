@@ -4,13 +4,13 @@ import typing
 
 import torch
 
-from fast_llm.config import Config, Configurable
-from fast_llm.engine.base_model.base_model import Layer, Module
-from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.config import Configurable
+from fast_llm.engine.base_model.base_model import Layer, LayerBase
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.logging import get_model_debug_level, log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
@@ -93,9 +93,9 @@ class DebugLayer:
                 )
 
 
-class BaseBlock[ConfigType: Config](Configurable[ConfigType], Module):
+class BlockBase[ConfigType: ModuleConfig](Configurable[ConfigType], LayerBase):
     """
-    Base class for blocks and block-like layers (mlp, mixers, etc.).
+    Base class for blocks and block-like layers (mlp, mixers, block sequences, etc.).
     """
 
     def __init__(
@@ -115,11 +115,6 @@ class BaseBlock[ConfigType: Config](Configurable[ConfigType], Module):
         self._lr_scale = lr_scale
         self._peft = peft
 
-    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        raise NotImplementedError()
 
-
-class Block[ConfigType: Config](BaseBlock[ConfigType], Layer):
-    """
-    Base class for actual blocks, i.e., base blocks that are also `Layers`.
-    """
+class Block[ConfigType: BlockConfig](BlockBase[ConfigType], Layer):
+    pass

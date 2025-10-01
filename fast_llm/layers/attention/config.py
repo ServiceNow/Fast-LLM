@@ -3,9 +3,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
@@ -126,19 +124,3 @@ class AttentionConfig(MixerConfig):
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
-
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
-        # TODO: Find a better solution.
-        preprocessors: list[Preprocessor] = [
-            self.rotary.get_layer(TensorDim("head_size", self.head_size)),
-        ]
-        if self.do_use_flash_attention(distributed_config):
-            from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
-
-            preprocessors.append(FlashAttnVarlenPreprocessor(self, distributed_config))
-        else:
-            from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor
-
-            preprocessors.append(BackupAttentionPreprocessor(self, distributed_config))
-        return preprocessors

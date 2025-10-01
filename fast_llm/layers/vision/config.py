@@ -2,8 +2,7 @@ import enum
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.linear.config import Convolution2DConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
@@ -11,31 +10,6 @@ from fast_llm.layers.decoder.config import MLPBaseConfig
 
 if typing.TYPE_CHECKING:
     pass
-
-
-class VisionEncoderDimNames:
-    in_channels = "vision_in_channels"
-    out_channels = "vision_out_channels"
-    adapter_size = "vision_adapter_size"
-    patch_size = "vision_patch_size"
-    kv_channels = "vision_kv_channels"
-
-
-class VisionEncoderKwargs:
-    patch_size = "patch_size"
-    images = "images"
-    image_patches = "image_patches"
-    image_positions = "image_positions"
-    max_image_size = "max_image_size"
-    image_sizes = "image_sizes"
-    rope_theta = "vit_rope_theta"
-    rotary_inv_freq = "vit_rotary_inv_freq"
-    kv_channels = "vit_kv_channels"
-    max_image_tokens = "max_image_tokens"
-    patch_embeddings = "patch_embeddings"
-    hidden_dims = "vit_hidden_dims"
-    image_patches_meta = "vit_image_patches_meta"
-    out_channels = "vit_out_channels"
 
 
 @config_class()
@@ -107,7 +81,7 @@ class PatchConvolutionConfig(BlockConfig):
 
 
 @config_class(registry=True)
-class VisionEncoderConfig(BaseModelConfig):
+class VisionEncoderConfig(ModuleConfig):
     _abstract = False
     patch_convolution_layer: PatchConvolutionConfig = Field(
         desc="Configuration for the patch convolution layer.",
@@ -198,13 +172,6 @@ class VisionEncoderConfig(BaseModelConfig):
             if self.adapter_init_method_std is None:
                 self.adapter_init_method_std = self.adapter_size**-0.5
         super()._validate()
-
-    def setup_tensor_space(self, tensor_space: "TensorSpace"):
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.adapter_size, self.adapter_size))
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.in_channels, 3))
-        self.transformer.setup_tensor_space(tensor_space)
 
     @property
     def enabled(self) -> bool:

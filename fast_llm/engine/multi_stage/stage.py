@@ -139,7 +139,9 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                     else:
                         # TODO: Handle variable shape.
                         output_global = output
-                    kwargs["hidden_states"][self._layer_range[i]] = {
+
+                    # TODO ====== Use ======
+                    kwargs["hidden_states"][self._layers[i].module_name] = {
                         "layer_type": type(layer).__name__,
                         "tensor": output_global,
                     }
@@ -223,9 +225,9 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             and self._distributed.tensor_group is not None
             and not self._meta_outputs[i].is_tensor_parallel
         ):
-            check_parallel_match(output, self._distributed.tensor_group, f"layer {self._layer_range[i]} fw")
+            check_parallel_match(output, self._distributed.tensor_group, f"layer {self._layers[i].module_name} fw")
         if self._config.debug_layer_outputs:
-            name = f"layer {self._layer_range[i]} fw"
+            name = f"layer {self._layers[i].module_name} fw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
@@ -242,7 +244,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                 meta=self._meta_outputs[i],
             )
         if self._config.debug_activation_memory:
-            log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"layer {self._layer_range[i]} fw", str))
+            log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"layer {self._layers[i].module_name} fw", str))
 
     def _log_layer_backward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if not input_.requires_grad:
@@ -254,11 +256,11 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         ):
             input_.register_hook(
                 lambda grad: check_parallel_match(
-                    grad, self._distributed.tensor_group, f"layer {self._layer_range[i]} bw"
+                    grad, self._distributed.tensor_group, f"layer {self._layers[i].module_name} bw"
                 )
             )
         if self._config.debug_layer_gradients:
-            name = f"layer {self._layer_range[i]} bw"
+            name = f"layer {self._layers[i].module_name} bw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
@@ -276,6 +278,6 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         if self._config.debug_activation_memory:
             input_.register_hook(
                 lambda grad: log_pipeline_parallel_main_rank(
-                    lambda: log_memory_usage(f"layer {self._layer_range[i]} bw", str)
+                    lambda: log_memory_usage(f"layer {self._layers[i].module_name} bw", str)
                 )
             )

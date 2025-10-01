@@ -4,14 +4,15 @@ import typing
 
 from fast_llm.config import MISSING, Config, Field, FieldHint, FieldVerboseLevel, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import compare_nested, log
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.utils import Assert, compare_nested, log
 
 if typing.TYPE_CHECKING:
-    import torch
+    from fast_llm.engine.base_model.base_model import BaseModel
 
 
 @config_class()
-class BaseModelConfig(Config):
+class ModuleConfig(Config):
     """
     Abstract config class for a base model.
     # TODO: Find better name?
@@ -43,7 +44,7 @@ class BaseModelConfig(Config):
         return architecture
 
     def _serialize_architecture_field(self, value: typing.Any) -> typing.Any:
-        if isinstance(value, BaseModelConfig):
+        if isinstance(value, ModuleConfig):
             # TODO: Make sure all nested configs have an architecture type hint?
             return value._get_architecture()
         elif isinstance(value, Config):
@@ -57,12 +58,29 @@ class BaseModelConfig(Config):
             return self._serialize_value(value)
 
 
-class Preprocessor(abc.ABC):
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        pass
+@config_class()
+class BaseModelConfig(ModuleConfig):
+    """
+    Abstract config class for a base model.
+    """
 
+    def get_base_model(self, distributed_config: DistributedConfig) -> "BaseModel":
+        from fast_llm.tensor import ParameterMeta
+
+        model = self.base_model_class(self, distributed_config)
+        # Storing the global name of each module and tensor.
+        # Done here because it needs to run right after `model.__init__()`
+        for key, value in model.named_modules():
+            value.module_name = key
+        for key, value in model.named_parameters():
+            Assert.custom(isinstance, value, ParameterMeta)
+            # Rename to the parameter full name
+            value.tensor_name = key
+        return model
+
+    @property
     @abc.abstractmethod
-    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+    def base_model_class(self) -> type["BaseModel"]:
         pass
 
 

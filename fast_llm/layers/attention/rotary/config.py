@@ -4,7 +4,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
 
 
 @config_class(registry=True)
-class RotaryConfig(BaseModelConfig):
+class RotaryConfig(ModuleConfig):
     # TODO: Move rotary to its own submodule.
 
     @classmethod
@@ -137,7 +137,7 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         return YarnRotary
 
 
-@config_class(dynamic_type={RotaryConfig: "rope_2d"})
+@config_class(dynamic_type={RotaryConfig: "default_2d"})
 class Rotary2DConfig(DefaultRotaryConfig):
     def _get_configurable_class(self) -> "type[Rotary2D]":
         from fast_llm.layers.transformer.rotary.rotary import Rotary2D

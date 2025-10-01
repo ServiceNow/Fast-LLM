@@ -5,8 +5,7 @@ import typing
 import torch
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.rotary.config import (
@@ -17,8 +16,6 @@ from fast_llm.layers.attention.rotary.config import (
     RotaryConfig,
     YarnRotaryConfig,
 )
-from fast_llm.layers.vision.config import VisionEncoderKwargs
-from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 
@@ -43,7 +40,7 @@ def apply_rotary_embeddings(tensor: torch.Tensor, rope_frequencies: torch.Tensor
     return torch.view_as_real(complex_tensor * rope_frequencies).view_as(tensor).type_as(tensor)
 
 
-class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module, Preprocessor):
+class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module):
     def __init__(
         self,
         config: ConfigType,
@@ -58,18 +55,15 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        pass
+
 
 class NoRotary[ConfigType: NoRotaryConfig](Rotary[ConfigType]):
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return query, key
-
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        pass
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        pass
 
 
 class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
@@ -83,26 +77,6 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
             :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
         ]
         kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[AttentionKwargs.rotary_freq_q] = TensorMeta.from_dims(
-            (
-                scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
-                scalar_dim,
-                self._head_size_dim,
-            ),
-            tensor_name=AttentionKwargs.rotary_freq_q,
-        )
-        kwargs[AttentionKwargs.rotary_freq_k] = TensorMeta.from_dims(
-            (
-                scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
-                scalar_dim,
-                self._head_size_dim,
-            ),
-            tensor_name=AttentionKwargs.rotary_freq_k,
-        )
 
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
@@ -206,52 +180,30 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
 class Rotary2D[ConfigType: Rotary2DConfig](DefaultRotary[ConfigType]):
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_num_patches: int = -1
+    _config: ConfigType
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        assert self._tensor_space is not None
-        max_num_patches = kwargs[VisionEncoderKwargs.max_image_size] // kwargs[VisionEncoderKwargs.patch_size]
-        self._create_tensors(max_num_patches)
+        self._create_tensors(
+            kwargs[VisionEncoderKwargs.max_image_size] // kwargs[VisionEncoderKwargs.patch_size], batch.device
+        )
         position_ids = kwargs[VisionTransformerKwargs.patch_position_ids]
-        kwargs[VisionTransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
-        kwargs[VisionTransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
+        kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
+        kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
 
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        assert self._tensor_space is not None
-        kwargs[VisionTransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
-            (
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
-                self._scalar_dim,
-                self._kv_channels_dim,
-            ),
-            tensor_name=VisionTransformerKwargs.rotary_freq_q,
-        )
-        kwargs[VisionTransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
-            (
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
-                self._scalar_dim,
-                self._kv_channels_dim,
-            ),
-            tensor_name=VisionTransformerKwargs.rotary_freq_k,
-        )
+    def forward(
+        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        rotary_fn = triton_rotary_autograd_ if self._config.triton else apply_rotary_embeddings
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
+        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
+        return query, key
 
-    def _create_tensors(self, max_num_patches: int) -> None:
-        if max_num_patches <= self._tensor_cache_max_num_patches:
-            return
-        self._tensor_cache_max_num_patches = max_num_patches
-
-        self._rotary_embedding_frequencies = self._get_frequencies(
-            max_num_patches,
-            self._kv_channels_dim.global_size,
-            device=self._tensor_space.distributed.device,
-        )
-
-    def _get_frequencies(self, max_num_patches: int, kv_channels: int, device="cuda") -> torch.Tensor:
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
+        max_num_patches = sequence_length
         # Calculate complex frequencies by using alternating channels for width and height
         height_positions = torch.arange(max_num_patches, device=device, dtype=torch.float64)
         width_positions = torch.arange(max_num_patches, device=device, dtype=torch.float64)
-        frequencies = self._config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
+        frequencies = self._config.theta ** -torch.arange(0, 1, 2 / head_size, device=device, dtype=torch.float64)
         angles_h = torch.outer(height_positions, frequencies[::2])
         angles_w = torch.outer(width_positions, frequencies[1::2])
         angles = torch.cat(
@@ -260,12 +212,12 @@ class Rotary2D[ConfigType: Rotary2DConfig](DefaultRotary[ConfigType]):
                 angles_w[None, :, :].repeat(max_num_patches, 1, 1),
             ],
             dim=-1,
-        ).reshape(-1, kv_channels // 2)
+        ).reshape(-1, head_size // 2)
 
         frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
         if not self._config.complex_format:
             frequencies = convert_rotary_complex_to_real(
-                torch.view_as_real(frequencies).flatten(-2), kv_channels, 3
+                torch.view_as_real(frequencies).flatten(-2), head_size, 3
             ).contiguous()
 
         return frequencies

@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.base_model.base_model import BaseModel, Layer
-from fast_llm.engine.base_model.config import Preprocessor
+from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
@@ -13,8 +13,6 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -37,22 +35,42 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     ):
         self._hidden_dim = TensorDim("hidden", config.embeddings_layer.hidden_size)
         super().__init__(config, distributed_config)
+
+        hidden_dim = TensorDim("hidden", self.embeddings_layer.hidden_size)
+        self.embedding = self._config.embeddings_layer.get_layer(
+            distributed_config,
+            hidden_dim=hidden_dim,
+            lr_scale=None,
+            peft=self._config.peft,
+        )
+        self.decoder = self._config.decoder.get_layer(
+            distributed_config,
+            hidden_dim,
+            lr_scale=None,
+            peft=self._config.peft,
+        )
+        self.head = self._config.output_layer.get_layer(
+            distributed_config,
+            self._config.embeddings_layer,
+            hidden_dim=hidden_dim,
+            lr_scale=None,
+            peft=self._config.peft,
+        )
+
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
                 param.init_parameter = get_init_megatron(
                     param, self._config.decoder.block, config.embeddings_layer.hidden_size
                 )  # Noqa
-        # `self._reference_models` is not populated at this point, so we pass a mutable dict.
-        self._preprocessors: list[Preprocessor] = self._config.get_preprocessors(distributed_config)
 
         # TODO ====== Vision ======
         # if self._config.vision_encoder.enabled:
         #    self._preprocessors.append(VisionPreprocessor(self._config.vision_encoder, self._tensor_space))
         #    self._preprocessors.append(self._config.vision_encoder.transformer.rotary.build(self._tensor_space))
 
-    def get_layers(self) -> list[Layer]:
-        return self._config.get_blocks(self._distributed_config)
+    def get_layers(self) -> list["Layer"]:
+        return self.embedding.get_layers() + self.decoder.get_layers() + self.head.get_layers()
 
     # TODO ====== Vision ======
     # def get_vision_layers(self) -> list[Layer]:
@@ -67,16 +85,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     #        MultiModalEmbedding(self._config, self._tensor_space),
     #    ]
 
-    def get_embedding_layers(self) -> list[Layer]:
-        if self._config.vision_encoder.enabled:
-            return self.get_vision_layers()
-        else:
-            return [LanguageModelEmbedding(self._config, self._tensor_space)]
-
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
-        # TODO: How much of this is generalizable?
+        # TODO ====== Remove (Move batch splitting elsewhere) ======
         # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
 
         if isinstance(batch_meta, GPTBatchConfig):
@@ -193,8 +205,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = TensorMeta.from_dims(
                     hidden_dims[:2], tensor_name="labels", dtype=torch.int64
                 )
-            for preprocessor in self._preprocessors:
-                preprocessor.preprocess_meta(kwargs)
             reference_kwargs = {}
             for name, reference_preprocessed_meta in reference_preprocessed_metas.items():
                 reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
@@ -228,7 +238,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO: How much of this is generalizable?
+        # TODO ====== Move batch splitting elsewhere, align interface with LayerBase ======
         assert self._is_setup
 
         if preprocessed_meta is None:
@@ -319,6 +329,39 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                     labels[start : end + 1, idx] = -100
                                 else:
                                     labels[idx, start : end + 1] = -100
+
+                # TODO ====== Preference spans ======
+                if batch.chosen_spans is not None:
+                    chosen_valid_spans = []
+                    for spans in batch.chosen_spans:
+                        if not spans.numel():
+                            continue
+                        # only keep spans within the sequence or partially within the sequence
+                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
+                        if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                            valid_spans[0].clamp_(min=sequence_offset)
+                            valid_spans[1].clamp_(max=sequence_k)
+                            valid_spans -= sequence_offset
+
+                            chosen_valid_spans.append(valid_spans)
+                    kwargs[LanguageModelKwargs.chosen_spans] = chosen_valid_spans
+
+                    rejected_valid_spans = []
+                    for spans in batch.rejected_spans:
+                        if not spans.numel():
+                            continue
+                        # only keep spans within the sequence or partially within the sequence
+                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
+                        if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                            valid_spans[0].clamp_(min=sequence_offset)
+                            valid_spans[1].clamp_(max=sequence_k)
+                            valid_spans -= sequence_offset
+
+                            rejected_valid_spans.append(valid_spans)
+                    kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
+
                 # TODO ====== Vision ======
                 # if self._config.vision_encoder.enabled:
                 #    if self._config.vision_encoder.image_break_token is not None:
@@ -358,8 +401,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             #    )
             #    kwargs[LanguageModelKwargs.tokens] = tokens
 
-            for preprocessor in self._preprocessors:
-                preprocessor.preprocess(tokens, kwargs)
+            # TODO ====== Turn into super() call ======
+            self.embedding.preprocess(tokens, kwargs)
+            self.decoder.preprocess(tokens, kwargs)
+            self.head.preprocess(tokens, kwargs)
 
             # TODO ====== Vision ======
             # image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
@@ -371,10 +416,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             preprocessed.append((tokens, kwargs))
 
         return preprocessed
-
-    @property
-    def embedding(self) -> LanguageModelEmbedding:
-        return self.layers[0]
 
     # TODO ====== Vision ======
     # @property
@@ -392,37 +433,41 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     #    else:
     #        return 0
 
-    @property
-    def model_head(self) -> LanguageModelHead:
-        return self.layers[self.model_head_indices[0]]
-
-    @property
-    def model_head_indices(self) -> list[int]:
-        return sorted([len(self) - 1 - 2 * i for i in range(self._config.output_layer.prediction_heads)])
-
     def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        if self._config.output_layer.tied_weight:
-            return {
-                WORD_EMBEDDINGS_WEIGHT: (
-                    self.embedding.word_embeddings_weight,
-                    # TODO ====== Vision ======
-                    # (self.embedding_layer_index, *self.model_head_indices),
-                    (0, *self.model_head_indices),
-                )
-            }
-        elif self._config.output_layer.prediction_heads > 1:
-            return {
-                OUTPUT_WEIGHTS: (
-                    self.model_head.output_weights,
-                    tuple(self.model_head_indices),
-                )
-            }
-        else:
-            return {}
+        # TODO ====== Tied weights ======
+        if self._config.tied_embedding_weight:
+            raise NotImplementedError()
+        return {}
+        # if self._config.output_layer.tied_weight:
+        #    return {
+        #        WORD_EMBEDDINGS_WEIGHT: (
+        #            self.embedding.word_embeddings_weight,
+        #            # TODO ====== Vision ======
+        #            # (self.embedding_layer_index, *self.model_head_indices),
+        #            (0, *self.model_head_indices),
+        #        )
+        #    }
+        # elif self._config.output_layer.prediction_heads > 1:
+        #    return {
+        #        OUTPUT_WEIGHTS: (
+        #            self.model_head.output_weights,
+        #            tuple(self.model_head_indices),
+        #        )
+        #    }
+        # else:
+        #    return {}
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return (
+            self.embeddings_layer.get_loss_definitions(count)
+            + self.decoder.get_loss_definitions(count)
+            + self.output_layer.get_loss_definitions(count)
+        )
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
-    base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
+    # TODO: Can we drop class?
+    pass
 
 
 class GPTInferenceRunner(InferenceRunner):

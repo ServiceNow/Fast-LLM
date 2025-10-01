@@ -4,22 +4,21 @@ import typing
 
 import torch
 
-from fast_llm.config import Config
 from fast_llm.core.distributed import set_generator
-from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 
 
-class BlockWithBias[ConfigType: Config](Block[ConfigType]):
+class BlockWithBias[ConfigType: BlockWithBiasConfig](Block[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
@@ -85,12 +84,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input = return_input
-        # Note, layer_lr_scale does not impact the norms
-        # TODO: add a separate norm_lr_scale
         self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
         self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
 
-        # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
             self._hidden_dim,
@@ -178,3 +174,6 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 self.mlp.get_compute_usage(input_, kwargs, config),
             )
         )
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)
