@@ -130,33 +130,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             LanguageModelKwargs.mask_inputs: not truncate_documents,
         }
 
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    try:
-        #        max_image_size = batch_meta.max_image_size
-        #    except AttributeError:
-        #        max_image_size = 256
-        #        logger.warning("Inference mode: max_image_size not provided, defaulting to 256")
-        #    vision_kwargs = {
-        #        VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
-        #        VisionEncoderKwargs.max_image_size: max_image_size,
-        #        VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
-        #        VisionEncoderKwargs.kv_channels: self._tensor_space[VisionTransformerDimNames.kv_channels].size,
-        #        VisionEncoderKwargs.out_channels: self._tensor_space[VisionEncoderDimNames.out_channels].size,
-        #    }
-        #    vision_hidden_dim = self._tensor_space[VisionTransformerDimNames.hidden]
-        #    vision_hidden_dims = (
-        #        (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
-        #        if sequence_first
-        #        else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
-        #    )
-        #    vision_kwargs.update(
-        #        {
-        #            VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
-        #        }
-        #    )
-        #    common_kwargs.update(vision_kwargs)
-
         sequence_k_pasts = range(
             sequence_q_dim.size * self._distributed_config.sequence_data_rank,
             sequence_length,
@@ -198,13 +171,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     Assert.eq(reference_kwargs_[key], kwargs[key])
                 reference_kwargs[name] = reference_kwargs_
             kwargs["reference_models"] = reference_kwargs
-
-            # TODO ====== Vision ======
-            # if self._config.vision_encoder.enabled:
-            #     # patch_dimensions are (batch * sequence_length) x 3 x patch_size x patch_size
-            #     preprocessed_meta.append((kwargs[VisionEncoderKwargs.image_patches_meta], kwargs))
-            # else:
-            #     preprocessed_meta.append((tokens, kwargs))
 
             preprocessed_meta.append((tokens, kwargs))
 
@@ -306,11 +272,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k + max_prediction_distance - 1)
                             valid_spans -= sequence_offset
+                            loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    labels[start : end + 1, idx] = -100
+                                    loss_mask[start : end + 1, idx] = False
                                 else:
-                                    labels[idx, start : end + 1] = -100
+                                    loss_mask[idx, start : end + 1] = False
+                            if self._config.output_layer.distillation_model is not None:
+                                kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                            labels = torch.where(loss_mask, labels, -100)
 
                 # TODO ====== Preference spans ======
                 if batch.chosen_spans is not None:
@@ -344,11 +314,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             rejected_valid_spans.append(valid_spans)
                     kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
 
-                if self._config.distillation_model is not None:
-                    loss_mask = torch.ones_like(labels, dtype=torch.bool)
-                    loss_mask = torch.where(labels == -100, False, loss_mask)
-                    kwargs[LanguageModelKwargs.loss_mask] = loss_mask
-                kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
 
             # TODO ====== Turn into super() call ======
