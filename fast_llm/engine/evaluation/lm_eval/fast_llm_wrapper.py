@@ -16,6 +16,7 @@ from fast_llm.core.distributed import gather_object, safe_barrier, scatter_objec
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 
 logger = logging.getLogger(__name__)
@@ -34,22 +35,29 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         add_bos_token: bool | None = False,
         prefix_token_id: int | None = None,
         max_length: int | None = None,
+        batch_config: BatchConfig | None = None,
+        communication_timeout_sec: float = 600.0,
     ):
         super().__init__()
 
         # === Distributed setup ===
         self._rank = 0  # For lm_eval: always run on main rank
-        self._world_size = 1
+        self._world_size = 1  # For lm_eval: always world size 1
+
+        self.communication_timeout_sec = communication_timeout_sec
+
         self._distributed: Distributed = model._inference_runner._fast_llm_model.distributed
+
+        self._world_group = self._distributed.world_group
 
         if (
             self._distributed.config.sequence_data_rank == 0
             and self._distributed.config.pipeline_rank == 0
             and self._distributed.config.tensor_rank == 0
         ):
-            self._group = self._distributed.batch_data_group
+            self._leading_batch_data_group = self._distributed.batch_data_group
         else:
-            self._group = torch.distributed.GroupMember.NON_GROUP_MEMBER
+            self._leading_batch_data_group = None
 
         # === Model & tokenizer setup ===
         self._model = model
@@ -76,7 +84,10 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # === Batch configuration ===
         self._batch_schedule = 1
         self._batch_sizes = {}  # Not used dynamically by lm_eval
-        self._batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
+
+        # NOTE: We can not take batch configuration from inference runner as it has a dummy batch config
+        self._batch_size_per_gpu = batch_config.micro_batch_size if batch_config else 1
+
         self._batch_size = self._batch_size_per_gpu * self._distributed.config.batch_data_parallel
         self._max_batch_size = self._batch_size
 
@@ -171,11 +182,15 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     completed_steps,
                 )
         else:
-            self.worker_model_invoke()
+            # On the rest of the bath data group leaders, we run the full generate/forward pass
+            # On all other ranks, we only invoke worker_forward
+            if self._leading_batch_data_group:
+                self.worker_model_invoke()
+            else:
+                self._model.worker_forward(communication_timeout_sec=self.communication_timeout_sec)
 
-        # TODO: do we need it here as self.stop_workers() and self.worker_model_invoke()
-        #       already have barrier
-        safe_barrier(self._distributed.world_group, f"lm_eval Run end")
+        # Model forward workers end earlier, so sync here for all gpus
+        safe_barrier(self._world_group, f"lm_eval Run end")
 
     def _model_invoke(
         self,
@@ -185,39 +200,44 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         max_length,
         stop,
         generate: bool,
-        continue_generate: bool,
+        continue_work: bool,
         **generation_kwargs,
     ):
         # TODO: Consider passing true messages and payloads around instead of combining all data into a large tuple.
         # Messages could include types like logits, generate, finished.
 
-        # Group is always None if world size is 1
-        if self._group is None:
-            # Must not be called with continue_generate false on one process
-            assert continue_generate
+        # Call directly if on one gpu or data group size is 1
+        if self._world_group is None or self._leading_batch_data_group is None:
+            # Must not be called with continue_work false on one gpu
+            assert self._world_group or continue_work
+            # Still call then continue_work false to stop model forward workers
             return self._model_invoke_inner(
-                input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
+                input_ids, attention_mask, labels, max_length, stop, generate, continue_work, **generation_kwargs
             )
 
-        world_size = self._group.size()
+        assert self._world_group.rank() == 0
 
-        assert self._group.rank() == 0
+        batch_data_parallel_size = self._leading_batch_data_group.size()
 
-        if continue_generate:
+        if continue_work:
             assert input_ids is not None
             if generate:
                 assert max_length is not None and stop is not None
 
-            # always divide by world_size, if not full batch, some ranks will get less work or not at all
-            assert self._batch_size % world_size == 0
-            step = self._batch_size // world_size
+            # Always divide by batch_data_parallel_size, if not full batch, some ranks will get less work or not at all.
+            assert self._batch_size % batch_data_parallel_size == 0
+            step = self._batch_size // batch_data_parallel_size
 
-            input_ids = [input_ids[i * step : (i + 1) * step] for i in range(world_size)]
+            # Data is send to every rank and micro batches are repeated for the same batch_data_parallel rank.
+            input_ids = [input_ids[i * step : (i + 1) * step] for i in range(batch_data_parallel_size)]
             attention_mask = [
-                attention_mask[i * step : (i + 1) * step] if attention_mask is not None else None
-                for i in range(world_size)
+                (attention_mask[i * step : (i + 1) * step] if attention_mask is not None else None)
+                for i in range(batch_data_parallel_size)
             ]
-            labels = [labels[i * step : (i + 1) * step] if labels is not None else None for i in range(world_size)]
+            labels = [
+                (labels[i * step : (i + 1) * step] if labels is not None else None)
+                for i in range(batch_data_parallel_size)
+            ]
 
             scatter_list = [
                 [
@@ -227,36 +247,46 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     max_length,
                     stop,
                     generate,
-                    continue_generate,
+                    continue_work,
                     generation_kwargs,
                 ]
-                for i in range(world_size)
+                for i in range(batch_data_parallel_size)
             ]
         else:
-            scatter_list = [[None, None, None, None, None, None, False, None] for _ in range(world_size)]
+            scatter_list = [[[], None, None, None, None, None, False, {}] for _ in range(batch_data_parallel_size)]
 
-        input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
+        # Some tasks may post-process too slowly, so waiting for the next batch or
+        # the end of work can exceed the standard 60s timeout.
+        safe_barrier(self._leading_batch_data_group, "model_invoke_wait", timeout=self.communication_timeout_sec)
+        input_ids, attention_mask, labels, max_length, stop, generate, continue_work, generation_kwargs = (
             scatter_object(
                 scatter_list,
-                group=self._group,
+                group=self._leading_batch_data_group,
             )
         )
 
-        if not continue_generate:
+        # Always call inner function to propagate stop signal to TP workers if continue_work is False
+        result = self._model_invoke_inner(
+            input_ids, attention_mask, labels, max_length, stop, generate, continue_work, **generation_kwargs
+        )
+
+        if not continue_work:
             return None
 
         assert len(input_ids) > 0
 
-        result = self._model_invoke_inner(
-            input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
+        # At the end, some data-parallel ranks may have no data, so the wait can
+        # exceed the standard 60s timeout.
+        safe_barrier(
+            self._leading_batch_data_group, "model_invoke_gather_wait", timeout=self.communication_timeout_sec
         )
+        gather_list = gather_object(result, group=self._leading_batch_data_group)
 
-        gather_list = gather_object(result, group=self._group)
-        # Clean gather list from empty shards
+        # Clean gather list from empty shards (from not full batches).
         gather_list = [el for el in gather_list if len(el) > 0]
 
         # If it was model generate tensors could be of different length
-        # so we aggregate results to list instead of a tensor
+        # so we aggregate results to list instead of a tensor.
         if generate:
             result = sum((el.tolist() for el in gather_list), [])
         else:
@@ -266,57 +296,109 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         return result
 
     def worker_model_invoke(self):
-        assert self._group is not None
-        # if isinstance(self.group, dist.ProcessGroup):
-        if not isinstance(self._group, int):
-            # groups is None for world_size 1
-            assert self._group.rank() != 0
-            # on worker ranks the function need to wait to be called multiple times
-            while True:
-                input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
-                    scatter_object(
-                        None,
-                        group=self._group,
-                    )
+        # Group is None for world_size 1 and this function must not be called for world_size 1.
+        assert self._world_group
+        assert self._leading_batch_data_group
+        # The function must not be called on the main rank.
+        assert self._world_group.rank() != 0
+
+        device = torch.cuda.current_device()
+
+        # On worker ranks the function need to wait to be called multiple times
+        while True:
+            # Some tasks may post-process too slowly, so waiting for the next batch or
+            # the end of work can exceed the standard 60s timeout.
+            safe_barrier(self._leading_batch_data_group, "model_invoke_wait", timeout=self.communication_timeout_sec)
+            input_ids, attention_mask, labels, max_length, stop, generate, continue_work, generation_kwargs = (
+                scatter_object(
+                    None,
+                    group=self._leading_batch_data_group,
                 )
+            )
+            # NOTE: scatter_object keeps tensors on the same device as the source,
+            #       so they must be moved to the current device.
+            # TODO: With scatter_object, tensors are copied GPU → CPU → GPU, then scattered,
+            #       and finally copied again to the correct GPU here. We already have a scatter
+            #       primitive for tensors of known size and type; we need to extend it to
+            #       handle optional tensors of unknown type and size directly (src GPU → dst GPU);
+            #       and use it for scattering tensors like input_ids, attention_mask, labels.
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids.to(device)
+            if isinstance(attention_mask, torch.Tensor):
+                attention_mask = attention_mask.to(device)
+            if isinstance(labels, torch.Tensor):
+                labels = labels.to(device)
 
-                # Stop signal was send, end waiting/processing loop
-                if not continue_generate:
-                    break
+            if continue_work:
+                logger.info(f"worker_model_invoke: input_id device {input_ids.device}, shape {input_ids.shape}")
 
-                # if some data was received, work, otherwise return empty tensor
-                if len(input_ids) > 0:
-                    result = self._model_invoke_inner(
-                        input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
-                    )
-                else:
-                    result = input_ids
+            # Always call inner function to propagate stop signal to TP workers if continue_work is False
+            result = self._model_invoke_inner(
+                input_ids, attention_mask, labels, max_length, stop, generate, continue_work, **generation_kwargs
+            )
 
-                gather_object(result, group=self._group)
-        else:
-            # TODO: implement distributed model support
-            assert self._group == torch.distributed.GroupMember.NON_GROUP_MEMBER
-        safe_barrier(self._distributed.world_group, "lm_eval_end")
+            # Stop signal was send, end waiting/processing loop
+            if not continue_work:
+                break
+
+            # If some data was received, return processed results, otherwise return empty tensor
+            if len(input_ids) == 0:
+                result = input_ids
+
+            # At the end, some data-parallel ranks may have no data, so the wait can
+            # exceed the standard 60s timeout.
+            safe_barrier(
+                self._leading_batch_data_group, "model_invoke_gather_wait", timeout=self.communication_timeout_sec
+            )
+            gather_object(result, group=self._leading_batch_data_group)
+
+        safe_barrier(self._leading_batch_data_group, "lm_eval_end")
 
     def stop_workers(self):
         # Group is always None if world size is 1
-        if self._group is None:
+        if self._world_group is None:
             return
-        self._model_invoke(None, None, None, None, None, None, continue_generate=False)
-        safe_barrier(self._distributed.world_group, "lm_eval_end")
+
+        self._model_invoke([], None, None, None, None, None, continue_work=False)
+
+        # Only if data group size > 1 worker_model_invoke is called and need to be synced here
+        if self._leading_batch_data_group:
+            safe_barrier(self._leading_batch_data_group, "lm_eval_end")
 
     def _model_invoke_inner(
-        self, input_ids, attention_mask, labels, max_length, stop, generate: bool, **generation_kwargs
+        self,
+        input_ids,
+        attention_mask,
+        labels,
+        max_length,
+        stop,
+        generate: bool,
+        continue_work: bool,
+        **generation_kwargs,
     ):
+        # If stopping, stop model forward workers and return.
+        if not continue_work:
+            # continue_work=False should not occur on a single GPU.
+            # This function must be called on batch data parallel group leaders.
+            # If there is only one data rank, the leader is global rank 0 and the data group will be None.
+            assert self._world_group is not None
+            assert self._world_group.rank() == 0 or self._leading_batch_data_group
+            self._model.stop_workers()
+            return None
+
+        # If input_ids is empty, there is no work to process - return early
+        if len(input_ids) == 0:
+            # Receiving no work can only happen on non-zero ranks
+            assert self._world_group is not None and self._world_group.rank() != 0
+            return None
+
         if generate:
             return self._model_generate_inner(input_ids, attention_mask, max_length, stop, **generation_kwargs)
         else:
             return self._model_call_inner(input_ids, attention_mask, labels)
 
     def _model_call(self, input_ids, attention_mask=None, labels=None):
-        return self._model_invoke(
-            input_ids, attention_mask, labels, None, None, generate=False, continue_generate=True
-        )
+        return self._model_invoke(input_ids, attention_mask, labels, None, None, generate=False, continue_work=True)
 
     def _model_generate(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
         return self._model_invoke(
@@ -326,7 +408,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             max_length,
             stop,
             generate=True,
-            continue_generate=True,
+            continue_work=True,
             **generation_kwargs,
         )
 
@@ -370,6 +452,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 output_attentions=False,
                 output_hidden_states=False,
                 return_dict=True,
+                coordinator_forward=True,
+                communication_timeout_sec=self.communication_timeout_sec,
             ).logits.cpu()
 
     def _model_generate_inner(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
@@ -398,6 +482,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             stopping_criteria=stopping_criteria,
             pad_token_id=self._tokenizer.pad_token_id,
             use_cache=False,
+            coordinator_forward=True,
+            communication_timeout_sec=self.communication_timeout_sec,
             **generation_kwargs,
         )
 

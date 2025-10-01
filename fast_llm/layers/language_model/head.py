@@ -6,7 +6,7 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import split_op
+from fast_llm.core.ops import gather_op, split_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
@@ -266,6 +266,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
+                loss = loss.detach()
+                if kwargs.get("global_logits"):
+                    if self._vocab_parallel:
+                        loss = gather_op(loss, self._parallel_dim.group, 2)
+                    elif self._sequence_parallel_logits:
+                        loss = gather_op(
+                            loss, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+                        )
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
