@@ -1,5 +1,6 @@
 import collections
 import functools
+import typing
 
 import torch.nn
 
@@ -54,6 +55,9 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
     def get_layers(self) -> list["Layer"]:
         return self._layers_with_namespace
 
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+        self._layers_with_namespace[0].preprocess(batch, kwargs)
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return (
             self[0].get_loss_definitions(count=count * self._config.num_blocks) if self._config.num_blocks > 0 else []
@@ -105,12 +109,16 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
     def get_layers(self) -> list[Layer]:
         return self._layers_with_namespace
 
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+        for _, index in self._config.preprocessing_layers.items():
+            self._layers_with_namespace[index].preprocess(batch, kwargs)
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         # TODO: Prevent name conflicts.
         return sum(
             (
                 self[self._config.preprocessing_layers[name]].get_loss_definitions(count=count * count_)
-                for name, count_ in collections.Counter(self.expanded_pattern).items()
+                for name, count_ in collections.Counter(self._config.expanded_pattern).items()
             ),
             [],
         )

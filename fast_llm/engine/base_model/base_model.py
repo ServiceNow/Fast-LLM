@@ -81,12 +81,13 @@ class LayerWithNamespace(Layer):
     TODO: Consider namespace for losses and metrics?
     """
 
-    def __init__(self, layer: Layer, namespace: str):
+    def __init__(self, layer: Layer, namespace: str = None):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
         self.layer_count = self._layer.layer_count
         self.get_compute_usage = self._layer.get_compute_usage
+        self.module_name = self._layer.module_name
 
     def setup(self, distributed: Distributed) -> None:
         self._layer.setup(distributed)
@@ -101,12 +102,12 @@ class LayerWithNamespace(Layer):
             # TODO: Forward meta doesn't go through preprocessing so doesn't have a namespace.
             #   Using kwargs as-is since it's generally unused.
             assert isinstance(input_, TensorMeta)
-        return self._layer.forward(input_, kwargs.get(self._namespace, kwargs), losses, metrics)
+        return self._layer.forward(input_, kwargs, losses, metrics)
 
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         assert self._namespace not in kwargs
         kwargs[self._namespace] = kwargs.copy()
-        return self._layer.preprocess(batch, kwargs[self._namespace])
+        self._layer.preprocess(batch, kwargs[self._namespace])
 
 
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase):

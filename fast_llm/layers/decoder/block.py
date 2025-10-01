@@ -175,5 +175,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             )
         )
 
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        self.mixer.preprocess(batch, kwargs)
+        self.mlp.preprocess(batch, kwargs)
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)
