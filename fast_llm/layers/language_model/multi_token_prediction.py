@@ -80,6 +80,9 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](BlockBase[Con
             for module in (block, head)
         ]
 
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return sum((head.output_weights for head in self.heads), [])
+
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         self._layers_with_namespace[0].preprocess(batch, kwargs)
 

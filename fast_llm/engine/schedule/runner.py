@@ -339,11 +339,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     num_micro_batches=batch_config.sequential_micro_batches,
                     micro_batch_splits=batch_config.micro_batch_splits,
                 )
-                for name, tied_parameter in self._tied_parameters.items():
-                    if tied_parameter.on_device:
-                        kwargs[name] = self._stages[tied_parameter.main_stage].get_parameter_buffer(
-                            tied_parameter.meta.tensor_name
-                        )
                 data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_

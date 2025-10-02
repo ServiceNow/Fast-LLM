@@ -149,13 +149,16 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         # TODO ====== Move batch splitting elsewhere, align interface with LayerBase ======
         pass
 
-    def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        # TODO ====== Tied weights ======
-        #   Return tuples of independently defined metas to tie together.
-        # For each tied weight, return the weight and the tuple of layers sharing it.
-        # The weight should be defined in the first layer in the set.
-        # Warning: This may return buffers instead of metas after stage setup.
-        # The name (dict key) is used to insert the weight in the kwargs of the forward pass.
+    def get_tied_parameters(self) -> dict[str, list[ParameterMeta]]:
+        """
+        Return tuples of independently defined metas to tie together.
+        Metas should be compatible, i.e. have the same tensor dimensions.
+        Tied weights are named (dict keys) for convenience only.
+        Warning: Initialization and optimization properties are defined on the first appearance of the tied weight.
+          To prevent any confusion, the metas should be provided in the same order they appear in the model.
+          TODO: Improve?
+        Note: This may return buffers instead of metas after stage setup.
+        """
         return {}
 
     def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:

@@ -14,8 +14,6 @@ from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig,
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
-WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
-
 
 class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[ConfigType]):
     """

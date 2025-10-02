@@ -15,7 +15,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-    from fast_llm.layers.language_model.head import LanguageModelHead
+    from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
 
@@ -107,7 +107,7 @@ class LanguageModelHeadBaseConfig(BlockConfig):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-    ):
+    ) -> LanguageModelHeadBase:
         return self.layer_class(
             self,
             distributed_config,

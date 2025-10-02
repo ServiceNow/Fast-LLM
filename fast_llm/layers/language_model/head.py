@@ -1,3 +1,4 @@
+import abc
 import functools
 import logging
 import typing
@@ -22,6 +23,7 @@ from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
+    LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
@@ -33,7 +35,13 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
+class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](Block[ConfigType]):
+    @abc.abstractmethod
+    def get_output_weights(self) -> list[torch.Tensor]:
+        pass
+
+
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -98,16 +106,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         self._vocab_dim = TensorDim(
             "vocab", embeddings_config.vocab_size, self._parallel_dim if self._vocab_parallel else None
         )
-        # Only the first head defines the output weights
-        # TODO ====== tied_weight ======
-        if self._prediction_distance == 0:  # and not self._config.tied_weight:
-            # untie embedding weights
-            self.output_weights = self._config.output_weight.get_parameter(
-                (self._vocab_dim, self._hidden_dim),
-                default_initialization=init_normal_(std=self._hidden_size**-0.5),
-                lr_scale=self._lr_scale,
-                peft=self._peft,
-            )
+        self.output_weights = self._config.output_weight.get_parameter(
+            (self._vocab_dim, self._hidden_dim),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -185,7 +189,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             self._parallel_dim.size if self._sequence_parallel_logits else 1
         )
 
-        output_weights = self._get_output_weights(kwargs)
+        output_weights = self.output_weights
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
             ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
         )
@@ -244,13 +248,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             targets = None
         return targets
 
-    def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        # TODO ====== tied_weight ======
-        # if self._config.tied_weight:
-        #    return kwargs[WORD_EMBEDDINGS_WEIGHT]
-        if self._prediction_distance > 0:
-            return kwargs[OUTPUT_WEIGHTS]
-        return self.output_weights
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return [self.output_weights]
 
     def _logits_cross_entropy_forward_backward_split(
         self,

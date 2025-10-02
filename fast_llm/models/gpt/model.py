@@ -13,6 +13,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -36,7 +37,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         super().__init__(config, distributed_config)
 
         self._hidden_dim = TensorDim("hidden", config.embeddings.hidden_size)
-        self.embeddings = self._config.embeddings.get_layer(
+        self.embeddings: LanguageModelEmbedding = self._config.embeddings.get_layer(
             distributed_config,
             hidden_dim=self._hidden_dim,
             lr_scale=None,
@@ -325,26 +326,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         return preprocessed
 
-    def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        # TODO ====== Tied weights ======
+    def get_tied_parameters(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
+        output_weights = self.head.get_output_weights()
         if self._config.tied_embedding_weight:
-            raise NotImplementedError()
-        return {}
-        # if self._config.output_layer.tied_weight:
-        #    return {
-        #        WORD_EMBEDDINGS_WEIGHT: (
-        #            self.embedding.word_embeddings_weight,
-        #        )
-        #    }
-        # elif self._config.output_layer.prediction_heads > 1:
-        #    return {
-        #        OUTPUT_WEIGHTS: (
-        #            self.model_head.output_weights,
-        #            tuple(self.model_head_indices),
-        #        )
-        #    }
-        # else:
-        #    return {}
+            output_weights.insert(0, self.embeddings.word_embeddings_weight)
+        return {output_weights[0].tensor_name: output_weights} if len(output_weights) > 1 else {}
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return (
