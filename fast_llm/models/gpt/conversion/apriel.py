@@ -317,14 +317,13 @@ class AprielDecoderConverter(MistralDecoderConverter):
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
-        fast_llm_layer_start: int = 1,
     ) -> list[WeightConverter]:
         converters = []
         for block_index in range(config.num_blocks):
             block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
             converters += cls.block_converter_class.get_converters(
                 block_config,
-                f"{fast_llm_prefix}.{block_index+fast_llm_layer_start}",
+                f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
                 drop_on_export,
             )

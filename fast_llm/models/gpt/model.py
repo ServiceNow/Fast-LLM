@@ -281,7 +281,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             if self._config.output_layer.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
-                    kwargs[LanguageModelKwargs.labels] = labels
+                kwargs[LanguageModelKwargs.labels] = labels
                 kwargs.update(reference_logits[i])
 
                 # TODO ====== Preference spans ======

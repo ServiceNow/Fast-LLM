@@ -73,6 +73,11 @@ class Layer(LayerBase):
     ) -> torch.Tensor:
         pass
 
+    def unwrap(self) -> "Layer":
+        # Get the actual module contained in this layer,
+        # undoing any wrapping for the Fast-LLM engine (ex. `LayerWithNamespace`)
+        return self
+
 
 class LayerWithNamespace(Layer):
     """
@@ -108,6 +113,9 @@ class LayerWithNamespace(Layer):
         assert self._namespace not in kwargs
         kwargs[self._namespace] = kwargs.copy()
         self._layer.preprocess(batch, kwargs[self._namespace])
+
+    def unwrap(self) -> "Layer":
+        return self._layer.unwrap()
 
 
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase):

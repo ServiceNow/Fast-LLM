@@ -432,9 +432,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if dpo_loss is not None:
                 losses[self._dpo_loss_name].append(dpo_loss.detach())
             if self._config.distillation_model is not None and distillation_loss is not None:
-                losses[self._distillation_language_model_loss_name].append(distillation_loss.detach())
+                losses[self._distillation_loss_name].append(distillation_loss.detach())
             if self._config.distillation_model is not None and lm_loss is not None:
-                losses[self._distillation_loss_name].append(lm_loss.detach())
+                losses[self._distillation_language_model_loss_name].append(lm_loss.detach())
 
         return loss, output_parallel_linear_backward(grad, context) if self.training else None
 
@@ -476,7 +476,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
         if self._config.logit_z_loss:
-            LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            loss_defs.append(
+                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            )
         if self._config.enable_dpo:
             loss_defs.append(
                 LossDef(name=self._dpo_loss_name, formatted_name=_format_name(self._dpo_loss_name), count=count)

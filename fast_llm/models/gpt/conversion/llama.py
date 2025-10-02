@@ -434,13 +434,12 @@ class LlamaDecoderConverter:
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
-        fast_llm_layer_start: int = 1,
     ) -> list[WeightConverter]:
         converters = []
         for block_index in range(config.num_blocks):
             converters += cls.block_converter_class.get_converters(
                 config.block,
-                f"{fast_llm_prefix}.{block_index+fast_llm_layer_start}",
+                f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
                 drop_on_export,
             )
@@ -477,47 +476,43 @@ class LlamaHeadConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {
-            "tied_weight": config["tie_word_embeddings"],
-            "normalization": cls.normalization_converter_class.import_config(config),
-        }
+        return {"normalization": cls.normalization_converter_class.import_config(config)}
 
     @classmethod
     def export_config(cls, config: LanguageModelHeadConfig) -> dict:
         Assert.custom(isinstance, config, LanguageModelHeadConfig)
-        return safe_merge_dicts(
-            cls.normalization_converter_class.export_config(config.normalization),
-            {"tie_word_embeddings": config.tied_weight},
-        )
+        return cls.normalization_converter_class.export_config(config.normalization)
 
     @classmethod
     def get_converters(
-        cls, config: LanguageModelHeadConfig, block_config: DecoderBlockConfig, fast_llm_prefix: str, start_index: int
+        cls, config: LanguageModelHeadConfig, fast_llm_prefix: str, tied_embedding_weight: bool
     ) -> list[WeightConverter]:
-        converters = []
-        for prediction_distance in range(config.prediction_heads):
-            if prediction_distance > 0:
-                converters += cls.block_converter_class.get_converters(
-                    block_config,
-                    f"{fast_llm_prefix}.{start_index+2*prediction_distance-1}",
-                    "",
-                    drop_on_export=True,
-                )
-            converters += cls.normalization_converter_class.get_converters(
+        # for prediction_distance in range(config.prediction_heads):
+        #    if prediction_distance > 0:
+        #        converters += cls.block_converter_class.get_converters(
+        #            block_config,
+        #            f"{fast_llm_prefix}.{start_index+2*prediction_distance-1}",
+        #            "",
+        #            drop_on_export=True,
+        #        )
+        #    converters += cls.normalization_converter_class.get_converters(
+        #        config.normalization,
+        #        f"{fast_llm_prefix}.{start_index+2*prediction_distance}.final_norm",
+        #        f"model.norm",
+        #        drop_on_export=prediction_distance > 0,
+        #    )
+        return [
+            *cls.normalization_converter_class.get_converters(
                 config.normalization,
-                f"{fast_llm_prefix}.{start_index+2*prediction_distance}.final_norm",
+                f"{fast_llm_prefix}.final_norm",
                 f"model.norm",
-                drop_on_export=prediction_distance > 0,
-            )
-        converters.append(
+            ),
             get_parameter_converter(
-                f"{fast_llm_prefix}.{start_index}.output_weights",
+                f"{fast_llm_prefix}.output_weights",
                 "lm_head.weight",
-                drop_on_import=config.tied_weight,
-            )
-        )
-
-        return converters
+                drop_on_import=tied_embedding_weight,
+            ),
+        ]
 
 
 class LlamaBaseModelConverter:
@@ -529,9 +524,10 @@ class LlamaBaseModelConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "embeddings_layer": cls.embeddings_converter_class.import_config(config),
+            "embeddings": cls.embeddings_converter_class.import_config(config),
             "decoder": cls.decoder_converter_class.import_config(config, config["hidden_size"]),
-            "output_layer": cls.head_converter_class.import_config(config),
+            "head": cls.head_converter_class.import_config(config),
+            "tied_embedding_weight": config["tie_word_embeddings"],
         }
 
     @classmethod
@@ -541,28 +537,16 @@ class LlamaBaseModelConverter:
             cls.embeddings_converter_class.export_config(config.embeddings),
             cls.decoder_converter_class.export_config(config.decoder),
             cls.head_converter_class.export_config(config.head),
+            {"tie_word_embeddings": config.tied_embedding_weight},
         )
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
-            *cls.embeddings_converter_class.get_converters(config.embeddings, "layers.0", "model"),
-            *cls.decoder_converter_class.get_converters(config.decoder, "layers", "model.layers"),
-            *cls.head_converter_class.get_converters(
-                config.head, config.decoder[len(config.decoder) - 1], "layers", len(config.decoder) + 1
-            ),
+            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
+            *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
+            *cls.head_converter_class.get_converters(config.head, "head", config.tied_embedding_weight),
         ]
-
-    def _create_weight_converters(
-        self,
-    ) -> list[WeightConverter]:
-        base_model_config = self._model.config.base_model
-        self.embeddings_converter_class.get_converters(base_model_config.embeddings, "layers.0", "model")
-        converters = self.decoder_converter_class.get_converters(base_model_config.decoder, "layers", "model.layers")
-        self.head_converter_class.get_converters(
-            base_model_config.decoder, base_model_config.decoder.block, "layers", len(base_model_config.decoder) + 1
-        )
-        return converters
 
 
 class LlamaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):

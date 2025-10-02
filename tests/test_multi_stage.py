@@ -42,14 +42,14 @@ def test_frozen_weights(model_testing_config):
         model_frozen._num_stages,
     )
     frozen_parameter_counts = [
-        sum(p.numel() for p in layer.mlp.parameters()) if isinstance(layer, DecoderBlock) else 0
-        for layer in model_ref.base_model.layers
+        sum(p.numel() for p in layer.unwrap().mlp.parameters()) if isinstance(layer.unwrap(), DecoderBlock) else 0
+        for layer in model_ref.base_model.get_layers()
     ]
 
     # Make sure each layer has its own buffer so the check below works.
     Assert.eq(
-        num_stages := len(model_ref.base_model.layers),
-        len(model_frozen.base_model.layers),
+        num_stages := len(model_ref.base_model.get_layers()),
+        len(model_frozen.base_model.get_layers()),
         len(model_ref.stages),
         len(model_frozen.stages),
     )

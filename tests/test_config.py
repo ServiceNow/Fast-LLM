@@ -127,7 +127,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         }
     )
     serialized_config = pretrained_config.model.to_dict()
-    expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
+    expected_config = {"distributed": DistributedConfig().to_dict()}
 
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
@@ -139,40 +139,38 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 "vocab_size": 1000,
             },
             "decoder": {
-                "type": "fixed",
                 "block": {
-                    "type": "decoder",
                     "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default"},
                         "window_size": 32,
                         "head_groups": 1,
                     },
                     "mlp": {
-                        "type": "mlp",
                         "intermediate_size": 4096,  # Implicit default, default value
                         "activation": "silu",  # Implicit default, non-default value
                     },
-                    "normalization": {"type": "rms_norm", "implementation": "triton"},
+                    "normalization": {"implementation": "triton"},
                 },
                 "num_blocks": 12,
             },
-            "head": {"normalization": {"type": "layer_norm"}},
             "tied_embedding_weight": False,
-            "peft": {"type": "lora", "freeze_others": False},
+            "peft": {"freeze_others": False},
         }
     else:
-        base_model_update["decoder"]["type"] = "fixed"
-        base_model_update["decoder"]["block"]["type"] = "decoder"
-        base_model_update["decoder"]["block"]["normalization"]["type"] = "layer_norm"
-        base_model_update["decoder"]["block"]["mixer"]["type"] = "attention"
-        base_model_update["decoder"]["block"]["mixer"]["rotary"] = {"type": "none"}
-        base_model_update["decoder"]["block"]["mlp"] = {"type": "mlp"}
-        base_model_update["head"] = {"type": "language_model_head", "normalization": {"type": "layer_norm"}}
-        base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 
-    check_equal_nested(serialized_config, expected_config)
+    check_equal_nested(_trim_type(serialized_config), _trim_type(expected_config))
+
+
+def _trim_type(config: dict):
+    # Serialization inserts dynamic types, we ignore them during the comparison.
+    if "type" in config:
+        del config["type"]
+    for key in list(config):
+        if isinstance(value := config[key], dict):
+            _trim_type(value)
+            if not value:
+                del config[key]
+    return config
 
 
 def _check_dim(dim: DistributedDim, name: str, rank: int, size: int, global_rank: int):

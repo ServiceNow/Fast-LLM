@@ -104,7 +104,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[AttentionKwargs.sequence_first]:
             logits = kwargs["logits"].transpose(0, 1)
         else:
             logits = kwargs["logits"]

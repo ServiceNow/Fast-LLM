@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, allreduce_scalar, safe_barrier
-from fast_llm.engine.base_model.base_model import BaseModel, Layer
+from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
@@ -32,19 +32,17 @@ def result_path():
 def get_base_model(config: FastLLMModelConfig):
     # Create a base model (and distributed).
     # Using a full model config so we have the model type and distributed config in the same argument.
-    base_model = config.get_model_class().base_model_class(config.base_model, config.distributed)
+    base_model = config.get_base_model_config_class().get_base_model(config.base_model, config.distributed)
     base_model.setup(distributed := Distributed(config.distributed))
     return base_model, distributed
 
 
-def get_stage(base_model: BaseModel | list[Layer], distributed: Distributed):
+def get_stage(layers: list[Layer], distributed: Distributed):
     # Create a fast-llm stage which allocates and initializes meta tensors correctly.
     stage = Stage(
         config=StageConfig(),
-        layers=base_model,
+        layers=layers,
         distributed_config=distributed.config,
-        begin=0,
-        end=1,
         index=0,
     )
     stage.setup(distributed=distributed)
