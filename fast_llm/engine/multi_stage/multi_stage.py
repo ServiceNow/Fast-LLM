@@ -79,10 +79,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
         # Set up tied weights.
         self._tied_parameters = self._get_tied_parameters()
-        self._tied_parameter_duplicates = [[] for _ in range(self._num_stages)]
+        self._tied_parameter_duplicates = [{} for _ in range(self._num_stages)]
         for tied_parameter in self._tied_parameters.values():
             for meta in tied_parameter.metas[1:]:
-                self._tied_parameter_duplicates[self._parameter_stages[meta.tensor_name]].append(meta.tensor_name)
+                self._tied_parameter_duplicates[self._parameter_stages[meta.tensor_name]][
+                    meta.tensor_name
+                ] = tied_parameter
+        print("IUHWO", self._base_model.get_tied_parameters(), self._tied_parameters, self._tied_parameter_duplicates)
 
         # Create the stages.
         self._stages = [
@@ -91,7 +94,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 layers=self._layers[stage_splits[stage_index] : stage_splits[stage_index + 1]],
                 distributed_config=self._config.distributed,
                 index=stage_index,
-                tied_parameter_duplicates=tied_parameter_duplicates_,
+                tied_parameter_duplicates=tied_parameter_duplicates_.keys(),
             )
             for stage_index, tied_parameter_duplicates_ in enumerate(self._tied_parameter_duplicates)
         ]
@@ -326,10 +329,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 else []
             )
             tied_weight_duplicate_buffers = {
-                parameter_name: self._stages[self._parameter_stages[parameter_name]].get_parameter_buffer(
-                    parameter_name
+                parameter_name: self._stages[tied_parameter.main_stage].get_parameter_buffer(
+                    tied_parameter.metas[0].tensor_name
                 )
-                for parameter_name in self._tied_parameter_duplicates[stage_index]
+                for parameter_name, tied_parameter in self._tied_parameter_duplicates[stage_index].items()
             }
             stage.setup(
                 distributed=self._distributed,
@@ -563,7 +566,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 # TODO: Improve. Compare initializations? (Not currently possible)
                 if (
                     len(meta.dims) != len(metas[0].dims)
-                    or any(dim is not dim_ for dim, dim_ in zip(meta.dims, metas[0].dims, strict=True))
+                    or any(dim != dim_ for dim, dim_ in zip(meta.dims, metas[0].dims, strict=True))
                     or meta.sequence_tensor_parallel != metas[0].sequence_tensor_parallel
                 ):
                     raise ValueError(
@@ -599,7 +602,7 @@ class TiedParameter:
     # Whether the local rank is involved at all.
     on_device: bool
     # Process group for reduction.
-    group: ProcessGroup | None = dataclasses.field(init=False)
+    group: ProcessGroup | None = dataclasses.field(repr=False, init=False)
     all_ranks: set[int]
     # The index of the main stage.
     main_stage: int

@@ -8,7 +8,6 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
@@ -21,9 +20,7 @@ def _reverse_kl_loss(
     loss_mask: torch.Tensor | None,
     teacher_softmax_temperature: float = 1.0,
 ):
-    scaled_target = target / teacher_softmax_temperature
-
-    scaled_target = torch.clamp(target, min=-50, max=50)
+    scaled_target = torch.clamp(target / teacher_softmax_temperature, min=-50, max=50)
     teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
 
     with torch.enable_grad():
@@ -109,7 +106,7 @@ VOCAB_SIZE = 500
         ({"sequence_first": True}, {}, False, 1),
         ({"head": {"logit_z_loss": 1e-3}}, {}, False, 1),
         ({"head": {"logits_scale_factor": 5.0}}, {}, False, 1),
-        ({"tied_embedding_weight": False}, {}, False, 1),
+        ({"tied_embedding_weight": True}, {}, False, 1),
         ({}, {}, False, 2),
         ({}, {}, True, 1),
         (
@@ -166,6 +163,8 @@ def test_lm_head(
     loss_masking: bool,
     prediction_heads: int,
 ):
+    torch.cuda.manual_seed(0)
+    torch.manual_seed(0)
     head_config = {
         "cross_entropy_implementation": cross_entropy_impl,
         "normalization": {"type": "rms_norm"},
@@ -265,6 +264,14 @@ def test_lm_head(
         logit_weight = None
 
     for prediction_distance, head in enumerate((model.head,) if prediction_heads == 1 else model.head.heads):
+        print(
+            "AIUFHGUKI",
+            prediction_distance,
+            head.config,
+            head._prediction_distance,
+            head._prediction_heads,
+            head._is_last_head,
+        )
         # Prepare the LM head
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
@@ -319,6 +326,10 @@ def test_lm_head(
             {loss_key: 1 for loss_key in loss_keys},
         )
         losses = {key: [] for key in loss_keys}
+        print("head_input", head_input)
+        for kew, value in kwargs.items():
+            print("kwargs", kew, value)
+
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
@@ -332,6 +343,18 @@ def test_lm_head(
         if ref_z_loss is not None:
             Assert.eq(len(losses["z_loss"]), 1)
             Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
+
+        print("losses", losses)
+        print("ref_loss", ref_loss)
+
+        print("input_grad", head_input.grad if head._is_last_head else head_input.grad.unbind()[1])
+        print("ref_input.grad", ref_input.grad)
+
+        print("head.final_norm.weight.grad_buffer", head.final_norm.weight.grad_buffer)
+        print("ref_rms_weight.grad", ref_rms_weight.grad)
+
+        print("logit_weight.grad_buffer", logit_weight.grad_buffer)
+        print("ref_logit_weight.grad", ref_logit_weight.grad)
 
         Assert.rms_close_relative(losses[loss_name][0], ref_loss, threshold, min_threshold)
 

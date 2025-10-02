@@ -70,6 +70,9 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             self._accumulators = []
             with torch.enable_grad():
                 for meta in self._parameter_metas:
+                    if meta.tensor_name in self._tied_parameter_duplicates:
+                        # Already handled in the main stage.
+                        continue
                     buffer = self.get_parameter_buffer(meta.tensor_name)
                     if not buffer.requires_grad:
                         continue

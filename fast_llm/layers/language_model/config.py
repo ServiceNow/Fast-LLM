@@ -107,7 +107,7 @@ class LanguageModelHeadBaseConfig(BlockConfig):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-    ) -> LanguageModelHeadBase:
+    ) -> "LanguageModelHeadBase":
         return self.layer_class(
             self,
             distributed_config,

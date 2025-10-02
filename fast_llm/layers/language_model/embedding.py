@@ -26,6 +26,10 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     layer_count: float = 1000.0
     _config: ConfigType
 
+    # Position embedding preprocessing
+    _position_ids: torch.Tensor
+    _tensor_cache_max_sequence_length: int = -1
+
     def __init__(
         self,
         config: ConfigType,

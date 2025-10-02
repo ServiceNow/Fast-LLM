@@ -330,10 +330,10 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         duplicate_metas: list[ParameterMeta] = []
         meta: ParameterMeta
         for layer in self._layers:
-            for name, meta in layer.named_parameters():
+            for meta in layer.parameters():
                 Assert.custom(isinstance, meta, ParameterMeta)
                 Assert.eq(meta.dtype, self._distributed_config.optimization_dtype.torch)
-                if name in self._tied_parameter_duplicates:
+                if meta.tensor_name in self._tied_parameter_duplicates:
                     duplicate_metas.append(meta)
                 elif meta.requires_grad:
                     parameter_metas.append(meta)
