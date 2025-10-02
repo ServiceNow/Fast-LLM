@@ -120,7 +120,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             if self._is_last_head:
                 return TensorMeta.from_dims(
                     (scalar_dim,),
-                    tensor_name="Loss",
+                    tensor_name=f"{self.module_name} output",
                     reductions=(
                         (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
                     ),

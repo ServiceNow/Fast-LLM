@@ -232,7 +232,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         ):
             check_parallel_match(output, self._distributed.tensor_group, f"layer {self._layers[i].module_name} fw")
         if self._config.debug_layer_outputs:
-            name = f"layer {self._layers[i].module_name} fw"
+            name = f"{self._layers[i].module_name} fw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
@@ -265,7 +265,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                 )
             )
         if self._config.debug_layer_gradients:
-            name = f"layer {self._layers[i].module_name} bw"
+            name = f"{self._layers[i].module_name} bw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:

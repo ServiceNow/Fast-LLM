@@ -147,13 +147,6 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 nonlocal i
                 for key in module._parameters:
                     meta = typing.cast(ParameterMeta, module._parameters[key])
-                    print(
-                        "AAAAAA",
-                        key,
-                        meta.tensor_name,
-                        self._tied_parameter_duplicates,
-                        tied_parameter_duplicate_buffers.keys(),
-                    )
                     if meta.tensor_name in self._tied_parameter_duplicates:
                         module._parameters[key] = tied_parameter_duplicate_buffers.pop(meta.tensor_name)
                     else:

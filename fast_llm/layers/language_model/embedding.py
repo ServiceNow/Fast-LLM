@@ -119,7 +119,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
                 kwargs[LanguageModelKwargs.hidden_dims],
-                tensor_name="Embedding output",
+                tensor_name=f"{self.module_name} output",
                 dtype=self._residual_dtype,
             )
         return self._forward(

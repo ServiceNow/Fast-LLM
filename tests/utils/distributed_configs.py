@@ -228,8 +228,8 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
-            "model.base_model.embeddings_layer.vocab_parallel=False",
-            "model.base_model.output_layer.cross_entropy_splits=4",
+            "model.base_model.embeddings.vocab_parallel=False",
+            "model.base_model.head.cross_entropy_splits=4",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
