@@ -47,7 +47,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         grad_buffers: list[torch.Tensor | None] | None = None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
-        tied_weight_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
+        tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
         weight_buffer_shared_with: collections.abc.Sequence["Stage"] = (),
     ) -> None:
         super().setup(
@@ -57,7 +57,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             weight_buffers=weight_buffers,
             grad_buffers=grad_buffers,
             mode=mode,
-            tied_weight_duplicate_buffers=tied_weight_duplicate_buffers,
+            tied_parameter_duplicate_buffers=tied_parameter_duplicate_buffers,
         )
         self._is_tied_weight_copy = is_tied_weight_copy
         if self._mode.support_forward:

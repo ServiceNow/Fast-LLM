@@ -342,7 +342,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 grad_buffers=stage_grad_buffers,
                 mode=self._mode if stage_index in self._stages_on_device else StageMode.off_device,
                 is_tied_weight_copy=stage_index in self._stages_on_device and stage_index not in self._stages_owned,
-                tied_weight_duplicate_buffers=tied_weight_duplicate_buffers,
+                tied_parameter_duplicate_buffers=tied_weight_duplicate_buffers,
                 weight_buffer_shared_with=weight_buffer_shared_with,
             )
 

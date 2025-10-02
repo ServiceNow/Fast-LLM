@@ -8,7 +8,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
@@ -252,37 +252,32 @@ def test_lm_head(
             kwargs[LanguageModelKwargs.loss_mask] = loss_mask
 
     if config.tied_embedding_weight or config.head.max_prediction_distance > 1:
-        logit_weight = (
+        logit_weight = torch.nn.Parameter(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.compute_dtype.torch, device=distributed.device
-            )
-            .normal_(config.embeddings.hidden_size**-0.5)
-            .requires_grad_(True)
+            ).normal_(config.embeddings.hidden_size**-0.5)
         )
-        kwargs[WORD_EMBEDDINGS_WEIGHT if config.tied_embedding_weight else OUTPUT_WEIGHTS] = logit_weight
     else:
         logit_weight = None
 
     for prediction_distance, head in enumerate((model.head,) if prediction_heads == 1 else model.head.heads):
-        print(
-            "AIUFHGUKI",
-            prediction_distance,
-            head.config,
-            head._prediction_distance,
-            head._prediction_heads,
-            head._is_last_head,
-        )
         # Prepare the LM head
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
-        stage = get_stage([head], distributed)
+        is_duplicate = config.tied_embedding_weight or prediction_distance > 0
+        stage = get_stage(
+            [head],
+            distributed,
+            tied_parameter_duplicates=[head.output_weights.tensor_name] if is_duplicate else [],
+            tied_parameter_duplicate_buffers={head.output_weights.tensor_name: logit_weight} if is_duplicate else {},
+        )
 
         # Get reference outputs and grads
-        if logit_weight is None:
-            logit_weight = head.output_weights
-        else:
+        if is_duplicate:
             logit_weight.grad_buffer = torch.full_like(logit_weight, float("nan"))
             logit_weight.param_grad_is_zero = True
+        else:
+            logit_weight = head.output_weights
 
         ref_input = input_.detach().requires_grad_()
         ref_rms_weight = head.final_norm.weight.detach().requires_grad_()
@@ -326,10 +321,6 @@ def test_lm_head(
             {loss_key: 1 for loss_key in loss_keys},
         )
         losses = {key: [] for key in loss_keys}
-        print("head_input", head_input)
-        for kew, value in kwargs.items():
-            print("kwargs", kew, value)
-
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
@@ -343,18 +334,6 @@ def test_lm_head(
         if ref_z_loss is not None:
             Assert.eq(len(losses["z_loss"]), 1)
             Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
-
-        print("losses", losses)
-        print("ref_loss", ref_loss)
-
-        print("input_grad", head_input.grad if head._is_last_head else head_input.grad.unbind()[1])
-        print("ref_input.grad", ref_input.grad)
-
-        print("head.final_norm.weight.grad_buffer", head.final_norm.weight.grad_buffer)
-        print("ref_rms_weight.grad", ref_rms_weight.grad)
-
-        print("logit_weight.grad_buffer", logit_weight.grad_buffer)
-        print("ref_logit_weight.grad", ref_logit_weight.grad)
 
         Assert.rms_close_relative(losses[loss_name][0], ref_loss, threshold, min_threshold)
 

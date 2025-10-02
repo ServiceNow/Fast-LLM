@@ -108,7 +108,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         weight_buffers: list[torch.Tensor | None] | None,
         grad_buffers: list[torch.Tensor | None] | None,
         mode: StageMode = StageMode.training,
-        tied_weight_duplicate_buffers: dict[str, torch.nn.Parameter] | None,
+        tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None,
     ) -> None:
         assert not self._is_setup
         distributed.check_config(self._distributed_config)
@@ -124,7 +124,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             weight_buffers = [None for _ in self._fsdps]
         if grad_buffers is None:
             grad_buffers = [None for _ in self._fsdps]
-        if tied_weight_duplicate_buffers is None:
+        if tied_parameter_duplicate_buffers is None:
             assert not self._tied_parameter_duplicates
 
         for fsdp, weight_shard, grad_shard, weight_buffer, grad_buffer in zip(
@@ -147,8 +147,15 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 nonlocal i
                 for key in module._parameters:
                     meta = typing.cast(ParameterMeta, module._parameters[key])
+                    print(
+                        "AAAAAA",
+                        key,
+                        meta.tensor_name,
+                        self._tied_parameter_duplicates,
+                        tied_parameter_duplicate_buffers.keys(),
+                    )
                     if meta.tensor_name in self._tied_parameter_duplicates:
-                        module._parameters[key] = tied_weight_duplicate_buffers[meta.tensor_name]
+                        module._parameters[key] = tied_parameter_duplicate_buffers.pop(meta.tensor_name)
                     else:
                         module._parameters[key] = self.get_parameter_buffer(meta.tensor_name)
                     i += 1
@@ -158,6 +165,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 layer.apply(_replace)
 
             Assert.eq(i, len(self._parameter_metas))
+            assert not tied_parameter_duplicate_buffers, tied_parameter_duplicate_buffers.keys()
 
     def initialize_weights(self) -> None:
         # TODO: Avoid all the _on_device checks

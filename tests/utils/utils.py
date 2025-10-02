@@ -37,15 +37,21 @@ def get_base_model(config: FastLLMModelConfig):
     return base_model, distributed
 
 
-def get_stage(layers: list[Layer], distributed: Distributed):
+def get_stage(
+    layers: list[Layer],
+    distributed: Distributed,
+    tied_parameter_duplicates: typing.Iterable[str] = (),
+    tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
+):
     # Create a fast-llm stage which allocates and initializes meta tensors correctly.
     stage = Stage(
         config=StageConfig(),
         layers=layers,
         distributed_config=distributed.config,
         index=0,
+        tied_parameter_duplicates=tied_parameter_duplicates,
     )
-    stage.setup(distributed=distributed)
+    stage.setup(distributed=distributed, tied_parameter_duplicate_buffers=tied_parameter_duplicate_buffers)
     stage.initialize_weights()
     stage.restore_parameters()
     stage.reset_gradients()
