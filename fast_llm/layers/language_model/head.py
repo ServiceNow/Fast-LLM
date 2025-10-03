@@ -1,3 +1,4 @@
+import abc
 import functools
 import logging
 import typing
@@ -6,7 +7,7 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import split_op
+from fast_llm.core.ops import gather_op, split_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
@@ -22,10 +23,10 @@ from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
+    LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
@@ -34,7 +35,13 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
+class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](Block[ConfigType]):
+    @abc.abstractmethod
+    def get_output_weights(self) -> list[torch.Tensor]:
+        pass
+
+
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -99,15 +106,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         self._vocab_dim = TensorDim(
             "vocab", embeddings_config.vocab_size, self._parallel_dim if self._vocab_parallel else None
         )
-        # Only the first head defines the output weights
-        if self._prediction_distance == 0 and not self._config.tied_weight:
-            # untie embedding weights
-            self.output_weights = self._config.output_weight.get_parameter(
-                (self._vocab_dim, self._hidden_dim),
-                default_initialization=init_normal_(std=self._hidden_size**-0.5),
-                lr_scale=self._lr_scale,
-                peft=self._peft,
-            )
+        self.output_weights = self._config.output_weight.get_parameter(
+            (self._vocab_dim, self._hidden_dim),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -116,7 +120,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if self._is_last_head:
                 return TensorMeta.from_dims(
                     (scalar_dim,),
-                    tensor_name="Loss",
+                    tensor_name=f"{self.module_name} output",
                     reductions=(
                         (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
                     ),
@@ -185,7 +189,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             self._parallel_dim.size if self._sequence_parallel_logits else 1
         )
 
-        output_weights = self._get_output_weights(kwargs)
+        output_weights = self.output_weights
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
             ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
         )
@@ -244,12 +248,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             targets = None
         return targets
 
-    def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        if self._config.tied_weight:
-            return kwargs[WORD_EMBEDDINGS_WEIGHT]
-        if self._prediction_distance > 0:
-            return kwargs[OUTPUT_WEIGHTS]
-        return self.output_weights
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return [self.output_weights]
 
     def _logits_cross_entropy_forward_backward_split(
         self,
@@ -266,6 +266,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
+                loss = loss.detach()
+                if kwargs.get("global_logits"):
+                    if self._vocab_parallel:
+                        loss = gather_op(loss, self._parallel_dim.group, 2)
+                    elif self._sequence_parallel_logits:
+                        loss = gather_op(
+                            loss, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+                        )
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
@@ -423,9 +431,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if dpo_loss is not None:
                 losses[self._dpo_loss_name].append(dpo_loss.detach())
             if self._config.distillation_model is not None and distillation_loss is not None:
-                losses[self._distillation_language_model_loss_name].append(distillation_loss.detach())
+                losses[self._distillation_loss_name].append(distillation_loss.detach())
             if self._config.distillation_model is not None and lm_loss is not None:
-                losses[self._distillation_loss_name].append(lm_loss.detach())
+                losses[self._distillation_language_model_loss_name].append(lm_loss.detach())
 
         return loss, output_parallel_linear_backward(grad, context) if self.training else None
 
@@ -467,7 +475,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
         if self._config.logit_z_loss:
-            LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            loss_defs.append(
+                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            )
         if self._config.enable_dpo:
             loss_defs.append(
                 LossDef(name=self._dpo_loss_name, formatted_name=_format_name(self._dpo_loss_name), count=count)

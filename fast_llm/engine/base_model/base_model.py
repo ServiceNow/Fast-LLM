@@ -73,6 +73,11 @@ class Layer(LayerBase):
     ) -> torch.Tensor:
         pass
 
+    def unwrap(self) -> "Layer":
+        # Get the actual module contained in this layer,
+        # undoing any wrapping for the Fast-LLM engine (ex. `LayerWithNamespace`)
+        return self
+
 
 class LayerWithNamespace(Layer):
     """
@@ -81,12 +86,13 @@ class LayerWithNamespace(Layer):
     TODO: Consider namespace for losses and metrics?
     """
 
-    def __init__(self, layer: Layer, namespace: str):
+    def __init__(self, layer: Layer, namespace: str = None):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
         self.layer_count = self._layer.layer_count
         self.get_compute_usage = self._layer.get_compute_usage
+        self.module_name = self._layer.module_name
 
     def setup(self, distributed: Distributed) -> None:
         self._layer.setup(distributed)
@@ -95,12 +101,21 @@ class LayerWithNamespace(Layer):
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
-        return self._layer.forward(input_, kwargs[self._namespace], losses, metrics)
+        if self._namespace in kwargs:
+            kwargs = kwargs[self._namespace]
+        else:
+            # TODO: Forward meta doesn't go through preprocessing so doesn't have a namespace.
+            #   Using kwargs as-is since it's generally unused.
+            assert isinstance(input_, TensorMeta)
+        return self._layer.forward(input_, kwargs, losses, metrics)
 
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         assert self._namespace not in kwargs
         kwargs[self._namespace] = kwargs.copy()
-        return self._layer.preprocess(batch, kwargs[self._namespace])
+        self._layer.preprocess(batch, kwargs[self._namespace])
+
+    def unwrap(self) -> "Layer":
+        return self._layer.unwrap()
 
 
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase):
@@ -118,11 +133,11 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
 
     @abc.abstractmethod
     def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
-        # TODO ====== Remove (Move batch splitting elsewhere) ======
+        # TODO Remove (Move batch splitting elsewhere)
         pass
 
     @abc.abstractmethod
-    def preprocess(
+    def preprocess_batch(
         self,
         batch: typing.Any,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
@@ -131,16 +146,19 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO ====== Move batch splitting elsewhere, align interface with LayerBase ======
+        # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass
 
-    def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        # TODO ====== Tied weights ======
-        #   Return tuples of independently defined metas to tie together.
-        # For each tied weight, return the weight and the tuple of layers sharing it.
-        # The weight should be defined in the first layer in the set.
-        # Warning: This may return buffers instead of metas after stage setup.
-        # The name (dict key) is used to insert the weight in the kwargs of the forward pass.
+    def get_tied_parameters(self) -> dict[str, list[ParameterMeta]]:
+        """
+        Return tuples of independently defined metas to tie together.
+        Metas should be compatible, i.e. have the same tensor dimensions.
+        Tied weights are named (dict keys) for convenience only.
+        Warning: Initialization and optimization properties are defined on the first appearance of the tied weight.
+          To prevent any confusion, the metas should be provided in the same order they appear in the model.
+          TODO: Improve?
+        Note: This may return buffers instead of metas after stage setup.
+        """
         return {}
 
     def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:

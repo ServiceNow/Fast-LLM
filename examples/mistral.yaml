@@ -27,7 +27,7 @@ optimizer:
   beta_2: 0.95
 model:
   base_model:
-    embeddings_layer:
+    embeddings:
       hidden_size: 4096
       vocab_size: 32000
       dropout: 0.0
@@ -54,11 +54,11 @@ model:
           epsilon: 1.0e-05
         dropout: 0.0
       num_blocks: 32
-    output_layer:
-      tied_weight: false
+    head:
       normalization:
         type: rms_norm
         epsilon: 1.0e-05
+    tied_embedding_weight: false
   multi_stage:
     zero_stage: 2
   distributed:

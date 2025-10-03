@@ -1,7 +1,8 @@
+import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import LossDef, ModuleConfig
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -10,30 +11,18 @@ from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequence
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.vision.config import VisionEncoderConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-    from fast_llm.layers.language_model.head import LanguageModelHead
+    from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
 
-# class LanguageModelLossNames:
-#    language_model_loss = "language_model_loss"
-#    z_loss = "z_loss"
-#    dpo_loss = "dpo_loss"
-#    distil_lm_loss = "distillation_language_model_loss"  # the next token perdiciton of combined distillation loss
-#    distillation_loss = "distillation_loss"
-
-
 class LanguageModelKwargs(BlockKwargs):
-    token_ids = "token_ids"
     position_ids = "position_ids"
-    embedding_map = "embedding_map"
     # TODO: These are generic
     labels = "labels"
-    tokens = "tokens"
     phase = "phase"
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
@@ -47,10 +36,6 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
     word_embeddings: ParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
-    )
-    vision_encoder: VisionEncoderConfig = Field(
-        desc="Configuration for the vision encoder that transforms images into embeddings.",
-        hint=FieldHint.optional,
     )
     position_embeddings: OptionalParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
@@ -122,7 +107,7 @@ class LanguageModelHeadBaseConfig(BlockConfig):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-    ):
+    ) -> "LanguageModelHeadBase":
         return self.layer_class(
             self,
             distributed_config,
@@ -132,8 +117,13 @@ class LanguageModelHeadBaseConfig(BlockConfig):
             peft=peft,
         )
 
+    @property
+    @abc.abstractmethod
+    def max_prediction_distance(self) -> int:
+        pass
 
-@config_class(dynamic_type={LanguageModelHeadBaseConfig: "default"})
+
+@config_class(dynamic_type={LanguageModelHeadBaseConfig: "language_model_head"})
 class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
@@ -193,19 +183,14 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    enable_dpo: bool | None = Field(
-        default=False,
-        desc="Whether to enable DPO loss",
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     dpo_beta: float | None = Field(
         default=1.0,
         desc="Beta value for DPO loss.",
-        hint=FieldHint.feature,
-    )
-    dpo_reference_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     distillation_model: str | None = Field(
@@ -253,6 +238,15 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                 else:
                     self.language_model_loss_factor = 0.0
         super()._validate()
+        assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
+
+    @property
+    def max_prediction_distance(self) -> int:
+        return 1
+
+    @property
+    def enable_dpo(self) -> bool:
+        return self.dpo_reference_model is not None
 
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
@@ -260,7 +254,6 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
     _abstract = False
     # Needs to be `DecoderBlockConfig` for the `return_input` interface.
     # TODO: Make a generic wrapper for returning input instead?
-    # TODO ====== Tied weight ======
     block: DecoderBlockConfig = Field(
         desc="Configuration for the decoder block before each head.",
         hint=FieldHint.architecture,
@@ -276,7 +269,6 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    # TODO ====== Adjust ======
     prediction_loss_coefficient: list[float] | None = Field(
         default=None,
         desc="Loss coefficient for each prediction head.",
@@ -297,11 +289,9 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
 
         return MultiTokenPrediction
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        # TODO ====== Wrong ======
-        return self.block.get_loss_definitions(count=count * self.prediction_heads) + self.head.get_loss_definitions(
-            count=count * self.prediction_heads
-        )
+    @property
+    def max_prediction_distance(self) -> int:
+        return self.prediction_heads
 
 
 @config_class()
@@ -311,8 +301,8 @@ class LanguageModelConfig(ModuleConfig):
         desc="Configuration for the language model decoder.",
         hint=FieldHint.architecture,
     )
-    embeddings_layer: LanguageModelEmbeddingsConfig = Field()
-    output_layer: LanguageModelHeadBaseConfig = Field()
+    embeddings: LanguageModelEmbeddingsConfig = Field()
+    head: LanguageModelHeadBaseConfig = Field()
     # TODO: Allow overriding in sub-models?
     peft: PeftConfig = Field(
         desc="Configuration for parameter-efficient fine tuning.",
@@ -331,17 +321,3 @@ class LanguageModelConfig(ModuleConfig):
         " Setting this parameter overrides the default choice. Note that setting to `False` will either do nothing or raise an error.",
         hint=FieldHint.testing,
     )
-
-    # def __len__(self) -> int:
-    #    return len(self.decoder) + 2 * self.output_layer.prediction_heads
-
-    # def __getitem__(self, index: int) -> BlockConfig:
-    #    if index <= 0:
-    #        Assert.eq(index, 0)
-    #        return self.embeddings_layer
-    #    elif index <= len(self.decoder):
-    #        return self.decoder[index - 1]
-    #    else:
-    #        # Start at the last decoder layer so all MTP heads are treated similarly.
-    #        index - len(self.decoder)
-    #        return self.embeddings_layer

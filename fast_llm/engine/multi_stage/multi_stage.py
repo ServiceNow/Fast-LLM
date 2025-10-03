@@ -3,7 +3,6 @@ import logging
 import typing
 import warnings
 
-import numpy as np
 import torch
 from torch._C._distributed_c10d import ProcessGroup
 
@@ -62,27 +61,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             self._num_stages,
             self._config.distributed.pipeline_parallel * self._config.multi_stage.stages_per_pipeline_stage,
         )
-
-        # Create the stages.
-        self._stages = [
-            Stage(
-                config=self._config.multi_stage,
-                layers=self._layers[stage_splits[i] : stage_splits[i + 1]],
-                distributed_config=self._config.distributed,
-                index=i,
-            )
-            for i in (range(self._num_stages))
-        ]
-
-        if self._verbose:
-            log_main_rank(lambda: f"  Total parameters: {sum(stage_.parameter_count for stage_ in self._stages):,} ")
-
         # Keep track of which stage each parameter belongs to.
         self._parameter_stages: dict[str, int] = {}
-        for stage_index, stage in enumerate(self._stages):
-            for parameter_name in stage.parameter_names:
-                assert parameter_name not in self._parameter_stages
-                self._parameter_stages[parameter_name] = stage_index
+        for stage_index in range(self._num_stages):
+            for layer in self._layers[stage_splits[stage_index] : stage_splits[stage_index + 1]]:
+                for meta in layer.parameters():
+                    assert meta.tensor_name not in self._parameter_stages
+                    self._parameter_stages[meta.tensor_name] = stage_index
 
         # Determine which stages belong to this pipeline rank.
         self._stage_pipeline_ranks = {
@@ -90,14 +75,37 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             % self._config.distributed.pipeline_parallel
             for stage_index in (range(self._num_stages))
         }
+
+        # Set up tied weights.
+        self._tied_parameters = self._get_tied_parameters()
+        self._tied_parameter_duplicates = [{} for _ in range(self._num_stages)]
+        for tied_parameter in self._tied_parameters.values():
+            for meta in tied_parameter.metas[1:]:
+                self._tied_parameter_duplicates[self._parameter_stages[meta.tensor_name]][
+                    meta.tensor_name
+                ] = tied_parameter
+
+        # Create the stages.
+        self._stages = [
+            Stage(
+                config=self._config.multi_stage,
+                layers=self._layers[stage_splits[stage_index] : stage_splits[stage_index + 1]],
+                distributed_config=self._config.distributed,
+                index=stage_index,
+                tied_parameter_duplicates=tied_parameter_duplicates_.keys(),
+            )
+            for stage_index, tied_parameter_duplicates_ in enumerate(self._tied_parameter_duplicates)
+        ]
+
+        if self._verbose:
+            log_main_rank(lambda: f"  Total parameters: {sum(stage_.parameter_count for stage_ in self._stages):,} ")
+
         self._stages_owned = {
             stage_index: self._stages[stage_index]
             for stage_index, stage_rank in self._stage_pipeline_ranks.items()
             if stage_rank == self._config.distributed.pipeline_rank
         }
 
-        # Set up tied weights.
-        self._tied_parameters = self._get_tied_parameters(stage_splits[1:])
         self._tied_weight_main_stages_on_device = {
             stage_index: self._stages[stage_index]
             for stage_index in sorted(
@@ -318,6 +326,16 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 if self._mode.support_forward and weight_buffer_index is not None
                 else []
             )
+            tied_weight_duplicate_buffers = (
+                {
+                    parameter_name: self._stages[tied_parameter.main_stage].get_parameter_buffer(
+                        tied_parameter.metas[0].tensor_name
+                    )
+                    for parameter_name, tied_parameter in self._tied_parameter_duplicates[stage_index].items()
+                }
+                if self._mode.support_forward and stage_index in self._stages_on_device
+                else None
+            )
             stage.setup(
                 distributed=self._distributed,
                 weight_shards=stage_weight_shards,
@@ -326,6 +344,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 grad_buffers=stage_grad_buffers,
                 mode=self._mode if stage_index in self._stages_on_device else StageMode.off_device,
                 is_tied_weight_copy=stage_index in self._stages_on_device and stage_index not in self._stages_owned,
+                tied_parameter_duplicate_buffers=tied_weight_duplicate_buffers,
                 weight_buffer_shared_with=weight_buffer_shared_with,
             )
 
@@ -533,17 +552,43 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         }
         return buffer_contents, buffer_indices
 
-    def _get_tied_parameters(self, stage_ends) -> dict[str, "TiedParameter"]:
+    def _get_tied_parameters(self) -> dict[str, "TiedParameter"]:
         tied_parameters = {}
-        for name, (meta, layer_indexes) in self._base_model.get_tied_weights().items():
-            Assert.eq(list(layer_indexes), sorted(layer_indexes))
-            Assert.incl(meta, list(self._base_model[layer_indexes[0]].parameters()))
-            stage_indexes = sorted({np.searchsorted(stage_ends, i, side="right").item() for i in layer_indexes})
+        for name, metas in self._base_model.get_tied_parameters().items():
+            if len(metas) <= 1:
+                continue
+            stage_indexes = [self._parameter_stages[meta.tensor_name] for meta in metas]
+            # TODO: Ambiguous if multiple instances are on the same stage?
+            Assert.eq(
+                sorted(stage_indexes),
+                stage_indexes,
+                msg="Tied parameters should be provided in the order they appear in the model.",
+            )
+            for meta in metas[1:]:
+                # TODO: Improve. Compare initializations? (Not currently possible)
+                if (
+                    len(meta.dims) != len(metas[0].dims)
+                    or any(dim != dim_ for dim, dim_ in zip(meta.dims, metas[0].dims, strict=True))
+                    or meta.sequence_tensor_parallel != metas[0].sequence_tensor_parallel
+                ):
+                    raise ValueError(
+                        f"Tied parameter group `{name}` has incompatible tied parameters {metas[0]} and {meta}."
+                    )
+                if (
+                    meta.requires_grad != metas[0].requires_grad
+                    or meta.lr_scale != metas[0].lr_scale
+                    or meta.param_weight_decay != metas[0].param_weight_decay
+                ):
+                    logger.warning(
+                        f"Tied parameters `{metas[0]}` and `{meta}` in tied parameter group `{name}` have different optimization parameters."
+                        f" Only those of `{metas[0].tensor_name}` will be used."
+                    )
+
             all_ranks = {self._stage_pipeline_ranks[stage_index] for stage_index in stage_indexes}
 
             tied_parameters[name] = TiedParameter(
                 name=name,
-                meta=meta,
+                metas=tuple(metas),
                 all_ranks=all_ranks,
                 on_device=self._config.distributed.pipeline_rank in all_ranks,
                 main_stage=stage_indexes[0],
@@ -555,11 +600,11 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 class TiedParameter:
     name: str
     # Parameter definition.
-    meta: ParameterMeta
+    metas: tuple[ParameterMeta, ...]
     # Whether the local rank is involved at all.
     on_device: bool
     # Process group for reduction.
-    group: ProcessGroup | None = dataclasses.field(init=False)
+    group: ProcessGroup | None = dataclasses.field(repr=False, init=False)
     all_ranks: set[int]
     # The index of the main stage.
     main_stage: int

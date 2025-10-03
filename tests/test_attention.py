@@ -2,13 +2,13 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.layers.attention.attention import Attention
 from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
-from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.utils import Assert
 
 
-def test_varlen_preprocessor():
+def test_varlen_preprocessing():
     sequence_lengths = [torch.tensor([8, 13, 4, 11], dtype=torch.int32), torch.tensor([11, 16, 9], dtype=torch.int32)]
     # First micro-sequence:
     # [0...7,0...3] + [0...10,0] -> [0,8,12,23,24]
@@ -28,8 +28,12 @@ def test_varlen_preprocessor():
     ]
     micro_sequence_length = 12
     sequence_length = 36
-    varlen_preprocessor = FlashAttnVarlenPreprocessor(
-        AttentionConfig(head_size=64), DistributedConfig(compute_dtype="bfloat16")
+    attention = Attention(
+        AttentionConfig(head_size=64),
+        DistributedConfig(compute_dtype="bfloat16"),
+        hidden_dim=TensorDim("", 1),
+        lr_scale=None,
+        peft=None,
     )
     for micro_seq_idx in range(int(sequence_length / micro_sequence_length)):
         kwargs = {
@@ -40,6 +44,6 @@ def test_varlen_preprocessor():
             AttentionKwargs.sequence_length: sequence_length,
             AttentionKwargs.sequence_lengths: sequence_lengths,
         }
-        varlen_preprocessor.preprocess(torch.empty(1, device="cpu"), kwargs)
+        attention.preprocess(torch.empty(1, device="cpu"), kwargs)
         Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_q], cumulative_sequences_q[micro_seq_idx])
         Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_k], cumulative_sequences_k[micro_seq_idx])

@@ -189,7 +189,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         },
         "model": {
             "base_model": {
-                "embeddings_layer": {
+                "embeddings": {
                     "word_embeddings": init_1,
                     "position_embeddings": {"enabled": True, **init_1},
                     "hidden_size": 256,
@@ -215,7 +215,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                     },
                     "num_blocks": 2,
                 },
-                "output_layer": {"output_weight": init_1},
+                "head": {"output_weight": init_1},
+                "tied_embedding_weight": True,
             },
             "multi_stage": {
                 "debug_param_init": _LOG_LEVEL,
@@ -324,7 +325,7 @@ _update_and_add_testing_config(
     updates={
         ("model", "base_model", "decoder", "block", "mixer", "head_groups"): 4,
         ("model", "base_model", "decoder", "block", "mixer", "rotary", "type"): "default",
-        ("model", "base_model", "embeddings_layer", "position_embeddings", "enabled"): False,
+        ("model", "base_model", "embeddings", "position_embeddings", "enabled"): False,
     },
     megatron_args=[
         "--group-query-attention",
@@ -354,8 +355,8 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "mlp", "activation"): "silu",
         ("model", "base_model", "decoder", "block", "mlp", "add_linear_biases"): False,
         ("model", "base_model", "decoder", "block", "normalization", "type"): "rms_norm",
-        ("model", "base_model", "output_layer", "normalization", "type"): "rms_norm",
-        ("model", "base_model", "output_layer", "tied_weight"): False,
+        ("model", "base_model", "head", "normalization", "type"): "rms_norm",
+        ("model", "base_model", "tied_embedding_weight"): False,
     },
     megatron_args=[
         "--swiglu",
@@ -436,12 +437,22 @@ _update_and_add_testing_config(
     },
 )
 
+
+_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
+
+
 _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "mtp_llama",
     updates={
-        ("model", "base_model", "output_layer", "prediction_heads"): 2,
+        ("model", "base_model", "head"): {
+            "type": "multi_token_prediction",
+            "block": _llama_block,
+            "head": MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["head"],
+            "prediction_heads": 2,
+        },
+        ("model", "base_model", "decoder", "num_blocks"): 1,
     },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
@@ -456,6 +467,8 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=2.0,
+    # Arg update for cross-entropy splits doesn't work here.
+    skip_tests=("ce4", "ms"),
 )
 
 _update_and_add_testing_config(
@@ -548,8 +561,6 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
 )
-
-_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
 
 
 _update_and_add_testing_config(

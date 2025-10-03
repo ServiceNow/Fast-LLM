@@ -1,6 +1,10 @@
+import functools
+import typing
+
 import torch
 
 from fast_llm.engine.base_model.base_model import Layer, LayerWithNamespace
+from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
@@ -62,16 +66,27 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](BlockBase[Con
             ]
         )
 
+    @functools.cached_property
+    def _layers_with_namespace(self) -> list[Layer]:
         # Wrap all blocks in a namespace using the unique module name of the first one.
+        # This needs to be in a property because `module_name` is set after `__init__`.
         namespace = self.blocks[0].module_name
-        # Note: Pytorch won't redundantly register modules  because it doesn't look into lists.
-        self._blocks_with_namespace = [
-            LayerWithNamespace(sublayer, namespace) for layer in self.blocks for sublayer in layer.get_layers()
-        ]
+        return [LayerWithNamespace(sublayer, namespace) for layer in self.blocks for sublayer in layer.get_layers()]
 
     def get_layers(self) -> list[Layer]:
         return [
             module
-            for block, head in zip(self._blocks_with_namespace, self.heads, strict=True)
+            for block, head in zip(self._layers_with_namespace, self.heads, strict=True)
             for module in (block, head)
+        ]
+
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return sum((head.get_output_weights() for head in self.heads), [])
+
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+        self._layers_with_namespace[0].preprocess(batch, kwargs)
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return self.blocks[0].get_loss_definitions(count=count * self._config.prediction_heads) + [
+            loss_definition for head in self.heads for loss_definition in head.get_loss_definitions(count=count)
         ]

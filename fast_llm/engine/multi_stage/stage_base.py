@@ -31,6 +31,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         layers: list[Layer],
         distributed_config: DistributedConfig,
         index: int,
+        tied_parameter_duplicates: typing.Iterable[str] = (),
     ):
         super().__init__(config)
         self._distributed_config = distributed_config.validate()
@@ -39,9 +40,10 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         self._is_setup = False
         self._index = index
         self._layers = layers
+        self._tied_parameter_duplicates = set(tied_parameter_duplicates)
 
-        parameter_metas, frozen_metas = self._get_parameter_metas()
-        self._parameter_metas = parameter_metas + frozen_metas
+        parameter_metas, frozen_metas, duplicate_metas = self._get_parameter_metas()
+        self._parameter_metas = parameter_metas + frozen_metas + duplicate_metas
         self._fsdps = []
         if parameter_metas:
             self._fsdps.append(
@@ -106,6 +108,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         weight_buffers: list[torch.Tensor | None] | None,
         grad_buffers: list[torch.Tensor | None] | None,
         mode: StageMode = StageMode.training,
+        tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None,
     ) -> None:
         assert not self._is_setup
         distributed.check_config(self._distributed_config)
@@ -142,7 +145,11 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 nonlocal i
                 for key in module._parameters:
                     meta = typing.cast(ParameterMeta, module._parameters[key])
-                    module._parameters[key] = self.get_parameter_buffer(meta.tensor_name)
+                    if meta.tensor_name in self._tied_parameter_duplicates:
+                        assert tied_parameter_duplicate_buffers is not None
+                        module._parameters[key] = tied_parameter_duplicate_buffers.pop(meta.tensor_name)
+                    else:
+                        module._parameters[key] = self.get_parameter_buffer(meta.tensor_name)
                     i += 1
 
             i = 0
@@ -150,6 +157,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 layer.apply(_replace)
 
             Assert.eq(i, len(self._parameter_metas))
+            assert not tied_parameter_duplicate_buffers, tied_parameter_duplicate_buffers.keys()
 
     def initialize_weights(self) -> None:
         # TODO: Avoid all the _on_device checks
@@ -172,6 +180,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             ]
 
             for meta in metas:
+                if meta.tensor_name in self._tied_parameter_duplicates:
+                    # Initialization is not managed by this stage.
+                    continue
                 fsdp = self._fsdps[fsdp_index := self._fsdp_index[meta.tensor_name]]
                 parameter = weight_shards_split[fsdp_index][meta.tensor_name]
                 # Multi-gpu init may be different because of TP or FSDP (different shape), or PP (not on device)
@@ -309,24 +320,31 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         for fsdp, shard in zip(self._fsdps, shards, strict=True):
             yield from fsdp.export_shard(shard, data_type)
 
-    def _get_parameter_metas(self) -> tuple[list[ParameterMeta], list[ParameterMeta]]:
+    def _get_parameter_metas(self) -> tuple[list[ParameterMeta], list[ParameterMeta], list[ParameterMeta]]:
         # Get all the stage parameters,
         # then separate the parameters with and without weight decay,
         # and squeeze the non-tensor parallel and sequence parallel ones in the middle.
         # This allows running the optimizer, grad norm and sequence_parallel reduction on contiguous buffers.
         parameter_metas: list[ParameterMeta] = []
         frozen_metas: list[ParameterMeta] = []
+        duplicate_metas: list[ParameterMeta] = []
         meta: ParameterMeta
         for layer in self._layers:
-            for name, meta in layer.named_parameters():
+            for meta in layer.parameters():
                 Assert.custom(isinstance, meta, ParameterMeta)
                 Assert.eq(meta.dtype, self._distributed_config.optimization_dtype.torch)
-                if meta.requires_grad:
+                if meta.tensor_name in self._tied_parameter_duplicates:
+                    duplicate_metas.append(meta)
+                elif meta.requires_grad:
                     parameter_metas.append(meta)
                 else:
                     frozen_metas.append(meta)
 
-        return self._reorder_parameter_metas(parameter_metas), self._reorder_parameter_metas(frozen_metas)
+        return (
+            self._reorder_parameter_metas(parameter_metas),
+            self._reorder_parameter_metas(frozen_metas),
+            self._reorder_parameter_metas(duplicate_metas),
+        )
 
     @classmethod
     def _reorder_parameter_metas(cls, parameter_metas):

@@ -47,6 +47,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         grad_buffers: list[torch.Tensor | None] | None = None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
+        tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
         weight_buffer_shared_with: collections.abc.Sequence["Stage"] = (),
     ) -> None:
         super().setup(
@@ -56,6 +57,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             weight_buffers=weight_buffers,
             grad_buffers=grad_buffers,
             mode=mode,
+            tied_parameter_duplicate_buffers=tied_parameter_duplicate_buffers,
         )
         self._is_tied_weight_copy = is_tied_weight_copy
         if self._mode.support_forward:
@@ -68,6 +70,9 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             self._accumulators = []
             with torch.enable_grad():
                 for meta in self._parameter_metas:
+                    if meta.tensor_name in self._tied_parameter_duplicates:
+                        # Already handled in the main stage.
+                        continue
                     buffer = self.get_parameter_buffer(meta.tensor_name)
                     if not buffer.requires_grad:
                         continue
@@ -140,7 +145,6 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                         # TODO: Handle variable shape.
                         output_global = output
 
-                    # TODO ====== Use ======
                     kwargs["hidden_states"][self._layers[i].module_name] = {
                         "layer_type": type(layer).__name__,
                         "tensor": output_global,
@@ -227,7 +231,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
         ):
             check_parallel_match(output, self._distributed.tensor_group, f"layer {self._layers[i].module_name} fw")
         if self._config.debug_layer_outputs:
-            name = f"layer {self._layers[i].module_name} fw"
+            name = f"{self._layers[i].module_name} fw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
@@ -260,7 +264,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                 )
             )
         if self._config.debug_layer_gradients:
-            name = f"layer {self._layers[i].module_name} bw"
+            name = f"{self._layers[i].module_name} bw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
             if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
