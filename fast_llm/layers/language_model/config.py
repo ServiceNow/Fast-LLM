@@ -2,7 +2,7 @@ import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import LossDef, ModuleConfig
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -254,7 +254,6 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
     _abstract = False
     # Needs to be `DecoderBlockConfig` for the `return_input` interface.
     # TODO: Make a generic wrapper for returning input instead?
-    # TODO ====== Tied weight ======
     block: DecoderBlockConfig = Field(
         desc="Configuration for the decoder block before each head.",
         hint=FieldHint.architecture,
@@ -270,7 +269,6 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    # TODO ====== Adjust ======
     prediction_loss_coefficient: list[float] | None = Field(
         default=None,
         desc="Loss coefficient for each prediction head.",
@@ -290,12 +288,6 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
         from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
         return MultiTokenPrediction
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        # TODO ====== Wrong ======
-        return self.block.get_loss_definitions(count=count * self.prediction_heads) + self.head.get_loss_definitions(
-            count=count * self.prediction_heads
-        )
 
     @property
     def max_prediction_distance(self) -> int:

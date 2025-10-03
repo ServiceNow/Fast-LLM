@@ -62,7 +62,7 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
             )
         converters.append(
             get_parameter_converter(
-                f"heads.0.output_weights",
+                f"{fast_llm_prefix}.heads.0.output_weights",
                 "lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
             )

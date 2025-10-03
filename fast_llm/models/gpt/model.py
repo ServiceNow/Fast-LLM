@@ -4,8 +4,7 @@ import typing
 import torch
 
 from fast_llm.data.data.gpt.data import GPTBatch
-from fast_llm.engine.base_model.base_model import BaseModel, Layer
-from fast_llm.engine.base_model.config import LossDef
+from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
@@ -13,7 +12,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
+from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -22,7 +21,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
+class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], BaseModel[ConfigType]):
     """
     A transformer-based language model generalizing the GPT model architecture.
     """
@@ -35,28 +34,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-
-        self._hidden_dim = TensorDim("hidden", config.embeddings.hidden_size)
-        self.embeddings: LanguageModelEmbedding = self._config.embeddings.get_layer(
-            distributed_config,
-            hidden_dim=self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-        )
-        self.decoder = self._config.decoder.get_layer(
-            distributed_config,
-            self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-        )
-        self.head = self._config.head.get_layer(
-            distributed_config,
-            self._config.embeddings,
-            hidden_dim=self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-        )
-
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
@@ -64,13 +41,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     param, self._config.decoder.block, config.embeddings.hidden_size
                 )  # Noqa
 
-    def get_layers(self) -> list["Layer"]:
-        return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
-
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
-        # TODO ====== Remove (Move batch splitting elsewhere) ======
+        # TODO Remove (Move batch splitting elsewhere)
         # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
 
         if isinstance(batch_meta, GPTBatchConfig):
@@ -177,7 +151,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         return preprocessed_meta
 
-    def preprocess(
+    def preprocess_batch(
         self,
         batch: GPTBatch,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
@@ -186,7 +160,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO ====== Move batch splitting elsewhere, align interface with LayerBase ======
+        # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
 
         if preprocessed_meta is None:
@@ -209,7 +183,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
             ]
 
-            reference_batch = reference_model.fast_llm_model.base_model.preprocess(
+            reference_batch = reference_model.fast_llm_model.base_model.preprocess_batch(
                 batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
             )
 
@@ -285,7 +259,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = labels
                 kwargs.update(reference_logits[i])
 
-                # TODO ====== Preference spans ======
                 if batch.chosen_spans is not None:
                     chosen_valid_spans = []
                     for spans in batch.chosen_spans:
@@ -317,27 +290,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             rejected_valid_spans.append(valid_spans)
                     kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
 
-            # TODO ====== Turn into super() call ======
-            self.embeddings.preprocess(tokens, kwargs)
-            self.decoder.preprocess(tokens, kwargs)
-            self.head.preprocess(tokens, kwargs)
-
+            self.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed
 
     def get_tied_parameters(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
+        # TODO: Integrate to the `LayerBase` interface, move to `LanguageModel`, `MultiTokenPrediction`?
         output_weights = self.head.get_output_weights()
         if self._config.tied_embedding_weight:
             output_weights.insert(0, self.embeddings.word_embeddings_weight)
         return {output_weights[0].tensor_name: output_weights} if len(output_weights) > 1 else {}
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return (
-            self.embeddings.get_loss_definitions(count)
-            + self.decoder.get_loss_definitions(count)
-            + self.head.get_loss_definitions(count)
-        )
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):

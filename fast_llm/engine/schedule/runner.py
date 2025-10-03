@@ -324,7 +324,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         for micro_batch in range(batch_config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:
-                micro_batch_data = self._multi_stage.base_model.preprocess(
+                micro_batch_data = self._multi_stage.base_model.preprocess_batch(
                     micro_batch_data,
                     context.schedule.preprocessed_meta,
                     phase=context.phase,

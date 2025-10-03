@@ -145,7 +145,6 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                         # TODO: Handle variable shape.
                         output_global = output
 
-                    # TODO ====== Use ======
                     kwargs["hidden_states"][self._layers[i].module_name] = {
                         "layer_type": type(layer).__name__,
                         "tensor": output_global,

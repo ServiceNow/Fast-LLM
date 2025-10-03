@@ -133,11 +133,11 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
 
     @abc.abstractmethod
     def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
-        # TODO ====== Remove (Move batch splitting elsewhere) ======
+        # TODO Remove (Move batch splitting elsewhere)
         pass
 
     @abc.abstractmethod
-    def preprocess(
+    def preprocess_batch(
         self,
         batch: typing.Any,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
@@ -146,7 +146,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO ====== Move batch splitting elsewhere, align interface with LayerBase ======
+        # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass
 
     def get_tied_parameters(self) -> dict[str, list[ParameterMeta]]:

@@ -61,7 +61,6 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             self._num_stages,
             self._config.distributed.pipeline_parallel * self._config.multi_stage.stages_per_pipeline_stage,
         )
-
         # Keep track of which stage each parameter belongs to.
         self._parameter_stages: dict[str, int] = {}
         for stage_index in range(self._num_stages):
@@ -85,7 +84,6 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 self._tied_parameter_duplicates[self._parameter_stages[meta.tensor_name]][
                     meta.tensor_name
                 ] = tied_parameter
-        print("IUHWO", self._base_model.get_tied_parameters(), self._tied_parameters, self._tied_parameter_duplicates)
 
         # Create the stages.
         self._stages = [
@@ -335,7 +333,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                     )
                     for parameter_name, tied_parameter in self._tied_parameter_duplicates[stage_index].items()
                 }
-                if self._mode.support_forward
+                if self._mode.support_forward and stage_index in self._stages_on_device
                 else None
             )
             stage.setup(
