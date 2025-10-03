@@ -79,7 +79,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
-        batch = self.fast_llm_base_model.preprocess(
+        batch = self.fast_llm_base_model.preprocess_batch(
             GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
         )
         ((input_, kwargs),) = batch
@@ -104,7 +104,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[AttentionKwargs.sequence_first]:
             logits = kwargs["logits"].transpose(0, 1)
         else:
             logits = kwargs["logits"]

@@ -79,7 +79,9 @@ class CompareConfig:
         keys_test = set(dict_test)
         if keys_ref != keys_test:
             errors.append(
-                f">>>> {name} do not match. Missing = {keys_ref - keys_test}, extra = {keys_test - keys_ref}."
+                f">>>> {name} do not match."
+                f"\n       Missing = \n{"\n         * ".join(keys_ref - keys_test)}"
+                f"\n       Extra = \n{"\n         * ".join(keys_test - keys_ref)}"
             )
 
         # Avoid set to preserve ordering.

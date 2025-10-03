@@ -137,11 +137,6 @@ class StageConfig(Config):
         desc="Check for tensor-parallel desyncs and log an error if a desync is found. High overhead",
         hint=FieldHint.logging,
     )
-    compile_all: bool = Field(
-        default=False,
-        desc="Compile the whole model using torch.compile.",
-        hint=FieldHint.expert,
-    )
 
 
 @config_class()

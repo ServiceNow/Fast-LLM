@@ -74,7 +74,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
-                "embeddings_layer": {
+                "embeddings": {
                     "hidden_size": 1024,  # Default
                 },
                 "decoder": {
@@ -92,7 +92,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     },
                     "num_blocks": 12,  # Default
                 },
-                "output_layer": {"tied_weight": False},
+                "tied_embedding_weight": False,
             },
             "multi_stage": {"zero_stage": 3},
             "distributed": {"compute_dtype": "bfloat16"},
@@ -105,7 +105,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config.save_metadata(save_config)
 
     base_model_update = {
-        "embeddings_layer": {"hidden_size": 512, "vocab_size": 1000},
+        "embeddings": {"hidden_size": 512, "vocab_size": 1000},
         "decoder": {
             "block": {
                 "mixer": {
@@ -127,51 +127,50 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         }
     )
     serialized_config = pretrained_config.model.to_dict()
-    expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
+    expected_config = {"distributed": DistributedConfig().to_dict()}
 
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
     expected_config["distributed"].update({"seed": 1234, "compute_dtype": "float16"})
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
-            "embeddings_layer": {
+            "embeddings": {
                 "hidden_size": 512,
                 "vocab_size": 1000,
             },
             "decoder": {
-                "type": "fixed",
                 "block": {
-                    "type": "decoder",
                     "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default"},
                         "window_size": 32,
                         "head_groups": 1,
                     },
                     "mlp": {
-                        "type": "mlp",
                         "intermediate_size": 4096,  # Implicit default, default value
                         "activation": "silu",  # Implicit default, non-default value
                     },
-                    "normalization": {"type": "rms_norm", "implementation": "triton"},
+                    "normalization": {"implementation": "triton"},
                 },
                 "num_blocks": 12,
             },
-            "output_layer": {"tied_weight": False, "normalization": {"type": "layer_norm"}},
-            "peft": {"type": "lora", "freeze_others": False},
+            "tied_embedding_weight": False,
+            "peft": {"freeze_others": False},
         }
     else:
-        base_model_update["decoder"]["type"] = "fixed"
-        base_model_update["decoder"]["block"]["type"] = "decoder"
-        base_model_update["decoder"]["block"]["normalization"]["type"] = "layer_norm"
-        base_model_update["decoder"]["block"]["mixer"]["type"] = "attention"
-        base_model_update["decoder"]["block"]["mixer"]["rotary"] = {"type": "none"}
-        base_model_update["decoder"]["block"]["mlp"] = {"type": "mlp"}
-        base_model_update["output_layer"] = {"normalization": {"type": "layer_norm"}}
-        base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 
-    check_equal_nested(serialized_config, expected_config)
+    check_equal_nested(_trim_type(serialized_config), _trim_type(expected_config))
+
+
+def _trim_type(config: dict):
+    # Serialization inserts dynamic types, we ignore them during the comparison.
+    if "type" in config:
+        del config["type"]
+    for key in list(config):
+        if isinstance(value := config[key], dict):
+            _trim_type(value)
+            if not value:
+                del config[key]
+    return config
 
 
 def _check_dim(dim: DistributedDim, name: str, rank: int, size: int, global_rank: int):

@@ -149,7 +149,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             multi_stage=self._multi_stage,
             distributed_config=self._config.model.distributed,
         )
-        self._loss_defs = self._multi_stage.base_model.config.get_loss_definitions()
+        self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
 
         if not self._is_evaluation_only:
             steps_per_split = {
@@ -320,7 +320,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 phase=PhaseType.test,
                 num_iters=self._config.training.test_iters,
             )
-            formatted_metrics = format_metrics(metrics[metrics_key], self._loss_defs, PhaseType.test)
+            formatted_metrics = format_metrics(metrics[metrics_key], self._loss_definitions, PhaseType.test)
             log_main_rank(formatted_metrics)
             self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
@@ -331,7 +331,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         advanced_iters = 0
         skipped_iters = 0
         nan_iters = 0
-        total_losses = {loss_def.name: 0.0 for loss_def in self._loss_defs}
+        total_losses = {loss_def.name: 0.0 for loss_def in self._loss_definitions}
 
         # Profiling
         profiler = self._config.profiling.get_profiler(
@@ -435,7 +435,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             **get_and_reset_memory_usage_mib(),
                         }
 
-                        formatted_metrics = format_metrics(metrics[metrics_key], self._loss_defs, PhaseType.training)
+                        formatted_metrics = format_metrics(
+                            metrics[metrics_key], self._loss_definitions, PhaseType.training
+                        )
                         logger.info(formatted_metrics)
                         if self._config.training.wandb.alert.enabled(self._completed_steps):
                             self._wandb.alert("Training results", formatted_metrics, "INFO")
@@ -443,7 +445,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     advanced_iters = 0
                     skipped_iters = 0
                     nan_iters = 0
-                    total_losses = {loss_def.name: 0.0 for loss_def in self._loss_defs}
+                    total_losses = {loss_def.name: 0.0 for loss_def in self._loss_definitions}
 
                 self._run.save_logged_tensors(f"train_{self._completed_steps}")
 

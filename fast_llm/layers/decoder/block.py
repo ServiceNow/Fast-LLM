@@ -4,28 +4,53 @@ import typing
 
 import torch
 
-from fast_llm.config import Config
 from fast_llm.core.distributed import set_generator
-from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.block import BaseBlock, Block
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 
 
-class BlockWithBias[ConfigType: Config](BaseBlock[ConfigType]):
+class BlockWithBias[ConfigType: BlockWithBiasConfig](Block[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
 
-    @abc.abstractmethod
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        return_bias: bool = True,
+    ):
+        super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
+        self._return_bias = return_bias
+
     def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | torch.Tensor:
+        output, bias = self._forward(input_, kwargs, losses, metrics)
+        if self._return_bias:
+            return output, bias
+        else:
+            return output if bias is None else output + bias
+
+    @abc.abstractmethod
+    def _forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],
@@ -58,18 +83,16 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             peft=peft,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
-        self._return_input: bool = return_input
-        # Note, layer_lr_scale does not impact the norms
-        # TODO: add a separate norm_lr_scale
+        self._return_input = return_input
         self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
         self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
 
-        # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
             self._hidden_dim,
             self._lr_scale,
             peft=peft,
+            return_bias=True,
         )
 
         self.mlp = self._config.mlp.get_layer(
@@ -77,6 +100,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._hidden_dim,
             self._lr_scale,
             peft=peft,
+            return_bias=True,
         )
 
     def setup(self, distributed: Distributed) -> None:
@@ -150,3 +174,10 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 self.mlp.get_compute_usage(input_, kwargs, config),
             )
         )
+
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        self.mixer.preprocess(batch, kwargs)
+        self.mlp.preprocess(batch, kwargs)
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)

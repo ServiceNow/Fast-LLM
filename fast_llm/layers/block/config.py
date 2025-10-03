@@ -1,11 +1,9 @@
-import abc
-import collections
 import functools
 import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, Preprocessor
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -13,7 +11,8 @@ from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.block import Block
+    from fast_llm.layers.block.block import BlockBase
+    from fast_llm.layers.block.sequence import FixedBlockSequence, PatternBlockSequence
 
 
 class BlockDimNames:
@@ -40,8 +39,8 @@ class BlockKwargs:
     grad_output = "grad_output"
 
 
-@config_class()
-class BaseBlockConfig(BaseModelConfig):
+@config_class(registry=True)
+class BlockConfig(ModuleConfig):
     """
     Base configuration class for blocks and block-like layers (mlp, mixers, etc.).
     """
@@ -55,19 +54,6 @@ class BaseBlockConfig(BaseModelConfig):
         hint=FieldHint.feature,
     )
 
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        return []
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return []
-
-
-@config_class(registry=True)
-class BlockConfig(BaseBlockConfig):
-    """
-    Base configuration class for actual blocks, i.e., base blocks that are also `Layers`.
-    """
-
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is BlockConfig and cls.get_subclass(default.get("type")) is None:
@@ -78,50 +64,33 @@ class BlockConfig(BaseBlockConfig):
         return super()._from_dict(default, strict=strict)
 
     @property
-    def layer_class(self) -> "type[Block]":
+    def layer_class(self) -> "type[BlockBase]":
         raise NotImplementedError()
 
-    def get_block(
+    def get_layer(
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-        return_input: bool = False,
-    ) -> "Block":
+    ) -> "BlockBase":
         return self.layer_class(
             self,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
-            return_input=return_input,
         )
 
 
 @config_class(registry=True)
-class BlockSequenceConfig(BaseModelConfig):
+class BlockSequenceConfig(BlockConfig):
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if cls is BlockSequenceConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
             return FixedBlockSequenceConfig._from_dict(default, strict)
         return super()._from_dict(default, strict=strict)
-
-    @abc.abstractmethod
-    def __len__(self) -> int:
-        pass
-
-    @abc.abstractmethod
-    def __getitem__(self, index: int) -> BlockConfig:
-        pass
-
-    @abc.abstractmethod
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        pass
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return []
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "fixed"})
@@ -138,18 +107,11 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def __len__(self) -> int:
-        return self.num_blocks
+    @property
+    def layer_class(self) -> "type[FixedBlockSequence]":
+        from fast_llm.layers.block.sequence import FixedBlockSequence
 
-    def __getitem__(self, index: int) -> BlockConfig:
-        return self.block
-
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        # TODO: Prevent name conflicts in preprocessed kwargs.
-        return self.block.get_preprocessors(distributed_config)
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.block.get_loss_definitions(count=count * self.num_blocks)
+        return FixedBlockSequence
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
@@ -182,26 +144,18 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
 
         super()._validate()
 
-    def __len__(self) -> int:
-        return self.num_blocks
+    @property
+    def layer_class(self) -> "type[PatternBlockSequence]":
+        from fast_llm.layers.block.sequence import PatternBlockSequence
 
-    def __getitem__(self, index: int) -> BlockConfig:
-        return self.blocks[self.expanded_pattern[index]]
+        return PatternBlockSequence
 
     @functools.cached_property
     def expanded_pattern(self) -> list[str]:
+        # The complete list of block names, expanded to `num_blocks`
         return (self.pattern * (self.num_blocks // len(self.pattern) + 1))[: self.num_blocks]
 
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        # TODO: Prevent name conflicts in preprocessed kwargs.
-        return sum((block.get_preprocessors(distributed_config) for block in self.blocks.values()), [])
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        # TODO: Prevent name conflicts.
-        return sum(
-            (
-                self.blocks[name].get_loss_definitions(count=count * count_)
-                for name, count_ in collections.Counter(self.expanded_pattern).items()
-            ),
-            [],
-        )
+    @functools.cached_property
+    def preprocessing_layers(self) -> dict[str, int]:
+        # The index at which each block first appears. These blocks are used for preprocessing.
+        return {name: self.expanded_pattern.index(name) for name in set(self.expanded_pattern)}

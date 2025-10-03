@@ -31,13 +31,17 @@ class HuggingFaceBaseModelConverter:
 
     @classmethod
     @abc.abstractmethod
-    def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
+    def get_converters(cls, config: BaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         pass
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
     architecture: typing.ClassVar[str]
     base_model_converter_class: typing.ClassVar[type[HuggingFaceBaseModelConverter]]
+
+    def __init__(self, model: "FastLLMModel"):
+        self._exported_config = self._export_config(model.config)
+        super().__init__(model)
 
     @classmethod
     @abc.abstractmethod
@@ -126,10 +130,8 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         Assert.eq(config["architecture"], cls.architecture)
         return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
 
-    def _create_weight_converters(
-        self,
-    ) -> list[WeightConverter]:
-        return self.base_model_converter_class.get_converters(self._model.config.base_model)
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        return self.base_model_converter_class.get_converters(self._model.config.base_model, self._exported_config)
 
     def _load_weights(
         self, config: CheckpointLoadConfig, device

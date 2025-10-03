@@ -3,7 +3,7 @@ import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import ParameterConfig, combine_lr_scales
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
@@ -26,7 +26,7 @@ class NormalizationImplementation(str, enum.Enum):
 
 
 @config_class(registry=True)
-class NormalizationConfig(BaseModelConfig):
+class NormalizationConfig(ModuleConfig):
     lr_scale: float | None = Field(
         default=None,
         desc="Scaling factor for the layer learning rate."
