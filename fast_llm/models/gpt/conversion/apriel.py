@@ -24,11 +24,11 @@ from fast_llm.utils import Assert, safe_merge_dicts
 
 class AprielDiscreteMamba2Converter:
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         return {
             "type": "discrete_mamba_2",
             "state_size": config["ssm_cfg"]["d_state"],
-            "d_inner": config["ssm_cfg"].get("d_inner") or hidden_size * config["ssm_cfg"].get("expand", 1),
+            "d_inner": config["ssm_cfg"].get("d_inner") or config["hidden_size"] * config["ssm_cfg"].get("expand", 1),
             "add_linear_biases": config["ssm_cfg"]["bias"],
             "convolution_layer": {"bias": {"enabled": config["ssm_cfg"].get("conv_bias", True)}},
             "n_qk_heads": config["ssm_cfg"]["n_qk_heads"],
@@ -117,17 +117,17 @@ class AprielDiscreteMamba2Converter:
 
 class AprielMamba2Converter:
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         return {
             "type": "mamba_2",
             "state_size": config["ssm_cfg"]["d_state"],
-            "d_inner": config["ssm_cfg"].get("d_inner") or hidden_size * config["ssm_cfg"].get("expand", 1),
+            "d_inner": config["ssm_cfg"].get("d_inner") or config["hidden_size"] * config["ssm_cfg"].get("expand", 1),
             "add_linear_biases": config["ssm_cfg"]["bias"],
             "convolution_layer": {"bias": {"enabled": config["ssm_cfg"].get("conv_bias", True)}},
-            "d_xb": config["ssm_cfg"].get("d_xb") or hidden_size,
+            "d_xb": config["ssm_cfg"].get("d_xb") or config["hidden_size"],
             "dt_layer": {"bias": {"enabled": config["ssm_cfg"].get("dt_proj_bias", True)}},
             "dt_rank": (
-                math.ceil(hidden_size)
+                math.ceil(config["hidden_size"])
                 if config["ssm_cfg"].get("dt_rank", "auto") == "auto"
                 else config["ssm_cfg"]["dt_rank"]
             ),
@@ -246,8 +246,8 @@ class AprielBlockConverter:
     _config_classes = {value: key for key, value in layout_names.items()}
 
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int, layout_name: str = "t") -> dict:
-        return cls._converter_classes[cls._config_classes[layout_name]].import_config(config, hidden_size)
+    def import_config(cls, config: dict, layout_name: str = "t") -> dict:
+        return cls._converter_classes[cls._config_classes[layout_name]].import_config(config)
 
     @classmethod
     def export_config(cls, config) -> dict:
@@ -270,18 +270,18 @@ class AprielDecoderConverter(MistralDecoderConverter):
     block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         layout = config["hybrid_block_layout"]
         if len(layout) == 1:
             return {
-                "block": cls.block_converter_class.import_config(config, hidden_size, layout[0]),
+                "block": cls.block_converter_class.import_config(config, layout[0]),
                 "num_blocks": config["num_hidden_layers"],
             }
         else:
             return {
                 "type": "pattern",
                 "blocks": {
-                    layout_name: cls.block_converter_class.import_config(config, hidden_size, layout_name)
+                    layout_name: cls.block_converter_class.import_config(config, layout_name)
                     for layout_name in set(layout)
                 },
                 "pattern": layout,

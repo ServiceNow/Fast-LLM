@@ -124,8 +124,6 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             weight_buffers = [None for _ in self._fsdps]
         if grad_buffers is None:
             grad_buffers = [None for _ in self._fsdps]
-        if tied_parameter_duplicate_buffers is None:
-            assert not self._tied_parameter_duplicates
 
         for fsdp, weight_shard, grad_shard, weight_buffer, grad_buffer in zip(
             self._fsdps, weight_shards, grad_shards, weight_buffers, grad_buffers, strict=True
@@ -148,6 +146,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 for key in module._parameters:
                     meta = typing.cast(ParameterMeta, module._parameters[key])
                     if meta.tensor_name in self._tied_parameter_duplicates:
+                        assert tied_parameter_duplicate_buffers is not None
                         module._parameters[key] = tied_parameter_duplicate_buffers.pop(meta.tensor_name)
                     else:
                         module._parameters[key] = self.get_parameter_buffer(meta.tensor_name)

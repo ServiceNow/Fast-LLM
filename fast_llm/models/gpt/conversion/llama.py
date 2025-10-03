@@ -184,7 +184,7 @@ class MLPLayer2Converter(WeightConverter):
 
 class LlamaAttentionConverter:
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         try:
             rope_type = config["rope_scaling"]["rope_type"]
         except (KeyError, TypeError):
@@ -224,7 +224,7 @@ class LlamaAttentionConverter:
             "dropout": config["attention_dropout"],
         }
         if out["head_size"] is None:
-            out["head_size"] = div(hidden_size, out["heads"])
+            out["head_size"] = div(config["hidden_size"], out["heads"])
 
         return out
 
@@ -360,9 +360,9 @@ class LlamaBlockConverter:
     hf_norm_2_name: typing.ClassVar[str] = "post_attention_layernorm"
 
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         return {
-            "mixer": cls.mixer_converter_class.import_config(config, hidden_size),
+            "mixer": cls.mixer_converter_class.import_config(config),
             "mlp": cls.mlp_converter_class.import_config(config),
             "normalization": cls.normalization_converter_class.import_config(config),
         }
@@ -412,9 +412,9 @@ class LlamaDecoderConverter:
     block_converter_class: typing.ClassVar[type[LlamaBlockConverter]] = LlamaBlockConverter
 
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
+    def import_config(cls, config: dict) -> dict:
         return {
-            "block": cls.block_converter_class.import_config(config, hidden_size),
+            "block": cls.block_converter_class.import_config(config),
             "num_blocks": config["num_hidden_layers"],
         }
 
@@ -485,22 +485,11 @@ class LlamaHeadConverter:
 
     @classmethod
     def get_converters(
-        cls, config: LanguageModelHeadConfig, fast_llm_prefix: str, tied_embedding_weight: bool
+        cls,
+        config: LanguageModelHeadConfig,
+        exported_config: dict,
+        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
-        # for prediction_distance in range(config.prediction_heads):
-        #    if prediction_distance > 0:
-        #        converters += cls.block_converter_class.get_converters(
-        #            block_config,
-        #            f"{fast_llm_prefix}.{start_index+2*prediction_distance-1}",
-        #            "",
-        #            drop_on_export=True,
-        #        )
-        #    converters += cls.normalization_converter_class.get_converters(
-        #        config.normalization,
-        #        f"{fast_llm_prefix}.{start_index+2*prediction_distance}.final_norm",
-        #        f"model.norm",
-        #        drop_on_export=prediction_distance > 0,
-        #    )
         return [
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
@@ -510,7 +499,7 @@ class LlamaHeadConverter:
             get_parameter_converter(
                 f"{fast_llm_prefix}.output_weights",
                 "lm_head.weight",
-                drop_on_import=tied_embedding_weight,
+                drop_on_import=exported_config["tie_word_embeddings"],
             ),
         ]
 
@@ -525,7 +514,7 @@ class LlamaBaseModelConverter:
     def import_config(cls, config: dict) -> dict:
         return {
             "embeddings": cls.embeddings_converter_class.import_config(config),
-            "decoder": cls.decoder_converter_class.import_config(config, config["hidden_size"]),
+            "decoder": cls.decoder_converter_class.import_config(config),
             "head": cls.head_converter_class.import_config(config),
             "tied_embedding_weight": config["tie_word_embeddings"],
         }
@@ -541,11 +530,11 @@ class LlamaBaseModelConverter:
         )
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
+    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         return [
             *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
             *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config.head, "head", config.tied_embedding_weight),
+            *cls.head_converter_class.get_converters(config.head, exported_config, "head"),
         ]
 
 

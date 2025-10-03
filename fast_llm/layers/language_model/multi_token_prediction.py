@@ -81,10 +81,12 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](BlockBase[Con
         ]
 
     def get_output_weights(self) -> list[torch.Tensor]:
-        return sum((head.output_weights for head in self.heads), [])
+        return sum((head.get_output_weights() for head in self.heads), [])
 
     def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         self._layers_with_namespace[0].preprocess(batch, kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self[0].get_loss_definitions(count=count * self._config.prediction_heads)
+        return self.blocks[0].get_loss_definitions(count=count * self._config.prediction_heads) + [
+            loss_definition for head in self.heads for loss_definition in head.get_loss_definitions(count=count)
+        ]

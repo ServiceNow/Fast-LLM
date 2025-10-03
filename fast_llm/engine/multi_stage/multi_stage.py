@@ -328,12 +328,16 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 if self._mode.support_forward and weight_buffer_index is not None
                 else []
             )
-            tied_weight_duplicate_buffers = {
-                parameter_name: self._stages[tied_parameter.main_stage].get_parameter_buffer(
-                    tied_parameter.metas[0].tensor_name
-                )
-                for parameter_name, tied_parameter in self._tied_parameter_duplicates[stage_index].items()
-            }
+            tied_weight_duplicate_buffers = (
+                {
+                    parameter_name: self._stages[tied_parameter.main_stage].get_parameter_buffer(
+                        tied_parameter.metas[0].tensor_name
+                    )
+                    for parameter_name, tied_parameter in self._tied_parameter_duplicates[stage_index].items()
+                }
+                if self._mode.support_forward
+                else None
+            )
             stage.setup(
                 distributed=self._distributed,
                 weight_shards=stage_weight_shards,

@@ -183,19 +183,14 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    enable_dpo: bool | None = Field(
-        default=False,
-        desc="Whether to enable DPO loss",
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     dpo_beta: float | None = Field(
         default=1.0,
         desc="Beta value for DPO loss.",
-        hint=FieldHint.feature,
-    )
-    dpo_reference_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     distillation_model: str | None = Field(
@@ -243,10 +238,15 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                 else:
                     self.language_model_loss_factor = 0.0
         super()._validate()
+        assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
 
     @property
     def max_prediction_distance(self) -> int:
         return 1
+
+    @property
+    def enable_dpo(self) -> bool:
+        return self.dpo_reference_model is not None
 
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})

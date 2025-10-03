@@ -437,12 +437,21 @@ _update_and_add_testing_config(
     },
 )
 
+
+_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
+
+
 _update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "mtp_llama",
     updates={
-        ("model", "base_model", "head", "prediction_heads"): 2,
+        ("model", "base_model", "head"): {
+            "type": "multi_token_prediction",
+            "block": _llama_block,
+            "head": MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["head"],
+            "prediction_heads": 2,
+        },
     },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
@@ -457,6 +466,8 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=2.0,
+    # Arg update for cross-entropy splits doesn't work here.
+    skip_tests=("ce4", "ms"),
 )
 
 _update_and_add_testing_config(
@@ -549,8 +560,6 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
 )
-
-_llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
 
 
 _update_and_add_testing_config(
