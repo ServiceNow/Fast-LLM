@@ -1,3 +1,5 @@
+import abc
+import functools
 import logging
 import typing
 
@@ -5,8 +7,8 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import split_op
-from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.core.ops import gather_op, split_op
+from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
@@ -21,11 +23,10 @@ from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
+    LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
-    LanguageModelLossNames,
 )
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
@@ -34,7 +35,13 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
+class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](Block[ConfigType]):
+    @abc.abstractmethod
+    def get_output_weights(self) -> list[torch.Tensor]:
+        pass
+
+
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -51,39 +58,34 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-        prediction_distance: int,
-        return_input: bool = False,
+        prediction_distance: int = 0,
+        prediction_heads: int = 1,
+        loss_coefficient: float = 1.0,
     ):
-        if return_input:
-            raise NotImplementedError()
         super().__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
-            return_input=return_input,
         )
+        if prediction_distance > 0 and (
+            self._config.distillation_model is not None or self._config.dpo_reference_model is not None
+        ):
+            raise NotImplementedError("Multi-token prediction not supported with distillation or dpo.")
+
+        Assert.in_range(prediction_distance, 0, prediction_heads)
+        self._prediction_distance = prediction_distance
+        self._prediction_heads = prediction_heads
+        self._loss_coefficient = loss_coefficient
+        self._is_last_head = self._prediction_distance == self._prediction_heads - 1
+
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         self._sequence_parallel_logits = self._sequence_parallel and not self._vocab_parallel
         if self._config.cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._vocab_parallel
-
-        self._loss_coefficient = (
-            self._config.prediction_loss_coefficient[prediction_distance]
-            if self._config.prediction_loss_coefficient
-            else 1.0
-        )
-        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-
-        # Distance of the target token prediction
-        # 0: next-token prediction
-        # >0: multi-token prediction (MTP)
-        Assert.geq(prediction_distance, 0)
-        self._prediction_distance = prediction_distance
-        self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
 
         if not self._config.enable_dpo:
             self._cross_entropy_impl = self._config.cross_entropy_implementation
@@ -104,15 +106,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         self._vocab_dim = TensorDim(
             "vocab", embeddings_config.vocab_size, self._parallel_dim if self._vocab_parallel else None
         )
-        # Only the first head defines the output weights
-        if self._prediction_distance == 0 and not self._config.tied_weight:
-            # untie embedding weights
-            self.output_weights = self._config.output_weight.get_parameter(
-                (self._vocab_dim, self._hidden_dim),
-                default_initialization=init_normal_(std=self._hidden_size**-0.5),
-                lr_scale=self._lr_scale,
-                peft=self._peft,
-            )
+        self.output_weights = self._config.output_weight.get_parameter(
+            (self._vocab_dim, self._hidden_dim),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -121,7 +120,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if self._is_last_head:
                 return TensorMeta.from_dims(
                     (scalar_dim,),
-                    tensor_name="Loss",
+                    tensor_name=f"{self.module_name} output",
                     reductions=(
                         (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
                     ),
@@ -190,7 +189,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             self._parallel_dim.size if self._sequence_parallel_logits else 1
         )
 
-        output_weights = self._get_output_weights(kwargs)
+        output_weights = self.output_weights
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
             ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
         )
@@ -226,9 +225,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                 if lm_target is not None:
                     # MTP: Shift the labels
                     lm_target_sequence_length = (
-                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first])
-                        + 1
-                        - self._config.prediction_heads
+                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
                     )
                     if LanguageModelKwargs.sequence_q_dim in kwargs:
                         Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
@@ -251,12 +248,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             targets = None
         return targets
 
-    def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        if self._config.tied_weight:
-            return kwargs[WORD_EMBEDDINGS_WEIGHT]
-        if self._prediction_distance > 0:
-            return kwargs[OUTPUT_WEIGHTS]
-        return self.output_weights
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return [self.output_weights]
 
     def _logits_cross_entropy_forward_backward_split(
         self,
@@ -273,6 +266,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
+                loss = loss.detach()
+                if kwargs.get("global_logits"):
+                    if self._vocab_parallel:
+                        loss = gather_op(loss, self._parallel_dim.group, 2)
+                    elif self._sequence_parallel_logits:
+                        loss = gather_op(
+                            loss, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+                        )
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
@@ -340,7 +341,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                 self.training,
                 grad_output,
                 losses,
-                LanguageModelLossNames.z_loss,
+                self._z_loss_name,
                 logits_scale_factor=self._config.logits_scale_factor,
             )
         if self._debug.enabled and self._config.cross_entropy_splits is None:
@@ -428,13 +429,82 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
         if self.training and losses is not None:
             if dpo_loss is not None:
-                losses[LanguageModelLossNames.dpo_loss].append(dpo_loss.detach())
+                losses[self._dpo_loss_name].append(dpo_loss.detach())
             if self._config.distillation_model is not None and distillation_loss is not None:
-                losses[LanguageModelLossNames.distillation_loss].append(distillation_loss.detach())
+                losses[self._distillation_loss_name].append(distillation_loss.detach())
             if self._config.distillation_model is not None and lm_loss is not None:
-                losses[LanguageModelLossNames.distil_lm_loss].append(lm_loss.detach())
+                losses[self._distillation_language_model_loss_name].append(lm_loss.detach())
 
         return loss, output_parallel_linear_backward(grad, context) if self.training else None
+
+    @functools.cached_property
+    def _loss_name(self) -> str:
+        name = "language_model_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _z_loss_name(self) -> str:
+        name = "z_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _dpo_loss_name(self) -> str:
+        name = "dpo_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _distillation_language_model_loss_name(self) -> str:
+        name = "distillation_language_model_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _distillation_loss_name(self) -> str:
+        name = "distillation_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
+        if self._config.logit_z_loss:
+            loss_defs.append(
+                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            )
+        if self._config.enable_dpo:
+            loss_defs.append(
+                LossDef(name=self._dpo_loss_name, formatted_name=_format_name(self._dpo_loss_name), count=count)
+            )
+
+        if self._config.distillation_model is not None:
+            loss_defs.append(
+                LossDef(
+                    name=self._distillation_loss_name,
+                    formatted_name=_format_name(self._distillation_loss_name),
+                    count=count,
+                )
+            )
+            if self._config.language_model_loss_factor > 0.0:
+                loss_defs.append(
+                    LossDef(
+                        name=self._distillation_language_model_loss_name,
+                        formatted_name=_format_name(self._distillation_language_model_loss_name),
+                        count=count,
+                    )
+                )
+
+        return loss_defs
+
+
+def _format_name(name: str) -> str:
+    return name.replace("_", " ")
 
 
 def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor:

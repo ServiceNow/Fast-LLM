@@ -32,7 +32,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
     # _supports_cache_class = False
     # _tied_weights_keys = []
 
-    def forward(
+    def inner_forward(
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
@@ -79,7 +79,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
-        batch = self.fast_llm_base_model.preprocess(
+        batch = self.fast_llm_base_model.preprocess_batch(
             GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
         )
         ((input_, kwargs),) = batch
@@ -99,10 +99,15 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         else:
             kwargs["output_hidden_states"] = False
 
+        kwargs["global_logits"] = True
+
         self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
-        logits = kwargs["logits"]
+        if kwargs[AttentionKwargs.sequence_first]:
+            logits = kwargs["logits"].transpose(0, 1)
+        else:
+            logits = kwargs["logits"]
 
         # TODO: convert hidden state form dict to list to be the same as with HFs
         hidden_states = None

@@ -4,12 +4,13 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig, MultiTokenPredictionConfig
 from fast_llm.models.gpt.conversion.config import (
     AprielHybridSSMCheckpointFormat,
     AutoGPTHuggingfaceCheckpointFormat,
@@ -26,7 +27,7 @@ from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-    from fast_llm.models.gpt.model import GPTInferenceRunner, GPTModel
+    from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
     from fast_llm.models.gpt.trainer import GPTTrainer
 
 logger = logging.getLogger(__name__)
@@ -80,13 +81,19 @@ class GPTBatchConfig(BatchConfig):
 
 
 @config_class()
-class GPTBaseModelConfig(LanguageModelBaseConfig):
+class GPTBaseModelConfig(LanguageModelConfig, BaseModelConfig):
     _abstract = False
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )
+
+    @property
+    def base_model_class(self) -> type["GPTBaseModel"]:
+        from fast_llm.models.gpt.model import GPTBaseModel
+
+        return GPTBaseModel
 
 
 @config_class(dynamic_type={FastLLMModelConfig: "gpt"})
@@ -141,41 +148,42 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     def _validate(self) -> None:
         if self.batch.sequence_length is None:
             # TODO: Drop this.
-            self.batch.sequence_length = self.model.base_model.embeddings_layer.num_position_embeddings
+            self.batch.sequence_length = self.model.base_model.embeddings.num_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
-        if self.model.base_model.embeddings_layer.position_embeddings.enabled:
-            Assert.geq(self.model.base_model.embeddings_layer.num_position_embeddings, self.batch.sequence_length)
+        if self.model.base_model.embeddings.position_embeddings.enabled:
+            Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.batch.sequence_length)
 
-        distillation_model = self.model.base_model.output_layer.distillation_model
-        dpo_reference_model = self.model.base_model.output_layer.dpo_reference_model
-
-        if self.model.base_model.output_layer.enable_dpo:
-            assert dpo_reference_model is not None
-            Assert.none(distillation_model)
+        # TODO: Avoid digging inside the model.
+        head = self.model.base_model.head
+        if isinstance(head, MultiTokenPredictionConfig):
+            prediction_heads = head.prediction_heads
+            head = head.head
         else:
-            Assert.none(dpo_reference_model)
+            prediction_heads = 1
 
-        if distillation_model is None and dpo_reference_model is None:
-            Assert.empty(self.reference_models)
-        else:
-            assert distillation_model is None or dpo_reference_model is None  # currently don't support both
-            expected_names = {name for name in (distillation_model, dpo_reference_model) if name is not None}
-            Assert.eq(self.reference_models.keys(), expected_names)
+        expected_names = {name for name in (head.distillation_model, head.dpo_reference_model) if name is not None}
+        Assert.eq(self.reference_models.keys(), expected_names)
 
         for reference_model in self.reference_models.values():
-            output_layer = reference_model.model.base_model.output_layer
-            Assert.none(output_layer.distillation_model)
-            Assert.none(output_layer.dpo_reference_model)
+            reference_head = reference_model.model.base_model.head
+            if isinstance(reference_head, MultiTokenPredictionConfig):
+                reference_prediction_heads = reference_head.prediction_heads
+                reference_head = reference_head.heads
+            else:
+                reference_prediction_heads = 1
+            Assert.geq(reference_prediction_heads, prediction_heads)
+
+            Assert.none(reference_head.distillation_model)
+            Assert.none(reference_head.dpo_reference_model)
             # TODO: Support more LM head features.
-            Assert.none(output_layer.cross_entropy_splits)
+            Assert.none(reference_head.cross_entropy_splits)
             Assert.eq(
-                reference_model.model.base_model.embeddings_layer.vocab_parallel,
-                self.model.base_model.embeddings_layer.vocab_parallel,
+                reference_model.model.base_model.embeddings.vocab_parallel,
+                self.model.base_model.embeddings.vocab_parallel,
             )
-            Assert.geq(output_layer.prediction_heads, output_layer.prediction_heads)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

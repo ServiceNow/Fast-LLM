@@ -5,7 +5,7 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
-from fast_llm.engine.base_model.config import ResourceUsageConfig
+from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -46,6 +46,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = True,
     ):
         Assert.gt(config.experts, 1)
         # TODO: Implement?
@@ -56,6 +57,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             hidden_dim=hidden_dim,
             lr_scale=lr_scale,
             peft=peft,
+            return_bias=return_bias,
         )
         self.router = self._config.router.get_layer(
             self._hidden_dim,
@@ -83,9 +85,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             CompositeTensorDim("moe_intermediate_2", (experts_dim, intermediate_2_dim)),
         )
 
-    def forward(
+    def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, None]:
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
@@ -260,6 +262,26 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         moe_input = TensorMeta.from_dims(dims, tensor_name=f"moe_{input_.tensor_name}", dtype=input_.dtype)
 
         return super().get_compute_usage(moe_input, kwargs, config) + self.router.get_compute_usage(input_, config)
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        loss_definitions = []
+        if self._config.routing == RoutingType.topk:
+            loss_definitions.append(
+                LossDef(
+                    name=MLPLossNames.load_balancing_loss,
+                    formatted_name="load balancing loss",
+                    count=1,
+                )
+            )
+        if self._config.z_loss_coefficient:
+            loss_definitions.append(
+                LossDef(
+                    name=MLPLossNames.router_z_loss,
+                    formatted_name="router z loss",
+                    count=1,
+                )
+            )
+        return loss_definitions
 
 
 def sinkhorn(cost: torch.Tensor, tolerance: float = 1e-5, eps=1e-9) -> torch.Tensor:

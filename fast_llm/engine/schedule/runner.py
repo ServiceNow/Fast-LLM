@@ -95,7 +95,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._num_stages = len(self._stages)
         self._loss_definitions = {
             loss_definition.name: loss_definition
-            for loss_definition in self._multi_stage.base_model.config.get_loss_definitions()
+            for loss_definition in self._multi_stage.base_model.get_loss_definitions()
         }
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
@@ -324,7 +324,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         for micro_batch in range(batch_config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:
-                micro_batch_data = self._multi_stage.base_model.preprocess(
+                micro_batch_data = self._multi_stage.base_model.preprocess_batch(
                     micro_batch_data,
                     context.schedule.preprocessed_meta,
                     phase=context.phase,
@@ -339,11 +339,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     num_micro_batches=batch_config.sequential_micro_batches,
                     micro_batch_splits=batch_config.micro_batch_splits,
                 )
-                for name, tied_parameter in self._tied_parameters.items():
-                    if tied_parameter.on_device:
-                        kwargs[name] = self._stages[tied_parameter.main_stage].get_parameter_buffer(
-                            tied_parameter.meta.tensor_name
-                        )
                 data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_

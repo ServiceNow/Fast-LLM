@@ -1,11 +1,10 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import LossDef, Preprocessor
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.config import BaseBlockConfig, BlockConfig
+from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
@@ -15,7 +14,7 @@ if typing.TYPE_CHECKING:
 
 
 @config_class()
-class BlockWithBiasConfig(BaseBlockConfig):
+class BlockWithBiasConfig(BlockConfig):
     """
     A common interface for various blocks and block layers.
     """
@@ -30,6 +29,7 @@ class BlockWithBiasConfig(BaseBlockConfig):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_bias: bool = False,
     ) -> "BlockWithBias":
         return self.layer_class(
             self,
@@ -37,6 +37,7 @@ class BlockWithBiasConfig(BaseBlockConfig):
             hidden_dim=hidden_dim,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
+            return_bias=return_bias,
         )
 
 
@@ -94,8 +95,19 @@ class DecoderBlockConfig(BlockConfig):
 
         return DecoderBlock
 
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        return self.mixer.get_preprocessors(distributed_config) + self.mlp.get_preprocessors(distributed_config)
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        return_input: bool = False,
+    ) -> "DecoderBlock":
+        return self.layer_class(
+            self,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+            return_input=return_input,
+        )

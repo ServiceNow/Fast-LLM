@@ -3,7 +3,6 @@ import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import LossDef
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
@@ -152,23 +151,3 @@ class MoEMLPConfig(MLPConfig):
         super()._validate()
         Assert.leq(self.shared_experts, self.experts)
         Assert.leq(self.shared_experts + self.experts_per_token, self.experts)
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        loss_definitions = []
-        if self.routing == RoutingType.topk:
-            loss_definitions.append(
-                LossDef(
-                    name=MLPLossNames.load_balancing_loss,
-                    formatted_name="load balancing loss",
-                    count=1,
-                )
-            )
-        if self.z_loss_coefficient:
-            loss_definitions.append(
-                LossDef(
-                    name=MLPLossNames.router_z_loss,
-                    formatted_name="router z loss",
-                    count=1,
-                )
-            )
-        return loss_definitions

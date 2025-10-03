@@ -328,7 +328,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
     )
     test_input = torch.randint(
         0,
-        model_ref.config.fast_llm_config.base_model.embeddings_layer.vocab_size,
+        model_ref.config.fast_llm_config.base_model.embeddings.vocab_size,
         size=(4, 100),
         dtype=torch.int64,
         device="cuda",

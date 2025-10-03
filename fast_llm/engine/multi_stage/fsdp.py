@@ -56,11 +56,11 @@ class FSDP:
         # The index range of the parameters in the buffer.
         self._parameter_begins_in_buffer = {
             parameter_meta.tensor_name: offset
-            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[:-1])
+            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[:-1], strict=True)
         }
         self._parameter_ends_in_buffer = {
             parameter_meta.tensor_name: offset
-            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[1:])
+            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[1:], strict=True)
         }
 
         # Shard properties
@@ -377,7 +377,7 @@ class FSDP:
         assert self._mode.support_backward
         if not self._requires_grad:
             return
-        for buffer, meta in zip(self._parameter_buffers.values(), self._parameter_metas.values()):
+        for buffer, meta in zip(self._parameter_buffers.values(), self._parameter_metas.values(), strict=True):
             if buffer.param_grad_is_zero:  # noqa
                 assert allow_no_grad or meta.allow_no_grad, meta
                 triton_fill(buffer.grad_buffer, 0)  # noqa

@@ -1,7 +1,8 @@
+import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, Preprocessor
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -9,25 +10,13 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-    from fast_llm.layers.language_model.head import LanguageModelHead
-
-
-class LanguageModelLossNames:
-    language_model_loss = "language_model_loss"
-    z_loss = "z_loss"
-    dpo_loss = "dpo_loss"
-    distil_lm_loss = "distillation_language_model_loss"  # the next token perdiciton of combined distillation loss
-    distillation_loss = "distillation_loss"
-
-    @staticmethod
-    def multi_token_prediction_loss(index: int) -> str:
-        if index == 0:
-            return LanguageModelLossNames.language_model_loss
-        return f"language_model_loss_{index}"
+    from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
+    from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
 
 class LanguageModelKwargs(BlockKwargs):
@@ -100,17 +89,42 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
 
         return LanguageModelEmbedding
 
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        preprocessors = []
-        if self.position_embeddings.enabled:
-            from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 
-            preprocessors.append(PositionEmbeddingPreprocessor(self, distributed_config))
-        return preprocessors
+@config_class(registry=True)
+class LanguageModelHeadBaseConfig(BlockConfig):
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if cls is LanguageModelHeadBaseConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return LanguageModelHeadConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
+
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        embeddings_config: LanguageModelEmbeddingsConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+    ) -> "LanguageModelHeadBase":
+        return self.layer_class(
+            self,
+            distributed_config,
+            embeddings_config,
+            hidden_dim=hidden_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+        )
+
+    @property
+    @abc.abstractmethod
+    def max_prediction_distance(self) -> int:
+        pass
 
 
-@config_class()
-class LanguageModelHeadConfig(BlockConfig):
+@config_class(dynamic_type={LanguageModelHeadBaseConfig: "language_model_head"})
+class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
         desc="Configuration for the final normalization layer.",
@@ -120,17 +134,6 @@ class LanguageModelHeadConfig(BlockConfig):
     output_weight: ParameterConfig = Field(
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
         hint=FieldHint.architecture,
-    )
-    tied_weight: bool = Field(
-        default=True,
-        desc="Tie the output weights (logits) with the vocabulary embedding.",
-        hint=FieldHint.architecture,
-    )
-    prediction_heads: int = Field(
-        default=1,
-        desc="Number of multi-token prediction heads.",
-        hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
     )
     cross_entropy_implementation: CrossEntropyImpl = Field(
         default=CrossEntropyImpl.auto,
@@ -173,12 +176,6 @@ class LanguageModelHeadConfig(BlockConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    prediction_loss_coefficient: list[float] | None = Field(
-        default=None,
-        desc="Loss coefficient for each prediction head.",
-        doc="If not provided, all heads are equally weighted.",
-        hint=FieldHint.feature,
-    )
     teacher_softmax_temperature: float = Field(
         default=1.0,
         desc="Divides distillation target logits by this factor.",
@@ -186,19 +183,14 @@ class LanguageModelHeadConfig(BlockConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    enable_dpo: bool | None = Field(
-        default=False,
-        desc="Whether to enable DPO loss",
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     dpo_beta: float | None = Field(
         default=1.0,
         desc="Beta value for DPO loss.",
-        hint=FieldHint.feature,
-    )
-    dpo_reference_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     distillation_model: str | None = Field(
@@ -207,6 +199,30 @@ class LanguageModelHeadConfig(BlockConfig):
         "If provided, replace the loss with a distillation loss.",
         hint=FieldHint.feature,
     )
+
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        embeddings_config: LanguageModelEmbeddingsConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        prediction_distance: int = 0,
+        prediction_heads: int = 1,
+        loss_coefficient: float = 1.0,
+    ):
+        return self.layer_class(
+            self,
+            distributed_config,
+            embeddings_config,
+            hidden_dim=hidden_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+            prediction_distance=prediction_distance,
+            prediction_heads=prediction_heads,
+            loss_coefficient=loss_coefficient,
+        )
 
     @property
     def layer_class(self) -> "type[LanguageModelHead]":
@@ -222,123 +238,79 @@ class LanguageModelHeadConfig(BlockConfig):
                 else:
                     self.language_model_loss_factor = 0.0
         super()._validate()
-        if self.distillation_model is not None:
-            if self.prediction_heads > 1:
-                raise NotImplementedError("Multi-token prediction not supported with distillation.")
+        assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
+
+    @property
+    def max_prediction_distance(self) -> int:
+        return 1
+
+    @property
+    def enable_dpo(self) -> bool:
+        return self.dpo_reference_model is not None
+
+
+@config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
+class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
+    _abstract = False
+    # Needs to be `DecoderBlockConfig` for the `return_input` interface.
+    # TODO: Make a generic wrapper for returning input instead?
+    block: DecoderBlockConfig = Field(
+        desc="Configuration for the decoder block before each head.",
+        hint=FieldHint.architecture,
+    )
+    # TODO: Generalize? (needs the extra initialization arguments)
+    head: LanguageModelHeadConfig = Field(
+        desc="Configuration for the multi-token-prediction heads.",
+        hint=FieldHint.architecture,
+    )
+    prediction_heads: int = Field(
+        default=1,
+        desc="Prediction heads.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    prediction_loss_coefficient: list[float] | None = Field(
+        default=None,
+        desc="Loss coefficient for each prediction head.",
+        doc="If not provided, all heads are equally weighted.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
         if isinstance(self.prediction_loss_coefficient, list):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
                 Assert.geq(coeff, 0)
 
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        preprocessors: list[Preprocessor] = []
+    @property
+    def layer_class(self) -> "type[MultiTokenPrediction]":
+        from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
-        if self.enable_dpo:  # TODO better way to pass in?
-            from fast_llm.layers.language_model.preprocessing import PreferenceSpanPreprocessor
+        return MultiTokenPrediction
 
-            preprocessors.append(PreferenceSpanPreprocessor())
-
-        return preprocessors
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        loss_defs = []
-        if self.logit_z_loss:
-            LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=count)
-
-        if self.enable_dpo:
-            loss_defs.append(LossDef(name=LanguageModelLossNames.dpo_loss, formatted_name="dpo loss", count=count))
-
-        if self.distillation_model is not None:
-            loss_defs.append(
-                LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=count)
-            )
-            if self.language_model_loss_factor > 0.0:
-                loss_defs.append(
-                    LossDef(
-                        name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=count
-                    )
-                )
-
-        for i in range(self.prediction_heads):
-            loss_defs.append(
-                LossDef(
-                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
-                    formatted_name=f"language model loss {i}",
-                    count=count,
-                )
-            )
-        return loss_defs
-
-    def get_block(
-        self,
-        distributed_config: DistributedConfig,
-        embeddings_config: LanguageModelEmbeddingsConfig,
-        *,
-        hidden_dim: TensorDim,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-        prediction_distance: int = 0,
-    ):
-        return self.layer_class(
-            self,
-            distributed_config,
-            embeddings_config,
-            hidden_dim=hidden_dim,
-            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
-            peft=peft,
-            prediction_distance=prediction_distance,
-        )
-
-    def get_blocks(
-        self,
-        distributed_config: DistributedConfig,
-        embeddings_config: LanguageModelEmbeddingsConfig,
-        mtp_block_config: BlockConfig,
-        *,
-        hidden_dim: TensorDim,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-    ):
-        blocks = []
-        for i in range(self.prediction_heads):
-            if i > 0:
-                blocks.append(
-                    mtp_block_config.get_block(
-                        distributed_config,
-                        hidden_dim=hidden_dim,
-                        lr_scale=lr_scale,
-                        peft=peft,
-                        # The last block only returns the model output.
-                        # The previous blocks return a stack of shared_hidden and transformer_output.
-                        return_input=i < self.prediction_heads - 1,
-                    )
-                )
-            blocks.append(
-                self.get_block(
-                    distributed_config,
-                    embeddings_config,
-                    hidden_dim=hidden_dim,
-                    lr_scale=lr_scale,
-                    peft=peft,
-                    prediction_distance=i,
-                )
-            )
-        return blocks
+    @property
+    def max_prediction_distance(self) -> int:
+        return self.prediction_heads
 
 
-# TODO: `BlockSequenceConfig`? (interface not fully compatible)
 @config_class()
-class LanguageModelBaseConfig(BaseModelConfig):
+class LanguageModelConfig(ModuleConfig):
     # TODO: block
     decoder: BlockSequenceConfig = Field(
         desc="Configuration for the language model decoder.",
         hint=FieldHint.architecture,
     )
-    embeddings_layer: LanguageModelEmbeddingsConfig = Field()
-    output_layer: LanguageModelHeadConfig = Field()
+    embeddings: LanguageModelEmbeddingsConfig = Field()
+    head: LanguageModelHeadBaseConfig = Field()
     # TODO: Allow overriding in sub-models?
     peft: PeftConfig = Field(
         desc="Configuration for parameter-efficient fine tuning.",
+        hint=FieldHint.architecture,
+    )
+    tied_embedding_weight: bool = Field(
+        default=False,
+        desc="Tie the output weights (logits) with the vocabulary embedding.",
         hint=FieldHint.architecture,
     )
     sequence_first: bool | None = Field(
@@ -349,62 +321,3 @@ class LanguageModelBaseConfig(BaseModelConfig):
         " Setting this parameter overrides the default choice. Note that setting to `False` will either do nothing or raise an error.",
         hint=FieldHint.testing,
     )
-
-    def __len__(self) -> int:
-        return len(self.decoder) + 2 * self.output_layer.prediction_heads
-
-    def __getitem__(self, index: int) -> BlockConfig:
-        if index <= 0:
-            Assert.eq(index, 0)
-            return self.embeddings_layer
-        elif index <= len(self.decoder):
-            return self.decoder[index - 1]
-        else:
-            # Start at the last decoder layer so all MTP heads are treated similarly.
-            index - len(self.decoder)
-            return self.embeddings_layer
-
-    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
-        return (
-            self.embeddings_layer.get_preprocessors(distributed_config)
-            + self.decoder.get_preprocessors(distributed_config)
-            + self.output_layer.get_preprocessors(distributed_config)
-        )
-
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return (
-            self.embeddings_layer.get_loss_definitions(count)
-            + self.decoder.get_loss_definitions(count)
-            + self.output_layer.get_loss_definitions(count)
-        )
-
-    def get_blocks(self, distributed_config: DistributedConfig):
-        hidden_dim = TensorDim("hidden", self.embeddings_layer.hidden_size)
-        return [
-            self.embeddings_layer.get_block(
-                distributed_config,
-                hidden_dim=hidden_dim,
-                lr_scale=None,
-                peft=self.peft,
-            ),
-            *[
-                self.decoder[i].get_block(
-                    distributed_config,
-                    hidden_dim,
-                    lr_scale=None,
-                    peft=self.peft,
-                    # The last layer only returns the transformer output.
-                    # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=self.output_layer.prediction_heads > 1 and i == len(self.decoder) - 1,
-                )
-                for i in range(len(self.decoder))
-            ],
-            *self.output_layer.get_blocks(
-                distributed_config,
-                self.embeddings_layer,
-                self.decoder[len(self.decoder) - 1],
-                hidden_dim=hidden_dim,
-                lr_scale=None,
-                peft=self.peft,
-            ),
-        ]

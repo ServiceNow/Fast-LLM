@@ -16,8 +16,8 @@ from fast_llm.utils import safe_merge_dicts
 
 class MistralAttentionConverter(LlamaAttentionConverter):
     @classmethod
-    def import_config(cls, config: dict, hidden_size: int) -> dict:
-        return safe_merge_dicts(super().import_config(config, hidden_size), {"window_size": config["sliding_window"]})
+    def import_config(cls, config: dict) -> dict:
+        return safe_merge_dicts(super().import_config(config), {"window_size": config["sliding_window"]})
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:

@@ -316,7 +316,9 @@ def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Cal
     return new_decorator
 
 
-def compare_nested(config_a, config_b, errors: list | None = None, prefix: tuple = ()):
+def compare_nested(
+    config_a, config_b, errors: list | None = None, prefix: tuple = (), ignore_missing: tuple[str, ...] = ()
+):
     if errors is None:
         errors = []
     # Check for equality of both values and types.

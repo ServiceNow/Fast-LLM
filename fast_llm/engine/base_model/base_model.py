@@ -1,23 +1,19 @@
 import abc
 import typing
 
-import torch
 import torch.nn
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import BaseModelConfig, ResourceUsageConfig
+from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
-from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.runner import InferenceRunner
 
 
-class Module(torch.nn.Module, abc.ABC):
-    """ """
-
+class LayerBase(torch.nn.Module, abc.ABC):
     _is_setup: bool = False
     _distributed: Distributed
 
@@ -27,57 +23,102 @@ class Module(torch.nn.Module, abc.ABC):
 
     def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
+        for layer in self.get_layers():
+            if layer is not self:
+                layer.setup(distributed)
         distributed.check_config(self._distributed_config)
         self._distributed = distributed
         self._is_setup = True
 
-
-class Layer(Module):
-    # Weight used to determine the stage size
-    layer_count: float = 1.0
-
     @abc.abstractmethod
-    def forward(
-        self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
-    ) -> torch.Tensor:
-        pass
+    def get_layers(self) -> list["Layer"]:
+        """
+        The list of layers as meant to be seen by the Fast-LLM engine.
+        May differ from the module configuration seen by pytorch.
+        """
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        raise NotImplementedError()
+        out = 0
+        for layer in self.get_layers():
+            if layer is self:
+                raise NotImplementedError()
+            out += layer.get_compute_usage(input_, kwargs, config)
+        return out
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        losses = []
+        for layer in self.get_layers():
+            if layer is not self:
+                losses += layer.get_loss_definitions(count)
+        return losses
+
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+        for layer in self.get_layers():
+            if layer is not self:
+                layer.preprocess(batch, kwargs)
 
 
-class Sequential(Layer):
-    def __init__(self, distributed_config: DistributedConfig):
-        super().__init__(distributed_config)
-        self.layers = torch.nn.ModuleList(self.get_layers())
+class Layer(LayerBase):
+    # Weight used to determine the stage size.
+    layer_count: float = 1.0
 
-    def __getitem__(self, item):
-        return self.layers[item]
+    def get_layers(self) -> list["Layer"]:
+        # Return a breakdown of the layer into atomic ones,
+        # i.e. the list of layers from as seen from the Fast-LLM model.
+        return [self]
 
-    def __iter__(self):
-        return iter(self.layers)
+    @abc.abstractmethod
+    def forward(
+        self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
+    ) -> torch.Tensor:
+        pass
 
-    def __len__(self):
-        return len(self.layers)
+    def unwrap(self) -> "Layer":
+        # Get the actual module contained in this layer,
+        # undoing any wrapping for the Fast-LLM engine (ex. `LayerWithNamespace`)
+        return self
+
+
+class LayerWithNamespace(Layer):
+    """
+    A layer with its own namespace for preprocessing (kwargs),
+     so that it doesn't inadvertently interact with other layers.
+    TODO: Consider namespace for losses and metrics?
+    """
+
+    def __init__(self, layer: Layer, namespace: str = None):
+        super().__init__(layer._distributed_config)
+        self._layer = layer
+        self._namespace = namespace
+        self.layer_count = self._layer.layer_count
+        self.get_compute_usage = self._layer.get_compute_usage
+        self.module_name = self._layer.module_name
+
+    def setup(self, distributed: Distributed) -> None:
+        self._layer.setup(distributed)
+        super().setup(distributed)
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
-        for layer in self.layers:
-            input_ = layer(input_, kwargs, losses, metrics)
-        return input_
+        if self._namespace in kwargs:
+            kwargs = kwargs[self._namespace]
+        else:
+            # TODO: Forward meta doesn't go through preprocessing so doesn't have a namespace.
+            #   Using kwargs as-is since it's generally unused.
+            assert isinstance(input_, TensorMeta)
+        return self._layer.forward(input_, kwargs, losses, metrics)
 
-    @abc.abstractmethod
-    def get_layers(self) -> list[Layer]:
-        pass
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+        assert self._namespace not in kwargs
+        kwargs[self._namespace] = kwargs.copy()
+        self._layer.preprocess(batch, kwargs[self._namespace])
 
-    def setup(self, distributed: Distributed) -> None:
-        super().setup(distributed)
-        for layer in self.layers:
-            layer.setup(distributed)
+    def unwrap(self) -> "Layer":
+        return self._layer.unwrap()
 
 
-class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequential):
+class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase):
 
     def __init__(
         self,
@@ -85,27 +126,18 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-        for key, value in self.named_modules():
-            value.module_name = key
-        for key, value in self.named_parameters():
-            Assert.custom(isinstance, value, ParameterMeta)
-            # Rename to the parameter full name
-            value.tensor_name = key
 
         # Reference models
         # TODO: Add basic handling (preprocessor) in this class.
         self._reference_models: dict[str, "InferenceRunner"] = {}
 
     @abc.abstractmethod
-    def get_layers(self) -> list[Layer]:
-        pass
-
-    @abc.abstractmethod
     def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
+        # TODO Remove (Move batch splitting elsewhere)
         pass
 
     @abc.abstractmethod
-    def preprocess(
+    def preprocess_batch(
         self,
         batch: typing.Any,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
@@ -114,13 +146,19 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
+        # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass
 
-    def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        # For each tied weight, return the weight and the tuple of layers sharing it.
-        # The weight should be defined in the first layer in the set.
-        # Warning: This may return buffers instead of metas after stage setup.
-        # The name (dict key) is used to insert the weight in the kwargs of the forward pass.
+    def get_tied_parameters(self) -> dict[str, list[ParameterMeta]]:
+        """
+        Return tuples of independently defined metas to tie together.
+        Metas should be compatible, i.e. have the same tensor dimensions.
+        Tied weights are named (dict keys) for convenience only.
+        Warning: Initialization and optimization properties are defined on the first appearance of the tied weight.
+          To prevent any confusion, the metas should be provided in the same order they appear in the model.
+          TODO: Improve?
+        Note: This may return buffers instead of metas after stage setup.
+        """
         return {}
 
     def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:
