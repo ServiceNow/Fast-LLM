@@ -41,7 +41,8 @@ def test_frozen_weights(model_testing_config):
         model_frozen._num_stages,
     )
     frozen_parameter_counts = [
-        sum(p.numel() for p in layer.mlp.parameters()) for layer in model_ref.base_model.decoder.layers
+        sum(p.numel() for p in layer.unwrap().mlp.parameters()) if layer.module_name.startswith("decoder") else 0
+        for layer in model_ref.base_model.get_layers()
     ]
 
     # Make sure each layer has its own buffer so the check below works.
