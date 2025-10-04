@@ -32,5 +32,4 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "extra_tokens": self._config.model.base_model.head.max_prediction_distance,
             }
         )
-
         return parameters if _return_dict else GPTSamplingParameters(**parameters)
