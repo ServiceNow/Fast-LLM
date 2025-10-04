@@ -449,19 +449,13 @@ class LlamaDecoderConverter:
 class LlamaEmbeddingsConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {
-            "vocab_size": config["vocab_size"],
-            "hidden_size": config["hidden_size"],
-        }
+        return {"vocab_size": config["vocab_size"]}
 
     @classmethod
     def export_config(cls, config: LanguageModelEmbeddingsConfig) -> dict:
         Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
         assert not config.position_embeddings.enabled
-        return {
-            "vocab_size": config.vocab_size,
-            "hidden_size": config.hidden_size,
-        }
+        return {"vocab_size": config.vocab_size}
 
     @classmethod
     def get_converters(
@@ -516,6 +510,7 @@ class LlamaBaseModelConverter:
             "embeddings": cls.embeddings_converter_class.import_config(config),
             "decoder": cls.decoder_converter_class.import_config(config),
             "head": cls.head_converter_class.import_config(config),
+            "hidden_size": config["hidden_size"],
             "tied_embedding_weight": config["tie_word_embeddings"],
         }
 
@@ -526,7 +521,10 @@ class LlamaBaseModelConverter:
             cls.embeddings_converter_class.export_config(config.embeddings),
             cls.decoder_converter_class.export_config(config.decoder),
             cls.head_converter_class.export_config(config.head),
-            {"tie_word_embeddings": config.tied_embedding_weight},
+            {
+                "tie_word_embeddings": config.tied_embedding_weight,
+                "hidden_size": config.hidden_size,
+            },
         )
 
     @classmethod
