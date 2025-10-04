@@ -103,6 +103,7 @@ class BlockBase[ConfigType: ModuleConfig](Configurable[ConfigType], LayerBase):
         config: ConfigType,
         distributed_config: DistributedConfig,
         *,
+        # TODO: Review. Use `input_dim(s)` and `output_dim(s)` instead?
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,

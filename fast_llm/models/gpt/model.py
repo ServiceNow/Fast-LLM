@@ -30,34 +30,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def __init__(
         self,
-        config: GPTBaseModelConfig,
+        config: ConfigType,
         distributed_config: DistributedConfig,
     ):
-        super().__init__(config, distributed_config)
+        super().__init__(config, distributed_config, lr_scale=self._config.lr_scale, peft=self._config.peft)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(
-                    param, self._config.decoder.block, config.embeddings.hidden_size
-                )  # Noqa
-
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    self._preprocessors.append(VisionPreprocessor(self._config.vision_encoder, self._tensor_space))
-        #    self._preprocessors.append(self._config.vision_encoder.transformer.rotary.build(self._tensor_space))
-
-    # TODO ====== Vision ======
-    # def get_vision_layers(self) -> list[Layer]:
-    #    vit_layers = [
-    #        VisionTransformerBlock(self._config.vision_encoder.transformer, self._tensor_space, block_index=idx + 1)
-    #        for idx in range(self._config.vision_encoder.transformer.num_layers)
-    #    ]
-    #    return [
-    #        PatchConv(self._config.vision_encoder, self._tensor_space),
-    #        *vit_layers,
-    #        VisionAdapter(self._config.vision_encoder, self._tensor_space),
-    #        MultiModalEmbedding(self._config, self._tensor_space),
-    #    ]
+                param.init_parameter = get_init_megatron(param, self._config.decoder.block, config.hidden_size)  # Noqa
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
@@ -123,33 +103,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             LanguageModelKwargs.mask_inputs: not truncate_documents,
         }
 
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    try:
-        #        max_image_size = batch_meta.max_image_size
-        #    except AttributeError:
-        #        max_image_size = 256
-        #        logger.warning("Inference mode: max_image_size not provided, defaulting to 256")
-        #    vision_kwargs = {
-        #        VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
-        #        VisionEncoderKwargs.max_image_size: max_image_size,
-        #        VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
-        #        VisionEncoderKwargs.kv_channels: self._tensor_space[VisionTransformerDimNames.kv_channels].size,
-        #        VisionEncoderKwargs.out_channels: self._tensor_space[VisionEncoderDimNames.out_channels].size,
-        #    }
-        #    vision_hidden_dim = self._tensor_space[VisionTransformerDimNames.hidden]
-        #    vision_hidden_dims = (
-        #        (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
-        #        if sequence_first
-        #        else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
-        #    )
-        #    vision_kwargs.update(
-        #        {
-        #            VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
-        #        }
-        #    )
-        #    common_kwargs.update(vision_kwargs)
-
         sequence_k_pasts = range(
             sequence_q_dim.size * self._distributed_config.sequence_data_rank,
             sequence_length,
@@ -191,13 +144,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     Assert.eq(reference_kwargs_[key], kwargs[key])
                 reference_kwargs[name] = reference_kwargs_
             kwargs["reference_models"] = reference_kwargs
-
-            # TODO ====== Vision ======
-            # if self._config.vision_encoder.enabled:
-            #     # patch_dimensions are (batch * sequence_length) x 3 x patch_size x patch_size
-            #     preprocessed_meta.append((kwargs[VisionEncoderKwargs.image_patches_meta], kwargs))
-            # else:
-            #     preprocessed_meta.append((tokens, kwargs))
 
             preprocessed_meta.append((tokens, kwargs))
 
@@ -341,44 +287,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
                             rejected_valid_spans.append(valid_spans)
                     kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
-
-                # TODO ====== Vision ======
-                # if self._config.vision_encoder.enabled:
-                #    if self._config.vision_encoder.image_break_token is not None:
-                #        if not labels_cloned:
-                #            labels = labels.clone()
-                #            labels_cloned = True
-                #        labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
-                #    if self._config.vision_encoder.image_end_token is not None:
-                #        if not labels_cloned:
-                #            labels = labels.clone()
-                #            labels_cloned = True
-                #        labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
-                # Loss-masking for distillation losses
-
-            # TODO ====== Vision ======
-            # if self._config.vision_encoder.enabled:
-            #    batch_images = (
-            #        batch.images if batch.images is not None else [[]] * kwargs[AttentionKwargs.micro_batch_size]
-            #    )
-            #    kwargs[VisionEncoderKwargs.images] = [
-            #        [
-            #            img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
-            #            for img in images
-            #        ]
-            #        for images in batch_images
-            #    ]
-            #    kwargs[VisionEncoderKwargs.image_positions] = (
-            #        batch.image_positions
-            #        if batch.image_positions is not None
-            #        else [[]] * kwargs[AttentionKwargs.micro_batch_size]
-            #    )
-            #    kwargs[LanguageModelKwargs.tokens] = tokens
-            # image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
-            # if image_patches is not None:
-            #     preprocessed.append((image_patches, kwargs))
-            # else:
-            #     preprocessed.append((tokens, kwargs))
 
             self.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))

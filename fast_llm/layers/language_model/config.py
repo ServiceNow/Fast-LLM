@@ -2,7 +2,6 @@ import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -16,6 +15,7 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
     from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
+    from fast_llm.layers.language_model.language_model import LanguageModel
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
 
@@ -40,12 +40,6 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
     position_embeddings: OptionalParameterConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
-    )
-    hidden_size: int = Field(
-        default=1024,
-        desc="Size of the model's main hidden dimension, e.g., for its input and output layers.",
-        hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
     )
     vocab_size: int = Field(
         default=49152,
@@ -295,23 +289,28 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
 
 
 @config_class()
-class LanguageModelConfig(ModuleConfig):
-    # TODO: block
+class LanguageModelConfig(BlockConfig):
     decoder: BlockSequenceConfig = Field(
         desc="Configuration for the language model decoder.",
         hint=FieldHint.architecture,
     )
-    embeddings: LanguageModelEmbeddingsConfig = Field()
-    head: LanguageModelHeadBaseConfig = Field()
-    # TODO: Allow overriding in sub-models?
-    peft: PeftConfig = Field(
-        desc="Configuration for parameter-efficient fine tuning.",
+    embeddings: LanguageModelEmbeddingsConfig = Field(
         hint=FieldHint.architecture,
+        desc="Configuration for the language model embeddings.",
+    )
+    head: LanguageModelHeadBaseConfig = Field(
+        hint=FieldHint.architecture, desc="Configuration for the language model head(s)."
     )
     tied_embedding_weight: bool = Field(
         default=False,
         desc="Tie the output weights (logits) with the vocabulary embedding.",
         hint=FieldHint.architecture,
+    )
+    hidden_size: int = Field(
+        default=1024,
+        desc="Size of the model's main hidden dimension, e.g., for its input and output layers.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
     sequence_first: bool | None = Field(
         default=None,
@@ -321,3 +320,9 @@ class LanguageModelConfig(ModuleConfig):
         " Setting this parameter overrides the default choice. Note that setting to `False` will either do nothing or raise an error.",
         hint=FieldHint.testing,
     )
+
+    @property
+    def layer_class(self) -> "type[LanguageModel]":
+        from fast_llm.layers.language_model.language_model import LanguageModel
+
+        return LanguageModel

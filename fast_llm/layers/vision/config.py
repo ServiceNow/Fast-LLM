@@ -1,15 +1,14 @@
-import enum
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import ModuleConfig
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.linear.config import Convolution2DConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    pass
+    from fast_llm.layers.vision.vision_encoder import VisionEncoder
 
 
 @config_class()
@@ -51,12 +50,6 @@ class ImageNormalizationConfig(Config):
     )
 
 
-class VisionEncoderType(str, enum.Enum):
-    none = "none"
-    # TODO: better name? normalization, patch size, adapter can change based on implementation, no standard way currently.
-    pixtral = "pixtral"
-
-
 @config_class()
 class PatchConvolutionConfig(BlockConfig):
     _abstract = False
@@ -81,26 +74,34 @@ class PatchConvolutionConfig(BlockConfig):
 
 
 @config_class(registry=True)
-class VisionEncoderConfig(ModuleConfig):
+class VisionEncoderConfig(BlockConfig):
     _abstract = False
-    patch_convolution_layer: PatchConvolutionConfig = Field(
+    patch_convolution: PatchConvolutionConfig = Field(
         desc="Configuration for the patch convolution layer.",
         hint=FieldHint.architecture,
     )
-    adapter_layer: MLPBaseConfig = Field(
+    adapter: MLPBaseConfig = Field(
         desc="Configuration for the adapter layer.",
         hint=FieldHint.architecture,
     )
+    # TODO: ====== Appropriate name?? ======
     decoder: BlockSequenceConfig = Field(
         desc="Configuration for the vision decoder.",
         hint=FieldHint.architecture,
     )
-
-    type: VisionEncoderType = Field(
-        default=VisionEncoderType.none,
-        desc="Type of the vision encoder. Choices: none, pixtral.",
+    hidden_size: int = Field(
+        default=1024,
+        desc="Size of the vision encoder main hidden dimension.",
         hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
+
+    @property
+    def layer_class(self) -> "type[VisionEncoder]":
+        from fast_llm.layers.vision.vision_encoder import VisionEncoder
+
+        return VisionEncoder
+
     # transformer: TransformerConfig = Field(
     #    desc="Configuration for the vision transformer architecture.",
     #    hint=FieldHint.core,
@@ -134,20 +135,20 @@ class VisionEncoderConfig(ModuleConfig):
     #    desc="Whether to use bias in the adapter linear layer.",
     #    hint=FieldHint.optional,
     # )
-    image_normalization: ImageNormalizationConfig = Field(
-        desc="Configuration for the normalization layers applied to the image patches.",
-        hint=FieldHint.optional,
-    )
-    image_break_token: int | None = Field(
-        default=None,
-        desc="Token id to separate image rows. If None, no token id is applied.",
-        hint=FieldHint.optional,
-    )
-    image_end_token: int | None = Field(
-        default=None,
-        desc="Token id to indicate the end of an image. If None, no token id is applied.",
-        hint=FieldHint.optional,
-    )
+    # image_normalization: ImageNormalizationConfig = Field(
+    #    desc="Configuration for the normalization layers applied to the image patches.",
+    #    hint=FieldHint.optional,
+    # )
+    # image_break_token: int | None = Field(
+    #    default=None,
+    #    desc="Token id to separate image rows. If None, no token id is applied.",
+    #    hint=FieldHint.optional,
+    # )
+    # image_end_token: int | None = Field(
+    #    default=None,
+    #    desc="Token id to indicate the end of an image. If None, no token id is applied.",
+    #    hint=FieldHint.optional,
+    # )
     # adapter_lr_scale: float | None = Field(
     #    default=None,
     #    desc="Custom learning rate scale for the adapter weights.",
@@ -166,19 +167,3 @@ class VisionEncoderConfig(ModuleConfig):
     #    hint=FieldHint.optional,
     #    valid=check_field(Assert.geq, 0),
     # )
-
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            if self.adapter_init_method_std is None:
-                self.adapter_init_method_std = self.adapter_size**-0.5
-        super()._validate()
-
-    @property
-    def enabled(self) -> bool:
-        return self.type != VisionEncoderType.none
-
-
-for name in VisionEncoderType:
-    # We need this because we are using the reserved field name `type`.
-    # TODO: Implement proper dynamic typing.
-    VisionEncoderConfig.register_subclass(name.value, VisionEncoderConfig)
