@@ -255,7 +255,7 @@ def test_lm_head(
         logit_weight = torch.nn.Parameter(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.compute_dtype.torch, device=distributed.device
-            ).normal_(config.embeddings.hidden_size**-0.5)
+            ).normal_(config.hidden_size**-0.5)
         )
     else:
         logit_weight = None
