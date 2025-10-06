@@ -35,6 +35,7 @@ class ConcatenateDatasetConfig(RunnableConfig):
             dataset_dict = {
                 "prefix": str(prefix.relative_to(self.directory)),
                 "num_documents": len(dataset),
+                # Todo: fix
                 "num_tokens": dataset.num_tokens,
             }
             if self.min_tokens is not None and dataset_dict["num_tokens"] < self.min_tokens:
