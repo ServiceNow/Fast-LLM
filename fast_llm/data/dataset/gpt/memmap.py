@@ -65,7 +65,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset = stream.tell()
 
         if num_documents is not None:
-            assert self._num_documents == num_documents
+            assert (
+                self._num_documents == num_documents
+            ), f"Inconsistent num_documents for dataset {self.name} - {self._prefix}. Expected {num_documents}, got {self._num_documents}."
 
         self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
