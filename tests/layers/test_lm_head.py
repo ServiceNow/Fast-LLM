@@ -171,13 +171,8 @@ def test_lm_head(
     }
     config = GPTBaseModelConfig.from_dict(
         {
-            "decoder": {
-                "num_blocks": 0,
-            },
-            "embeddings": {
-                "vocab_size": VOCAB_SIZE,
-                "hidden_size": HIDDEN_SIZE,
-            },
+            "decoder": {"num_blocks": 0},
+            "embeddings": {"vocab_size": VOCAB_SIZE},
             "head": (
                 head_config
                 if prediction_heads == 1
@@ -187,6 +182,7 @@ def test_lm_head(
                     "prediction_heads": prediction_heads,
                 }
             ),
+            "hidden_size": HIDDEN_SIZE,
         },
         config_dict,
         update_type=UpdateType.update,

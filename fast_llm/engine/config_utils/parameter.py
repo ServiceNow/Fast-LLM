@@ -1,7 +1,8 @@
 import math
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.initialization import Initialization, InitializationConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -36,7 +37,7 @@ def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
 
 
 @config_class()
-class ParameterConfig(Config):
+class ParameterConfig(ModuleConfig):
     initialization: InitializationConfig = Field(
         desc="If provided, override the default initialization method set by the parent layer.",
         hint=FieldHint.feature,
