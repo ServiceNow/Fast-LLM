@@ -30,16 +30,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def __init__(
         self,
-        config: GPTBaseModelConfig,
+        config: ConfigType,
         distributed_config: DistributedConfig,
     ):
-        super().__init__(config, distributed_config)
+        super().__init__(config, distributed_config, lr_scale=config.lr_scale, peft=config.peft)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(
-                    param, self._config.decoder.block, config.embeddings.hidden_size
-                )  # Noqa
+                param.init_parameter = get_init_megatron(param, self._config.decoder.block, config.hidden_size)  # Noqa
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType

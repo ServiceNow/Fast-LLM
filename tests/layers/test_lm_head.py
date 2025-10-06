@@ -171,13 +171,8 @@ def test_lm_head(
     }
     config = GPTBaseModelConfig.from_dict(
         {
-            "decoder": {
-                "num_blocks": 0,
-            },
-            "embeddings": {
-                "vocab_size": VOCAB_SIZE,
-                "hidden_size": HIDDEN_SIZE,
-            },
+            "decoder": {"num_blocks": 0},
+            "embeddings": {"vocab_size": VOCAB_SIZE},
             "head": (
                 head_config
                 if prediction_heads == 1
@@ -187,6 +182,7 @@ def test_lm_head(
                     "prediction_heads": prediction_heads,
                 }
             ),
+            "hidden_size": HIDDEN_SIZE,
         },
         config_dict,
         update_type=UpdateType.update,
@@ -255,7 +251,7 @@ def test_lm_head(
         logit_weight = torch.nn.Parameter(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.compute_dtype.torch, device=distributed.device
-            ).normal_(config.embeddings.hidden_size**-0.5)
+            ).normal_(config.hidden_size**-0.5)
         )
     else:
         logit_weight = None

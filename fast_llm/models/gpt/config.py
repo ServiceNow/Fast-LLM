@@ -10,6 +10,7 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig, MultiTokenPredictionConfig
 from fast_llm.models.gpt.conversion.config import (
     AprielHybridSSMCheckpointFormat,
@@ -84,6 +85,11 @@ class GPTBatchConfig(BatchConfig):
 class GPTBaseModelConfig(LanguageModelConfig, BaseModelConfig):
     _abstract = False
 
+    # TODO: Allow overriding in sub-models?
+    peft: PeftConfig = Field(
+        desc="Configuration for parameter-efficient fine tuning.",
+        hint=FieldHint.architecture,
+    )
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
