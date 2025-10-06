@@ -23,7 +23,7 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         config: ConfigType,
         distributed_config: DistributedConfig,
         *,
-        # Unused, but required by the `BlockBase` interface.
+        # TODO: Unused, but required by the `BlockBase` interface.
         hidden_dim: TensorDim | None = None,
         lr_scale: float | None,
         peft: PeftConfig | None,
@@ -31,7 +31,7 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         super().__init__(
             config,
             distributed_config,
-            hidden_dim=TensorDim("hidden", self._config.hidden_size),
+            hidden_dim=TensorDim("hidden", config.hidden_size),
             lr_scale=lr_scale,
             peft=peft,
         )

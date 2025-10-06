@@ -28,7 +28,6 @@ optimizer:
 model:
   base_model:
     embeddings:
-      hidden_size: 4096
       vocab_size: 32000
       dropout: 0.0
     decoder:
@@ -58,6 +57,7 @@ model:
       normalization:
         type: rms_norm
         epsilon: 1.0e-05
+    hidden_size: 4096
     tied_embedding_weight: false
   multi_stage:
     zero_stage: 2

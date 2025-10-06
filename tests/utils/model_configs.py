@@ -192,7 +192,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "embeddings": {
                     "word_embeddings": init_1,
                     "position_embeddings": {"enabled": True, **init_1},
-                    "hidden_size": 256,
                     "num_position_embeddings": 512,
                     "vocab_size": MODEL_TEST_VOCAB_SIZE,
                 },
@@ -216,6 +215,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                     "num_blocks": 2,
                 },
                 "head": {"output_weight": init_1},
+                "hidden_size": 256,
                 "tied_embedding_weight": True,
             },
             "multi_stage": {

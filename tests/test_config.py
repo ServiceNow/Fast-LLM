@@ -74,9 +74,6 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
-                "embeddings": {
-                    "hidden_size": 1024,  # Default
-                },
                 "decoder": {
                     "block": {
                         "mixer": {
@@ -92,6 +89,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     },
                     "num_blocks": 12,  # Default
                 },
+                "hidden_size": 1024,  # Default
                 "tied_embedding_weight": False,
             },
             "multi_stage": {"zero_stage": 3},
@@ -105,7 +103,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     pretrained_model_config.save_metadata(save_config)
 
     base_model_update = {
-        "embeddings": {"hidden_size": 512, "vocab_size": 1000},
+        "embeddings": {"vocab_size": 1000},
         "decoder": {
             "block": {
                 "mixer": {
@@ -115,6 +113,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 "normalization": {"implementation": "triton"},  # Update non-default nested
             },
         },
+        "hidden_size": 512,
         "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
@@ -134,10 +133,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
     expected_config["distributed"].update({"seed": 1234, "compute_dtype": "float16"})
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
-            "embeddings": {
-                "hidden_size": 512,
-                "vocab_size": 1000,
-            },
+            "embeddings": {"vocab_size": 1000},
             "decoder": {
                 "block": {
                     "mixer": {
@@ -152,6 +148,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 },
                 "num_blocks": 12,
             },
+            "hidden_size": 512,
             "tied_embedding_weight": False,
             "peft": {"freeze_others": False},
         }

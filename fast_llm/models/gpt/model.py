@@ -33,7 +33,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         config: ConfigType,
         distributed_config: DistributedConfig,
     ):
-        super().__init__(config, distributed_config, lr_scale=self._config.lr_scale, peft=self._config.peft)
+        super().__init__(config, distributed_config, lr_scale=config.lr_scale, peft=config.peft)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)

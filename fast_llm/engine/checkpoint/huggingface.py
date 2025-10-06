@@ -150,7 +150,6 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                 ].values()
             }
         elif (config.path / transformers.utils.WEIGHTS_NAME).is_file():
-            # TODO: Prevent unsafe by default
             paths = {config.path / transformers.utils.WEIGHTS_NAME}
         elif (config.path / transformers.utils.WEIGHTS_INDEX_NAME).is_file():
             logger.info(f"Loading index from {config.path / transformers.utils.WEIGHTS_INDEX_NAME}")
@@ -170,7 +169,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                     for key in f.keys():
                         yield key, "weights", f.get_slice(key)
             elif path.suffix == ".bin":
-                # TODO: Prevent unsafe by default
-                yield from torch.load(path)
+                # TODO: Confirm that loading works with `weights_only=True`
+                yield from torch.load(path, weights_only=True)
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")
