@@ -344,6 +344,8 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
 )
+del MODEL_CONFIGS["starcoder_2"].config_dict["model"]["base_model"]["embeddings"]["num_position_embeddings"]
+
 
 _update_and_add_testing_config(
     # Main tested model.
