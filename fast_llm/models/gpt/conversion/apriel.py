@@ -7,7 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
 from fast_llm.layers.ssm.config import DiscreteMamba2Config, Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
@@ -232,16 +232,80 @@ class AprielMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielMamba2Converter]] = AprielMamba2Converter
 
 
+class AprielStochasticMixerConverter:
+    _mixer_block_converters = {
+        AttentionConfig: MistralBlockConverter,
+        Mamba2Config: AprielMamba2BlockConverter,
+        DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
+    }
+
+    @classmethod
+    def import_config(cls, config: dict, layout_name: str = "t") -> dict:
+        layout_to_config = {
+            "t": AttentionConfig,
+            "m2": Mamba2Config,
+            "m2d": DiscreteMamba2Config,
+        }
+        config_class = layout_to_config.get(layout_name, AttentionConfig)
+        converter_class = cls._mixer_block_converters[config_class]
+        return converter_class.import_config(config)
+
+    @classmethod
+    def export_config(cls, config: DecoderBlockConfig) -> dict:
+        Assert.custom(isinstance, config.mixer, StochasticMixerConfig)
+        inference_mixer = config.mixer.mixers[config.mixer.main_mixer_index]
+        mixer_type = type(inference_mixer)
+        converter_class = cls._mixer_block_converters.get(mixer_type)
+        if converter_class is None:
+            raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
+        temp_block_config = DecoderBlockConfig(
+            mixer=inference_mixer,
+            mlp=config.mlp,
+            normalization=config.normalization,
+            dropout=config.dropout,
+        )
+        return converter_class.export_config(temp_block_config)
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: DecoderBlockConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        Assert.custom(isinstance, config.mixer, StochasticMixerConfig)
+        inference_mixer = config.mixer.mixers[config.mixer.main_mixer_index]
+        mixer_type = type(inference_mixer)
+        converter_class = cls._mixer_block_converters.get(mixer_type)
+        if converter_class is None:
+            raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
+        mixer_converter_class = converter_class.mixer_converter_class
+        converters = mixer_converter_class.get_converters(
+            inference_mixer,
+            f"{fast_llm_prefix}.mixers.{config.mixer.main_mixer_index}",
+            hf_prefix,
+            drop_on_export=drop_on_export,
+        )
+        return converters
+
+
+class AprielStochasticMixerBlockConverter(MistralBlockConverter):
+    mixer_converter_class: typing.ClassVar[type[AprielStochasticMixerConverter]] = AprielStochasticMixerConverter
+
+
 class AprielBlockConverter:
     layout_names = {
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
+        StochasticMixerConfig: "stochastic",
     }
     _converter_classes = {
         AttentionConfig: MistralBlockConverter,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
+        StochasticMixerConfig: AprielStochasticMixerBlockConverter,
     }
     _config_classes = {value: key for key, value in layout_names.items()}
 

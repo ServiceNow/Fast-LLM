@@ -1,3 +1,4 @@
+import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
@@ -11,6 +12,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.decoder.block import BlockWithBias, DecoderBlock
+    from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
 
 
 @config_class()
@@ -55,6 +57,13 @@ class MLPBaseConfig(BlockWithBiasConfig):
         return super()._from_dict(default, strict=strict)
 
 
+class SamplingStrategy(str, enum.Enum):
+    """Strategy for sampling mixers in a stochastic mixer."""
+
+    uniform = "uniform"
+    weighted = "weighted"
+
+
 @config_class(registry=True)
 class MixerConfig(BlockWithBiasConfig):
     """
@@ -69,6 +78,70 @@ class MixerConfig(BlockWithBiasConfig):
             # Default subclass.
             return AttentionConfig._from_dict(default, strict)
         return super()._from_dict(default, strict=strict)
+
+
+@config_class(dynamic_type={MixerConfig: "stochastic"})
+class StochasticMixerConfig(MixerConfig):
+    """
+    Stochastic mixer that uniformly samples from multiple mixer options during training.
+
+    For supernet training, each forward pass randomly selects one mixer to execute,
+    training all mixers with different subsets of data.
+    """
+
+    _abstract = False
+
+    mixers: list[MixerConfig] = Field(
+        desc="List of mixer options to sample from (must contain at least 1).",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt_len, 0),
+    )
+
+    sampling_strategy: SamplingStrategy = Field(
+        default=SamplingStrategy.uniform,
+        desc="Strategy for sampling mixers during training.",
+        hint=FieldHint.feature,
+    )
+
+    sampling_weights: list[float] | None = Field(
+        default=None,
+        desc="Sampling probability for each mixer (must sum to 1.0). "
+        "Only used when sampling_strategy='weighted'. "
+        "If None with uniform strategy, all mixers have equal probability.",
+        hint=FieldHint.feature,
+    )
+
+    main_mixer_index: int = Field(
+        default=0,
+        desc="Index of the main mixer. "
+        "Used for inference/eval, checkpoint loading (receives pretrained weights), "
+        "and checkpoint saving (only this mixer is exported).",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+
+        # Validate sampling weights
+        if self.sampling_weights is not None:
+            Assert.eq(len(self.sampling_weights), len(self.mixers))
+            # Check sum is close to 1.0
+            weight_sum = sum(self.sampling_weights)
+            if abs(weight_sum - 1.0) > 1e-5:
+                raise ValueError(f"Sampling weights must sum to 1.0, got {weight_sum}")
+            # Check all weights are non-negative
+            if any(w < 0 for w in self.sampling_weights):
+                raise ValueError("All sampling weights must be non-negative")
+
+        # Validate main mixer index
+        Assert.lt(self.main_mixer_index, len(self.mixers))
+
+    @property
+    def layer_class(self) -> "type[StochasticMixer]":
+        from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+        return StochasticMixer
 
 
 @config_class(dynamic_type={BlockConfig: "decoder"})
