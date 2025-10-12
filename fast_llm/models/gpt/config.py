@@ -17,6 +17,7 @@ from fast_llm.models.gpt.conversion.config import (
     AutoGPTHuggingfaceCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
+    GptOssCheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -117,6 +118,7 @@ class GPTModelConfig(FastLLMModelConfig):
         DiffusionDreamCheckpointFormat,
         DiffusionLlamaCheckpointFormat,
         AprielHybridSSMCheckpointFormat,
+        GptOssCheckpointFormat,
     )
 
     @classmethod
