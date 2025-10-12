@@ -697,7 +697,7 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests GPT-OSS: heterogeneous blocks (alternating sliding/full attention), MoE, YARN RoPE, attention biases.
-    # Uses 4 experts for testing (GPT-OSS has 128, supported via scalable kernel).
+    # Uses 4 experts for testing (smaller, faster tests).
     "llama",
     "gpt_oss",
     updates={
@@ -745,6 +745,36 @@ _update_and_add_testing_config(
             "num_blocks": 4,
             "pattern": ["sliding", "full", "sliding", "full"],
         },
+    },
+    megatron_args=None,
+    checkpoint_format=GptOssCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported (due to MoE).
+    skip_tests=("ms",),
+)
+
+
+_update_and_add_testing_config(
+    # Tests GPT-OSS with 128 experts: validates scalable MoE kernel.
+    # Uses tiny experts (intermediate_size=256) to keep tests fast while exercising the scalable kernel.
+    "gpt_oss",
+    "gpt_oss_128_experts",
+    updates={
+        ("model", "base_model", "decoder", "blocks", "sliding", "mlp", "experts"): 128,
+        ("model", "base_model", "decoder", "blocks", "sliding", "mlp", "intermediate_size"): 256,
+        ("model", "base_model", "decoder", "blocks", "full", "mlp", "experts"): 128,
+        ("model", "base_model", "decoder", "blocks", "full", "mlp", "intermediate_size"): 256,
+        # Reduce to 2 blocks to keep tests fast
+        ("model", "base_model", "decoder", "num_blocks"): 2,
+        ("model", "base_model", "decoder", "pattern"): ["sliding", "full"],
     },
     megatron_args=None,
     checkpoint_format=GptOssCheckpointFormat,
