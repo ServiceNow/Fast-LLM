@@ -262,30 +262,3 @@ def test_automatic_kernel_selection():
     torch.testing.assert_close(sparse_map_large.expert_ends, expert_ends_ref)
     torch.testing.assert_close(sparse_map_large.expert_pad_begins, expert_pad_begins_ref)
     torch.testing.assert_close(sparse_map_large.sparse_rows, sparse_rows_ref)
-
-
-if __name__ == "__main__":
-    # Quick smoke test
-    if torch.cuda.is_available():
-        print("Running smoke tests...")
-        test_scalable_kernel_matches_original_small(16, 256, 2, True)
-        print("✓ Small experts test passed")
-
-        test_scalable_kernel_matches_pytorch_large(128, 256, 4, True)
-        print("✓ Large experts test passed")
-
-        test_gpt_oss_config(128, 1024, 4)
-        print("✓ GPT-OSS config test passed")
-
-        test_edge_cases()
-        print("✓ Edge cases test passed")
-
-        test_deterministic_results(128)
-        print("✓ Deterministic test passed")
-
-        test_automatic_kernel_selection()
-        print("✓ Automatic kernel selection test passed")
-
-        print("\nAll smoke tests passed! ✨")
-    else:
-        print("CUDA not available, skipping tests")
