@@ -225,6 +225,45 @@ def test_deterministic_results(num_experts):
         torch.testing.assert_close(results[0][2], results[i][2])
 
 
+def test_automatic_kernel_selection():
+    """
+    Test that get_sparse_map() automatically selects the correct kernel
+    based on num_experts and produces correct results.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    device = "cuda"
+
+    # Test 1: Small num_experts should use original kernel (num_experts <= 64)
+    top_experts_small = generate_test_experts(256, 32, 4, device)
+    sparse_map_small = get_sparse_map(top_experts_small, 32)
+    validate_sparse_map_correctness(
+        sparse_map_small.sparse_rows,
+        sparse_map_small.expert_ends,
+        sparse_map_small.expert_pad_begins,
+        top_experts_small,
+        32,
+    )
+
+    # Test 2: Large num_experts should use scalable kernel (num_experts > 64)
+    top_experts_large = generate_test_experts(256, 128, 4, device)
+    sparse_map_large = get_sparse_map(top_experts_large, 128)
+    validate_sparse_map_correctness(
+        sparse_map_large.sparse_rows,
+        sparse_map_large.expert_ends,
+        sparse_map_large.expert_pad_begins,
+        top_experts_large,
+        128,
+    )
+
+    # Test 3: Results should match PyTorch reference
+    expert_ends_ref, expert_pad_begins_ref, sparse_rows_ref = sparse_map_pytorch(top_experts_large, 128)
+    torch.testing.assert_close(sparse_map_large.expert_ends, expert_ends_ref)
+    torch.testing.assert_close(sparse_map_large.expert_pad_begins, expert_pad_begins_ref)
+    torch.testing.assert_close(sparse_map_large.sparse_rows, sparse_rows_ref)
+
+
 if __name__ == "__main__":
     # Quick smoke test
     if torch.cuda.is_available():
@@ -243,6 +282,9 @@ if __name__ == "__main__":
 
         test_deterministic_results(128)
         print("✓ Deterministic test passed")
+
+        test_automatic_kernel_selection()
+        print("✓ Automatic kernel selection test passed")
 
         print("\nAll smoke tests passed! ✨")
     else:

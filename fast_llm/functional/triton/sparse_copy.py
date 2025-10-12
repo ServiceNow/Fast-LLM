@@ -302,12 +302,41 @@ def get_sparse_map(
     pad_to_multiple: int = MAX_DROPLESS_BLOCK_SIZE_ROW,
     block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     use_triton: bool | None = None,
+    max_experts_onehot: int = 64,
 ) -> SparseMap:
+    """
+    Get sparse map for MoE token routing.
+
+    Automatically selects the appropriate kernel based on num_experts:
+    - num_experts <= max_experts_onehot: Use original one-hot kernel (fastest)
+    - num_experts > max_experts_onehot: Use scalable atomic kernel (supports 128+ experts)
+
+    Args:
+        max_experts_onehot: Maximum num_experts for one-hot kernel.
+                           Above this, use scalable kernel to avoid register pressure.
+                           Default 64 (conservative, original kernel works up to ~32-64).
+    """
     num_rows_dense, num_experts_per_token = top_experts.shape
     num_rows_unpadded = num_rows_dense * num_experts_per_token
     max_rows = (num_rows_unpadded + num_experts * pad_to_multiple) // pad_to_multiple * pad_to_multiple
     dtype = torch.int16 if max_rows < 32768 else torch.int32
-    if (use_triton is None and TritonConfig.TRITON_ENABLED) or use_triton:
+
+    use_triton_kernel = (use_triton is None and TritonConfig.TRITON_ENABLED) or use_triton
+
+    if use_triton_kernel and num_experts > max_experts_onehot:
+        # Use scalable kernel for large num_experts to avoid register pressure
+        from fast_llm.functional.triton.sparse_copy_scalable import get_sparse_map_scalable
+
+        expert_ends, expert_pad_begins, sparse_rows = get_sparse_map_scalable(
+            top_experts,
+            num_experts,
+            pad_to_multiple=pad_to_multiple,
+            block_size=block_size,
+            # Use atomic assignment for up to ~128 experts, chunked for more
+            use_atomic_assign=(num_experts <= 128),
+        )
+    elif use_triton_kernel:
+        # Use original one-hot kernel for small num_experts
         expert_ends, expert_pad_begins = top_experts.new_empty((2 * num_experts,), dtype=dtype).chunk(2)
         sparse_rows = expert_ends.new_empty(num_rows_dense, num_experts_per_token)
         sparse_map_kernel[(triton.cdiv(num_rows_dense, block_size),)](
@@ -323,6 +352,7 @@ def get_sparse_map(
             DataType.from_torch(dtype).triton,
         )
     else:
+        # PyTorch fallback
         expert_ends, expert_pad_begins, sparse_rows = sparse_map_pytorch(top_experts, num_experts, pad_to_multiple)
 
     return SparseMap(

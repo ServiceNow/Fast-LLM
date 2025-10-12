@@ -697,6 +697,7 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests GPT-OSS: heterogeneous blocks (alternating sliding/full attention), MoE, YARN RoPE, attention biases.
+    # Uses 4 experts for testing (GPT-OSS has 128, supported via scalable kernel).
     "llama",
     "gpt_oss",
     updates={
