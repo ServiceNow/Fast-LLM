@@ -37,25 +37,32 @@ class GptOssAttentionConverter(MistralAttentionConverter):
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        # Start with Mistral's config (handles sliding_window if present)
-        out = super().import_config(config)
+        # Handle YARN RoPE scaling before calling super() to avoid parent trying to parse it
+        rope_scaling = config.get("rope_scaling", {})
+        if rope_scaling and rope_scaling.get("rope_type") == "yarn":
+            # Create temporary config without rope_scaling for parent to process
+            config_without_rope = {**config, "rope_scaling": None}
+            out = super().import_config(config_without_rope)
+
+            # Now add our YARN config
+            rotary_config = {
+                "type": "yarn",
+                "theta": config["rope_theta"],
+                "scale_factor": rope_scaling["factor"],
+                "beta_fast": rope_scaling["beta_fast"],
+                "beta_slow": rope_scaling["beta_slow"],
+                "original_context_length": rope_scaling["original_max_position_embeddings"],
+            }
+            # attention_factor is optional - if not present, will be computed from scale_factor
+            if "attention_factor" in rope_scaling:
+                rotary_config["attention_factor"] = rope_scaling["attention_factor"]
+            out["rotary"] = rotary_config
+        else:
+            # No YARN, let parent handle it
+            out = super().import_config(config)
 
         # Override attention_bias - GPT-OSS supports it unlike Mistral
         out["add_linear_biases"] = config.get("attention_bias", False)
-
-        # Handle YARN RoPE scaling
-        rope_scaling = config.get("rope_scaling", {})
-        if rope_scaling:
-            rope_type = rope_scaling.get("rope_type", "yarn")
-            if rope_type == "yarn":
-                out["rotary"] = {
-                    "type": "yarn",
-                    "theta": config["rope_theta"],
-                    "attention_factor": rope_scaling.get("attention_factor", 1.0),
-                    "beta_fast": rope_scaling["beta_fast"],
-                    "beta_slow": rope_scaling["beta_slow"],
-                    "original_context_length": rope_scaling["original_max_position_embeddings"],
-                }
 
         return out
 
@@ -68,14 +75,22 @@ class GptOssAttentionConverter(MistralAttentionConverter):
         out["attention_bias"] = config.add_linear_biases
 
         # Export YARN rotary config
-        if isinstance(config.rotary, YarnRotaryConfig):
-            out["rope_scaling"] = {
-                "rope_type": "yarn",
-                "attention_factor": getattr(config.rotary, "attention_factor", 1.0),
-                "beta_fast": config.rotary.beta_fast,
-                "beta_slow": config.rotary.beta_slow,
-                "original_max_position_embeddings": config.rotary.original_context_length,
-            }
+        match config.rotary:
+            case YarnRotaryConfig(
+                scale_factor=scale_factor,
+                beta_fast=beta_fast,
+                beta_slow=beta_slow,
+                original_context_length=original_context_length,
+                attention_factor=attention_factor,
+            ):
+                out["rope_scaling"] = {
+                    "rope_type": "yarn",
+                    "factor": scale_factor,
+                    "attention_factor": attention_factor if attention_factor is not None else 1.0,
+                    "beta_fast": beta_fast,
+                    "beta_slow": beta_slow,
+                    "original_max_position_embeddings": original_context_length,
+                }
 
         return out
 
@@ -314,36 +329,56 @@ class GptOssDecoderConverter(MistralDecoderConverter):
     @classmethod
     def export_config(cls, config: BlockSequenceConfig) -> dict:
         """Export decoder config, reconstructing layer_types."""
-        if type(config) is FixedBlockSequenceConfig:
-            # All blocks are the same
-            block_configs = [config.block]
-            # Determine layer type from window_size
-            has_window = hasattr(config.block.mixer, "window_size") and config.block.mixer.window_size is not None
-            layer_type = "sliding_attention" if has_window else "full_attention"
-            layer_types = [layer_type] * config.num_blocks
-        elif type(config) is PatternBlockSequenceConfig:
-            # Multiple block types
-            block_configs = list(config.blocks.values())
-            # Reconstruct layer_types from pattern
-            layer_types = []
-            for block_name in config.expanded_pattern:
-                block_config = config.blocks[block_name]
-                has_window = (
-                    hasattr(block_config.mixer, "window_size") and block_config.mixer.window_size is not None
-                )
-                layer_type = "sliding_attention" if has_window else "full_attention"
-                layer_types.append(layer_type)
-        else:
-            raise NotImplementedError(f"Unsupported block sequence type: {type(config)}")
+        match config:
+            case FixedBlockSequenceConfig():
+                # All blocks are the same
+                block_configs = [config.block]
+                match config.block.mixer:
+                    case AttentionConfig(window_size=window_size) if window_size is not None:
+                        layer_type = "sliding_attention"
+                    case _:
+                        layer_type = "full_attention"
+                layer_types = [layer_type] * config.num_blocks
+            case PatternBlockSequenceConfig():
+                # Multiple block types
+                block_configs = list(config.blocks.values())
+                # Reconstruct layer_types from pattern
+                layer_types = []
+                for block_name in config.expanded_pattern:
+                    block_config = config.blocks[block_name]
+                    match block_config.mixer:
+                        case AttentionConfig(window_size=window_size) if window_size is not None:
+                            layer_type = "sliding_attention"
+                        case _:
+                            layer_type = "full_attention"
+                    layer_types.append(layer_type)
+            case _:
+                raise NotImplementedError(f"Unsupported block sequence type: {type(config)}")
+
+        # Export each block config and handle sliding_window conflicts
+        exported_configs = [cls.block_converter_class.export_config(block_config) for block_config in block_configs]
+
+        # Extract sliding_window values to handle heterogeneous blocks
+        sliding_window = None
+        for exported_config in exported_configs:
+            window = exported_config.pop("sliding_window", None)
+            if window is not None:
+                sliding_window = window
 
         # Merge all block configs
-        return safe_merge_dicts(
-            *[cls.block_converter_class.export_config(block_config) for block_config in block_configs],
+        result = safe_merge_dicts(
+            *exported_configs,
             {
                 "num_hidden_layers": config.num_blocks,
                 "layer_types": layer_types,
             },
         )
+
+        # Add sliding_window back if any block had it
+        if sliding_window is not None:
+            result["sliding_window"] = sliding_window
+
+        return result
 
     @classmethod
     def get_converters(

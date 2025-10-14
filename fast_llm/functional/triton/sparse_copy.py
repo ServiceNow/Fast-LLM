@@ -307,7 +307,9 @@ def get_sparse_map(
     num_rows_unpadded = num_rows_dense * num_experts_per_token
     max_rows = (num_rows_unpadded + num_experts * pad_to_multiple) // pad_to_multiple * pad_to_multiple
     dtype = torch.int16 if max_rows < 32768 else torch.int32
-    if (use_triton is None and TritonConfig.TRITON_ENABLED) or use_triton:
+    # TEMPORARY: Disable Triton kernel due to bug on Triton 3.3+/ARM64
+    # TODO: Fix sparse_map_kernel to work correctly on newer Triton versions
+    if False and ((use_triton is None and TritonConfig.TRITON_ENABLED) or use_triton):
         expert_ends, expert_pad_begins = top_experts.new_empty((2 * num_experts,), dtype=dtype).chunk(2)
         sparse_rows = expert_ends.new_empty(num_rows_dense, num_experts_per_token)
         sparse_map_kernel[(triton.cdiv(num_rows_dense, block_size),)](
