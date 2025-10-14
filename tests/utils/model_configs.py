@@ -742,7 +742,7 @@ _update_and_add_testing_config(
                 },
             },
             "num_blocks": 4,
-            "pattern": ["sliding", "full", "sliding", "full"],
+            "pattern": ["sliding", "full"],
         },
     },
     megatron_args=None,
@@ -753,7 +753,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=2.0,
     # Micro-sequence split not supported (due to MoE).

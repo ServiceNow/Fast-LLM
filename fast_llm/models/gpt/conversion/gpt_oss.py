@@ -3,100 +3,51 @@ import typing
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.attention.rotary.config import YarnRotaryConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
+from fast_llm.layers.decoder.mlp.config import MLPConfig, MoEMLPConfig
 from fast_llm.models.gpt.conversion.config import GptOssCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
+    LlamaAttentionConverter,
     LlamaBaseModelConverter,
+    LlamaBlockConverter,
     LlamaHeadConverter,
     LlamaMLPConverter,
     MLPLayer2Converter,
     get_weight_and_bias_converters,
 )
 from fast_llm.models.gpt.conversion.mistral import (
-    MistralAttentionConverter,
-    MistralBlockConverter,
-    MistralDecoderConverter,
-    MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
+)
+from fast_llm.models.gpt.conversion.mixtral import (
+    MixtralMLPConverter,
 )
 from fast_llm.utils import Assert, safe_merge_dicts
 
 
-class GptOssAttentionConverter(MistralAttentionConverter):
+class GptOssAttentionConverter(LlamaAttentionConverter):
     """
     GPT-OSS attention converter.
 
-    Key differences from Mistral:
-    - Supports attention_bias=True (Mistral doesn't use biases)
-    - Uses YARN RoPE scaling (not default)
-    - Has both full attention and sliding window attention variants
+    Inherits from Llama (which supports YARN RoPE) and only adds attention_bias support.
     """
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        # Handle YARN RoPE scaling before calling super() to avoid parent trying to parse it
-        rope_scaling = config.get("rope_scaling", {})
-        if rope_scaling and rope_scaling.get("rope_type") == "yarn":
-            # Create temporary config without rope_scaling for parent to process
-            config_without_rope = {**config, "rope_scaling": None}
-            out = super().import_config(config_without_rope)
-
-            # Now add our YARN config
-            rotary_config = {
-                "type": "yarn",
-                "theta": config["rope_theta"],
-                "scale_factor": rope_scaling["factor"],
-                "beta_fast": rope_scaling["beta_fast"],
-                "beta_slow": rope_scaling["beta_slow"],
-                "original_context_length": rope_scaling["original_max_position_embeddings"],
-            }
-            # attention_factor is optional - if not present, will be computed from scale_factor
-            if "attention_factor" in rope_scaling:
-                rotary_config["attention_factor"] = rope_scaling["attention_factor"]
-            out["rotary"] = rotary_config
-        else:
-            # No YARN, let parent handle it
-            out = super().import_config(config)
-
-        # Override attention_bias - GPT-OSS supports it unlike Mistral
+        out = super().import_config(config)
+        # GPT-OSS supports attention_bias unlike Llama
         out["add_linear_biases"] = config.get("attention_bias", False)
-
         return out
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
-        # Start with base Mistral export (handles window_size, etc.)
         out = super().export_config(config)
-
-        # Override to support attention_bias
         out["attention_bias"] = config.add_linear_biases
-
-        # Export YARN rotary config
-        match config.rotary:
-            case YarnRotaryConfig(
-                scale_factor=scale_factor,
-                beta_fast=beta_fast,
-                beta_slow=beta_slow,
-                original_context_length=original_context_length,
-                attention_factor=attention_factor,
-            ):
-                out["rope_scaling"] = {
-                    "rope_type": "yarn",
-                    "factor": scale_factor,
-                    "attention_factor": attention_factor if attention_factor is not None else 1.0,
-                    "beta_fast": beta_fast,
-                    "beta_slow": beta_slow,
-                    "original_max_position_embeddings": original_context_length,
-                }
-
         return out
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:
-        # Unlike Mistral, GPT-OSS supports biases
+        # Unlike Llama/Mistral, GPT-OSS supports biases
         Assert.is_(type(config), AttentionConfig)
         Assert.incl(config.query_layer.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.key_layer.bias.enabled, (None, config.add_linear_biases))
@@ -104,104 +55,31 @@ class GptOssAttentionConverter(MistralAttentionConverter):
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
 
-class GptOssMLPConverter(LlamaMLPConverter):
+class GptOssBlockConverter(LlamaBlockConverter):
     """
-    GPT-OSS MoE MLP converter.
+    GPT-OSS block converter.
 
-    Structure matches Mixtral:
-    - 128 experts (120B) or fewer (20B)
-    - 4 active experts per token
-    - Gated MLP with SiLU activation
-    - No biases in MLP layers
+    Uses dynamic MLP converter selection (Llama vs Mixtral) based on config type.
     """
 
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        base_config = {
-            "intermediate_size": config["intermediate_size"],
-            "add_linear_biases": False,  # GPT-OSS doesn't use biases in MLP
-            "activation": "silu",
-            "gated": True,
-        }
-
-        # Add MoE-specific config
-        if "num_local_experts" in config:
-            base_config.update(
-                {
-                    "type": "moe",
-                    "experts": config["num_local_experts"],
-                    "experts_per_token": config.get("num_experts_per_tok", config.get("experts_per_token", 4)),
-                }
-            )
-
-        return base_config
-
-    @classmethod
-    def export_config(cls, config: MoEMLPConfig) -> dict:
-        Assert.custom(isinstance, config, MoEMLPConfig)
-        assert not config.add_linear_biases
-
-        return {
-            "intermediate_size": config.intermediate_size,
-            "hidden_act": "silu",
-            "num_local_experts": config.experts,
-            "num_experts_per_tok": config.experts_per_token,
-            "experts_per_token": config.experts_per_token,
-        }
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: MoEMLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        """Convert MoE weights between Fast-LLM and HuggingFace formats."""
-        return [
-            # Router/gate
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.router",
-                f"{hf_prefix}.gate",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            # Expert layer 1 (gate + up projections)
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                tuple(f"{hf_prefix}.experts.{i}.{w}" for i in range(config.experts) for w in ("w1", "w3")),
-                False,
-                SplitWeightConverter,
-                drop_on_export=drop_on_export,
-            ),
-            # Expert layer 2 (down projection)
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                tuple(f"{hf_prefix}.experts.{i}.w2" for i in range(config.experts)),
-                False,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ]
-
-
-class GptOssBlockConverter:
-    """
-    GPT-OSS block converter supporting both sliding and full attention.
-
-    Uses a layout name system to distinguish between block types:
-    - "sliding": Sliding window attention block
-    - "full": Full attention block
-    """
-
+    # Layout names for heterogeneous block patterns
     layout_names = {
         "sliding_attention": "sliding",
         "full_attention": "full",
     }
-    reverse_layout_names = {v: k for k, v in layout_names.items()}
+
+    # Dynamic converter selection like Apriel
+    _mixer_converter_classes = {
+        AttentionConfig: GptOssAttentionConverter,
+    }
+    _mlp_converter_classes = {
+        MLPConfig: LlamaMLPConverter,
+        MoEMLPConfig: MixtralMLPConverter,
+    }
 
     mixer_converter_class: typing.ClassVar[type[GptOssAttentionConverter]] = GptOssAttentionConverter
-    mlp_converter_class: typing.ClassVar[type[GptOssMLPConverter]] = GptOssMLPConverter
+    mlp_converter_class: typing.ClassVar[type] = None  # Will be selected dynamically
+
     hf_mixer_name: typing.ClassVar[str] = "self_attn"
     hf_mlp_name: typing.ClassVar[str] = "block_sparse_moe"
     hf_norm_1_name: typing.ClassVar[str] = "input_layernorm"
@@ -209,13 +87,10 @@ class GptOssBlockConverter:
 
     @classmethod
     def import_config(cls, config: dict, layer_type: str = "full_attention") -> dict:
-        """Import config for a specific layer type."""
-        from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
-
         # Create attention config
         attention_config = cls.mixer_converter_class.import_config(config)
 
-        # For sliding attention, ensure window_size is set
+        # Handle sliding window for this specific layer type
         if layer_type == "sliding_attention":
             if "window_size" not in attention_config:
                 attention_config["window_size"] = config.get("sliding_window", 128)
@@ -223,32 +98,37 @@ class GptOssBlockConverter:
             # For full attention, remove window_size if present
             attention_config.pop("window_size", None)
 
+        # Determine MLP converter based on config
+        if "num_local_experts" in config:
+            mlp_converter = cls._mlp_converter_classes[MoEMLPConfig]
+        else:
+            mlp_converter = cls._mlp_converter_classes[MLPConfig]
+
         return {
             "mixer": attention_config,
-            "mlp": cls.mlp_converter_class.import_config(config),
-            "normalization": {"type": "rms_norm", "epsilon": config["rms_norm_eps"]},
+            "mlp": mlp_converter.import_config(config),
+            "normalization": cls.normalization_converter_class.import_config(config),
         }
 
     @classmethod
     def export_config(cls, config: DecoderBlockConfig) -> dict:
         Assert.custom(isinstance, config, DecoderBlockConfig)
-        from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 
-        Assert.custom(isinstance, config.normalization, RMSNormalizationConfig)
-        assert not config.normalization.zero_centered
+        # Select MLP converter based on config type
+        mlp_converter = cls._mlp_converter_classes[type(config.mlp)]
 
         return safe_merge_dicts(
             cls.mixer_converter_class.export_config(config.mixer),
-            cls.mlp_converter_class.export_config(config.mlp),
-            {"rms_norm_eps": config.normalization.epsilon},
+            mlp_converter.export_config(config.mlp),
+            cls.normalization_converter_class.export_config(config.normalization),
         )
 
     @classmethod
     def get_converters(
         cls, config: DecoderBlockConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
     ) -> list[WeightConverter]:
-        """Get weight converters for a block."""
-        from fast_llm.models.gpt.conversion.llama import LlamaNormalizationConverter
+        # Select MLP converter based on config type
+        mlp_converter = cls._mlp_converter_classes[type(config.mlp)]
 
         return [
             *cls.mixer_converter_class.get_converters(
@@ -257,19 +137,19 @@ class GptOssBlockConverter:
                 f"{hf_prefix}.{cls.hf_mixer_name}",
                 drop_on_export,
             ),
-            *cls.mlp_converter_class.get_converters(
+            *mlp_converter.get_converters(
                 config.mlp,
                 f"{fast_llm_prefix}.mlp",
                 f"{hf_prefix}.{cls.hf_mlp_name}",
                 drop_on_export,
             ),
-            *LlamaNormalizationConverter.get_converters(
+            *cls.normalization_converter_class.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.norm_1",
                 f"{hf_prefix}.{cls.hf_norm_1_name}",
                 drop_on_export,
             ),
-            *LlamaNormalizationConverter.get_converters(
+            *cls.normalization_converter_class.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.norm_2",
                 f"{hf_prefix}.{cls.hf_norm_2_name}",
@@ -278,7 +158,7 @@ class GptOssBlockConverter:
         ]
 
 
-class GptOssDecoderConverter(MistralDecoderConverter):
+class GptOssDecoderConverter:
     """
     GPT-OSS decoder converter with heterogeneous block pattern support.
 
@@ -288,16 +168,18 @@ class GptOssDecoderConverter(MistralDecoderConverter):
     block_converter_class: typing.ClassVar[type[GptOssBlockConverter]] = GptOssBlockConverter
 
     @classmethod
+    def _get_layer_type(cls, config: DecoderBlockConfig) -> str:
+        """Determine layer type from block config."""
+        match config.mixer:
+            case AttentionConfig(window_size=window_size) if window_size is not None:
+                return "sliding_attention"
+            case _:
+                return "full_attention"
+
+    @classmethod
     def import_config(cls, config: dict) -> dict:
         """Import decoder config, handling heterogeneous layer types."""
-        layer_types = config.get("layer_types", [])
-
-        if not layer_types:
-            # No layer_types specified, assume all full attention
-            return {
-                "block": cls.block_converter_class.import_config(config, "full_attention"),
-                "num_blocks": config["num_hidden_layers"],
-            }
+        layer_types = config.get("layer_types", ["full_attention"])
 
         # Determine unique layer types
         unique_types = list(dict.fromkeys(layer_types))  # Preserve order
@@ -333,11 +215,7 @@ class GptOssDecoderConverter(MistralDecoderConverter):
             case FixedBlockSequenceConfig():
                 # All blocks are the same
                 block_configs = [config.block]
-                match config.block.mixer:
-                    case AttentionConfig(window_size=window_size) if window_size is not None:
-                        layer_type = "sliding_attention"
-                    case _:
-                        layer_type = "full_attention"
+                layer_type = cls._get_layer_type(config.block)
                 layer_types = [layer_type] * config.num_blocks
             case PatternBlockSequenceConfig():
                 # Multiple block types
@@ -346,11 +224,7 @@ class GptOssDecoderConverter(MistralDecoderConverter):
                 layer_types = []
                 for block_name in config.expanded_pattern:
                     block_config = config.blocks[block_name]
-                    match block_config.mixer:
-                        case AttentionConfig(window_size=window_size) if window_size is not None:
-                            layer_type = "sliding_attention"
-                        case _:
-                            layer_type = "full_attention"
+                    layer_type = cls._get_layer_type(block_config)
                     layer_types.append(layer_type)
             case _:
                 raise NotImplementedError(f"Unsupported block sequence type: {type(config)}")
@@ -417,7 +291,7 @@ class GptOssDecoderConverter(MistralDecoderConverter):
         return converters
 
 
-class GptOssHeadConverter(MistralHeadConverter):
+class GptOssHeadConverter(LlamaHeadConverter):
     block_converter_class: typing.ClassVar[type[GptOssBlockConverter]] = GptOssBlockConverter
 
 
@@ -444,7 +318,7 @@ class GptOssHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
     Handles both gpt-oss-120b (117B params) and gpt-oss-20b (21B params) variants.
 
     Key features:
-    - Mixture of Experts (128 experts for 120B, 4 active per token)
+    - Mixture of Experts (32-128 experts, 4 active per token)
     - Alternating sliding window and full attention patterns
     - YARN RoPE scaling
     - Grouped multi-query attention (8 KV heads)
