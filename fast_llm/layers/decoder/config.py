@@ -94,7 +94,6 @@ class StochasticMixerConfig(MixerConfig):
     mixers: list[MixerConfig] = Field(
         desc="List of mixer options to sample from (must contain at least 1).",
         hint=FieldHint.architecture,
-        valid=check_field(Assert.gt_len, 0),
     )
 
     sampling_strategy: SamplingStrategy = Field(
@@ -122,6 +121,9 @@ class StochasticMixerConfig(MixerConfig):
 
     def _validate(self) -> None:
         super()._validate()
+
+        # Validate mixers list is not empty
+        Assert.gt(len(self.mixers), 0)
 
         # Validate sampling weights
         if self.sampling_weights is not None:

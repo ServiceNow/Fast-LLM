@@ -77,6 +77,15 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
             f"{[type(m).__name__ for m in self.mixers]}"
         )
 
+        # Mark all mixer parameters with allow_no_grad since only one mixer
+        # is active per forward pass during training. Even though all mixers
+        # will eventually be trained, on any single forward pass, the non-selected
+        # mixers won't receive gradients.
+        for mixer in self.mixers:
+            for param in mixer.parameters(recurse=True):
+                if hasattr(param, 'allow_no_grad'):
+                    param.allow_no_grad = True
+
     def setup(self, distributed: Distributed) -> None:
         """Setup all mixers with the distributed context."""
         super().setup(distributed)
