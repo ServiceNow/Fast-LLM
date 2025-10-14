@@ -198,19 +198,20 @@ class LlamaAttentionConverter:
         elif rope_type == "llama3":
             rotary_config.update(
                 {
-                    "scale_factor": config["factor"],
-                    "low_frequency_factor": config["low_freq_factor"],
-                    "high_frequency_factor": config["high_freq_factor"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
+                    "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         elif rope_type == "yarn":
             rotary_config.update(
                 {
-                    "attention_factor": config["attention_factor"],
-                    "beta_fast": config["beta_fast"],
-                    "beta_slow": config["beta_slow"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "attention_factor": config["rope_scaling"]["attention_factor"],
+                    "beta_fast": config["rope_scaling"]["beta_fast"],
+                    "beta_slow": config["rope_scaling"]["beta_slow"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         else:
@@ -253,6 +254,7 @@ class LlamaAttentionConverter:
         elif type(config.rotary) is YarnRotaryConfig:
             out["rope_scaling"] = {
                 "rope_type": "yarn",
+                "factor": config.rotary.scale_factor,
                 "attention_factor": config.rotary.attention_factor,
                 "beta_fast": config.rotary.beta_fast,
                 "beta_slow": config.rotary.beta_slow,
