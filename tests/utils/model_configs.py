@@ -712,11 +712,12 @@ _update_and_add_testing_config(
                     "add_linear_biases": False,
                 },
                 {
-                    # Option 2: Mamba (randomly initialized on load)
-                    "type": "mamba",
+                    # Option 2: Mamba2 (randomly initialized on load)
+                    "type": "mamba_2",
                     "d_inner": 512,
                     "state_size": 16,
                     "dt_rank": 16,
+                    "d_xb": 256,
                     "add_linear_biases": False,
                 },
             ],
