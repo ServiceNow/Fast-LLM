@@ -7,8 +7,8 @@ import pytest
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSampledDatasetConfig, GPTSamplingData
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample, logger
+from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.sampled import GPTSample, logger
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_model_test_dataset
@@ -87,13 +87,13 @@ class GPTMegatronDatasetConfig(GPTMemmapDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTMemmapDataset":
+    def build(self) -> "MemmapDataset":
         return GPTMegatronMemmapDataset(
             str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens
         )
 
 
-class GPTMegatronMemmapDataset(GPTMemmapDataset):
+class GPTMegatronMemmapDataset(MemmapDataset):
     def sample(self, sampling: GPTSamplingData) -> "MegatronGPTSampledIndexedDataset":
         return MegatronGPTSampledIndexedDataset(self, sampling)
 

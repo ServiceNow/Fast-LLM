@@ -8,17 +8,10 @@ from fast_llm.config import Field, FieldHint, NoAutoValidate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import (
-    GPTIndexedDatasetConfig,
-    GPTSampledDatasetConfig,
-    GPTSamplingConfig,
-    GPTSamplingData,
-    GPTSamplingParameters,
-    ShufflingType,
-)
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig, SamplingConfig, ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
+from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.dataset.sampled import SampledIndexedDataset
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
@@ -34,7 +27,6 @@ def get_sampling_data(
     phase=PhaseType.training,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
-    tokenizer: Tokenizer | None = None,
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
@@ -42,7 +34,7 @@ def get_sampling_data(
     # Config with convenient defaults.
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     return GPTSamplingData(
-        config=GPTSamplingConfig(
+        config=SamplingConfig(
             seed=seed,
             gpu=gpu,
             shuffle=shuffle,
@@ -56,12 +48,11 @@ def get_sampling_data(
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
-        tokenizer=tokenizer,
     )
 
 
-def get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any], cls: type[T]) -> T:
-    dataset_config = GPTSampledDatasetConfig.from_dict(config)
+def get_dataset_config[T: SampledDatasetConfig](config: dict[str, typing.Any], cls: type[T]) -> T:
+    dataset_config = SampledDatasetConfig.from_dict(config)
     Assert.custom(isinstance, dataset_config, cls)
     return typing.cast(cls, dataset_config)
 
@@ -96,7 +87,7 @@ def get_test_data_and_compare_samples(
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
     assert "sampling" not in config
-    config["sampling"] = GPTSamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
+    config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
     data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():
@@ -115,7 +106,7 @@ def get_test_data_and_compare_samples(
 
 
 def compare_indexed_dataset(
-    dataset: GPTIndexedDataset,
+    dataset: IndexedDataset,
     length: int,
     num_tokens: int,
     expected_samples: dict[int, list[int]],
@@ -142,9 +133,7 @@ def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list
     Assert.all_equal([sampled[i].token_ids for i in range(len(expected_samples))], expected_samples)
 
 
-def validate_indexed_dataset_sampling(
-    sampled: GPTSampledIndexedDataset, expected_samples: list[list[int]] | None = None
-):
+def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_samples: list[list[int]] | None = None):
     """
     Compare `GPTSampledIndexedDataset` sampling against a more basic approach
     """
@@ -184,8 +173,8 @@ def validate_indexed_dataset_sampling(
     return token_ids
 
 
-@config_class(dynamic_type={GPTSampledDatasetConfig: "mock_memmap"})
-class MockGPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
+@config_class(dynamic_type={SampledDatasetConfig: "mock_memmap"})
+class MockGPTMemmapDatasetConfig(IndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     num_documents: int | None = Field(
         default=None,
@@ -207,7 +196,7 @@ class MockGPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         return self.num_documents * self.num_tokens_per_document
 
 
-class MockGPTMemmapDataset(GPTIndexedDataset):
+class MockGPTMemmapDataset(IndexedDataset):
     def __init__(self, config: MockGPTMemmapDatasetConfig):
         self._config = config
 

@@ -8,7 +8,7 @@ from tests.data.common import (
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_PREFIX
+from tests.utils.global_variables import DATASET_PATH
 
 GPT_SLICE_TRAINING_SAMPLES = [
     [80, 268, 79, 260, 207, 3086],
@@ -33,7 +33,7 @@ def test_gpt_slice():
     get_test_dataset()
     # samples[9:18]
     dataset = get_dataset_config(
-        {"type": "slice", "dataset": {"type": "memmap", "path": DATASET_PREFIX}, "begin": 0.0015, "end": 0.003},
+        {"type": "slice", "dataset": {"type": "memmap", "path": DATASET_PATH}, "begin": 0.0015, "end": 0.003},
         GPTDatasetSliceConfig,
     ).build()
     compare_indexed_dataset(dataset, 9, 544, {i - 9: sample for i, sample in MEMMAP_DATASET_SAMPLES.items()})
@@ -47,19 +47,19 @@ def test_gpt_slice_data():
             "datasets": {
                 "training": {
                     "type": "slice",
-                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": DATASET_PATH},
                     "begin": 0,
                     "end": 0.0015,
                 },
                 "validation": {
                     "type": "slice",
-                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": DATASET_PATH},
                     "begin": 0.0015,
                     "end": 0.003,
                 },
                 "test": {
                     "type": "slice",
-                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": DATASET_PATH},
                     "begin": 0.003,
                     "end": 1,
                 },

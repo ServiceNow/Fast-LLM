@@ -2,7 +2,7 @@ import numpy as np
 
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.sample import LanguageModelSample
 
 
 class GPTRandomDataset(SamplableDataset):
@@ -33,7 +33,7 @@ class GPTRandomSampledDataset(SampledDataset):
         return self._num_samples
 
     def __getitem__(self, idx) -> np.ndarray:
-        return GPTSample(
+        return LanguageModelSample(
             np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
                 0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
             )

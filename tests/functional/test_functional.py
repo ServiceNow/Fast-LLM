@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.functional.dpo import _compute_dpo_loss, _compute_logprobs_for_preference_spans
+from fast_llm.functional.dpo import _compute_dpo_loss, _get_logratios
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert
@@ -96,7 +96,7 @@ def test_preference_logps(batch_size, seq_length, vocab_size):
         logits, targets, attention_mask, prompt_id_lens, packed_seq_lens
     )
 
-    chosen_logps, rejected_logps, selected_log_probs = _compute_logprobs_for_preference_spans(
+    chosen_logps, rejected_logps, selected_log_probs = _get_logratios(
         logits=logits,
         targets=targets[:, 1:],
         chosen_spans=chosen_span,

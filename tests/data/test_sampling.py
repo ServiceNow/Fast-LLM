@@ -3,9 +3,10 @@ import typing
 import numpy as np
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
+from fast_llm.data.dataset.config import ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.sampled import GPTSample
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -14,7 +15,7 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_PREFIX
+from tests.utils.global_variables import DATASET_PATH
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -39,7 +40,7 @@ GPT_MEMMAP_SAMPLES = [
 def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
-    sampled = get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build_and_sample(
+    sampled = get_dataset_config({"type": "memmap", "path": DATASET_PATH}, GPTMemmapDatasetConfig).build_and_sample(
         get_sampling_data(8, sequence_length=5)
     )
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
@@ -52,7 +53,7 @@ def test_gpt_sampled_data():
             "datasets": {
                 "training": {
                     "type": "memmap",
-                    "path": DATASET_PREFIX,
+                    "path": DATASET_PATH,
                 }
             }
         },

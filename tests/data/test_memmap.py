@@ -2,10 +2,10 @@ import pathlib
 
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
+from fast_llm.data.dataset.sample.config import MemmapDatasetConfig
 from tests.data.common import compare_indexed_dataset, get_dataset_config
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE
+from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH, DATASET_SAMPLING_CACHE
 
 MEMMAP_DATASET_LENGTH = 6153
 MEMMAP_DATASET_TOKENS = 508327
@@ -21,7 +21,7 @@ MEMMAP_DATASET_SAMPLES = {
 def test_gpt_memmap(cache_directory):
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
-    dataset = get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
+    dataset = get_dataset_config({"type": "memmap", "path": DATASET_PATH}, MemmapDatasetConfig).build()
     compare_indexed_dataset(dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES)
 
 
@@ -36,13 +36,13 @@ _DATASET_PREFIX_SPANS = DATASET_CACHE / "with_spans" / "dataset"
 
 
 def test_gpt_data_with_spans():
-    get_test_dataset(prefix=_DATASET_PREFIX_SPANS, max_spans=5)
+    get_test_dataset(path=_DATASET_PREFIX_SPANS, max_spans=5)
     dataset = get_dataset_config(
         {
             "type": "memmap",
             "path": _DATASET_PREFIX_SPANS,
         },
-        GPTMemmapDatasetConfig,
+        MemmapDatasetConfig,
     ).build()
     compare_indexed_dataset(
         dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_SPANS

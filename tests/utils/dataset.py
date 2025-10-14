@@ -2,12 +2,14 @@ import pathlib
 import random
 
 import numpy as np
+import torch
 import yaml
 
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.sample.language_model import LanguageModelReader, LanguageModelSample
+from fast_llm.data.dataset.sample.token import TokenSample
 from tests.utils.global_variables import (
-    DATASET_PREFIX,
+    DATASET_PATH,
     MODEL_DATASET_PREFIX,
     MODEL_TEST_VOCAB_SIZE,
     TEST_CHARACTERS,
@@ -26,7 +28,7 @@ def download_santacoder_tokenizer():
 
 
 def get_test_dataset(
-    prefix: pathlib.Path = DATASET_PREFIX,
+    path: pathlib.Path = DATASET_PATH,
     seed: int = 1234,
     num_tokens: int = TEST_DATASET_TOKENS,
     characters: str = TEST_CHARACTERS,
@@ -35,34 +37,33 @@ def get_test_dataset(
 ):
     download_santacoder_tokenizer()
 
-    if not (
-        prefix.with_suffix(".idx").is_file()
-        and prefix.with_suffix(".bin").is_file()
-        and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
-    ):
+    if not (path.is_file() and path.parent.joinpath("fast_llm_config.yaml").is_file()):
         import transformers
 
         texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         samples = [
-            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size) for document in texts
+            LanguageModelSample(
+                TokenSample(
+                    torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size),
+                )
+            )
+            for document in texts
         ]
         if max_spans > 0:
-            lengths = np.array([max(len(sample.token_ids), 1) for sample in samples])
+            lengths = np.array([max(len(sample), 1) for sample in samples])
             spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths[:, None], [len(samples), max_spans]))
             for sample, span in zip(samples, spans):
                 span = np.unique(span)
-                sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
+                sample.loss_masking_spans = torch.from_numpy(span[: len(span) // 2 * 2].reshape(-1, 2))
 
-        GPTMemmapDataset.write_dataset(prefix, samples)
-        yaml.safe_dump(
-            {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
-        )
+        MemmapDataset.write_dataset(path, samples, LanguageModelReader)
+        yaml.safe_dump({"type": "memmap", "path": path.name}, path.parent.joinpath("fast_llm_config.yaml").open("w"))
 
 
 def get_model_test_dataset(
     prefix: pathlib.Path = MODEL_DATASET_PREFIX,
     vocab_size: int = MODEL_TEST_VOCAB_SIZE,
 ):
-    return get_test_dataset(prefix=prefix, vocab_size=vocab_size)
+    return get_test_dataset(path=prefix, vocab_size=vocab_size)

@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTIndexedDatasetConfig
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.sample.language_model import LanguageModelReader
+from fast_llm.data.dataset.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 from fast_llm.utils import Assert
@@ -30,9 +31,9 @@ def get_preparator(output_path: str, dataset_path_name: str) -> GPTMemmapDataset
 def test_write_memmap_dataset(dtype):
     documents = [GPTSample(np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype)) for _ in range(100)]
     with tempfile.TemporaryDirectory() as temp_dir:
-        prefix = pathlib.Path(temp_dir)
-        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
-        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
+        path = pathlib.Path(temp_dir)
+        MemmapDataset.write_dataset(path, documents, LanguageModelReader)
+        dataset = MemmapDataset(name="foo", path=path)
         for i, document in enumerate(documents):
             assert np.array_equal(
                 dataset.get(i).token_ids, document.token_ids, equal_nan=True
@@ -58,9 +59,9 @@ def test_write_memmap_preference_dataset(dtype):
         for _ in range(num_samples)
     ]
     with tempfile.TemporaryDirectory() as temp_dir:
-        prefix = pathlib.Path(temp_dir)
-        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
-        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
+        path = pathlib.Path(temp_dir)
+        MemmapDataset.write_dataset(path, documents, LanguageModelReader)
+        dataset = MemmapDataset(name="foo", path=path)
         for i, document in enumerate(documents):
             dataset_item = dataset.get(i, use_preference_loss_spans=True)
             assert np.array_equal(

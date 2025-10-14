@@ -22,7 +22,7 @@ MEMMAP_DTYPES = {
     8: DataType.uint16,
 }
 MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
-MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
+MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x01"
 
 
 @config_class(registry=True)

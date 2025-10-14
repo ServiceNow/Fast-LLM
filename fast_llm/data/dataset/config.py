@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import functools
 import itertools
 import math
@@ -14,15 +15,39 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
+class ShufflingType(str, enum.Enum):
+    # Shuffle all epochs together. Not extendable.
+    full = "full"
+    # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
+    epoch = "epoch"
+    # Shuffle all epochs except the first one. Recommended for pre-shuffled datasets, especially big ones.
+    skip_first_epoch = "skip_first_epoch"
+    # Disable shuffling entirely.
+    disabled = "disabled"
+
+
 @config_class()
 class SamplingConfig(Config):
     """
     A dataset-dependent configuration for sampling.
     """
 
+    # TODO: ====== DocumentSamplingConfig? ======
     seed: int = Field(
         default=784569,
         desc="Seed for random sampling.",
+        hint=FieldHint.feature,
+    )
+    gpu: bool = Field(
+        default=True,
+        desc="Enable fast sampling on GPU."
+        " Note that random sampling works differently on GPU,"
+        " so the sample won't match the CPU equivalent.",
+        hint=FieldHint.feature,
+    )
+    shuffle: ShufflingType = Field(
+        default=ShufflingType.epoch,
+        desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
 
@@ -34,6 +59,14 @@ class SamplingParameters:
     """
 
     num_samples: int
+    # TODO: ====== Always return sequence lengths, let the model decide. ======
+    cross_document_attention: bool = True
+    # TODO: ====== DocumentSamplingParameter? ======
+    truncate_documents: bool = True
+    sequence_length: int
+    # How many extra tokens to add to the sequence length.
+    # This is used to provide labels even for the last tokens in the sequence.
+    extra_tokens: int = 1
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -68,7 +101,7 @@ class DatasetConfig(Config):
     _abstract: typing.ClassVar[bool] = True
 
 
-@config_class()
+@config_class(registry=True)
 class SampledDatasetConfig(DatasetConfig):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
@@ -93,7 +126,7 @@ class IndexedDatasetConfig(SamplableDatasetConfig):
         raise NotImplementedError()
 
 
-@config_class()
+@config_class(dynamic_type={SampledDatasetConfig: "concatenated"})
 class ConcatenatedDatasetConfig(SamplableDatasetConfig):
     """
     Concatenate multiple indexed datasets as if they were one.
@@ -116,13 +149,10 @@ class ConcatenatedDatasetConfig(SamplableDatasetConfig):
     def build(self) -> "ConcatenatedDataset":
         from fast_llm.data.dataset.indexed import ConcatenatedDataset
 
-        return self._build(ConcatenatedDataset)
-
-    def _build[T: ConcatenatedDataset](self, cls: type[T]) -> T:
-        return cls(self.name, [dataset.build() for dataset in self.datasets])
+        return ConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
 
 
-@config_class()
+@config_class(dynamic_type={SampledDatasetConfig: "slice"})
 class DatasetSliceConfig(SamplableDatasetConfig):
     """
     Use a fraction of an indexed dataset, specified by the range (begin, end).
@@ -152,12 +182,10 @@ class DatasetSliceConfig(SamplableDatasetConfig):
     def build(self) -> "DatasetSlice":
         from fast_llm.data.dataset.indexed import DatasetSlice
 
-        return self._build(DatasetSlice)
-
-    def _build[T: DatasetSlice](self, cls: type[T]) -> T:
         dataset = self.dataset.build()
         size = len(dataset)
-        return cls(
+
+        return DatasetSlice(
             f"{dataset.name}_{self.begin}_{self.end}",
             dataset,
             round(self.begin * size),
@@ -165,7 +193,7 @@ class DatasetSliceConfig(SamplableDatasetConfig):
         )
 
 
-@config_class()
+@config_class(dynamic_type={SampledDatasetConfig: "sampled"})
 class SampledDatasetUpdateConfig(SampledDatasetConfig):
     """
     Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
@@ -186,7 +214,7 @@ class SampledDatasetUpdateConfig(SampledDatasetConfig):
         return self.dataset.build_and_sample(data.update_config(self.sampling))
 
 
-@config_class()
+@config_class(dynamic_type={SampledDatasetConfig: "blended"})
 class BlendedDatasetConfig(SampledDatasetConfig):
     _abstract = False
     name: str = Field(

@@ -2,19 +2,21 @@ import abc
 import typing
 
 import numpy as np
+import torch
 
 from fast_llm.data.dataset.abstract import SamplableDataset
+from fast_llm.data.dataset.config import SamplingData
+from fast_llm.data.dataset.sample import Sample
 from fast_llm.utils import Assert, padded_cumsum
 
 
 class IndexedDataset(SamplableDataset):
     """
-    A dataset containing a list of samples.
-    TODO: Move sampling responsibility here?
+    A dataset containing a list of `documents`, to be merged into `samples`.
     """
 
     @abc.abstractmethod
-    def get(self, index: int, *args, **kwargs) -> typing.Any:
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
         pass
 
     @abc.abstractmethod
@@ -22,6 +24,25 @@ class IndexedDataset(SamplableDataset):
         """
         Number of samples in the dataset.
         """
+
+    @abc.abstractmethod
+    def get_document_sizes(self) -> torch.Tensor:
+        """
+        The size of each document in the dataset.
+        The resulting array could be very large, so this method should be called cautiously,
+        and derived classes should try to avoid holding the whole array im memory.
+        """
+
+    @abc.abstractmethod
+    def get_document_size(self, index: int) -> int:
+        """
+        The size of a document in the dataset.
+        """
+
+    def sample(self, sampling: SamplingData) -> "SampledIndexedDataset":
+        from fast_llm.data.dataset.sampled import SampledIndexedDataset
+
+        return SampledIndexedDataset(self, sampling)
 
 
 class DatasetSlice[IndexedDatasetType: IndexedDataset](IndexedDataset):
@@ -59,6 +80,13 @@ class DatasetSlice[IndexedDatasetType: IndexedDataset](IndexedDataset):
     def __len__(self) -> int:
         return self._end - self._begin
 
+    def get_document_sizes(self) -> torch.Tensor:
+        # TODO: This can be really big.
+        return self._dataset.get_document_sizes()[self._begin : self._end]
+
+    def get_document_size(self, index: int) -> int:
+        return self._dataset.get_document_size(self._begin + index)
+
     @property
     def name(self) -> str:
         return self._name
@@ -80,8 +108,17 @@ class ConcatenatedDataset[IndexedDatasetType: IndexedDataset](IndexedDataset):
         return self._dataset_splits[-1].item()
 
     def get(self, index: int, *args, **kwargs):
+
         dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
         return self._datasets[dataset].get(index - self._dataset_splits[dataset].item(), *args, **kwargs)
+
+    def get_document_sizes(self) -> torch.Tensor:
+        # TODO: This can be really big.
+        return torch.cat([dataset.get_document_sizes() for dataset in self._datasets])
+
+    def get_document_size(self, index: int) -> int:
+        dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
+        return self._datasets[dataset].get_document_size(index - self._dataset_splits[dataset].item())
 
     @property
     def name(self) -> str:

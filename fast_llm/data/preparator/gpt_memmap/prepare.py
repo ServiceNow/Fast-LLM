@@ -21,8 +21,9 @@ from fast_llm.data.dataset.gpt.config import (
     GPTMemmapDatasetConfig,
     GPTSampledDatasetConfig,
 )
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.sample.language_model import LanguageModelReader
+from fast_llm.data.dataset.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
 from fast_llm.data.tokenizer import Tokenizer
@@ -137,8 +138,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
         shard_idx, shard_dataset = args
-        prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
-        shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
             if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
@@ -163,7 +162,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
-        GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
+        MemmapDataset.write_dataset(
+            path=self._config.output_path / f"shard_{self._config.distributed.rank}_{shard_idx}.fast_llm_dataset",
+            documents=_document_generator(),
+            reader_class=LanguageModelReader,
+        )
 
         return GPTMemmapDatasetConfig.from_dict(
             {
@@ -240,7 +243,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
         # Load tokenizer
-        self._tokenizer = Tokenizer(config=self._config.tokenizer)
+        self._tokenizer = self._config.tokenizer.get_tokenizer()
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
