@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
+from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -13,15 +13,9 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaBlockConverter,
     LlamaHeadConverter,
     LlamaMLPConverter,
-    MLPLayer2Converter,
-    get_weight_and_bias_converters,
 )
-from fast_llm.models.gpt.conversion.mistral import (
-    MistralHuggingfaceCheckpointHandler,
-)
-from fast_llm.models.gpt.conversion.mixtral import (
-    MixtralMLPConverter,
-)
+from fast_llm.models.gpt.conversion.mistral import MistralHuggingfaceCheckpointHandler
+from fast_llm.models.gpt.conversion.mixtral import MixtralMLPConverter
 from fast_llm.utils import Assert, safe_merge_dicts
 
 
@@ -177,6 +171,33 @@ class GptOssDecoderConverter:
                 return "full_attention"
 
     @classmethod
+    def _find_minimal_repeating_pattern(cls, layer_types: list[str]) -> list[str]:
+        """Find the minimal repeating pattern in layer_types.
+
+        Uses the property that the period must divide the length.
+        Tries periods in increasing order to find the smallest one.
+
+        Examples:
+        - ["A", "B", "A", "B"] -> ["A", "B"]
+        - ["A", "B", "C", "A", "B", "C"] -> ["A", "B", "C"]
+        - ["A", "B", "C"] -> ["A", "B", "C"] (no repetition)
+        """
+        n = len(layer_types)
+
+        # Try each possible period length from 1 to n
+        for period_len in range(1, n + 1):
+            # Period must divide the total length evenly
+            if n % period_len == 0:
+                candidate_pattern = layer_types[:period_len]
+                # Check if repeating this pattern reconstructs the full sequence
+                num_repeats = n // period_len
+                if candidate_pattern * num_repeats == layer_types:
+                    return candidate_pattern
+
+        # Fallback (should never reach here)
+        return layer_types
+
+    @classmethod
     def import_config(cls, config: dict) -> dict:
         """Import decoder config, handling heterogeneous layer types."""
         layer_types = config.get("layer_types", ["full_attention"])
@@ -192,14 +213,19 @@ class GptOssDecoderConverter:
             }
         else:
             # Multiple layer types - use PatternBlockSequenceConfig
-            # Create a block config for each unique type
+            # Find the minimal repeating pattern to enable compact representation
+            minimal_pattern = cls._find_minimal_repeating_pattern(layer_types)
+
+            # Create a block config for each unique type in the minimal pattern
+            # Use dict.fromkeys to preserve order while removing duplicates
+            unique_in_pattern = list(dict.fromkeys(minimal_pattern))
             blocks = {}
-            for layer_type in unique_types:
+            for layer_type in unique_in_pattern:
                 layout_name = cls.block_converter_class.layout_names.get(layer_type, layer_type)
                 blocks[layout_name] = cls.block_converter_class.import_config(config, layer_type)
 
             # Create pattern using layout names
-            pattern = [cls.block_converter_class.layout_names.get(lt, lt) for lt in layer_types]
+            pattern = [cls.block_converter_class.layout_names.get(lt, lt) for lt in minimal_pattern]
 
             return {
                 "type": "pattern",
@@ -220,7 +246,8 @@ class GptOssDecoderConverter:
             case PatternBlockSequenceConfig():
                 # Multiple block types
                 block_configs = list(config.blocks.values())
-                # Reconstruct layer_types from pattern
+                # Reconstruct layer_types from expanded pattern
+                # HuggingFace requires layer_types length to match num_hidden_layers
                 layer_types = []
                 for block_name in config.expanded_pattern:
                     block_config = config.blocks[block_name]
