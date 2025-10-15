@@ -76,10 +76,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             peft=self._peft,
         )
 
-        # For layer_2: The output dimension needs expert awareness for bias
-        # Weight: (num_experts * intermediate_size, hidden_size) transposed
-        # Bias: (num_experts, hidden_size) - each expert has its own bias
-        # We pass a composite dimension that includes the expert dimension
+        # For layer_2: pass composite dimension to enable per-expert biases
+        # The MoEAffineLinearConfig will extract the feature dimension for weight (since transposed=True)
+        # but use the full structure for per-expert biases
         experts_dim = TensorDim("experts", config.experts)
         moe_hidden_dim = CompositeTensorDim("moe_hidden", (experts_dim, hidden_dim))
 

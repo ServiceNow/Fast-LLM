@@ -107,7 +107,7 @@ class LinearConfig(LinearBaseConfig):
 
 @config_class(dynamic_type={LinearConfig: "affine_linear"})
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
-    def _get_weight_out_dim(self, out_dim: TensorDim) -> TensorDim:
+    def _get_weight_out_dim(self, out_dim: TensorDim, transposed_weight: bool = False) -> TensorDim:
         """Get the output dimension for weight parameter. Override in subclasses for special handling."""
         return out_dim
 
@@ -134,7 +134,7 @@ class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
         lr_scale = combine_lr_scales(lr_scale, self.lr_scale)
 
         # Get weight and bias dimensions (may differ for subclasses like MoE)
-        weight_out_dim = self._get_weight_out_dim(out_dim)
+        weight_out_dim = self._get_weight_out_dim(out_dim, transposed_weight)
 
         weight = self.weight.get_parameter(
             (in_dim, weight_out_dim) if transposed_weight else (weight_out_dim, in_dim),
@@ -184,24 +184,34 @@ class MoEAffineLinearConfig(AffineLinearConfig):
     AffineLinearConfig for MoE layers with per-expert biases.
 
     When out_dim is a CompositeTensorDim like (experts_dim, output_features_dim):
-    - Weight uses only the output_features_dim (last component)
-    - Bias uses the full structure (experts_dim, output_features_dim) for per-expert biases
+    - Weight dimension depends on transposed_weight:
+      * Non-transposed (layer 1): uses full flattened size (num_experts * output_features_per_expert)
+      * Transposed (layer 2): uses only feature dimension (output_features_per_expert)
+    - Bias always uses structured dimensions (experts_dim, output_features_per_expert) for per-expert biases
+
+    This matches the sparse MoE implementation where:
+    - Layer 1 (output-parallel sparse): weight is (num_experts * features, input), bias is (num_experts, features)
+    - Layer 2 (input-parallel sparse): weight is (num_experts * input, features), bias is (num_experts, features)
     """
 
-    def _get_weight_out_dim(self, out_dim: TensorDim) -> TensorDim:
-        """For MoE, extract the actual output feature dimension from composite."""
+    def _get_weight_out_dim(self, out_dim: TensorDim, transposed_weight: bool = False) -> TensorDim:
+        """For MoE, weight dimension depends on whether output or input is sparse."""
         if isinstance(out_dim, CompositeTensorDim):
-            return out_dim._tensor_dims[-1]
+            if transposed_weight:
+                # For transposed weight (layer 2), input is sparse, output is NOT sparse
+                # Use only the feature dimension (last component)
+                return out_dim._tensor_dims[-1]
+            else:
+                # For non-transposed weight (layer 1), output IS sparse
+                # Use the full flattened dimension
+                return out_dim
         else:
             return out_dim
 
     def _get_bias_dims(self, out_dim: TensorDim) -> tuple[TensorDim, ...]:
         """For MoE, use the composite structure for biases to get per-expert biases."""
         if isinstance(out_dim, CompositeTensorDim):
-            dims = out_dim._tensor_dims
-            # Debug logging
-            print(f"MoE bias dims for {out_dim.name}: dims={[(d.name, d.size) for d in dims]}")
-            return dims
+            return out_dim._tensor_dims
         else:
             return (out_dim,)
 
