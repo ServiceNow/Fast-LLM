@@ -9,10 +9,10 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.memmap import MemmapDataset
-    from fast_llm.data.dataset.sample.abstract import MemmapIndexedDatasetReader, MemmapReader
-    from fast_llm.data.dataset.sample.language_model import LanguageModelReader
-    from fast_llm.data.dataset.sample.range import RangeReader
-    from fast_llm.data.dataset.sample.token import TokenReader
+    from fast_llm.data.sample.abstract import MemmapIndexedDatasetReader, MemmapReader
+    from fast_llm.data.sample.language_model import LanguageModelReader
+    from fast_llm.data.sample.range import RangeReader
+    from fast_llm.data.sample.token import TokenReader
 
 
 @config_class(registry=True)
@@ -84,7 +84,7 @@ class RangeReaderConfig(MemmapReaderConfig):
 
     @property
     def reader_class(self) -> "type[RangeReader]":
-        from fast_llm.data.dataset.sample.range import RangeReader
+        from fast_llm.data.sample.range import RangeReader
 
         return RangeReader
 
@@ -101,7 +101,7 @@ class TokenReaderConfig(MemmapIndexDatasetReaderConfig):
 
     @property
     def reader_class(self) -> "type[TokenReader]":
-        from fast_llm.data.dataset.sample.token import TokenReader
+        from fast_llm.data.sample.token import TokenReader
 
         return TokenReader
 
@@ -119,7 +119,7 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
     @property
     def reader_class(self) -> "type[LanguageModelReader]":
-        from fast_llm.data.dataset.sample.language_model import LanguageModelReader
+        from fast_llm.data.sample.language_model import LanguageModelReader
 
         return LanguageModelReader
 

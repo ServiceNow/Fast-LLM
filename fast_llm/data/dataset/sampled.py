@@ -11,6 +11,7 @@ import yaml
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.sample.abstract import Sample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 
@@ -22,15 +23,6 @@ except ImportError:
     _extension_available = False
 
 logger = logging.getLogger(__name__)
-
-
-# @dataclasses.dataclass
-# class GPTSample:
-#    token_ids: np.ndarray
-#    loss_masking_spans: np.ndarray | None = None
-#    chosen_span: np.ndarray | None = None
-#    rejected_span: np.ndarray | None = None
-#    sequence_lengths: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -73,14 +65,14 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class SampledIndexedDataset(SampledDataset):
+class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     """
     A sampled GPT dataset.
     """
 
     def __init__(
         self,
-        indexed_dataset: IndexedDataset,
+        indexed_dataset: IndexedDataset[SampleType],
         sampling: SamplingData,
     ):
         self._indexed_dataset = indexed_dataset
@@ -344,7 +336,7 @@ class SampledIndexedDataset(SampledDataset):
     def __len__(self) -> int:
         return self._parameters.num_samples
 
-    def __getitem__(self, index: int) -> typing.Any:
+    def __getitem__(self, index: int) -> SampleType:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.

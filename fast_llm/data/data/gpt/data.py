@@ -13,8 +13,8 @@ from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.monitor import DatasetMonitor
-from fast_llm.data.dataset.sample.language_model import LanguageModelBatch
 from fast_llm.data.iterator import SampledDatasetIterator
+from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed

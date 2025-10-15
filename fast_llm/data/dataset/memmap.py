@@ -6,9 +6,8 @@ import numpy as np
 import torch
 
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.dataset.sample import Sample
-from fast_llm.data.dataset.sample.abstract import MemmapReader
-from fast_llm.data.dataset.sample.config import MemmapIndexDatasetReaderConfig
+from fast_llm.data.sample.abstract import MemmapReader, Sample
+from fast_llm.data.sample.config import MemmapIndexDatasetReaderConfig
 
 FILE_HEADER = b"fast_llm_prepared_dataset"
 

@@ -5,12 +5,11 @@ import tempfile
 import numpy as np
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTIndexedDatasetConfig
+from fast_llm.data.dataset.config import IndexedDatasetConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.dataset.sample.language_model import LanguageModelReader
-from fast_llm.data.dataset.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
+from fast_llm.data.sample.language_model import LanguageModelReader
 from fast_llm.utils import Assert
 from tests.data.common import MockGPTMemmapDatasetConfig  # Noqa
 
@@ -127,7 +126,7 @@ DATASET_DICT_1 = {
 
 
 def test_split_dataset():
-    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    dataset_config_0 = IndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0],
         {"training": 3, "validation": 1},
@@ -155,8 +154,8 @@ def test_split_dataset():
 
 
 def test_split_datasets_0():
-    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
-    dataset_config_1 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
+    dataset_config_0 = IndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    dataset_config_1 = IndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0, dataset_config_1],
         {"training": 1, "validation": 1},
@@ -174,8 +173,8 @@ def test_split_datasets_0():
 
 
 def test_split_datasets_1():
-    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
-    dataset_config_1 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
+    dataset_config_0 = IndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    dataset_config_1 = IndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0, dataset_config_1], {"training": 3, "validation": 1}, pathlib.Path(".")
     )

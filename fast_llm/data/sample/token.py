@@ -4,9 +4,9 @@ import typing
 import numpy as np
 import torch
 
-from fast_llm.data.dataset.sample import Batch, Sample
-from fast_llm.data.dataset.sample.abstract import MemmapIndexedDatasetReader
-from fast_llm.data.dataset.sample.config import TokenReaderConfig
+from fast_llm.data.sample import Batch, Sample
+from fast_llm.data.sample.abstract import MemmapIndexedDatasetReader
+from fast_llm.data.sample.config import TokenReaderConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 

@@ -3,11 +3,11 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.dataset.sample import Batch, Sample
-from fast_llm.data.dataset.sample.abstract import MemmapIndexedDatasetReader
-from fast_llm.data.dataset.sample.config import LanguageModelReaderConfig, NullReaderConfig
-from fast_llm.data.dataset.sample.range import RangeBatch, RangeReader, RangeSample
-from fast_llm.data.dataset.sample.token import TokenBatch, TokenReader, TokenSample
+from fast_llm.data.sample import Batch, Sample
+from fast_llm.data.sample.abstract import MemmapIndexedDatasetReader
+from fast_llm.data.sample.config import LanguageModelReaderConfig, NullReaderConfig
+from fast_llm.data.sample.range import RangeBatch, RangeReader, RangeSample
+from fast_llm.data.sample.token import TokenBatch, TokenReader, TokenSample
 from fast_llm.utils import Assert, get_unique
 
 

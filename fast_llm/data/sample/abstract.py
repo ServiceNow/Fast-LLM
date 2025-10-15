@@ -3,7 +3,7 @@ import io
 import typing
 
 from fast_llm.config import Configurable
-from fast_llm.data.dataset.sample.config import MemmapIndexDatasetReaderConfig, MemmapReaderBaseConfig
+from fast_llm.data.sample.config import MemmapIndexDatasetReaderConfig, MemmapReaderBaseConfig
 
 if typing.TYPE_CHECKING:
     import torch

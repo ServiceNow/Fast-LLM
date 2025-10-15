@@ -2,7 +2,7 @@ import pathlib
 
 import pytest
 
-from fast_llm.data.dataset.sample.config import MemmapDatasetConfig
+from fast_llm.data.sample.config import MemmapDatasetConfig
 from tests.data.common import compare_indexed_dataset, get_dataset_config
 from tests.utils.dataset import get_test_dataset
 from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH, DATASET_SAMPLING_CACHE

@@ -20,7 +20,7 @@ class GPTDataConfig(DataConfig):
     _abstract = False
 
     # TODO: Review field. Move closer to phase definition in training config?
-    datasets: dict[str, SampledDatasetConfig] = Field(
+    datasets: dict[str, SampledDatasetConfig[GPTSample]] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,

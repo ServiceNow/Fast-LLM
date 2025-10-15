@@ -4,9 +4,9 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.dataset.sample import Sample
-from fast_llm.data.dataset.sample.abstract import MemmapReader
-from fast_llm.data.dataset.sample.config import RangeReaderConfig
+from fast_llm.data.sample import Sample
+from fast_llm.data.sample.abstract import MemmapReader
+from fast_llm.data.sample.config import RangeReaderConfig
 
 
 class RangeSample(Sample):

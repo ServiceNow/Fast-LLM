@@ -6,8 +6,8 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.dataset.sample.language_model import LanguageModelReader, LanguageModelSample
-from fast_llm.data.dataset.sample.token import TokenSample
+from fast_llm.data.sample.language_model import LanguageModelReader, LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from tests.utils.global_variables import (
     DATASET_PATH,
     MODEL_DATASET_PREFIX,

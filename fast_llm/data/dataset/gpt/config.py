@@ -39,7 +39,7 @@ class GPTSamplingData(SamplingData):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig(SamplableDatasetConfig):
+class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -54,7 +54,7 @@ class GPTRandomDatasetConfig(SamplableDatasetConfig):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
-class GPTDatasetFromFileConfig(SamplableDatasetConfig):
+class GPTDatasetFromFileConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -62,18 +62,18 @@ class GPTDatasetFromFileConfig(SamplableDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         config = self._load_config()
         return config.build_and_sample(sampling)
 
-    def build(self) -> SamplableDataset:
+    def build(self) -> SamplableDataset[SampleType]:
         config = self._load_config()
         assert isinstance(config, SamplableDatasetConfig)
         return config.build()
 
-    def _load_config(self):
+    def _load_config(self) -> SampledDatasetConfig[SampleType]:
         assert self.path.is_file(), f"File {self.path} does not exist."
-        return SampledDatasetConfig.from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
+        return SampledDatasetConfig[SampleType].from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
 
     def _convert_paths(self, config):
         # Recursively convert paths relative to `self.path.parent` to make them relative to cwd.
@@ -164,7 +164,7 @@ class FimConfig(Config):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "fim"})
-class GPTFimSampledDatasetConfig(SampledDatasetConfig, FimConfig):
+class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType], FimConfig):
     """
     Configuration for FIM.
     """
@@ -187,7 +187,7 @@ class GPTFimSampledDatasetConfig(SampledDatasetConfig, FimConfig):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
-class GPTTestSlowDatasetConfig(SampledDatasetConfig):
+class GPTTestSlowDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType]):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
     """
@@ -200,8 +200,8 @@ class GPTTestSlowDatasetConfig(SampledDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         assert sampling.distributed.config.world_size > 1
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
-        return GPTRandomDatasetConfig().build_and_sample(sampling)
+        return GPTRandomDatasetConfig[SampleType]().build_and_sample(sampling)
