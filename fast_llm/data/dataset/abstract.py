@@ -19,6 +19,14 @@ class Dataset[SampleType: Sample](abc.ABC):
         A name for the dataset to facilitate identification and debugging.
         """
 
+    def __getstate__(self):
+        state = super().__getstate__()
+        # Pickling sometimes fails with bound `SampleType`.
+        # This is not needed at runtime, so we just drop it.
+        if "__orig_class__" in state:
+            del state["__orig_class__"]
+        return state
+
 
 class SampledDataset[SampleType: Sample](Dataset[SampleType]):
     """
