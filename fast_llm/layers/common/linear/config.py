@@ -43,7 +43,7 @@ class AffineLinearBaseConfig(LinearBaseConfig):
     )
 
 
-@config_class()
+@config_class(registry=True)
 class LinearConfig(LinearBaseConfig):
     apply_peft: bool | None = Field(
         default=None,
@@ -102,7 +102,7 @@ class LinearConfig(LinearBaseConfig):
         return out
 
 
-@config_class()
+@config_class(dynamic_type={LinearConfig: "affine_linear"})
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
     def get_layer(
         self,

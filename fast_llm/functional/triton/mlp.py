@@ -459,6 +459,8 @@ def mlp_autograd_looped(
     sequence_parallel: bool,
     training: bool = True,
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
+    bias_1: torch.Tensor | None = None,
+    bias_2: torch.Tensor | None = None,
 ) -> torch.Tensor:
     # TODO: Needed?
     scores = scores.to(hidden_states.dtype)
@@ -468,7 +470,20 @@ def mlp_autograd_looped(
     hidden_states, weight_1_chunked = chunk_weight(hidden_states, weight_1, num_experts)
     hidden_states, weight_2_t_chunked = chunk_weight(hidden_states, weight_2, num_experts)
 
-    for expert_idx, (weight_1_chunk, weight_2_t_chunk) in enumerate(zip(weight_1_chunked, weight_2_t_chunked)):
+    # Chunk biases if present
+    if bias_1 is not None:
+        _, bias_1_chunked = chunk_weight(hidden_states, bias_1, num_experts)
+    else:
+        bias_1_chunked = [None] * num_experts
+
+    if bias_2 is not None:
+        _, bias_2_chunked = chunk_weight(hidden_states, bias_2, num_experts)
+    else:
+        bias_2_chunked = [None] * num_experts
+
+    for expert_idx, (weight_1_chunk, weight_2_t_chunk, bias_1_chunk, bias_2_chunk) in enumerate(
+        zip(weight_1_chunked, weight_2_t_chunked, bias_1_chunked, bias_2_chunked)
+    ):
         row, column = torch.where(expert_mask[expert_idx])
         if column.size(0) > 0:
             output[column] += (
@@ -476,9 +491,9 @@ def mlp_autograd_looped(
                     hidden_states[column],
                     None,
                     weight_1_chunk,
-                    None,
+                    bias_1_chunk,
                     weight_2_t_chunk,
-                    None,
+                    bias_2_chunk,
                     gated,
                     activation_type,
                     group,
@@ -490,6 +505,11 @@ def mlp_autograd_looped(
                 * scores[column, row, None]
             )
 
+    # Finalize gradient tracking in reverse order
+    if bias_2 is not None:
+        output = chunk_weight_post(output, bias_2, bias_2_chunked)
+    if bias_1 is not None:
+        output = chunk_weight_post(output, bias_1, bias_1_chunked)
     output = chunk_weight_post(output, weight_2, weight_2_t_chunked)
     output = chunk_weight_post(output, weight_1, weight_1_chunked)
 

@@ -1,5 +1,7 @@
 import typing
 
+import torch
+
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
@@ -18,6 +20,7 @@ from fast_llm.models.gpt.conversion.llama import (
 )
 from fast_llm.models.gpt.conversion.mistral import MistralHuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.mixtral import MixtralMLPConverter
+from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, safe_merge_dicts
 
 
@@ -25,7 +28,9 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
     """
     GPT-OSS attention converter.
 
-    Inherits from Llama (which supports YARN RoPE) and only adds attention_bias support.
+    Inherits from Llama (which supports YARN RoPE) and adds:
+    - attention_bias support
+    - attention sinks support
     """
 
     @classmethod
@@ -33,12 +38,15 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
         out = super().import_config(config)
         # GPT-OSS supports attention_bias unlike Llama
         out["add_linear_biases"] = config.get("attention_bias", False)
+        # GPT-OSS always uses attention sinks
+        out["sinks"] = {"enabled": True}
         return out
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
         out = super().export_config(config)
         out["attention_bias"] = config.add_linear_biases
+        # Don't add sinks to config, it's indicated by presence of sinks parameter
         return out
 
     @classmethod
@@ -50,6 +58,93 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
         Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
+    @classmethod
+    def get_converters(
+        cls,
+        config: AttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        # Get base converters from parent class
+        converters = super().get_converters(config, fast_llm_prefix, hf_prefix, drop_on_export)
+
+        # Add sinks converter if enabled
+        if config.sinks.enabled:
+            from fast_llm.models.gpt.conversion.llama import get_parameter_converter
+
+            converters.append(
+                get_parameter_converter(
+                    f"{fast_llm_prefix}.sinks",
+                    f"{hf_prefix}.sinks",
+                    drop_on_export=drop_on_export,
+                )
+            )
+
+        return converters
+
+
+class GptOssMoEBiasConverter(WeightConverter):
+    """
+    Converter for GPT-OSS MoE biases.
+
+    HuggingFace format: (out_features_per_expert, num_experts)
+    Fast-LLM format: (num_experts, out_features_per_expert)
+    """
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (bias,) = weight
+        # Fast-LLM (num_experts, out_features_per_expert) -> HF (out_features_per_expert, num_experts)
+        return (bias[:].t().contiguous(),)
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (bias,) = weight
+        # HF (out_features_per_expert, num_experts) -> Fast-LLM (num_experts, out_features_per_expert)
+        return (bias[:].t().contiguous(),)
+
+
+def get_gpt_oss_weight_and_bias_converters(
+    fast_llm_prefix: str,
+    hf_prefix: str,
+    use_bias: bool,
+    weight_cls=WeightConverter,
+    drop_on_export: bool = False,
+) -> list[WeightConverter]:
+    """
+    Get weight and bias converters for GPT-OSS format.
+
+    GPT-OSS uses "_bias" suffix instead of ".bias" for expert biases,
+    and stores biases in transposed format (out_features_per_expert, num_experts).
+    """
+    from fast_llm.models.gpt.conversion.llama import get_parameter_converter
+
+    converters = [
+        get_parameter_converter(
+            f"{fast_llm_prefix}.weight",
+            f"{hf_prefix}.weight",
+            weight_cls,
+            None,
+            drop_on_export,
+        )
+    ]
+    if use_bias:
+        # GPT-OSS uses "_bias" suffix for expert biases, not ".bias"
+        # and stores them transposed
+        converters.append(
+            get_parameter_converter(
+                f"{fast_llm_prefix}.bias",
+                f"{hf_prefix}_bias",  # Note: _bias not .bias
+                GptOssMoEBiasConverter,
+                None,
+                drop_on_export,
+            )
+        )
+    return converters
+
 
 class GptOssMLPConverter(MixtralMLPConverter):
     """
@@ -57,8 +152,36 @@ class GptOssMLPConverter(MixtralMLPConverter):
 
     Handles the dequantized GPT-OSS checkpoint format which uses:
     - Router at .router (not .gate like Mixtral)
+    - Router has bias (unlike Mixtral)
     - Concatenated gate_up_proj and down_proj (not separate w1/w2/w3 like Mixtral)
+    - Expert biases use "_bias" suffix (not ".bias")
     """
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        out = super().import_config(config)
+        # GPT-OSS router has bias - use AffineLinearConfig (registered as "affine_linear")
+        out["router"] = {
+            "type": "affine_linear",
+            "bias": {"enabled": True},
+        }
+        # GPT-OSS experts also have biases (unlike Mixtral)
+        out["add_linear_biases"] = True
+        return out
+
+    @classmethod
+    def export_config(cls, config: MoEMLPConfig) -> dict:
+        Assert.custom(isinstance, config, MoEMLPConfig)
+        # Unlike Mixtral, GPT-OSS supports biases on expert layers
+        return safe_merge_dicts(
+            # Skip MixtralMLPConverter.export_config to avoid the bias assertion
+            # Call grandparent (LlamaMLPConverter) instead
+            LlamaMLPConverter.export_config(config),
+            {
+                "num_local_experts": config.experts,
+                "num_experts_per_tok": config.experts_per_token,
+            },
+        )
 
     @classmethod
     def get_converters(
@@ -68,24 +191,31 @@ class GptOssMLPConverter(MixtralMLPConverter):
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
+        # Check if router is AffineLinearConfig (has bias field)
+        from fast_llm.layers.common.linear.config import AffineLinearConfig
+
+        router_has_bias = isinstance(config.router, AffineLinearConfig) and config.router.bias.enabled
+
         return [
             # Router: GPT-OSS uses .router instead of .gate
+            # Router has bias in GPT-OSS (unlike Mixtral which doesn't)
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.router",
                 f"{hf_prefix}.router",  # Different from Mixtral which uses .gate
-                config.router.bias.enabled if config.router else False,
+                router_has_bias,
                 drop_on_export=drop_on_export,
             ),
             # Experts use concatenated format like Llama (gate_up_proj, down_proj)
             # not separate w1/w2/w3 like Mixtral
-            *get_weight_and_bias_converters(
+            # GPT-OSS uses "_bias" suffix for expert biases
+            *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_1",
                 f"{hf_prefix}.experts.gate_up_proj",
                 config.add_linear_biases,
                 SplitWeightConverter,
                 drop_on_export=drop_on_export,
             ),
-            *get_weight_and_bias_converters(
+            *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_2",
                 f"{hf_prefix}.experts.down_proj",
                 config.add_linear_biases,
@@ -121,7 +251,7 @@ class GptOssBlockConverter(LlamaBlockConverter):
     mlp_converter_class: typing.ClassVar[type] = None  # Will be selected dynamically
 
     hf_mixer_name: typing.ClassVar[str] = "self_attn"
-    hf_mlp_name: typing.ClassVar[str] = "block_sparse_moe"
+    hf_mlp_name: typing.ClassVar[str] = "mlp"  # GPT-OSS uses .mlp (after dequantization)
     hf_norm_1_name: typing.ClassVar[str] = "input_layernorm"
     hf_norm_2_name: typing.ClassVar[str] = "post_attention_layernorm"
 

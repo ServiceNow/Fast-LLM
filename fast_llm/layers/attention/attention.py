@@ -143,6 +143,22 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         # Rotary embeddings.
         self._rotary = self._config.rotary.get_layer(head_size_dim)
 
+        # Attention sinks for streaming attention (optional)
+        # Sinks are learnable embeddings, one per head
+        # TODO: Implement sinks usage in forward pass
+        sinks_dim = TensorDim("sinks", self._config.heads)
+        sinks = self._config.sinks.get_parameter(
+            (sinks_dim,),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
+            lr_scale=self._lr_scale,
+            default_enabled=False,
+            peft=None,
+        )
+        if sinks is not None:
+            # Mark as not requiring gradients since sinks are not yet used in forward pass
+            sinks.allow_no_grad = True
+            self.sinks = sinks
+
         # Output.
         self.dense = self._config.dense_layer.get_layer(
             dense_dim,

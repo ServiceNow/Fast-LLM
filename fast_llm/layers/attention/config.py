@@ -4,6 +4,7 @@ import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
@@ -98,6 +99,10 @@ class AttentionConfig(MixerConfig):
         desc="Size of the attention sliding window. Warning: this parameter is not part of the architecture and must be redefined when loading a pretrained model.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+    sinks: OptionalParameterConfig = Field(
+        desc="Configuration for attention sinks parameter. Sinks are learnable embeddings (one per head) prepended to keys/values for streaming attention.",
+        hint=FieldHint.architecture,
     )
     softmax_scale_power: float = Field(
         default=0.5,

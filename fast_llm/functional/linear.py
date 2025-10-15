@@ -65,8 +65,24 @@ def update_linear_gradients(
         )
     else:
         accumulate_gradient(weight, torch.mm(lhs, rhs))
+
+    # Bias gradients
     if bias is not None and bias.requires_grad:
-        accumulate_gradient(bias, grad_output.sum(dim=0))
+        if sparse_map is not None and bias.ndim == 2:
+            # For sparse maps with 2D bias: bias has shape (num_experts, out_features_per_expert)
+            # This is the case for manually created MoE biases (e.g., layer_2 in MoE)
+            # Need to sum gradients per expert
+            grad_bias = torch.zeros_like(bias)
+            for expert_idx in range(sparse_map.num_experts):
+                expert_begin = 0 if expert_idx == 0 else sparse_map.expert_ends[expert_idx - 1].item()
+                expert_pad_begin = sparse_map.expert_pad_begins[expert_idx].item()
+                # Sum gradients only from unpadded rows
+                if expert_begin < expert_pad_begin:
+                    grad_bias[expert_idx].copy_(grad_output[expert_begin:expert_pad_begin].sum(dim=0))
+            accumulate_gradient(bias, grad_bias)
+        else:
+            # For 1D bias (including sparse maps where bias already has experts in flattened dim)
+            accumulate_gradient(bias, grad_output.sum(dim=0))
 
 
 def linear_forward(
@@ -115,7 +131,6 @@ def output_parallel_linear_forward(
 
     # Matmul
     if TritonConfig.TRITON_LINEAR or sparse_map is not None:
-        assert bias is None
         if sparse_map is not None:
             assert not transposed_weight
         output = output_sparse_matmul(
@@ -123,6 +138,23 @@ def output_parallel_linear_forward(
             maybe_transpose(weight, not transposed_weight),
             sparse_map,
         ).unflatten(0, input_.shape[:-1])
+        # Add bias if present (for sparse maps, bias has expert dimension)
+        if bias is not None:
+            if sparse_map is not None:
+                # bias shape: (num_experts, out_features_per_expert)
+                # We need to add the correct expert's bias to each row
+                # sparse_map tells us which expert each row belongs to
+                output_flat = output.flatten(0, -2)
+                for expert_idx in range(sparse_map.num_experts):
+                    expert_begin = 0 if expert_idx == 0 else sparse_map.expert_ends[expert_idx - 1].item()
+                    expert_pad_begin = sparse_map.expert_pad_begins[expert_idx].item()
+                    # Add bias only to unpadded rows
+                    if expert_begin < expert_pad_begin:
+                        output_flat[expert_begin:expert_pad_begin] += bias[expert_idx]
+                output = output_flat.unflatten(0, input_.shape[:-1])
+            else:
+                # Regular bias for non-sparse case
+                output = output + bias
     else:
         output = torch.nn.functional.linear(input1, maybe_transpose(weight, transposed_weight), bias)
 
@@ -179,12 +211,28 @@ def input_parallel_linear_forward(
 ) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
     # Matmul
     if TritonConfig.TRITON_LINEAR or sparse_map is not None:
-        assert bias is None
         if sparse_map is not None:
             assert transposed_weight
         output = input_inner_sparse_matmul(
             input_.flatten(0, -2), maybe_transpose(weight, not transposed_weight), sparse_map
         ).unflatten(0, input_.shape[:-1])
+        # Add bias if present (for sparse maps, bias has expert dimension)
+        if bias is not None:
+            if sparse_map is not None:
+                # bias shape: (num_experts, out_features_per_expert)
+                # We need to add the correct expert's bias to each row
+                # sparse_map tells us which expert each row belongs to
+                output_flat = output.flatten(0, -2)
+                for expert_idx in range(sparse_map.num_experts):
+                    expert_begin = 0 if expert_idx == 0 else sparse_map.expert_ends[expert_idx - 1].item()
+                    expert_pad_begin = sparse_map.expert_pad_begins[expert_idx].item()
+                    # Add bias only to unpadded rows
+                    if expert_begin < expert_pad_begin:
+                        output_flat[expert_begin:expert_pad_begin] += bias[expert_idx]
+                output = output_flat.unflatten(0, input_.shape[:-1])
+            else:
+                # Regular bias for non-sparse case
+                output = output + bias
     else:
         output = torch.nn.functional.linear(input_, maybe_transpose(weight, transposed_weight), bias)
 

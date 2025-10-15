@@ -6,10 +6,11 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, triton_mlp_activation_autograd, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
@@ -29,7 +30,6 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346
     With custom routing implementation supporting both topk and sinkhorn routing
 
-    TODO: Bias
     TODO: Sequence-tensor-parallel
     TODO: Expert parallel
     """
@@ -49,9 +49,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         return_bias: bool = True,
     ):
         Assert.gt(config.experts, 1)
-        # TODO: Implement?
-        assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(
+
+        # Call grandparent __init__ to avoid creating layers yet
+        super(MLPBase, self).__init__(
             config,
             distributed_config,
             hidden_dim=hidden_dim,
@@ -59,6 +59,51 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             peft=peft,
             return_bias=return_bias,
         )
+
+        # Create MoE-specific dimensions
+        self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        intermediate_1_dim, self._intermediate_2_dim = self._get_intermediate_dims()
+        self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
+
+        # Create layers with MoE-specific dimensions
+        self.layer_1 = self._config.layer_1.get_layer(
+            hidden_dim,
+            intermediate_1_dim,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        # For layer_2: the output dimension is hidden_dim (without experts) because the
+        # sparse-to-dense reduction happens after the linear layer. However, the bias
+        # needs to have the expert dimension so each expert can have its own bias.
+        # We let the layer create its normal bias first, then replace it with the correct shape.
+        self.layer_2 = self._config.layer_2.get_layer(
+            self._intermediate_2_dim,
+            hidden_dim,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,  # Let it create bias normally
+            sequence_parallel=self._sequence_parallel,
+            transposed_weight=True,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+
+        # Replace layer_2 bias with correct expert-aware shape: (num_experts, hidden_size)
+        # This matches HuggingFace format where each expert has its own bias
+        if self._config.add_linear_biases:
+            experts_dim = TensorDim("experts", config.experts)
+            moe_hidden_dim = CompositeTensorDim("moe_hidden", (experts_dim, hidden_dim))
+            bias_param = self._config.layer_2.bias.get_parameter(
+                moe_hidden_dim._tensor_dims,
+                default_initialization=init_zeros_,
+                lr_scale=self._lr_scale,
+                peft=self._peft,
+            )
+            # Replace the incorrectly-shaped bias with the correct one
+            self.layer_2.bias = bias_param
+
         self.router = self._config.router.get_layer(
             self._hidden_dim,
             TensorDim("router_experts", self._config.unshared_experts),
@@ -148,9 +193,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             hidden_states,
             scores,
             self.layer_1.weight,
-            None,
+            self.layer_1.bias,
             self.layer_2.weight,
-            None,
+            None if self._parallel_dim.group else self.layer_2.bias,
             gated=self._config.gated,
             activation_type=self._config.activation,
             group=self._parallel_dim.group,
@@ -177,6 +222,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             self._sequence_parallel,
             self.training,
             self._config.recompute_level,
+            self.layer_1.bias,
+            None if self._parallel_dim.group else self.layer_2.bias,
         )
 
     @torch.compile

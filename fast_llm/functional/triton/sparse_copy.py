@@ -337,3 +337,96 @@ def get_sparse_map(
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
     )
+
+
+@triton_jit()
+def add_sparse_bias_kernel(
+    input_ptr,
+    bias_ptr,
+    output_ptr,
+    expert_ends_ptr,
+    num_columns: tl_constexpr,
+    num_experts: tl_constexpr,
+    block_size: tl_constexpr,
+):
+    """Add expert-specific bias to sparse tensor."""
+    sparse_row = tl.program_id(0)
+    offsets = tl.arange(0, block_size) + block_size * tl.program_id(1)
+    mask = None if num_columns % block_size == 0 else offsets < num_columns
+
+    # Find which expert this sparse row belongs to
+    # The sparse rows are organized such that rows for expert i are in range [expert_begins[i], expert_ends[i])
+    expert_idx = 0
+    for i in range(num_experts):
+        expert_end = tl.load(expert_ends_ptr + i)
+        if sparse_row < expert_end:
+            expert_idx = i
+            break
+
+    # Load input and bias
+    input_val = tl.load(input_ptr + sparse_row * num_columns + offsets, mask=mask)
+    bias_val = tl.load(bias_ptr + expert_idx * num_columns + offsets, mask=mask)
+
+    # Add bias and store
+    output_val = input_val + bias_val
+    tl.store(output_ptr + sparse_row * num_columns + offsets, output_val, mask=mask)
+
+
+def add_sparse_bias(
+    input_: torch.Tensor,  # shape: (num_sparse_rows, out_features_per_expert)
+    bias: torch.Tensor,     # shape: (num_experts, out_features_per_expert)
+    sparse_map: SparseMap,
+) -> torch.Tensor:
+    """Add expert-specific biases to sparse tensor based on expert assignment."""
+    num_sparse_rows, hidden_size = input_.shape
+    num_experts, bias_hidden_size = bias.shape
+    assert hidden_size == bias_hidden_size, f"Hidden size mismatch: {hidden_size} vs {bias_hidden_size}"
+    assert num_experts == sparse_map.num_experts
+
+    # Use PyTorch implementation for now (can optimize with Triton later if needed)
+    output = input_.clone()
+
+    # For each expert, add its bias to the rows it processed
+    for expert_idx in range(num_experts):
+        expert_begin = 0 if expert_idx == 0 else sparse_map.expert_ends[expert_idx - 1].item()
+        expert_end = sparse_map.expert_ends[expert_idx].item()
+        expert_pad_begin = sparse_map.expert_pad_begins[expert_idx].item()
+
+        # Add bias only to unpadded rows
+        if expert_begin < expert_pad_begin:
+            output[expert_begin:expert_pad_begin] += bias[expert_idx]
+
+    return output
+
+
+def add_sparse_bias_forward(
+    input_: torch.Tensor, bias: torch.Tensor, sparse_map: SparseMap
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, SparseMap]]:
+    return add_sparse_bias(input_, bias, sparse_map), (input_, bias, sparse_map)
+
+
+def add_sparse_bias_backward(
+    grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor, SparseMap]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    input_, bias, sparse_map = context
+
+    # Gradient w.r.t. input is just grad_output (bias is added elementwise)
+    grad_input = grad_output
+
+    # Gradient w.r.t. bias: sum gradients for each expert's rows
+    grad_bias = torch.zeros_like(bias)
+    num_experts = sparse_map.num_experts
+
+    for expert_idx in range(num_experts):
+        expert_begin = 0 if expert_idx == 0 else sparse_map.expert_ends[expert_idx - 1].item()
+        expert_end = sparse_map.expert_ends[expert_idx].item()
+        expert_pad_begin = sparse_map.expert_pad_begins[expert_idx].item()
+
+        # Sum gradients only from unpadded rows
+        if expert_begin < expert_pad_begin:
+            grad_bias[expert_idx] = grad_output[expert_begin:expert_pad_begin].sum(dim=0)
+
+    return grad_input, grad_bias
+
+
+add_sparse_bias_autograd = wrap_forward_backward(add_sparse_bias_forward, add_sparse_bias_backward)

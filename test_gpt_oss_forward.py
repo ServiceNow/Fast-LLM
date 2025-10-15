@@ -70,6 +70,13 @@ def test_gpt_oss_20b_forward_equivalence():
             dequantized_path = tmpdir / "dequantized_hf"
             hf_model.save_pretrained(dequantized_path)
 
+            # Save vocab size and config before freeing the model
+            vocab_size = hf_model.config.vocab_size
+
+            # Free HuggingFace model to save memory
+            del hf_model
+            torch.cuda.empty_cache()
+
             print(f"\n4. Converting to Fast-LLM format...")
             print(f"   Source: {dequantized_path}")
             print(f"   Target: {fast_llm_path}")
@@ -88,7 +95,35 @@ def test_gpt_oss_20b_forward_equivalence():
                 model=GPTModelConfig,
             ).run()
 
-            print(f"\n5. Loading Fast-LLM model (from converted checkpoint)...")
+            print(f"\n5. Creating test input...")
+            test_input = torch.randint(
+                0,
+                vocab_size,
+                size=(2, 32),  # Small batch and sequence length
+                dtype=torch.int64,
+                device="cuda",
+            )
+            print(f"   Input shape: {test_input.shape}")
+            print(f"   Vocab size: {vocab_size}")
+
+            print(f"\n6. Loading HuggingFace model and running forward pass...")
+            # Reload HuggingFace model just for inference
+            hf_model = transformers.AutoModelForCausalLM.from_pretrained(
+                dequantized_path,
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+            ).cuda()
+
+            print(f"   Running HuggingFace model...")
+            with torch.no_grad():
+                hf_output = hf_model(test_input)
+
+            # Save the output and free the model
+            hf_logits = hf_output.logits.clone()
+            del hf_model, hf_output
+            torch.cuda.empty_cache()
+
+            print(f"\n7. Loading Fast-LLM model and running forward pass...")
             # Get the HuggingFace wrapper class from Fast-LLM
             # This wraps Fast-LLM model to match HF interface
             from fast_llm.models.gpt.huggingface import GPTHuggingfaceModel
@@ -101,41 +136,25 @@ def test_gpt_oss_20b_forward_equivalence():
                 )
             )
 
-            print(f"\n6. Creating test input...")
-            vocab_size = hf_model.config.vocab_size
-            test_input = torch.randint(
-                0,
-                vocab_size,
-                size=(2, 32),  # Small batch and sequence length
-                dtype=torch.int64,
-                device="cuda",
-            )
-            print(f"   Input shape: {test_input.shape}")
-            print(f"   Vocab size: {vocab_size}")
-
-            print(f"\n7. Running forward passes...")
-
-            # Run HuggingFace model
-            print(f"   Running HuggingFace model...")
-            with torch.no_grad():
-                hf_output = hf_model(test_input)
-
             # Run Fast-LLM model
             print(f"   Running Fast-LLM model...")
             with torch.no_grad():
                 fast_llm_output = fast_llm_model(test_input)
 
+            # Save the output
+            fast_llm_logits = fast_llm_output.logits.clone()
+
             print(f"\n8. Comparing outputs...")
-            print(f"   HF output shape: {hf_output.logits.shape}")
-            print(f"   Fast-LLM output shape: {fast_llm_output.logits.shape}")
-            print(f"   HF output dtype: {hf_output.logits.dtype}")
-            print(f"   Fast-LLM output dtype: {fast_llm_output.logits.dtype}")
+            print(f"   HF output shape: {hf_logits.shape}")
+            print(f"   Fast-LLM output shape: {fast_llm_logits.shape}")
+            print(f"   HF output dtype: {hf_logits.dtype}")
+            print(f"   Fast-LLM output dtype: {fast_llm_logits.dtype}")
 
             # Compare using Fast-LLM's comparison utility
             errors = []
             CompareConfig().compare_tensors(
-                {"samples": hf_output.logits, "shape": hf_output.logits.shape, "step": 0},
-                {"samples": fast_llm_output.logits, "shape": fast_llm_output.logits.shape, "step": 0},
+                {"samples": hf_logits, "shape": hf_logits.shape, "step": 0},
+                {"samples": fast_llm_logits, "shape": fast_llm_logits.shape, "step": 0},
                 errors,
                 "HuggingFace vs Fast-LLM",
                 "logits",
@@ -149,12 +168,12 @@ def test_gpt_oss_20b_forward_equivalence():
 
             # Print statistics
             print(f"\n   Statistics:")
-            print(f"   HF logits mean: {hf_output.logits.mean().item():.4f}")
-            print(f"   Fast-LLM logits mean: {fast_llm_output.logits.mean().item():.4f}")
+            print(f"   HF logits mean: {hf_logits.mean().item():.4f}")
+            print(f"   Fast-LLM logits mean: {fast_llm_logits.mean().item():.4f}")
             print(
-                f"   Absolute difference mean: {(hf_output.logits - fast_llm_output.logits).abs().mean().item():.6f}"
+                f"   Absolute difference mean: {(hf_logits - fast_llm_logits).abs().mean().item():.6f}"
             )
-            print(f"   Max absolute difference: {(hf_output.logits - fast_llm_output.logits).abs().max().item():.6f}")
+            print(f"   Max absolute difference: {(hf_logits - fast_llm_logits).abs().max().item():.6f}")
 
             print(f"\n✅ Forward pass equivalence test passed!")
             return True
