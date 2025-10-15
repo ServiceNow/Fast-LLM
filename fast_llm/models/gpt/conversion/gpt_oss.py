@@ -84,6 +84,39 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
         return converters
 
 
+class GptOssMoEWeightConverter(WeightConverter):
+    """
+    Converter for GPT-OSS MoE weights.
+
+    HF format: (num_experts, dim1, dim2)
+    Fast-LLM format: (num_experts * dim1, dim2)
+
+    Flattens/unflattens the expert dimension during conversion.
+    """
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (weight_tensor,) = weight
+        # Fast-LLM: (num_experts * dim1, dim2) -> HF: (num_experts, dim1, dim2)
+        weight_loaded = weight_tensor[:]
+        num_experts = self._config.experts
+        total_dim, dim2 = weight_loaded.shape
+        dim1 = total_dim // num_experts
+        weight_reshaped = weight_loaded.reshape(num_experts, dim1, dim2)
+        return (weight_reshaped,)
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (weight_tensor,) = weight
+        # HF: (num_experts, dim1, dim2) -> Fast-LLM: (num_experts * dim1, dim2)
+        weight_loaded = weight_tensor[:]
+        num_experts, dim1, dim2 = weight_loaded.shape
+        weight_reshaped = weight_loaded.reshape(num_experts * dim1, dim2)
+        return (weight_reshaped,)
+
+
 class GptOssMoEBiasConverter(WeightConverter):
     """
     Converter for GPT-OSS MoE biases.
@@ -208,18 +241,19 @@ class GptOssMLPConverter(MixtralMLPConverter):
             # Experts use concatenated format like Llama (gate_up_proj, down_proj)
             # not separate w1/w2/w3 like Mixtral
             # GPT-OSS uses "_bias" suffix for expert biases
+            # Weights need special MoE converter to handle (num_experts, ...) shape
             *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_1",
                 f"{hf_prefix}.experts.gate_up_proj",
                 config.add_linear_biases,
-                SplitWeightConverter,
+                GptOssMoEWeightConverter,
                 drop_on_export=drop_on_export,
             ),
             *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_2",
                 f"{hf_prefix}.experts.down_proj",
                 config.add_linear_biases,
-                MLPLayer2Converter,
+                GptOssMoEWeightConverter,
                 drop_on_export=drop_on_export,
             ),
         ]
