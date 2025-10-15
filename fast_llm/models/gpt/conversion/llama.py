@@ -122,7 +122,7 @@ class LlamaMLPConverter:
     def import_config(cls, config: dict) -> dict:
         return {
             "intermediate_size": config["intermediate_size"],
-            "add_linear_biases": config["mlp_bias"],
+            "add_linear_biases": config.get("mlp_bias", False),
             "activation": ActivationType.from_hf_name(config["hidden_act"]),
             "gated": True,
         }
@@ -208,7 +208,7 @@ class LlamaAttentionConverter:
             rotary_config.update(
                 {
                     "scale_factor": config["rope_scaling"]["factor"],
-                    "attention_factor": config["rope_scaling"]["attention_factor"],
+                    "attention_factor": config["rope_scaling"].get("attention_factor"),
                     "beta_fast": config["rope_scaling"]["beta_fast"],
                     "beta_slow": config["rope_scaling"]["beta_slow"],
                     "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],

@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import WeightConverter
+from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -13,6 +13,8 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaBlockConverter,
     LlamaHeadConverter,
     LlamaMLPConverter,
+    MLPLayer2Converter,
+    get_weight_and_bias_converters,
 )
 from fast_llm.models.gpt.conversion.mistral import MistralHuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.mixtral import MixtralMLPConverter
@@ -49,6 +51,50 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
 
+class GptOssMLPConverter(MixtralMLPConverter):
+    """
+    GPT-OSS MoE MLP converter.
+
+    Handles the dequantized GPT-OSS checkpoint format which uses:
+    - Router at .router (not .gate like Mixtral)
+    - Concatenated gate_up_proj and down_proj (not separate w1/w2/w3 like Mixtral)
+    """
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: MoEMLPConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            # Router: GPT-OSS uses .router instead of .gate
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.router",
+                f"{hf_prefix}.router",  # Different from Mixtral which uses .gate
+                config.router.bias.enabled if config.router else False,
+                drop_on_export=drop_on_export,
+            ),
+            # Experts use concatenated format like Llama (gate_up_proj, down_proj)
+            # not separate w1/w2/w3 like Mixtral
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_1",
+                f"{hf_prefix}.experts.gate_up_proj",
+                config.add_linear_biases,
+                SplitWeightConverter,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_2",
+                f"{hf_prefix}.experts.down_proj",
+                config.add_linear_biases,
+                MLPLayer2Converter,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
 class GptOssBlockConverter(LlamaBlockConverter):
     """
     GPT-OSS block converter.
@@ -68,7 +114,7 @@ class GptOssBlockConverter(LlamaBlockConverter):
     }
     _mlp_converter_classes = {
         MLPConfig: LlamaMLPConverter,
-        MoEMLPConfig: MixtralMLPConverter,
+        MoEMLPConfig: GptOssMLPConverter,
     }
 
     mixer_converter_class: typing.ClassVar[type[GptOssAttentionConverter]] = GptOssAttentionConverter
