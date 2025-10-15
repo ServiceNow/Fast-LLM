@@ -1,11 +1,13 @@
 import abc
 import typing
 
+from fast_llm.data.sample.abstract import Sample
+
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.config import SamplingData
 
 
-class Dataset(abc.ABC):
+class Dataset[SampleType: Sample](abc.ABC):
     """
     A generic dataset class compatible with torch.utils.data.Dataset but with a slightly different signature.
     """
@@ -18,14 +20,14 @@ class Dataset(abc.ABC):
         """
 
 
-class SampledDataset(Dataset):
+class SampledDataset[SampleType: Sample](Dataset[SampleType]):
     """
     A sampled dataset class containing a prepared list of samples to be indexed sequentially (as-is) during training.
     (See the `Sampler` class below.)
     """
 
     @abc.abstractmethod
-    def __getitem__(self, index: int) -> typing.Any:
+    def __getitem__(self, index: int) -> SampleType:
         pass
 
     @abc.abstractmethod
@@ -33,8 +35,8 @@ class SampledDataset(Dataset):
         pass
 
 
-class SamplableDataset(Dataset):
+class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
 
     @abc.abstractmethod
-    def sample(self, config: "SamplingData") -> SampledDataset:
+    def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
         pass

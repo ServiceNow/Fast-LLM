@@ -1,8 +1,9 @@
 import numpy as np
+import torch
 
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.sample.gpt import GPTSample
 
 
 class GPTRandomDataset(SamplableDataset):
@@ -21,7 +22,7 @@ class GPTRandomDataset(SamplableDataset):
         return self._name
 
 
-class GPTRandomSampledDataset(SampledDataset):
+class GPTRandomSampledDataset[SampleType: GPTSample](SampledDataset[SampleType]):
     def __init__(self, sampling: GPTSamplingData, name: str):
         self._name = name
         self._seed = sampling.config.seed
@@ -32,10 +33,12 @@ class GPTRandomSampledDataset(SampledDataset):
     def __len__(self) -> int:
         return self._num_samples
 
-    def __getitem__(self, idx) -> np.ndarray:
+    def __getitem__(self, index: int) -> SampleType:
         return GPTSample(
-            np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
-                0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
+            torch.from_numpy(
+                np.random.RandomState(self._seed + 48576439 + 74593 * index).randint(
+                    0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
+                )
             )
         )
 
