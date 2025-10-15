@@ -75,34 +75,24 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        # For layer_2: the output dimension is hidden_dim (without experts) because the
-        # sparse-to-dense reduction happens after the linear layer. However, the bias
-        # needs to have the expert dimension so each expert can have its own bias.
-        # We let the layer create its normal bias first, then replace it with the correct shape.
+
+        # For layer_2: The output dimension needs expert awareness for bias
+        # Weight: (num_experts * intermediate_size, hidden_size) transposed
+        # Bias: (num_experts, hidden_size) - each expert has its own bias
+        # We pass a composite dimension that includes the expert dimension
+        experts_dim = TensorDim("experts", config.experts)
+        moe_hidden_dim = CompositeTensorDim("moe_hidden", (experts_dim, hidden_dim))
+
         self.layer_2 = self._config.layer_2.get_layer(
             self._intermediate_2_dim,
-            hidden_dim,
+            moe_hidden_dim,
             default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
-            default_add_bias=self._config.add_linear_biases,  # Let it create bias normally
+            default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=True,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-
-        # Replace layer_2 bias with correct expert-aware shape: (num_experts, hidden_size)
-        # This matches HuggingFace format where each expert has its own bias
-        if self._config.add_linear_biases:
-            experts_dim = TensorDim("experts", config.experts)
-            moe_hidden_dim = CompositeTensorDim("moe_hidden", (experts_dim, hidden_dim))
-            bias_param = self._config.layer_2.bias.get_parameter(
-                moe_hidden_dim._tensor_dims,
-                default_initialization=init_zeros_,
-                lr_scale=self._lr_scale,
-                peft=self._peft,
-            )
-            # Replace the incorrectly-shaped bias with the correct one
-            self.layer_2.bias = bias_param
 
         self.router = self._config.router.get_layer(
             self._hidden_dim,

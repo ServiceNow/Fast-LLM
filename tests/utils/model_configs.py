@@ -715,8 +715,8 @@ _update_and_add_testing_config(
                     "mlp": {
                         "type": "moe",
                         "router": {"type": "affine_linear", "weight": init_1, "bias": {"enabled": True}},
-                        "layer_1": {"weight": init_1, "bias": {"enabled": True}},
-                        "layer_2": {"weight": init_2, "bias": {"enabled": True}},
+                        "layer_1": {"type": "moe_affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_2": {"type": "moe_affine_linear", "weight": init_2, "bias": {"enabled": True}},
                         "experts": 4,
                         "experts_per_token": 4,
                         "intermediate_size": 1024,
@@ -736,8 +736,8 @@ _update_and_add_testing_config(
                     "mlp": {
                         "type": "moe",
                         "router": {"type": "affine_linear", "weight": init_1, "bias": {"enabled": True}},
-                        "layer_1": {"weight": init_1, "bias": {"enabled": True}},
-                        "layer_2": {"weight": init_2, "bias": {"enabled": True}},
+                        "layer_1": {"type": "moe_affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_2": {"type": "moe_affine_linear", "weight": init_2, "bias": {"enabled": True}},
                         "experts": 4,
                         "experts_per_token": 4,
                         "intermediate_size": 1024,
