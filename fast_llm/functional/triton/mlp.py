@@ -25,6 +25,9 @@ from fast_llm.functional.triton.sparse_copy import (
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
 
+# Global dictionary for debugging MLP intermediate values
+_MLP_DEBUG_TRACES = {}
+
 
 @triton_jit()
 def triton_mlp_activation_forward_kernel(
@@ -233,15 +236,27 @@ def torch_mlp_activation(
     gated: bool,
     activation_type: ActivationType,
 ) -> torch.Tensor:
+    # DEBUG: Save activation input
+    if "activation_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["activation_inputs"] = []
+    _MLP_DEBUG_TRACES["activation_inputs"].append(input_.detach().cpu()[:1])  # Save first token only
+
     # GPT-OSS GLU handles the gating internally, not via standard pattern
     if activation_type == ActivationType.gpt_oss_glu:
         assert gated, "gpt_oss_glu requires gated=True"
-        return activation_type.activation_fn(input_)
+        result = activation_type.activation_fn(input_)
     elif gated:
         x1, x2 = input_.chunk(2, dim=-1)
-        return activation_type.activation_fn(x1) * x2
+        result = activation_type.activation_fn(x1) * x2
     else:
-        return activation_type.activation_fn(input_)
+        result = activation_type.activation_fn(input_)
+
+    # DEBUG: Save activation output
+    if "activation_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["activation_outputs"] = []
+    _MLP_DEBUG_TRACES["activation_outputs"].append(result.detach().cpu()[:1])  # Save first token only
+
+    return result
 
 
 def mlp_forward(
@@ -260,6 +275,17 @@ def mlp_forward(
     transposed_layer_2_weight: bool = False,
     sparse_map: SparseMap | None = None,
 ) -> tuple[torch.Tensor, list[typing.Any] | None]:
+    # DEBUG: Save MLP input (including scores for MoE)
+    if "mlp_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["mlp_inputs"] = []
+    _MLP_DEBUG_TRACES["mlp_inputs"].append(
+        {
+            "input": input_.detach().cpu()[:1],  # First token only
+            "scores": scores.detach().cpu()[:1] if scores is not None else None,  # First token scores
+            "sparse_map_used": sparse_map is not None,
+        }
+    )
+
     # Sparse copy
     input_shape = input_.shape
     intermediate_0 = input_ if sparse_map is None else copy_dense_to_sparse_forward(input_, sparse_map)[0]
@@ -268,6 +294,11 @@ def mlp_forward(
     intermediate_1, _ = output_parallel_linear_forward(
         intermediate_0, weight_1, bias_1, group, sequence_parallel, False, sparse_map
     )
+
+    # DEBUG: Save layer1 output
+    if "layer1_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["layer1_outputs"] = []
+    _MLP_DEBUG_TRACES["layer1_outputs"].append(intermediate_1.detach().cpu()[:1])  # Save first token only
 
     if recompute_level.recompute_sparse_input:
         intermediate_0 = None
@@ -297,6 +328,13 @@ def mlp_forward(
         sparse_map,
     )
 
+    # DEBUG: Save layer2 output
+    if "layer2_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["layer2_outputs"] = []
+    _MLP_DEBUG_TRACES["layer2_outputs"].append(
+        intermediate_3.detach().cpu()[:1] if sparse_map is None else intermediate_3.detach().cpu()
+    )  # Save first token
+
     # Context
     if recompute_level.recompute_activation or not training:
         intermediate_2 = None
@@ -307,6 +345,16 @@ def mlp_forward(
         intermediate_3 = None
     else:
         output, _ = copy_sparse_to_dense_forward(intermediate_3, scores, sparse_map)
+
+    # DEBUG: Save final MLP output
+    if "mlp_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["mlp_outputs"] = []
+    _MLP_DEBUG_TRACES["mlp_outputs"].append(
+        {
+            "output": output.detach().cpu()[:1],  # First token only
+            "shape": output.shape,
+        }
+    )
 
     context = (
         [
@@ -502,6 +550,17 @@ def mlp_autograd_looped(
     bias_1: torch.Tensor | None = None,
     bias_2: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    # DEBUG: Save looped MLP inputs
+    if "looped_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["looped_inputs"] = []
+    _MLP_DEBUG_TRACES["looped_inputs"].append(
+        {
+            "hidden_states": hidden_states.detach().cpu()[:1],  # First token
+            "scores": scores.detach().cpu()[:1],  # First token scores
+            "top_experts": top_experts.detach().cpu()[:1],  # First token expert indices
+        }
+    )
+
     # TODO: Needed?
     scores = scores.to(hidden_states.dtype)
     expert_mask = torch.nn.functional.one_hot(top_experts, num_classes=num_experts).permute(2, 1, 0)
@@ -552,5 +611,10 @@ def mlp_autograd_looped(
         output = chunk_weight_post(output, bias_1, bias_1_chunked)
     output = chunk_weight_post(output, weight_2, weight_2_t_chunked)
     output = chunk_weight_post(output, weight_1, weight_1_chunked)
+
+    # DEBUG: Save looped MLP output
+    if "looped_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["looped_outputs"] = []
+    _MLP_DEBUG_TRACES["looped_outputs"].append(output.detach().cpu()[:1])  # First token
 
     return output
