@@ -5,6 +5,7 @@ from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
+from fast_llm.engine.config_utils.data_type import get_unsigned_integer_type
 
 
 class GPTRandomDataset[SampleType: LanguageModelSample](SamplableDataset[SampleType]):
@@ -31,11 +32,13 @@ class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[Sa
         # TODO: Support?
         assert not self._parameters.use_loss_masking_spans
         assert not self._parameters.use_preference_loss_spans
+        self._dtype = get_unsigned_integer_type(self._parameters.vocab_size).torch
 
     def __len__(self) -> int:
         return self._parameters.num_samples
 
     def __getitem__(self, index: int) -> SampleType:
+        # TODO: Sample in self._dtype (breaking)
         return LanguageModelSample(
             TokenSample(
                 torch.from_numpy(
@@ -43,9 +46,8 @@ class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[Sa
                         0,
                         self._parameters.vocab_size,
                         size=(self._parameters.sequence_length + self._parameters.extra_tokens,),
-                        dtype=np.int64,
                     )
-                )
+                ).to(self._dtype),
             )
         )
 

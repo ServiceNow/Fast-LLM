@@ -103,12 +103,15 @@ def get_test_data_and_compare_samples(
     batch_config.validate()
     tokens = {
         phase: torch.stack(
-            [batch.token_ids[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+            [
+                batch.tokens.tokens[0]
+                for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)
+            ]
         )
         for phase, samples in samples_per_dataset.items()
     }
     for phase, expected_samples_ in expected_samples.items():
-        Assert.all_equal(tokens[phase], expected_samples_)
+        Assert.all_equal(tokens[phase].to(torch.int64), expected_samples_)
     return data
 
 
@@ -127,9 +130,10 @@ def compare_indexed_dataset(
         sizes[: min(len(dataset), 100)],
     )
     for i, expected_sample in expected_samples.items():
-        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample, dtype=np.int64))
     if loss_masking_spans:
         for i, loss_masking_span in loss_masking_spans.items():
+            print(i)
             Assert.eq(
                 dataset.get_document(
                     i,
@@ -143,7 +147,9 @@ def compare_indexed_dataset(
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
-    Assert.all_equal(torch.stack([sampled[i].token_ids for i in range(len(expected_samples))]), expected_samples)
+    Assert.all_equal(
+        torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]).to(torch.int64), expected_samples
+    )
 
 
 def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_samples: list[list[int]] | None = None):
@@ -178,7 +184,7 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
         all_tokens[index * sampled._parameters.sequence_length : (index + 1) * sampled._parameters.sequence_length + 1]
         for index in range(sampled._parameters.num_samples)
     ]
-    token_ids = torch.stack([sampled[i].token_ids for i in range(len(sampled))])
+    token_ids = torch.stack([sampled[i].tokens.tokens for i in range(len(sampled))]).to(torch.int64)
 
     Assert.all_equal(token_ids, validate_samples)
     if expected_samples is not None:

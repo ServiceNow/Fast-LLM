@@ -163,6 +163,9 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
             if end > begin
             else torch.empty(0, dtype=self._dtype)
         )
+        if not self._dtype.is_signed:
+            # Needed because torch doesn't yet support type promotion between signed and unsigned types. TODO: Remove when supported.
+            token_ids = token_ids.to(torch.int64)
         if parameters is not None and parameters.use_loss_masking_spans:
             assert self._spans is not None
             # TODO: ====== Store in range format (begin, end) ======
@@ -275,6 +278,7 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
         num_spans = np.array(num_spans, dtype=np.int32)
         if len(spans) > 0:
             spans = np.vstack(spans, dtype=np.int32)
+            print("JEFNEW", spans[:50].tolist())
         else:
             spans = np.array(spans, dtype=np.int32)
         chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)

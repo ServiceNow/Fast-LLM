@@ -1,7 +1,8 @@
 import abc
 import typing
 
-import torch
+if typing.TYPE_CHECKING:
+    import torch
 
 
 class Sample(abc.ABC):

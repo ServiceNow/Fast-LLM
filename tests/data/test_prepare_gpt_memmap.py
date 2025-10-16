@@ -39,7 +39,7 @@ def test_write_memmap_dataset(dtype):
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
         dataset = GPTMemmapDataset(name="foo", prefix=prefix)
         for i, (tokens, _, _, _) in enumerate(documents):
-            Assert.all_equal(dataset.get_document(i).tokens.tokens, tokens)
+            Assert.all_equal(dataset.get_document(i).tokens.tokens, tokens.to(torch.int64))
 
 
 def _generate_valid_span(max_seq_length):
@@ -64,11 +64,11 @@ def test_write_memmap_preference_dataset(dtype):
         parameters = GPTSamplingParameters(
             num_samples=0, sequence_length=0, vocab_size=0, use_preference_loss_spans=True
         )
-        for i, (token_ids, _, chosen_spans, rejected_spans) in enumerate(documents):
+        for i, (token_ids, _, (chosen_begin, chosen_end), (rejected_begin, rejected_end)) in enumerate(documents):
             document = dataset.get_document(i, parameters=parameters)
-            Assert.all_equal(document.tokens.tokens, token_ids)
-            Assert.all_equal(document.chosen_spans.ranges, chosen_spans)
-            Assert.all_equal(document.rejected_spans.ranges, rejected_spans)
+            Assert.all_equal(document.tokens.tokens, token_ids.to(torch.int64))
+            Assert.eq(document.chosen_spans.ranges, [(chosen_begin, chosen_end + 1)])
+            Assert.eq(document.rejected_spans.ranges, [(rejected_begin, rejected_end + 1)])
 
 
 def test_load_metadata_from_hub():

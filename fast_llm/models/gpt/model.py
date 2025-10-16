@@ -198,7 +198,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
-                # TODO: ====== Use only if wanted ======
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
                 **reference_logits[i],
             }

@@ -83,19 +83,19 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
             permuted = self._fim_split_and_permute_sequence(sample[curr_start_position:], np_rng)
             new_samples.append(permuted)
 
-            sample = np.concatenate(new_samples)
+            fim_sample = np.concatenate(new_samples)
         else:
-            sample = self._fim_split_and_permute_sequence(sample, np_rng)
+            fim_sample = self._fim_split_and_permute_sequence(sample, np_rng)
 
         # Truncate or pad sequence to max-length
-        diff = sample.shape[0] - sample_len
+        diff = fim_sample.shape[0] - sample_len
         if diff > 0:  # too long
-            sample = sample[:sample_len]
+            fim_sample = fim_sample[:sample_len]
         elif diff < 0:  # too short
-            sample = np.concatenate([sample, np.full((-1 * diff), self._pad_tok_id)])
+            fim_sample = np.concatenate([fim_sample, np.full((-1 * diff), self._pad_tok_id)])  # noqa
 
-        assert sample.shape[0] == sample_len
-        return sample
+        assert fim_sample.shape[0] == sample_len
+        return fim_sample.astype(sample.dtype)
 
     def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         """
@@ -168,9 +168,9 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix, end=False)], dtype=np.int64)
-        middle = np.array([*self._tokenizer.tokenize(middle, begin=False, end=False)], dtype=np.int64)
-        suffix = np.array([*self._tokenizer.tokenize(suffix, begin=False)], dtype=np.int64)
+        prefix = np.array([*self._tokenizer.tokenize(prefix, end=False)], dtype=sequence.dtype)
+        middle = np.array([*self._tokenizer.tokenize(middle, begin=False, end=False)], dtype=sequence.dtype)
+        suffix = np.array([*self._tokenizer.tokenize(suffix, begin=False)], dtype=sequence.dtype)
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?

@@ -1,10 +1,9 @@
+import enum
 import logging
 import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
@@ -30,6 +29,13 @@ class AttentionKwargs(BlockKwargs):
     # TODO: Review these
     presents = "presents"
     past_key_values = "past_key_values"
+
+
+class AttentionImplementation(enum.StrEnum):
+    auto = "auto"
+    flash = "flash"
+    flash_varlen = "flash_varlen"
+    backup = "backup"
 
 
 @config_class(dynamic_type={MixerConfig: "attention"})
@@ -107,6 +113,13 @@ class AttentionConfig(MixerConfig):
         " Under muP (if scaling number of heads instead of head_size): use 0.5.",
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    implementation: AttentionImplementation = Field(
+        default=AttentionImplementation.auto,
+        desc="The implementation to use for the attention layer.",
+        doc="Use `flash_varlen` to enable the varlen version of Flash Attention and prevent cross-document attention. "
+        "Default: `flash` if supported, otherwise `backup`,",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -121,6 +134,3 @@ class AttentionConfig(MixerConfig):
         from fast_llm.layers.attention.attention import Attention
 
         return Attention
-
-    def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)

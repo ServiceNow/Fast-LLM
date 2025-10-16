@@ -21,10 +21,10 @@ class LanguageModelSample(Sample):
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
         return cls(
-            TokenSample.from_documents(document.tokens for document in documents),
-            _merge_optional(RangeSample.from_documents, (document.loss_masking_spans for document in documents)),
-            _merge_optional(RangeSample.from_documents, (document.chosen_spans for document in documents)),
-            _merge_optional(RangeSample.from_documents, (document.rejected_spans for document in documents)),
+            TokenSample.from_documents([document.tokens for document in documents]),
+            _merge_optional(RangeSample.from_documents, [document.loss_masking_spans for document in documents]),
+            _merge_optional(RangeSample.from_documents, [document.chosen_spans for document in documents]),
+            _merge_optional(RangeSample.from_documents, [document.rejected_spans for document in documents]),
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -55,10 +55,10 @@ class LanguageModelBatch(Batch):
     @classmethod
     def from_samples(cls, samples: typing.Iterable[LanguageModelSample]) -> typing.Self:
         return cls(
-            TokenBatch.from_samples(sample.tokens for sample in samples),
-            _merge_optional(RangeBatch.from_samples, (sample.loss_masking_spans for sample in samples)),
-            _merge_optional(RangeBatch.from_samples, (sample.chosen_spans for sample in samples)),
-            _merge_optional(RangeBatch.from_samples, (sample.rejected_spans for sample in samples)),
+            TokenBatch.from_samples([sample.tokens for sample in samples]),
+            _merge_optional(RangeBatch.from_samples, [sample.loss_masking_spans for sample in samples]),
+            _merge_optional(RangeBatch.from_samples, [sample.chosen_spans for sample in samples]),
+            _merge_optional(RangeBatch.from_samples, [sample.rejected_spans for sample in samples]),
         )
 
     def to_samples(self) -> list[LanguageModelSample]:

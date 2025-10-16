@@ -25,6 +25,15 @@ def download_santacoder_tokenizer():
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
 
+def get_random_spans(num_samples: int, max_spans: int, lengths: np.ndarray | int, seed: int = 0):
+    spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths, [num_samples, max_spans * 2]))
+    spans = [np.unique(sample_spans).tolist() for sample_spans in spans]
+    return [
+        [(begin, end) for begin, end in zip(sample_spans[::2], sample_spans[1::2], strict=False)]
+        for sample_spans in spans
+    ]
+
+
 def get_test_dataset(
     prefix: pathlib.Path = DATASET_PREFIX,
     seed: int = 1234,
@@ -55,25 +64,17 @@ def get_test_dataset(
             for document in texts
         ]
         if max_spans > 0:
-            spans = np.sort(
-                np.random.RandomState(seed + 3847).randint(
-                    0, np.array([[max(len(tokens), 1)] for tokens, _, _, _ in samples]), [len(samples), max_spans]
-                )
-            )
-            samples = (
-                (tokens, np.unique(spans_).tolist()) for (tokens, _, _, _), spans_ in zip(samples, spans, strict=True)
+            spans = get_random_spans(
+                len(samples), max_spans, np.array([[max(len(tokens), 1)] for tokens, _, _, _ in samples]), seed
             )
             samples = [
                 (
                     tokens,
-                    torch.tensor(
-                        [[begin, end] for begin, end in zip(spans_[::2], spans_[1::2], strict=False)],
-                        dtype=torch.int32,
-                    ).reshape(-1, 2),
+                    torch.tensor(sample_spans, dtype=torch.int32).reshape(-1, 2),
                     None,
                     None,
                 )
-                for tokens, spans_ in samples
+                for (tokens, _, _, _), sample_spans in zip(samples, spans, strict=True)
             ]
 
         GPTMemmapDataset.write_dataset(prefix, samples)

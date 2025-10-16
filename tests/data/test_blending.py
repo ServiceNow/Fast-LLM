@@ -162,7 +162,7 @@ def test_gpt_blended_mixed():
             ],
             "weights": [0.6, 0.4],
         },
-        BlendedDatasetConfig[GPTSample],
+        BlendedDatasetConfig[LanguageModelSample],
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 

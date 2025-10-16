@@ -26,14 +26,14 @@ class TokenSample(Sample):
     def crop(self, begin: int, end: int) -> typing.Self:
         sample_size = end - begin
         if self.lengths == [len(self.tokens)]:
-            # Shortcut for the common case of a single document.
+            # Shortcut for the frequent case of a single document.
             lengths = [sample_size]
         else:
             begin_ = 0
             lengths = []
             for length in self.lengths:
-                end_ = begin + length
-                cropped_length = max(begin_ - begin, 0) - min(end_ - begin, end)
+                end_ = begin_ + length
+                cropped_length = min(end_, end) - max(begin_, begin)
                 if cropped_length > 0:
                     lengths.append(cropped_length)
                 if end_ > end:
@@ -46,8 +46,10 @@ class TokenSample(Sample):
 
 
 class TokenBatch(Batch):
-    def __init__(self, tokens: torch.Tensor, lengths: list[list[int]]) -> None:
+    def __init__(self, tokens: torch.Tensor, lengths: list[list[int]] | None) -> None:
         self.tokens = tokens
+        if lengths is None:
+            lengths = [[tokens.size(1)]] * tokens.size(0)
         self.lengths = lengths
 
     @classmethod
