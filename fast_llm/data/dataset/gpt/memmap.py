@@ -179,17 +179,15 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
                 raise ValueError("Failed to read chosen spans from memmap dataset.")
             elif self._has_preference_spans and self._rejected_spans is None:
                 raise ValueError("Failed to read rejected spans from memmap dataset.")
-            elif begin != 0 or end != sample_size:
-                raise ValueError("Samples with preference spans should not be cropped.")
             # TODO: ====== Store in range format ======
             chosen_spans = RangeSample(
                 [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
                 sample_size,
-            )
+            ).crop(begin, end)
             rejected_spans = RangeSample(
                 [(self._rejected_spans[index][0].item(), self._rejected_spans[index][1].item() + 1)],
                 sample_size,
-            )
+            ).crop(begin, end)
         else:
             chosen_spans = rejected_spans = None
 
