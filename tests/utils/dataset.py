@@ -6,7 +6,6 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.sample.gpt import GPTSample
 from tests.utils.global_variables import (
     DATASET_PREFIX,
     MODEL_DATASET_PREFIX,
@@ -47,15 +46,35 @@ def get_test_dataset(
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         samples = [
-            GPTSample(torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size))
+            (
+                torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size),
+                None,
+                None,
+                None,
+            )
             for document in texts
         ]
         if max_spans > 0:
-            lengths = np.array([max(len(sample.token_ids), 1) for sample in samples])
-            spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths[:, None], [len(samples), max_spans]))
-            for sample, span in zip(samples, spans):
-                span = np.unique(span)
-                sample.loss_masking_spans = torch.from_numpy(span[: len(span) // 2 * 2].reshape(-1, 2))
+            spans = np.sort(
+                np.random.RandomState(seed + 3847).randint(
+                    0, np.array([[max(len(tokens), 1)] for tokens, _, _, _ in samples]), [len(samples), max_spans]
+                )
+            )
+            samples = (
+                (tokens, np.unique(spans_).tolist()) for (tokens, _, _, _), spans_ in zip(samples, spans, strict=True)
+            )
+            samples = [
+                (
+                    tokens,
+                    torch.tensor(
+                        [[begin, end] for begin, end in zip(spans_[::2], spans_[1::2], strict=False)],
+                        dtype=torch.int32,
+                    ).reshape(-1, 2),
+                    None,
+                    None,
+                )
+                for tokens, spans_ in samples
+            ]
 
         GPTMemmapDataset.write_dataset(prefix, samples)
         yaml.safe_dump(

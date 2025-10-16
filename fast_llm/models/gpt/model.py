@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.data.sample.gpt import GPTBatch
+from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
@@ -40,7 +40,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 param.init_parameter = get_init_megatron(param, self._config.decoder.block, config.hidden_size)  # Noqa
 
     def preprocess_meta(
-        self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
+        self, batch_meta: GPTBatchConfig | LanguageModelBatch, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
         # TODO Remove (Move batch splitting elsewhere)
         # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
@@ -51,7 +51,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             micro_sequence_length = batch_meta.micro_sequence_length
             truncate_documents = batch_meta.truncate_documents
         else:
-            micro_batch_size, sequence_length = batch_meta.shape
+            micro_batch_size, sequence_length = batch_meta.tokens.tokens.shape
             if phase != PhaseType.inference:
                 sequence_length -= self._config.head.prediction_heads
             micro_sequence_length = sequence_length
@@ -151,7 +151,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def preprocess_batch(
         self,
-        batch: GPTBatch,
+        batch: LanguageModelBatch,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,
@@ -161,19 +161,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
 
+        batch.to_device_(self._distributed.device)
+
         if preprocessed_meta is None:
-            preprocessed_meta = self.preprocess_meta(batch.token_ids, phase)
-
-        _, common_kwargs = preprocessed_meta[0]
-        sequence_q = common_kwargs[AttentionKwargs.sequence_q_dim].size
-        sequence_first = common_kwargs[AttentionKwargs.sequence_first]
-        max_prediction_distance = self._config.head.max_prediction_distance
-
-        batch.token_ids = batch.token_ids.to(
-            device=self._distributed.device,
-            dtype=torch.int64,
-            non_blocking=True,
-        )
+            preprocessed_meta = self.preprocess_meta(batch, phase)
 
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
@@ -191,103 +182,60 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
 
-        token_ids = batch.token_ids
-        if sequence_first:
-            # Move the sequence dimension first to make sequence parallel ops more efficient.
-            token_ids = token_ids.transpose(0, 1).contiguous()
-
         preprocessed = []
         presents = None
         for i, (_, kwargs_meta) in enumerate(preprocessed_meta):
-            sequence_k = kwargs_meta[AttentionKwargs.sequence_k_dim].size
-            if sequence_first:
-                tokens = token_ids[sequence_k - sequence_q : sequence_k]
-            else:
-                # TODO: Avoid multiple contiguous calls?
-                tokens = token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
-            if batch.sequence_lengths is not None:
-                kwargs_meta[AttentionKwargs.sequence_lengths] = batch.sequence_lengths
-            if batch.chosen_spans is not None:
-                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_spans
-            if batch.rejected_spans is not None:
-                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_spans
+            tokens_end = kwargs_meta[AttentionKwargs.sequence_k_dim].size
+            tokens_begin = tokens_end - kwargs_meta[AttentionKwargs.sequence_q_dim].size
+            cropped_tokens = batch.tokens.crop(tokens_begin, tokens_end)
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
-            kwargs = {
+
+            kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
+                # TODO: ====== Use only if wanted ======
+                AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                **reference_logits[i],
             }
+
             if phase != PhaseType.inference:
-                sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
-                if sequence_first:
-                    labels = token_ids[sequence_offset : sequence_k + max_prediction_distance]
-                else:
-                    # TODO: Avoid multiple contiguous calls?
-                    labels = token_ids[:, sequence_offset : sequence_k + max_prediction_distance].contiguous()
-                    # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
-                    # TODO: take ignore_index from config
+                labels_begin = tokens_begin + 1
+                labels_end = tokens_end + self._config.head.max_prediction_distance
+
+                labels = batch.tokens.crop(labels_begin, labels_end).tokens
+
                 if batch.loss_masking_spans is not None:
-                    # avoid changing input tokens
-                    labels = labels.clone()
-                    for idx, spans in enumerate(batch.loss_masking_spans):
-                        if not spans.numel():
-                            continue
-                        valid_spans = spans[
-                            (spans[:, 0] <= sequence_k + max_prediction_distance - 1)
-                            & (spans[:, 1] >= sequence_offset)
-                        ]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[:, 0].clamp_(min=sequence_offset)
-                            valid_spans[:, 1].clamp_(max=sequence_k + max_prediction_distance - 1)
-                            valid_spans -= sequence_offset
-                            loss_mask = torch.ones_like(labels, dtype=torch.bool)
-                            for start, end in valid_spans:
-                                if sequence_first:
-                                    loss_mask[start : end + 1, idx] = False
-                                else:
-                                    loss_mask[idx, start : end + 1] = False
-                            if self._config.output_layer.distillation_model is not None:
-                                kwargs[LanguageModelKwargs.loss_mask] = loss_mask
-                            labels = torch.where(loss_mask, labels, -100)
-                kwargs[LanguageModelKwargs.labels] = labels
-                kwargs.update(reference_logits[i])
+                    loss_masking_spans = batch.loss_masking_spans.crop(labels_begin, labels_end)
+                    loss_mask = torch.ones_like(labels, dtype=torch.bool)
+                    for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
+                        for begin, end in loss_masking_spans:
+                            loss_mask[sample_index, begin:end] = False
+                    if self._config.output_layer.distillation_model is not None:
+                        kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                    labels = torch.where(loss_mask, labels, -100)
+
+                kwargs[LanguageModelKwargs.labels] = (
+                    labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels
+                ).contiguous()
 
                 if batch.chosen_spans is not None:
-                    chosen_valid_spans = []
-                    for spans in batch.chosen_spans:
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[0].clamp_(min=sequence_offset)
-                            valid_spans[1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
+                    kwargs[LanguageModelKwargs.chosen_spans] = batch.chosen_spans.crop(labels_begin, labels_end).ranges
 
-                            chosen_valid_spans.append(valid_spans)
-                    kwargs[LanguageModelKwargs.chosen_spans] = chosen_valid_spans
+                if batch.rejected_spans is not None:
+                    kwargs[LanguageModelKwargs.rejected_spans] = batch.rejected_spans.crop(
+                        labels_begin, labels_end
+                    ).ranges
 
-                    rejected_valid_spans = []
-                    for spans in batch.rejected_spans:
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[0].clamp_(min=sequence_offset)
-                            valid_spans[1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
-
-                            rejected_valid_spans.append(valid_spans)
-                    kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
-
+            tokens = (
+                cropped_tokens.tokens.transpose(0, 1)
+                if kwargs[AttentionKwargs.sequence_first]
+                else cropped_tokens.tokens
+            ).contiguous()
             self.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 

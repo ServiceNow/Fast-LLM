@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import functools
 import itertools
 import math
@@ -15,6 +16,17 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
+class ShufflingType(str, enum.Enum):
+    # Shuffle all epochs together. Not extendable.
+    full = "full"
+    # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
+    epoch = "epoch"
+    # Shuffle all epochs except the first one. Recommended for pre-shuffled datasets, especially big ones.
+    skip_first_epoch = "skip_first_epoch"
+    # Disable shuffling entirely.
+    disabled = "disabled"
+
+
 @config_class()
 class SamplingConfig(Config):
     """
@@ -26,6 +38,18 @@ class SamplingConfig(Config):
         desc="Seed for random sampling.",
         hint=FieldHint.feature,
     )
+    gpu: bool = Field(
+        default=True,
+        desc="Enable fast sampling on GPU."
+        " Note that random sampling works differently on GPU,"
+        " so the sample won't match the CPU equivalent.",
+        hint=FieldHint.feature,
+    )
+    shuffle: ShufflingType = Field(
+        default=ShufflingType.epoch,
+        desc="Shuffling strategy.",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -34,7 +58,12 @@ class SamplingParameters:
     Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
     """
 
+    sequence_length: int
     num_samples: int
+    truncate_documents: bool = True
+    # How many extra tokens to add to the sequence length.
+    # This is used to provide labels even for the last tokens in the sequence.
+    extra_tokens: int = 1
 
 
 @dataclasses.dataclass(kw_only=True)

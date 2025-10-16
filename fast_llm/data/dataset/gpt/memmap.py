@@ -8,12 +8,14 @@ import torch
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.range import RangeSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 
-class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
+class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -47,7 +49,7 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
             if self._version >= 3:
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
-            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
+            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].torch
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
@@ -126,7 +128,7 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
-        self._num_tokens = div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
+        self._num_tokens = div(self._bin_buffer_mmap.size, self._dtype.itemsize)
         if num_tokens is not None:
             assert self._num_tokens == num_tokens
 
@@ -149,27 +151,26 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
     ) -> SampleType:
         if end is None:
             end = self.get_document_size(index)
-        token_ids = np.frombuffer(
-            self._bin_buffer,
-            dtype=self._dtype,
-            count=end - begin,
-            offset=self._pointers[index] + begin * np.dtype(self._dtype).itemsize,
+        sample_size = self._document_sizes[index].item()
+        assert 0 <= begin <= end <= sample_size, (0, begin, end, sample_size)
+        token_ids = (
+            torch.frombuffer(
+                self._bin_buffer,
+                dtype=self._dtype,
+                count=end - begin,
+                offset=self._pointers[index].item() + begin * self._dtype.itemsize,
+            )
+            if end > begin
+            else torch.empty(0, dtype=self._dtype)
         )
-        sample_spans = None
         if parameters is not None and parameters.use_loss_masking_spans:
             assert self._spans is not None
-            sample_spans = self._spans[index]
-
-            # filter spans that are outside the range of the selected tokens in the document
-            sample_spans = sample_spans[(sample_spans[:, 0] < begin + len(token_ids)) & (sample_spans[:, 1] >= begin)]
-
-            # subtract by offset to normalize span boundaries
-            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], begin) - begin  # offset
-            sample_spans[:, 1] = np.minimum(sample_spans[:, 1], begin + len(token_ids) - 1) - begin
-            sample_spans = torch.from_numpy(sample_spans)
-
-        chosen_span = None
-        rejected_span = None
+            # TODO: ====== Store in range format (begin, end) ======
+            sample_spans = RangeSample(
+                [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
+            ).crop(begin, end)
+        else:
+            sample_spans = None
 
         if parameters is not None and parameters.use_preference_loss_spans:
             if not self._has_preference_spans:
@@ -178,34 +179,25 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
                 raise ValueError("Failed to read chosen spans from memmap dataset.")
             elif self._has_preference_spans and self._rejected_spans is None:
                 raise ValueError("Failed to read rejected spans from memmap dataset.")
-            else:
-                chosen_span = self._chosen_spans[index]
+            elif begin != 0 or end != sample_size:
+                raise ValueError("Samples with preference spans should not be cropped.")
+            # TODO: ====== Store in range format ======
+            chosen_spans = RangeSample(
+                [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
+                sample_size,
+            )
+            rejected_spans = RangeSample(
+                [(self._rejected_spans[index][0].item(), self._rejected_spans[index][1].item() + 1)],
+                sample_size,
+            )
+        else:
+            chosen_spans = rejected_spans = None
 
-                # filter spans that are outside the range of the selected tokens in the document
-                chosen_span = chosen_span[(chosen_span[0] < begin + len(token_ids)) & (chosen_span[1] >= begin)][0]
-
-                # subtract by offset to normalize span boundaries
-                chosen_span[0] = np.maximum(chosen_span[0], begin) - begin  # offset
-                chosen_span[1] = np.minimum(chosen_span[1], begin + len(token_ids) - 1) - begin
-                chosen_span = torch.from_numpy(chosen_span)
-
-                rejected_span = self._rejected_spans[index]
-
-                # filter spans that are outside the range of the selected tokens in the document
-                rejected_span = rejected_span[
-                    (rejected_span[0] < begin + len(token_ids)) & (rejected_span[1] >= begin)
-                ][0]
-
-                # subtract by offset to normalize span boundaries
-                rejected_span[0] = np.maximum(rejected_span[0], begin) - begin  # offset
-                rejected_span[1] = np.minimum(rejected_span[1], begin + len(token_ids) - 1) - begin
-                rejected_span = torch.from_numpy(rejected_span)
-
-        return GPTSample(
-            token_ids=torch.from_numpy(token_ids),
+        return LanguageModelSample(
+            tokens=TokenSample(token_ids),
             loss_masking_spans=sample_spans,
-            chosen_span=chosen_span,
-            rejected_span=rejected_span,
+            chosen_spans=chosen_spans,
+            rejected_spans=rejected_spans,
         )
 
     @property
@@ -231,7 +223,11 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
         return self._document_sizes[index].item()
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
+    def write_dataset(
+        cls,
+        prefix: pathlib.Path | str,
+        documents: typing.Iterable[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]],
+    ) -> None:
         # Initialize metadata
         dtype = None
         num_documents = 0
@@ -249,29 +245,29 @@ class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
 
         # Write the binary data file (.bin) lazily
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
-            for document in documents:
+            for token_ids, loss_masking_spans, chosen_span, rejected_span in documents:
                 # Infer dtype from the first document
                 if dtype is None:
-                    dtype = document.token_ids.dtype
+                    dtype = token_ids.dtype
                     assert dtype is not None, "Document dtype could not be inferred from the data."
 
                 # Ensure all documents have the same dtype
-                assert document.token_ids.dtype == dtype, f"Expected dtype {dtype}, got {document.token_ids.dtype}."
+                assert token_ids.dtype == dtype, f"Expected dtype {dtype}, got {token_ids.dtype}."
 
                 # Write document to binary file
-                bin_stream.write(document.token_ids.numpy().tobytes(order="C"))
+                bin_stream.write(token_ids.numpy().tobytes(order="C"))
 
                 # Update metadata
-                doc_length = len(document.token_ids)
+                doc_length = len(token_ids)
                 lengths.append(doc_length)
                 pointers.append(offset)
-                if document.loss_masking_spans is not None:
-                    num_spans.append(len(document.loss_masking_spans))
-                    spans.append(document.loss_masking_spans)
-                if document.chosen_span is not None:
-                    chosen_spans.append(document.chosen_span)
-                if document.rejected_span is not None:
-                    rejected_spans.append(document.rejected_span)
+                if loss_masking_spans is not None:
+                    num_spans.append(len(loss_masking_spans))
+                    spans.append(loss_masking_spans)
+                if chosen_span is not None:
+                    chosen_spans.append(chosen_span)
+                if rejected_span is not None:
+                    rejected_spans.append(rejected_span)
                 offset += doc_length * dtype.itemsize
                 num_documents += 1
 

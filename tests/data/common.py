@@ -8,8 +8,14 @@ from fast_llm.config import Field, FieldHint, NoAutoValidate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig, SamplingParameters
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig, GPTSamplingData, GPTSamplingParameters, ShufflingType
+from fast_llm.data.dataset.config import (
+    IndexedDatasetConfig,
+    SampledDatasetConfig,
+    SamplingConfig,
+    SamplingParameters,
+    ShufflingType,
+)
+from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.dataset.sampled import SampledIndexedDataset
 from fast_llm.data.sample.abstract import Sample
@@ -35,7 +41,7 @@ def get_sampling_data(
     # Config with convenient defaults.
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     return GPTSamplingData(
-        config=GPTSamplingConfig(
+        config=SamplingConfig(
             seed=seed,
             gpu=gpu,
             shuffle=shuffle,
@@ -88,7 +94,7 @@ def get_test_data_and_compare_samples(
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
     assert "sampling" not in config
-    config["sampling"] = GPTSamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
+    config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
     data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():
@@ -117,21 +123,21 @@ def compare_indexed_dataset(
     sizes = dataset.get_document_sizes()
     # Assert.eq(sizes.sum(), num_tokens)
     Assert.all_equal(
-        [len(dataset.get_document(i).token_ids) for i in range(min(len(dataset), 100))],
+        [len(dataset.get_document(i).tokens.tokens) for i in range(min(len(dataset), 100))],
         sizes[: min(len(dataset), 100)],
     )
     for i, expected_sample in expected_samples.items():
-        Assert.all_equal(dataset.get_document(i).token_ids, np.array(expected_sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample, dtype=np.uint16))
     if loss_masking_spans:
         for i, loss_masking_span in loss_masking_spans.items():
-            Assert.all_equal(
+            Assert.eq(
                 dataset.get_document(
                     i,
                     parameters=GPTSamplingParameters(
                         num_samples=0, sequence_length=0, vocab_size=0, use_loss_masking_spans=True
                     ),
-                ).loss_masking_spans,
-                np.array(loss_masking_spans[i], dtype=np.int32).reshape(-1, 2),
+                ).loss_masking_spans.ranges,
+                loss_masking_spans[i],
             )
 
 
@@ -161,7 +167,7 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
         )
     seen_tokens = 0
     for document_index in document_sampling:
-        document = sampled._indexed_dataset.get_document(document_index).token_ids
+        document = sampled._indexed_dataset.get_document(document_index).tokens.tokens
 
         all_tokens[seen_tokens : seen_tokens + len(document)] = document[: num_tokens - seen_tokens]
         seen_tokens += len(document)

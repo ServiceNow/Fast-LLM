@@ -3,11 +3,12 @@ import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
+class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType]):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
@@ -43,10 +44,13 @@ class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
 
     def __getitem__(self, index: int) -> SampleType:
         # TODO: Use torch methods to avoid back and forth.
-        return GPTSample(
-            torch.from_numpy(
-                self._fim(
-                    self._dataset[index].token_ids.numpy(), np.random.RandomState(seed=(self._seed + index) % MAX_SEED)
+        return LanguageModelSample(
+            TokenSample(
+                torch.from_numpy(
+                    self._fim(
+                        self._dataset[index].tokens.tokens.numpy(),
+                        np.random.RandomState(seed=(self._seed + index) % MAX_SEED),
+                    )
                 )
             )
         )

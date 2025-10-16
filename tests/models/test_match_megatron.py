@@ -11,7 +11,8 @@ from fast_llm.data.dataset.config import SampledDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingData
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.sampled import logger
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_model_test_dataset
@@ -155,7 +156,7 @@ class MegatronGPTSampledIndexedDataset(SampledDataset):
         token_ids = torch.cat([sample.token_ids for sample in sample_list])
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids)
+        return LanguageModelSample(TokenSample(token_ids))
 
     @property
     def name(self) -> str:
