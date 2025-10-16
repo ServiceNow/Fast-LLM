@@ -215,7 +215,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
-        attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
+        with set_generator(self._distributed.tp_generator):
+            attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
         attn_output = torch.bmm(
             attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
         )
@@ -334,13 +335,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
 
-        with set_generator(self._distributed.tp_generator):
-            if self._implementation == AttentionImplementation.flash_varlen:
-                assert _flash_available
-                out_dims = query.size()
-                query = query.view(-1, query.size(-2), query.size(-1))
-                key = key.view(-1, key.size(-2), key.size(-1))
-                value = value.view(-1, value.size(-2), value.size(-1))
+        if self._implementation == AttentionImplementation.flash_varlen:
+            assert _flash_available
+            out_dims = query.size()
+            query = query.view(-1, query.size(-2), query.size(-1))
+            key = key.view(-1, key.size(-2), key.size(-1))
+            value = value.view(-1, value.size(-2), value.size(-1))
+            with set_generator(self._distributed.tp_generator):
                 input_ = (
                     _flash_attn_varlen_func(
                         query,
@@ -358,8 +359,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     .view(*out_dims)
                     .flatten(-2)
                 )
-            elif self._implementation == AttentionImplementation.flash:
-                assert _flash_available
+        elif self._implementation == AttentionImplementation.flash:
+            assert _flash_available
+            with set_generator(self._distributed.tp_generator):
                 input_ = _flash_attn_func(
                     query,
                     key,
@@ -369,17 +371,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     causal=self._config.causal,
                     softmax_scale=self._softmax_scale,
                 ).flatten(-2)
-            elif self._implementation == AttentionImplementation.backup:
-                # TODO: Avoid the flattens.
-                input_ = self._attn_fused(
-                    query.flatten(-2),
-                    key.flatten(-2),
-                    value.flatten(-2),
-                    kwargs[AttentionKwargs.attention_mask],
-                    kwargs[AttentionKwargs.attention_mask_value],
-                )
-            else:
-                raise NotImplementedError(self._implementation)
+        elif self._implementation == AttentionImplementation.backup:
+            # TODO: Avoid the flattens.
+            input_ = self._attn_fused(
+                query.flatten(-2),
+                key.flatten(-2),
+                value.flatten(-2),
+                kwargs[AttentionKwargs.attention_mask],
+                kwargs[AttentionKwargs.attention_mask_value],
+            )
+        else:
+            raise NotImplementedError(self._implementation)
 
         if self._debug.enabled:
             self._debug(query, "query", self._query_dims, kwargs)
