@@ -86,45 +86,118 @@ class GptOssAttentionConverter(LlamaAttentionConverter):
 
 class GptOssMoEWeightConverter(WeightConverter):
     """
-    Converter for GPT-OSS MoE weights.
+    Converter for GPT-OSS MoE weights (for down_proj).
 
-    HF format: (num_experts, dim1, dim2)
-    Fast-LLM format: (num_experts * dim1, dim2)
+    HF format: (num_experts, in_features, out_features) - e.g. (32, 2880, 2880)
+    Fast-LLM format: (num_experts * out_features, in_features) - e.g. (92160, 2880)
 
-    Flattens/unflattens the expert dimension during conversion.
+    Each expert's weight is transposed and then all are concatenated.
     """
 
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (weight_tensor,) = weight
-        # Fast-LLM: (num_experts * dim1, dim2) -> HF: (num_experts, dim1, dim2)
+        # Fast-LLM: (num_experts * out_features, in_features) -> HF: (num_experts, in_features, out_features)
         weight_loaded = weight_tensor[:]
         num_experts = self._config.experts
-        total_dim, dim2 = weight_loaded.shape
-        dim1 = total_dim // num_experts
-        weight_reshaped = weight_loaded.reshape(num_experts, dim1, dim2)
-        return (weight_reshaped,)
+        total_out, in_features = weight_loaded.shape
+        out_features = total_out // num_experts
+        # Reshape and transpose each expert
+        weight_reshaped = weight_loaded.reshape(num_experts, out_features, in_features)
+        weight_transposed = weight_reshaped.transpose(1, 2)
+        return (weight_transposed,)
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (weight_tensor,) = weight
-        # HF: (num_experts, dim1, dim2) -> Fast-LLM: (num_experts * dim1, dim2)
+        # HF: (num_experts, in_features, out_features) -> Fast-LLM: (num_experts * out_features, in_features)
         weight_loaded = weight_tensor[:]
-        num_experts, dim1, dim2 = weight_loaded.shape
-        weight_reshaped = weight_loaded.reshape(num_experts * dim1, dim2)
+        num_experts, in_features, out_features = weight_loaded.shape
+        # Transpose each expert and concatenate
+        weight_transposed = weight_loaded.transpose(1, 2)  # (num_experts, out_features, in_features)
+        weight_reshaped = weight_transposed.reshape(num_experts * out_features, in_features)
+        return (weight_reshaped,)
+
+
+class GptOssMoEGateUpConverter(WeightConverter):
+    """
+    Converter for GPT-OSS MoE gate_up_proj weights.
+
+    HF format: (num_experts, in_features, 2 * out_features) with interleaved gate/up - e.g. (32, 2880, 5760)
+               where gate and up are interleaved: [g0, u0, g1, u1, ...]
+    Fast-LLM format: (num_experts * 2 * out_features, in_features) with concatenated gate/up - e.g. (184320, 2880)
+                     where gate and up are concatenated: [g0, g1, ..., u0, u1, ...]
+
+    This converter:
+    1. Transposes each expert's weight
+    2. De-interleaves gate and up projections
+    3. Concatenates all experts
+    """
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (weight_tensor,) = weight
+        # Fast-LLM: (num_experts * 2 * expert_dim, in_features) concatenated -> HF: (num_experts, in_features, 2 * expert_dim) interleaved
+        weight_loaded = weight_tensor[:]
+        num_experts = self._config.experts
+        total_out, in_features = weight_loaded.shape
+        expert_dim = total_out // (num_experts * 2)
+
+        # Reshape to separate experts: (num_experts, 2 * expert_dim, in_features)
+        weight_per_expert = weight_loaded.reshape(num_experts, 2 * expert_dim, in_features)
+
+        # Split each expert into gate and up: (num_experts, expert_dim, in_features) each
+        gate = weight_per_expert[:, :expert_dim, :]
+        up = weight_per_expert[:, expert_dim:, :]
+
+        # Transpose: (num_experts, in_features, expert_dim)
+        gate_t = gate.transpose(1, 2)
+        up_t = up.transpose(1, 2)
+
+        # Interleave columns: stack and reshape
+        # (num_experts, in_features, expert_dim, 2) -> (num_experts, in_features, 2 * expert_dim)
+        weight_interleaved = torch.stack([gate_t, up_t], dim=-1).reshape(num_experts, in_features, 2 * expert_dim)
+
+        return (weight_interleaved,)
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (weight_tensor,) = weight
+        # HF: (num_experts, in_features, 2 * expert_dim) interleaved -> Fast-LLM: (num_experts * 2 * expert_dim, in_features) concatenated
+        weight_loaded = weight_tensor[:]
+        num_experts, in_features, total_out = weight_loaded.shape
+        expert_dim = total_out // 2
+
+        # De-interleave: columns [0,2,4,...] are gate, [1,3,5,...] are up
+        # Split into gate and up by selecting even/odd columns
+        gate = weight_loaded[:, :, 0::2]  # (num_experts, in_features, expert_dim) - even columns
+        up = weight_loaded[:, :, 1::2]    # (num_experts, in_features, expert_dim) - odd columns
+
+        # Transpose each: (num_experts, expert_dim, in_features)
+        gate_t = gate.transpose(1, 2)
+        up_t = up.transpose(1, 2)
+
+        # For each expert, concatenate gate and up
+        # Result: (num_experts, 2 * expert_dim, in_features)
+        weight_per_expert = torch.cat([gate_t, up_t], dim=1)
+
+        # Reshape to (num_experts * 2 * expert_dim, in_features)
+        weight_reshaped = weight_per_expert.reshape(num_experts * 2 * expert_dim, in_features)
+
         return (weight_reshaped,)
 
 
 class GptOssMoEBiasConverter(WeightConverter):
     """
-    Converter for GPT-OSS MoE biases.
+    Converter for GPT-OSS MoE biases (for down_proj).
 
-    After dequantization, GPT-OSS stores biases in the same format as Fast-LLM:
-    Both formats: (num_experts, out_features_per_expert)
+    Both Fast-LLM and HF formats: (num_experts, out_features_per_expert)
 
-    No transposition needed - just pass through.
+    No transformation needed - just pass through.
     """
 
     def export_weight(
@@ -140,36 +213,90 @@ class GptOssMoEBiasConverter(WeightConverter):
         return weight
 
 
+class GptOssMoEGateUpBiasConverter(WeightConverter):
+    """
+    Converter for GPT-OSS MoE gate_up_proj biases.
+
+    HF format: (num_experts, 2 * expert_dim) with interleaved gate/up - e.g. (32, 5760)
+               where gate and up are interleaved: [g0, u0, g1, u1, ...]
+    Fast-LLM format: (num_experts, 2 * expert_dim) with concatenated gate/up
+                     where gate and up are concatenated: [g0, g1, ..., u0, u1, ...]
+
+    This converter de-interleaves/re-interleaves the biases.
+    """
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (bias_tensor,) = weight
+        # Fast-LLM: (num_experts, 2 * expert_dim) concatenated -> HF: (num_experts, 2 * expert_dim) interleaved
+        bias_loaded = bias_tensor[:]
+        num_experts, total_dim = bias_loaded.shape
+        expert_dim = total_dim // 2
+
+        # Split into gate and up: (num_experts, expert_dim) each
+        gate = bias_loaded[:, :expert_dim]
+        up = bias_loaded[:, expert_dim:]
+
+        # Interleave: stack and reshape (num_experts, expert_dim, 2) -> (num_experts, 2 * expert_dim)
+        bias_interleaved = torch.stack([gate, up], dim=-1).reshape(num_experts, 2 * expert_dim)
+
+        return (bias_interleaved,)
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        (bias_tensor,) = weight
+        # HF: (num_experts, 2 * expert_dim) interleaved -> Fast-LLM: (num_experts, 2 * expert_dim) concatenated
+        bias_loaded = bias_tensor[:]
+        num_experts, total_dim = bias_loaded.shape
+        expert_dim = total_dim // 2
+
+        # De-interleave: indices [0,2,4,...] are gate, [1,3,5,...] are up
+        gate = bias_loaded[:, 0::2]  # (num_experts, expert_dim) - even indices
+        up = bias_loaded[:, 1::2]    # (num_experts, expert_dim) - odd indices
+
+        # Concatenate: (num_experts, 2 * expert_dim)
+        bias_concat = torch.cat([gate, up], dim=1)
+
+        return (bias_concat,)
+
+
 def get_gpt_oss_weight_and_bias_converters(
     fast_llm_prefix: str,
     hf_prefix: str,
     use_bias: bool,
     weight_cls=WeightConverter,
     drop_on_export: bool = False,
+    bias_converter_cls=None,
 ) -> list[WeightConverter]:
     """
-    Get weight and bias converters for GPT-OSS format.
+    Get weight and bias converters for GPT-OSS MoE format.
 
-    GPT-OSS uses "_bias" suffix instead of ".bias" for expert biases.
-    After dequantization, biases are in (num_experts, out_features_per_expert) format.
+    GPT-OSS MoE parameters don't have .weight/.bias suffixes in the checkpoint.
+    Instead they use:
+    - experts.gate_up_proj (no .weight suffix)
+    - experts.gate_up_proj_bias (uses _bias not .bias)
     """
     converters = [
         get_parameter_converter(
             f"{fast_llm_prefix}.weight",
-            f"{hf_prefix}.weight",
+            hf_prefix,  # HF doesn't have .weight suffix for MoE experts
             weight_cls,
             None,
             drop_on_export,
         )
     ]
     if use_bias:
-        # GPT-OSS uses "_bias" suffix for expert biases, not ".bias"
-        # and stores them transposed
+        # GPT-OSS uses "_bias" suffix for expert biases
+        # Use provided bias converter or default
+        if bias_converter_cls is None:
+            bias_converter_cls = GptOssMoEBiasConverter
         converters.append(
             get_parameter_converter(
                 f"{fast_llm_prefix}.bias",
                 f"{hf_prefix}_bias",  # Note: _bias not .bias
-                GptOssMoEBiasConverter,
+                bias_converter_cls,
                 None,
                 drop_on_export,
             )
@@ -196,6 +323,8 @@ class GptOssMLPConverter(MixtralMLPConverter):
             "bias": {"enabled": True},
         }
         out["add_linear_biases"] = True
+        # GPT-OSS uses custom GLU activation
+        out["activation"] = "gpt_oss_glu"
         # Use moe_affine_linear type for MoE expert layers to get per-expert biases
         out["layer_1"] = {
             "type": "moe_affine_linear",
@@ -240,15 +369,16 @@ class GptOssMLPConverter(MixtralMLPConverter):
             ),
             # Experts use concatenated format like Llama (gate_up_proj, down_proj)
             # not separate w1/w2/w3 like Mixtral
-            # GPT-OSS uses "_bias" suffix for expert biases
-            # Weights need special MoE converter to handle (num_experts, ...) shape
+            # GPT-OSS gate_up_proj has interleaved gate/up, needs special converter
             *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_1",
                 f"{hf_prefix}.experts.gate_up_proj",
                 config.add_linear_biases,
-                GptOssMoEWeightConverter,
+                GptOssMoEGateUpConverter,  # Special converter for interleaved gate/up
                 drop_on_export=drop_on_export,
+                bias_converter_cls=GptOssMoEGateUpBiasConverter,  # Special bias converter
             ),
+            # down_proj uses standard MoE converter (no interleaving)
             *get_gpt_oss_weight_and_bias_converters(
                 f"{fast_llm_prefix}.layer_2",
                 f"{hf_prefix}.experts.down_proj",

@@ -128,4 +128,8 @@ class AttentionConfig(MixerConfig):
         return Attention
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
+        return (
+            self.use_flash_attention
+            and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
+            and not self.sinks.enabled
+        )

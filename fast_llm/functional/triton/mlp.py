@@ -61,10 +61,22 @@ def triton_mlp_activation_forward_kernel(
         out = relu_out * relu_out
     elif activation_type == "identity":
         out = input_
+    elif activation_type == "gpt_oss_glu":
+        # GPT-OSS custom GLU: (up + 1) * (gate * sigmoid(gate * 1.702))
+        # For gated=True, input_ is gate, other (loaded below) is up
+        # Includes clamping: gate max 7.0, up in [-7.0, 7.0]
+        tl.static_assert(gated, "gpt_oss_glu requires gated=True")
+        other = tl.load(input_ptr + n_cols, mask=mask)
+        # Clamp gate to max 7.0
+        gate_clamped = tl.minimum(input_, 7.0)
+        # Clamp up to [-7.0, 7.0]
+        up_clamped = tl.minimum(tl.maximum(other, -7.0), 7.0)
+        glu = gate_clamped * (1.0 / (1.0 + tl.exp(-gate_clamped * 1.702)))  # gate * sigmoid(gate * 1.702)
+        out = (up_clamped + 1.0) * glu
     else:
         tl.static_assert(False, activation_type)
 
-    if gated:
+    if gated and activation_type != "gpt_oss_glu":
         other = tl.load(input_ptr + n_cols, mask=mask)
         out = out * other
 
@@ -124,15 +136,39 @@ def triton_mlp_activation_backward_kernel(
         grad = 1
         if gated or recompute:
             out = input_
+    elif activation_type == "gpt_oss_glu":
+        # GPT-OSS custom GLU: out = (up + 1) * (gate * sigmoid(gate * 1.702))
+        # input_ is gate, other is up
+        # Includes clamping: gate max 7.0, up in [-7.0, 7.0]
+        tl.static_assert(gated, "gpt_oss_glu requires gated=True")
+        other = tl.load(input_ptr + n_cols, mask=mask)
+        alpha = 1.702
+        # Clamp gate to max 7.0
+        gate_clamped = tl.minimum(input_, 7.0)
+        # Clamp up to [-7.0, 7.0]
+        up_clamped = tl.minimum(tl.maximum(other, -7.0), 7.0)
+        sigma = 1.0 / (1.0 + tl.exp(-gate_clamped * alpha))  # sigmoid(gate * alpha)
+        glu = gate_clamped * sigma
+        # grad_gate = (up + 1) * d_glu/d_gate = (up + 1) * sigma * (1 + gate * alpha * (1 - sigma))
+        # Only backprop through gate if it wasn't clamped (input_ <= 7.0)
+        grad_glu = sigma * (1.0 + gate_clamped * alpha * (1.0 - sigma))
+        grad_gate = tl.where(input_ <= 7.0, (up_clamped + 1.0) * grad_glu, 0.0)
+        # grad_up = glu = gate * sigma
+        # Only backprop through up if it wasn't clamped (other in [-7.0, 7.0])
+        grad_up = tl.where((other >= -7.0) & (other <= 7.0), glu, 0.0)
+        tl.store(grad_input_ptr, grad_gate * output_grad, mask=mask)
+        tl.store(grad_input_ptr + n_cols, grad_up * output_grad, mask=mask)
+        if recompute:
+            out = (up_clamped + 1.0) * glu
     else:
         tl.static_assert(False, activation_type)
 
-    if gated:
+    if gated and activation_type != "gpt_oss_glu":
         other = tl.load(input_ptr + n_cols, mask=mask)
         tl.store(grad_input_ptr, grad * other * output_grad, mask=mask)
         tl.store(grad_input_ptr + n_cols, out * output_grad, mask=mask)  # noqa
         out = out * other
-    else:
+    elif not gated:
         tl.store(grad_input_ptr, grad * output_grad, mask=mask)
 
     if recompute:
@@ -197,7 +233,11 @@ def torch_mlp_activation(
     gated: bool,
     activation_type: ActivationType,
 ) -> torch.Tensor:
-    if gated:
+    # GPT-OSS GLU handles the gating internally, not via standard pattern
+    if activation_type == ActivationType.gpt_oss_glu:
+        assert gated, "gpt_oss_glu requires gated=True"
+        return activation_type.activation_fn(input_)
+    elif gated:
         x1, x2 = input_.chunk(2, dim=-1)
         return activation_type.activation_fn(x1) * x2
     else:
