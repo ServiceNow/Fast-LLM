@@ -250,7 +250,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
         # Load tokenizer
-        self._tokenizer = Tokenizer(config=self._config.tokenizer)
+        self._tokenizer = self._config.tokenizer.get_tokenizer()
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (

@@ -147,10 +147,7 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
     def build(self) -> "ConcatenatedDataset":
         from fast_llm.data.dataset.indexed import ConcatenatedDataset
 
-        return self._build(ConcatenatedDataset)
-
-    def _build[T: ConcatenatedDataset](self, cls: type[T]) -> T:
-        return cls(self.name, [dataset.build() for dataset in self.datasets])
+        return ConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "slice"})
