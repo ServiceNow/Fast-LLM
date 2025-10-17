@@ -22,7 +22,7 @@ from fast_llm.models.gpt.conversion.config import (
     Qwen2CheckpointFormat,
 )
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import MODEL_DATASET_PATH, MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
@@ -234,18 +234,18 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "data": {
             "datasets": {
                 "training": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
                     "type": "slice",
                     "end": 0.969,
                 },
                 "validation": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
                     "type": "slice",
                     "begin": 0.969,
                     "end": 0.999,
                 },
                 "test": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
                     "type": "slice",
                     "begin": 0.999,
                     "end": 1,
@@ -279,7 +279,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
-        f"--data-path={MODEL_DATASET_PREFIX}",
+        f"--data-path={MODEL_DATASET_PATH}",
         "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)

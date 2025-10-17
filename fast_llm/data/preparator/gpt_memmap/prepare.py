@@ -24,7 +24,7 @@ from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
 from fast_llm.data.sample.config import MemmapDatasetConfig
-from fast_llm.data.sample.language_model import LanguageModelReader
+from fast_llm.data.sample.language_model import LanguageModelReader, LanguageModelSample
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -37,7 +37,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _data_type: DataType
     _text_column: str
     _loss_masking_spans_column: str | None
-    _sample_type: typing.ClassVar[type[GPTSample]] = GPTSample
+    _sample_type: typing.ClassVar[type[LanguageModelSample]] = LanguageModelSample
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
@@ -140,11 +140,14 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_idx, shard_dataset = args
 
         def _document_generator():
+            # TODO: ====== Yield `LanguageModelSample` ======
             if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(
+                    yield (
                         torch.tensor(item["input_ids"], dtype=self._data_type.torch),
                         torch.tensor(item["token_spans"], dtype=torch.int32).reshape(-1, 2),
+                        None,
+                        None,
                     )
             elif (
                 "chosen_token_spans" in shard_dataset.column_names
@@ -153,14 +156,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 and self._config.dataset.rejected_text is not None
             ):
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(
-                        token_ids=torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        chosen_span=torch.tensor(item["chosen_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        rejected_span=torch.tensor(item["rejected_token_spans"], dtype=torch.int32).reshape(-1, 2),
+                    yield (
+                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
+                        None,
+                        torch.tensor(item["chosen_token_spans"], dtype=torch.int32).reshape(-1, 2),
+                        torch.tensor(item["rejected_token_spans"], dtype=torch.int32).reshape(-1, 2),
                     )
             else:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(torch.tensor(item["input_ids"], dtype=self._data_type.torch))
+                    yield (
+                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
+                        None,
+                        None,
+                        None,
+                    )
 
         MemmapDataset.write_dataset(
             path=self._config.output_path / f"shard_{self._config.distributed.rank}_{shard_idx}.fast_llm_dataset",

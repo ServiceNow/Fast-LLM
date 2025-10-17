@@ -52,7 +52,7 @@ class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
     def build(self) -> "GPTRandomDataset[SampleType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
-        return GPTRandomDataset(self.name)
+        return GPTRandomDataset[SampleType](self.name)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})

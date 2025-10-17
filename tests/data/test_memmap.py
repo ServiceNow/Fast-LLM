@@ -27,20 +27,20 @@ def test_gpt_memmap(cache_directory):
 
 MEMMAP_DATASET_SPANS = {
     9: [],
-    10: [[0, 4], [6, 8]],
-    13: [[1, 2]],
+    10: [(0, 2), (2, 7), (7, 10)],
+    13: [(0, 2)],
     15: [],
 }
 
-_DATASET_PREFIX_SPANS = DATASET_CACHE / "with_spans" / "dataset"
+_DATASET_PATH_SPANS = DATASET_CACHE / "with_spans" / "dataset.fast_llm_dataset"
 
 
 def test_gpt_data_with_spans():
-    get_test_dataset(path=_DATASET_PREFIX_SPANS, max_spans=5)
+    get_test_dataset(path=_DATASET_PATH_SPANS, max_spans=5)
     dataset = get_dataset_config(
         {
             "type": "memmap",
-            "path": _DATASET_PREFIX_SPANS,
+            "path": _DATASET_PATH_SPANS,
         },
         MemmapDatasetConfig,
     ).build()

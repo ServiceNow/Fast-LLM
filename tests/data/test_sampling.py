@@ -1,12 +1,13 @@
-import typing
-
 import numpy as np
 import pytest
+import torch
 
 from fast_llm.data.dataset.config import ShufflingType
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.sampled import GPTSample
+from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
+from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.sample.config import MemmapDatasetConfig
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -40,7 +41,7 @@ GPT_MEMMAP_SAMPLES = [
 def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
-    sampled = get_dataset_config({"type": "memmap", "path": DATASET_PATH}, GPTMemmapDatasetConfig).build_and_sample(
+    sampled = get_dataset_config({"type": "memmap", "path": DATASET_PATH}, MemmapDatasetConfig).build_and_sample(
         get_sampling_data(8, sequence_length=5)
     )
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
@@ -53,7 +54,7 @@ def test_gpt_sampled_data():
             "datasets": {
                 "training": {
                     "type": "memmap",
-                    "path": DATASET_PATH,
+                    "path": DATASET_PREFIX,
                 }
             }
         },
@@ -63,24 +64,23 @@ def test_gpt_sampled_data():
     )
 
 
-class SimpleGPTIndexedDataset(GPTIndexedDataset):
+class SimpleGPTIndexedDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
         self._samples = samples
 
-    def get(self, index: int, offset=0, length=None, use_loss_masking_spans: bool = False) -> typing.Any:
-        if length is None:
-            length = len(self._samples[index])
-        assert not use_loss_masking_spans
-        return GPTSample(
-            token_ids=np.array(self._samples[index][offset : offset + length], dtype=np.int64), loss_masking_spans=None
-        )
+    def get_document(
+        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
+    ) -> SampleType:
+        if end is None:
+            end = len(self._samples[index])
+        return LanguageModelSample(TokenSample(torch.tensor(self._samples[index][begin:end], dtype=torch.int64)))
 
     def __len__(self) -> int:
         return len(self._samples)
 
-    def get_document_sizes(self) -> np.ndarray:
-        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
+    def get_document_sizes(self) -> torch.Tensor:
+        return torch.tensor([self.get_document_size(index) for index in range(len(self))], dtype=torch.int64)
 
     def get_document_size(self, index: int) -> int:
         return len(self._samples[index])
@@ -181,4 +181,4 @@ def test_gpt_sample_padding():
         else:
             sampled = dataset.sample(sampling)
             for idx in range(len(expected_samples)):
-                Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx]))
+                Assert.all_equal(sampled[idx].tokens.tokens, np.array(expected_samples[idx]))

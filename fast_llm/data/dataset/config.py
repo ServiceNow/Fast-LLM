@@ -33,7 +33,6 @@ class SamplingConfig(Config):
     A dataset-dependent configuration for sampling.
     """
 
-    # TODO: ====== DocumentSamplingConfig? ======
     seed: int = Field(
         default=784569,
         desc="Seed for random sampling.",

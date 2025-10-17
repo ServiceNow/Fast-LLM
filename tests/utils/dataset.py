@@ -6,11 +6,10 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.sample.language_model import LanguageModelReader, LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
+from fast_llm.data.sample.language_model import LanguageModelReader
 from tests.utils.global_variables import (
     DATASET_PATH,
-    MODEL_DATASET_PREFIX,
+    MODEL_DATASET_PATH,
     MODEL_TEST_VOCAB_SIZE,
     TEST_CHARACTERS,
     TEST_DATASET_TOKENS,
@@ -25,6 +24,15 @@ def download_santacoder_tokenizer():
         import transformers
 
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+
+
+def get_random_spans(num_samples: int, max_spans: int, lengths: np.ndarray | int, seed: int = 0):
+    spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths, [num_samples, max_spans * 2]))
+    spans = [np.unique(sample_spans).tolist() for sample_spans in spans]
+    return [
+        [(begin, end) for begin, end in zip(sample_spans[::2], sample_spans[1::2], strict=False)]
+        for sample_spans in spans
+    ]
 
 
 def get_test_dataset(
@@ -44,26 +52,34 @@ def get_test_dataset(
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         samples = [
-            LanguageModelSample(
-                TokenSample(
-                    torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size),
-                )
+            (
+                torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size),
+                None,
+                None,
+                None,
             )
             for document in texts
         ]
         if max_spans > 0:
-            lengths = np.array([max(len(sample), 1) for sample in samples])
-            spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths[:, None], [len(samples), max_spans]))
-            for sample, span in zip(samples, spans):
-                span = np.unique(span)
-                sample.loss_masking_spans = torch.from_numpy(span[: len(span) // 2 * 2].reshape(-1, 2))
+            spans = get_random_spans(
+                len(samples), max_spans, np.array([[max(len(tokens), 1)] for tokens, _, _, _ in samples]), seed
+            )
+            samples = [
+                (
+                    tokens,
+                    torch.tensor(sample_spans, dtype=torch.int32).reshape(-1, 2),
+                    None,
+                    None,
+                )
+                for (tokens, _, _, _), sample_spans in zip(samples, spans, strict=True)
+            ]
 
         MemmapDataset.write_dataset(path, samples, LanguageModelReader)
         yaml.safe_dump({"type": "memmap", "path": path.name}, path.parent.joinpath("fast_llm_config.yaml").open("w"))
 
 
 def get_model_test_dataset(
-    prefix: pathlib.Path = MODEL_DATASET_PREFIX,
+    path: pathlib.Path = MODEL_DATASET_PATH,
     vocab_size: int = MODEL_TEST_VOCAB_SIZE,
 ):
-    return get_test_dataset(path=prefix, vocab_size=vocab_size)
+    return get_test_dataset(path=path, vocab_size=vocab_size)

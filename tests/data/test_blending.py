@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from fast_llm.data.dataset.config import BlendedDatasetConfig
+from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.data.common import (
     compare_sampled_dataset,
@@ -14,11 +15,11 @@ from tests.data.common import (
 from tests.utils.dataset import get_test_dataset
 from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH
 
-_DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
+_DATASET_PATH_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset.fast_llm_dataset"
 
 
 def _get_test_dataset_mix_1():
-    return get_test_dataset(path=_DATASET_PREFIX_MIX_1, seed=2345)
+    return get_test_dataset(path=_DATASET_PATH_MIX_1, seed=2345)
 
 
 def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray, np.ndarray]:
@@ -118,11 +119,11 @@ def test_gpt_blended():
             "type": "blended",
             "datasets": [
                 {"type": "memmap", "path": DATASET_PATH},
-                {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
+                {"type": "memmap", "path": _DATASET_PATH_MIX_1},
             ],
             "weights": [0.75, 0.25],
         },
-        GPTBlendedDatasetConfig,
+        BlendedDatasetConfig[LanguageModelSample],
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
@@ -137,7 +138,7 @@ def test_gpt_blended_data():
                     "type": "blended",
                     "datasets": [
                         {"type": "memmap", "path": DATASET_PATH},
-                        {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
+                        {"type": "memmap", "path": _DATASET_PATH_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
                 }
@@ -161,7 +162,7 @@ def test_gpt_blended_mixed():
             ],
             "weights": [0.6, 0.4],
         },
-        BlendedDatasetConfig,
+        BlendedDatasetConfig[LanguageModelSample],
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 

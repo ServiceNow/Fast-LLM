@@ -44,5 +44,5 @@ TEST_VOCAB_SIZE = 8192
 TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
 TEST_DATASET_TOKENS = 1000000
 
-MODEL_DATASET_PREFIX = DATASET_CACHE / "model_dataset"
+MODEL_DATASET_PATH = DATASET_CACHE / "model_dataset.fast_llm_dataset"
 MODEL_TEST_VOCAB_SIZE = 384
