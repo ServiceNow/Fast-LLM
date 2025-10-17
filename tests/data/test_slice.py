@@ -1,5 +1,5 @@
 from fast_llm.data.dataset.config import DatasetSliceConfig
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
 from tests.data.common import (
     compare_indexed_dataset,
     get_dataset_config,
@@ -35,7 +35,7 @@ def test_gpt_slice():
     # samples[9:18]
     dataset = get_dataset_config(
         {"type": "slice", "dataset": {"type": "memmap", "path": DATASET_PREFIX}, "begin": 0.0015, "end": 0.003},
-        DatasetSliceConfig[GPTSample],
+        DatasetSliceConfig[LanguageModelSample],
     ).build()
     compare_indexed_dataset(dataset, 9, 544, {i - 9: sample for i, sample in MEMMAP_DATASET_SAMPLES.items()})
     sampled = dataset.sample(get_sampling_data(8, sequence_length=5))
