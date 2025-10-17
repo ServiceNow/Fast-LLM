@@ -10,8 +10,9 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.config import SamplingData, ShufflingType
+from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.sample.abstract import Sample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.layers.vision.preprocessing import get_num_image_tokens, get_resize_dims
@@ -78,17 +79,16 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class GPTSampledIndexedDataset(SampledDataset):
+class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     """
-    A sampled GPT dataset.
+    A sampled dataset.
     """
 
     def __init__(
         self,
-        indexed_dataset: GPTIndexedDataset,
-        sampling: GPTSamplingData,
+        indexed_dataset: IndexedDataset[SampleType],
+        sampling: SamplingData,
     ):
-        assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
@@ -131,11 +131,11 @@ class GPTSampledIndexedDataset(SampledDataset):
             if sampling.distributed.config.rank == sampling.get_next_rank():
                 self._sample()
             # No barrier yet to allow running in parallel.
-            # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
+            # There needs to be one before calling `__getitem__`, normally handled through `Data`.
 
     def _sample(self) -> None:
         """
-        Create a `GPTSampledDataset` with the requested parameters.
+        Create a `SampledDataset` with the requested parameters.
         """
         # Get the size each document, the main information needed for sampling.
         # Note: "document" may refer to more than just text.
@@ -381,11 +381,11 @@ class GPTSampledIndexedDataset(SampledDataset):
     def __len__(self) -> int:
         return self._parameters.num_samples
 
-    def __getitem__(self, index: int) -> typing.Any:
+    def __getitem__(self, index: int) -> SampleType:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
-        The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
+        The returned sample is ready to be concatenated, then fed to a `Model`.
         """
         self._lazy_load()
 
@@ -440,8 +440,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
-                        # Add padding tokens to current sample
-                        token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
+                        documents.append(documents[-1].get_padding(padding_size))
                         Assert.eq(token_count + padding_size, token_end)
                         break
                     else:

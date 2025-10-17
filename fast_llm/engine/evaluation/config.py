@@ -2,6 +2,7 @@ import abc
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.data.config import TokenizerConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
 
@@ -63,6 +64,9 @@ class LossEvaluatorConfig(EvaluatorConfig):
 class LmEvalEvaluatorConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
 
+    tokenizer: TokenizerConfig = Field(
+        desc="Configuration for the tokenizer.",
+    )
     cli_args: list[str] = Field(
         default_factory=lambda: [],
         desc="lm_eval CLI arguments, excluding those related to model, wandb, batch sizes, and device.",

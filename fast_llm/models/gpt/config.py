@@ -48,12 +48,6 @@ class GPTBatchConfig(BatchConfig):
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
-    # TODO: Find a better place for these?
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
-        hint=FieldHint.feature,
-    )
     use_loss_masking_spans: bool = Field(
         default=False,
         desc="Read loss masking spans from the dataset.",

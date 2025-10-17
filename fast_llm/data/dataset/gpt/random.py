@@ -1,11 +1,14 @@
 import numpy as np
+import torch
 
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
+from fast_llm.engine.config_utils.data_type import get_unsigned_integer_type
 
 
-class GPTRandomDataset(SamplableDataset):
+class GPTRandomDataset[SampleType: LanguageModelSample](SamplableDataset[SampleType]):
     """
     A dummy dataset that always returns the same random sample, for debugging purposes.
     """
@@ -21,21 +24,30 @@ class GPTRandomDataset(SamplableDataset):
         return self._name
 
 
-class GPTRandomSampledDataset(SampledDataset):
+class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[SampleType]):
     def __init__(self, sampling: GPTSamplingData, name: str):
         self._name = name
         self._seed = sampling.config.seed
-        self._sequence_length = sampling.parameters.sequence_length
-        self._vocab_size = sampling.parameters.vocab_size
-        self._num_samples = sampling.parameters.num_samples
+        self._parameters = sampling.parameters
+        # TODO: Support?
+        assert not self._parameters.use_loss_masking_spans
+        assert not self._parameters.use_preference_loss_spans
+        self._dtype = get_unsigned_integer_type(self._parameters.vocab_size).torch
 
     def __len__(self) -> int:
-        return self._num_samples
+        return self._parameters.num_samples
 
-    def __getitem__(self, idx) -> np.ndarray:
-        return GPTSample(
-            np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
-                0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
+    def __getitem__(self, index: int) -> SampleType:
+        # TODO: Sample in self._dtype (breaking)
+        return LanguageModelSample(
+            TokenSample(
+                torch.from_numpy(
+                    np.random.RandomState(self._seed + 48576439 + 74593 * index).randint(
+                        0,
+                        self._parameters.vocab_size,
+                        size=(self._parameters.sequence_length + self._parameters.extra_tokens,),
+                    )
+                ).to(self._dtype),
             )
         )
 

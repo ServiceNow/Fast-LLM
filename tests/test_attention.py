@@ -3,7 +3,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.attention import Attention
-from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
+from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.utils import Assert
 
@@ -29,7 +29,7 @@ def test_varlen_preprocessing():
     micro_sequence_length = 12
     sequence_length = 36
     attention = Attention(
-        AttentionConfig(head_size=64),
+        AttentionConfig(head_size=64, implementation=AttentionImplementation.flash, cross_document_attention=False),
         DistributedConfig(compute_dtype="bfloat16"),
         hidden_dim=TensorDim("", 1),
         lr_scale=None,

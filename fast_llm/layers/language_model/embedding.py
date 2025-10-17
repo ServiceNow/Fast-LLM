@@ -173,9 +173,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], batch.device)
         sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
         sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-        if (sequence_lengths := kwargs.get(LanguageModelKwargs.sequence_lengths)) is not None:
+        if not self._config.cross_document_position_embeddings:
             position_ids = torch.stack(
-                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+                [
+                    torch.cat([torch.arange(x) for x in sample_lens])
+                    for sample_lens in kwargs[LanguageModelKwargs.sequence_lengths]
+                ]
             ).to(batch.device, dtype=torch.int64)
             position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
             if kwargs[LanguageModelKwargs.sequence_first]:

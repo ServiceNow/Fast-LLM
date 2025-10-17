@@ -17,15 +17,14 @@ import tqdm
 import transformers
 import yaml
 
-from fast_llm.data.dataset.gpt.config import (
-    GPTBlendedDatasetConfig,
-    GPTDatasetSliceConfig,
-    GPTIndexedDatasetConfig,
-    GPTMemmapDatasetConfig,
-    GPTSampledDatasetConfig,
+from fast_llm.data.dataset.config import (
+    BlendedDatasetConfig,
+    DatasetSliceConfig,
+    IndexedDatasetConfig,
+    SampledDatasetConfig,
 )
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import (
     GPTMemmapDatasetPreparatorConfig,
@@ -44,6 +43,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _data_type: DataType
     _text_column: str
     _loss_masking_spans_column: str | None
+    _sample_type: typing.ClassVar[type[LanguageModelSample]] = LanguageModelSample
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids, token_spans, image_token_positions = map(
@@ -251,7 +251,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
         # Load tokenizer
-        self._tokenizer = Tokenizer(config=self._config.tokenizer)
+        self._tokenizer = self._config.tokenizer.get_tokenizer()
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
@@ -398,7 +398,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             torch.distributed.destroy_process_group()
 
     @classmethod
-    def _save_dataset_config(cls, dataset_config: GPTIndexedDatasetConfig, output_path: pathlib.Path) -> None:
+    def _save_dataset_config(
+        cls, dataset_config: IndexedDatasetConfig[_sample_type], output_path: pathlib.Path
+    ) -> None:
         logger.info(f"Saving config to {output_path}")
         yaml.safe_dump(
             dataset_config.to_dict(),
@@ -406,10 +408,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
     @classmethod
-    def _blend_dataset_configs(cls, dataset_configs: list[GPTMemmapDatasetConfig]) -> GPTIndexedDatasetConfig:
+    def _blend_dataset_configs(
+        cls, dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]]
+    ) -> IndexedDatasetConfig[_sample_type]:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
-        return GPTSampledDatasetConfig.from_dict(
+        return SampledDatasetConfig[cls._sample_type].from_dict(
             {
                 "type": "blended",
                 "datasets": dataset_configs,
@@ -469,7 +473,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     end_index = _get_nearest_split(tokens_cumsum, split_end_in_dataset * tokens_cumsum[-1])
                     if end_index > begin_index:
                         datasets_in_split.append(
-                            GPTDatasetSliceConfig.from_dict(
+                            DatasetSliceConfig[cls._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
@@ -491,7 +495,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             elif len(datasets_in_split) == 1:
                 dataset_splits[split_name] = datasets_in_split[0]
             else:
-                dataset_splits[split_name] = GPTBlendedDatasetConfig.from_dict(
+                dataset_splits[split_name] = BlendedDatasetConfig[cls._sample_type].from_dict(
                     {
                         "type": "blended",
                         "datasets": datasets_in_split,

@@ -8,17 +8,17 @@ from fast_llm.config import Field, FieldHint, NoAutoValidate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import (
-    GPTIndexedDatasetConfig,
-    GPTSampledDatasetConfig,
-    GPTSamplingConfig,
-    GPTSamplingData,
-    GPTSamplingParameters,
+from fast_llm.data.dataset.config import (
+    IndexedDatasetConfig,
+    SampledDatasetConfig,
+    SamplingConfig,
+    SamplingParameters,
     ShufflingType,
 )
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
+from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.dataset.sampled import SampledIndexedDataset
+from fast_llm.data.sample.abstract import Sample
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
@@ -34,7 +34,6 @@ def get_sampling_data(
     phase=PhaseType.training,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
-    tokenizer: Tokenizer | None = None,
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
@@ -42,7 +41,7 @@ def get_sampling_data(
     # Config with convenient defaults.
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     return GPTSamplingData(
-        config=GPTSamplingConfig(
+        config=SamplingConfig(
             seed=seed,
             gpu=gpu,
             shuffle=shuffle,
@@ -56,13 +55,12 @@ def get_sampling_data(
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
-        tokenizer=tokenizer,
     )
 
 
-def get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any], cls: type[T]) -> T:
-    dataset_config = GPTSampledDatasetConfig.from_dict(config)
-    Assert.custom(isinstance, dataset_config, cls)
+def get_dataset_config[T: SampledDatasetConfig](config: dict[str, typing.Any], cls: type[T]) -> T:
+    dataset_config = SampledDatasetConfig.from_dict(config)
+    Assert.custom(isinstance, dataset_config, getattr(cls, "__origin__", cls))
     return typing.cast(cls, dataset_config)
 
 
@@ -96,7 +94,7 @@ def get_test_data_and_compare_samples(
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
     assert "sampling" not in config
-    config["sampling"] = GPTSamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
+    config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
     data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():
@@ -105,17 +103,20 @@ def get_test_data_and_compare_samples(
     batch_config.validate()
     tokens = {
         phase: torch.stack(
-            [batch.token_ids[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+            [
+                batch.tokens.tokens[0]
+                for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)
+            ]
         )
         for phase, samples in samples_per_dataset.items()
     }
     for phase, expected_samples_ in expected_samples.items():
-        Assert.all_equal(tokens[phase], expected_samples_)
+        Assert.all_equal(tokens[phase].to(torch.int64), expected_samples_)
     return data
 
 
 def compare_indexed_dataset(
-    dataset: GPTIndexedDataset,
+    dataset: IndexedDataset,
     length: int,
     num_tokens: int,
     expected_samples: dict[int, list[int]],
@@ -128,23 +129,29 @@ def compare_indexed_dataset(
         [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], text_sizes[: min(len(dataset), 100)]
     )
     for i, expected_sample in expected_samples.items():
-        Assert.all_equal(dataset.get(i).token_ids, np.array(expected_sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample, dtype=np.int64))
     if loss_masking_spans:
         for i, loss_masking_span in loss_masking_spans.items():
-            Assert.all_equal(
-                dataset.get(i, use_loss_masking_spans=True).loss_masking_spans,
-                np.array(loss_masking_spans[i], dtype=np.int32).reshape(-1, 2),
+            print(i)
+            Assert.eq(
+                dataset.get_document(
+                    i,
+                    parameters=GPTSamplingParameters(
+                        num_samples=0, sequence_length=0, vocab_size=0, use_loss_masking_spans=True
+                    ),
+                ).loss_masking_spans.ranges,
+                loss_masking_spans[i],
             )
 
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
-    Assert.all_equal([sampled[i].token_ids for i in range(len(expected_samples))], expected_samples)
+    Assert.all_equal(
+        torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]).to(torch.int64), expected_samples
+    )
 
 
-def validate_indexed_dataset_sampling(
-    sampled: GPTSampledIndexedDataset, expected_samples: list[list[int]] | None = None
-):
+def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_samples: list[list[int]] | None = None):
     """
     Compare `GPTSampledIndexedDataset` sampling against a more basic approach
     """
@@ -165,7 +172,7 @@ def validate_indexed_dataset_sampling(
         )
     seen_tokens = 0
     for document_index in document_sampling:
-        document = sampled._indexed_dataset.get(document_index).token_ids
+        document = sampled._indexed_dataset.get_document(document_index).tokens.tokens
 
         all_tokens[seen_tokens : seen_tokens + len(document)] = document[: num_tokens - seen_tokens]
         seen_tokens += len(document)
@@ -176,7 +183,7 @@ def validate_indexed_dataset_sampling(
         all_tokens[index * sampled._parameters.sequence_length : (index + 1) * sampled._parameters.sequence_length + 1]
         for index in range(sampled._parameters.num_samples)
     ]
-    token_ids = [sampled[i].token_ids for i in range(len(sampled))]
+    token_ids = torch.stack([sampled[i].tokens.tokens for i in range(len(sampled))]).to(torch.int64)
 
     Assert.all_equal(token_ids, validate_samples)
     if expected_samples is not None:
@@ -184,8 +191,8 @@ def validate_indexed_dataset_sampling(
     return token_ids
 
 
-@config_class(dynamic_type={GPTSampledDatasetConfig: "mock_memmap"})
-class MockGPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
+@config_class(dynamic_type={SampledDatasetConfig: "mock_memmap"})
+class MockGPTMemmapDatasetConfig(IndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     num_documents: int | None = Field(
         default=None,
@@ -199,15 +206,15 @@ class MockGPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
     )
     path: pathlib.Path = Field(default=".")
 
-    def build(self) -> "GPTIndexedDataset":
-        return MockGPTMemmapDataset(self)
+    def build(self) -> "IndexedDataset":
+        return MockMemmapDataset(self)
 
     @property
     def num_tokens(self) -> int:
         return self.num_documents * self.num_tokens_per_document
 
 
-class MockGPTMemmapDataset(GPTIndexedDataset):
+class MockMemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
     def __init__(self, config: MockGPTMemmapDatasetConfig):
         self._config = config
 
@@ -224,5 +231,7 @@ class MockGPTMemmapDataset(GPTIndexedDataset):
     def get_document_size(self, index: int, parameters: GPTSamplingParameters | None = None) -> int:
         return self._config.num_tokens_per_document
 
-    def get(self, index: int, *args, **kwargs) -> typing.Any:
+    def get_document(
+        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
+    ) -> SampleType:
         raise NotImplementedError()
