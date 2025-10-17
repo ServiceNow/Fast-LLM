@@ -278,7 +278,6 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
         num_spans = np.array(num_spans, dtype=np.int32)
         if len(spans) > 0:
             spans = np.vstack(spans, dtype=np.int32)
-            print("JEFNEW", spans[:50].tolist())
         else:
             spans = np.array(spans, dtype=np.int32)
         chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
