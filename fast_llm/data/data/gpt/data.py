@@ -1,4 +1,3 @@
-import dataclasses
 import logging
 import pathlib
 import typing
@@ -24,20 +23,9 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class GPTBatch:
-    token_ids: torch.Tensor
-    loss_masking_spans: list[torch.Tensor] | None = None
-    sequence_lengths: list[torch.Tensor] | None = None
-    chosen_spans: list[torch.Tensor] | None = None
-    rejected_spans: list[torch.Tensor] | None = None
-
-
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
-    Currently hard-coded to a GPT dataset.
-    TODO: Separate generic and GPT classes.
     """
 
     _datasets: dict[str, SampledDataset]
@@ -137,7 +125,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
-                # TODO: ====== Make sure the samples are compatible =====
                 collate_fn=LanguageModelBatch.from_samples,
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

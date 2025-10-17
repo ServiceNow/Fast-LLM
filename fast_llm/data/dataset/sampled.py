@@ -14,6 +14,7 @@ from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.utils import Assert
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -67,7 +68,7 @@ TOKEN_CUMSUM_RATE = 10
 
 class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     """
-    A sampled GPT dataset.
+    A sampled dataset.
     """
 
     def __init__(
@@ -108,11 +109,11 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             if sampling.distributed.config.rank == sampling.get_next_rank():
                 self._sample()
             # No barrier yet to allow running in parallel.
-            # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
+            # There needs to be one before calling `__getitem__`, normally handled through `Data`.
 
     def _sample(self) -> None:
         """
-        Create a `GPTSampledDataset` with the requested parameters.
+        Create a `SampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
         document_sizes = self._indexed_dataset.get_document_sizes().to(self._device)
@@ -340,7 +341,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
-        The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
+        The returned sample is ready to be concatenated, then fed to a `Model`.
         """
         self._lazy_load()
 
@@ -368,7 +369,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         token_count = token_start_array[token_start_cumsum_index]
 
-        documents = []
+        documents: list[SampleType] = []
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -388,8 +389,8 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
-                        # TODO: ====== Handle padding ======
-                        documents.append(PaddingSample(padding_size))
+                        documents.append(documents[-1].get_padding(padding_size))
+                        Assert.eq(token_count + padding_size, token_end)
                         break
                     else:
                         # Move on to the next sample.
@@ -401,18 +402,20 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
                 documents.append(
-                    self._indexed_dataset.get(
+                    self._indexed_dataset.get_document(
                         document_index,
-                        offset=token_start_index_in_document,
-                        length=token_end_index_in_document - token_start_index_in_document,
+                        begin=token_start_index_in_document,
+                        end=token_end_index_in_document,
+                        parameters=self._parameters,
                     )
                 )
+
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
 
         # TODO: ====== Better way to get the class method? ======
-        return documents[0].merge_documents(documents)
+        return documents[0].from_documents(documents)
 
     @property
     def name(self) -> str:

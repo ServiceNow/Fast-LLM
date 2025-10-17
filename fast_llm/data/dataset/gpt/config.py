@@ -9,9 +9,11 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class,
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
+from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.gpt.fim import GPTFimDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
 
@@ -39,7 +41,7 @@ class GPTSamplingData(SamplingData):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -47,14 +49,14 @@ class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[Sampl
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTRandomDataset":
+    def build(self) -> "GPTRandomDataset[SampleType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
         return GPTRandomDataset(self.name)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
-class GPTDatasetFromFileConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -164,14 +166,14 @@ class FimConfig(Config):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "fim"})
-class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType], FimConfig):
+class GPTFimSampledDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType], FimConfig):
     """
     Configuration for FIM.
     """
 
     _abstract: typing.ClassVar[bool] = False
 
-    dataset: SampledDatasetConfig = Field(
+    dataset: SampledDatasetConfig[SampleType] = Field(
         default=None,
         desc="The dataset to wrap with fim.",
         hint=FieldHint.core,
@@ -180,14 +182,14 @@ class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[Sam
     def build_and_sample(
         self,
         sampling: GPTSamplingData,
-    ) -> SampledDataset:
+    ) -> "GPTFimDataset[SampleType]":
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return GPTFimDataset(self, self.dataset.build_and_sample(sampling), sampling)
+        return GPTFimDataset[SampleType](self, self.dataset.build_and_sample(sampling), sampling)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
-class GPTTestSlowDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType]):
+class GPTTestSlowDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType]):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
     """

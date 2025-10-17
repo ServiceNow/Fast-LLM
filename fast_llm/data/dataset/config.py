@@ -59,12 +59,9 @@ class SamplingParameters:
     Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
     """
 
-    num_samples: int
-    # TODO: ====== Always return sequence lengths, let the model decide. ======
-    cross_document_attention: bool = True
-    # TODO: ====== DocumentSamplingParameter? ======
-    truncate_documents: bool = True
     sequence_length: int
+    num_samples: int
+    truncate_documents: bool = True
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
