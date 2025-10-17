@@ -389,8 +389,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
-                        # TODO: ====== Handle padding ======
-                        documents.append(PaddingSample(padding_size))
+                        documents.append(documents[-1].get_padding(padding_size))
                         Assert.eq(token_count + padding_size, token_end)
                         break
                     else:

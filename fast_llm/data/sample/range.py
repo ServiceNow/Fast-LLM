@@ -32,6 +32,9 @@ class RangeSample(Sample):
     def __len__(self) -> int:
         return self.sample_size
 
+    def get_padding(self, size: int) -> typing.Self:
+        return RangeSample([], size)
+
 
 class RangeBatch(Batch):
     def __init__(self, ranges: list[list[tuple[int, int]]], sample_size: int):

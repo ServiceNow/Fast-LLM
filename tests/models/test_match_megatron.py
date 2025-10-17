@@ -3,7 +3,6 @@ import typing
 
 import numpy as np
 import pytest
-import torch
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -12,7 +11,6 @@ from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSampling
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.sampled import logger
 from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_model_test_dataset
@@ -145,18 +143,16 @@ class MegatronGPTSampledIndexedDataset(SampledDataset):
         shuffled_idx = self._shuffle_idx[idx]
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        sample_list = [
-            self._indexed_dataset.get_document(
-                self._doc_idx[doc].item(),
-                begin=(doc == doc_f) * offset_f,
-                end=offset_l + 1 if doc == doc_l else None,
-            )
-            for doc in range(doc_f, doc_l + 1)
-        ]
-        token_ids = torch.cat([sample.token_ids for sample in sample_list])
-        Assert.eq(len(token_ids), self._sequence_length + 1)
-
-        return LanguageModelSample(TokenSample(token_ids))
+        return LanguageModelSample.from_documents(
+            [
+                self._indexed_dataset.get_document(
+                    self._doc_idx[doc].item(),
+                    begin=(doc == doc_f) * offset_f,
+                    end=offset_l + 1 if doc == doc_l else None,
+                )
+                for doc in range(doc_f, doc_l + 1)
+            ]
+        )
 
     @property
     def name(self) -> str:

@@ -19,6 +19,10 @@ class Sample(abc.ABC):
     def __len__(self) -> int:
         pass
 
+    @abc.abstractmethod
+    def get_padding(self, size: int) -> typing.Self:
+        pass
+
 
 class Batch(abc.ABC):
     # TODO: Relate to `BatchConfig`?

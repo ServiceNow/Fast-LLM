@@ -38,6 +38,14 @@ class LanguageModelSample(Sample):
     def __len__(self) -> int:
         return len(self.tokens)
 
+    def get_padding(self, size: int) -> typing.Self:
+        return LanguageModelSample(
+            self.tokens.get_padding(size),
+            None if self.loss_masking_spans is None else self.loss_masking_spans.get_padding(size),
+            None if self.chosen_spans is None else self.chosen_spans.get_padding(size),
+            None if self.rejected_spans is None else self.rejected_spans.get_padding(size),
+        )
+
 
 class LanguageModelBatch(Batch):
     def __init__(

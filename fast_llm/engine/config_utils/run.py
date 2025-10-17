@@ -44,7 +44,8 @@ class RunConfig(Config):
     # Enable torch compile.
     torch_dynamo_enable: bool = Field(
         default=True,
-        desc="Set to False to disable torch compile entirely. Not recommended unless there is a good reason to do so.",
+        desc="Set to False to "
+        "disable torch compile entirely. Not recommended unless there is a good reason to do so.",
         hint=FieldHint.expert,
     )
     enable_triton_kernels: bool = Field(

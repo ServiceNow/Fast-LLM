@@ -29,7 +29,7 @@ def test_varlen_preprocessing():
     micro_sequence_length = 12
     sequence_length = 36
     attention = Attention(
-        AttentionConfig(head_size=64, implementation=AttentionImplementation.flash_varlen),
+        AttentionConfig(head_size=64, implementation=AttentionImplementation.flash, cross_document_attention=False),
         DistributedConfig(compute_dtype="bfloat16"),
         hidden_dim=TensorDim("", 1),
         lr_scale=None,
