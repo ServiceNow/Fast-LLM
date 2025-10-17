@@ -12,6 +12,7 @@ from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
+    Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
 )
@@ -174,3 +175,49 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
             * math.log(self._config.original_context_length / (beta * 2 * math.pi))
             / (2 * math.log(self._config.theta))
         )
+
+
+class Rotary2D[ConfigType: Rotary2DConfig](DefaultRotary[ConfigType]):
+    _rotary_embedding_frequencies: torch.Tensor
+    _tensor_cache_max_num_patches: int = -1
+    _config: ConfigType
+
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(
+            kwargs[VisionEncoderKwargs.max_image_size] // kwargs[VisionEncoderKwargs.patch_size], batch.device
+        )
+        position_ids = kwargs[VisionTransformerKwargs.patch_position_ids]
+        kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
+        kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
+
+    def forward(
+        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        rotary_fn = triton_rotary_autograd_ if self._config.triton else apply_rotary_embeddings
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
+        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
+        return query, key
+
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
+        max_num_patches = sequence_length
+        # Calculate complex frequencies by using alternating channels for width and height
+        height_positions = torch.arange(max_num_patches, device=device, dtype=torch.float64)
+        width_positions = torch.arange(max_num_patches, device=device, dtype=torch.float64)
+        frequencies = self._config.theta ** -torch.arange(0, 1, 2 / head_size, device=device, dtype=torch.float64)
+        angles_h = torch.outer(height_positions, frequencies[::2])
+        angles_w = torch.outer(width_positions, frequencies[1::2])
+        angles = torch.cat(
+            [
+                angles_h[:, None, :].repeat(1, max_num_patches, 1),
+                angles_w[None, :, :].repeat(max_num_patches, 1, 1),
+            ],
+            dim=-1,
+        ).reshape(-1, head_size // 2)
+
+        frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+        if not self._config.complex_format:
+            frequencies = convert_rotary_complex_to_real(
+                torch.view_as_real(frequencies).flatten(-2), head_size, 3
+            ).contiguous()
+
+        return frequencies

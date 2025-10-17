@@ -25,7 +25,15 @@ if typing.TYPE_CHECKING:
 
 
 @dataclasses.dataclass(kw_only=True)
-class GPTSamplingParameters(SamplingParameters):
+class ImageSamplingParameters:
+    patch_size: int | None = None
+    max_image_size: int | None = None
+    image_break_token: int | None = None
+    image_end_token: int | None = None
+
+
+@dataclasses.dataclass(kw_only=True)
+class GPTSamplingParameters(SamplingParameters, ImageSamplingParameters):
     """
     Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
     """
@@ -33,6 +41,7 @@ class GPTSamplingParameters(SamplingParameters):
     vocab_size: int
     use_loss_masking_spans: bool = False
     use_preference_loss_spans: bool = False
+    use_images: bool = False
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -78,12 +87,17 @@ class GPTMemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConf
         desc="Expected number of tokens in the dataset.",
         hint=FieldHint.optional,
     )
+    num_pixels: int | None = Field(
+        default=None,
+        desc="Expected number of pixels in the dataset.",
+        hint=FieldHint.optional,
+    )
 
     def build(self) -> "GPTMemmapDataset[SampleType]":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
         return GPTMemmapDataset[SampleType](
-            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens
+            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens, self.num_pixels
         )
 
 

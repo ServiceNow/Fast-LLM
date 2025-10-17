@@ -1,21 +1,53 @@
+import functools
+import json
 import pathlib
 import struct
 import typing
 
 import numpy as np
-import torch
 
+from fast_llm.data.dataset.gpt.components.config import GPTMemmapDatasetHeader
+from fast_llm.data.dataset.gpt.components.images import GPTImageDatasetComponent
+from fast_llm.data.dataset.gpt.components.spans import GPTSpansDatasetComponent
+from fast_llm.data.dataset.gpt.components.tokens import GPTTokensDatasetComponent
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
-from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.range import RangeSample
-from fast_llm.data.sample.token import TokenSample
-from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_INDEX_HEADER
 from fast_llm.utils import Assert, div
 
 
-class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
+class BufferOffset:
+    # This makes offsets mutable.
+    def __init__(self, value: int):
+        self.value: int = value
+
+
+class ShiftMap:
+    """
+    A map between original and shifted token indices (i.e., accounting for extra content such as images).
+    Also serves as a cache so we don't have to recompute positions and sizes every time.
+    """
+
+    def __init__(self, positions_and_sizes: list[tuple[int, int]]):
+        self._positions_and_sizes = positions_and_sizes
+
+    @functools.cached_property
+    def shifted_positions(self) -> list[int]:
+        return [self.shift(position) for position, _ in self._positions_and_sizes]
+
+    def shift(self, index: int) -> int:
+        return index + sum(size for position, size in self._positions_and_sizes if index > position)
+
+    def unshift(self, index: int) -> int:
+        return index - sum(
+            size
+            for shifted_position, (_, size) in zip(self.shifted_positions, self._positions_and_sizes, strict=True)
+            if shifted_position < index
+        )
+
+
+class GPTMemmapDataset(GPTIndexedDataset):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -30,287 +62,241 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
         prefix: pathlib.Path | str,
         num_documents: int | None = None,
         num_tokens: int | None = None,
+        num_pixels: int | None = None,
     ):
-        self._init(name, prefix, num_documents, num_tokens)
+        self._init(name, prefix, num_documents, num_tokens, num_pixels)
 
-    def _init(self, name: str, prefix: pathlib.Path | str, num_documents: int | None, num_tokens: int | None) -> None:
+    def _init(
+        self,
+        name: str,
+        prefix: pathlib.Path | str,
+        num_documents: int | None = None,
+        num_tokens: int | None = None,
+        num_pixels: int | None = None,
+    ) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
-        self._has_spans = 0
-        self._has_preference_spans = False
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
-            assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
-            if self._version >= 2:
-                self._has_spans = struct.unpack("<B", stream.read(1))[0]
-            if self._version >= 3:
-                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
+            assert self._version in [1, 2, 3, 4, 5], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            if self._version < 5:
+                raise NotImplementedError()
+                # TODO: Not backward compatible.
+                # self._header = GPTMemmapDatasetHeader(
+                #    has_spans = self._version >= 2 and bool(struct.unpack("<B", stream.read(1))[0]),
+                #    has_preference_spans=self._version >= 3 and bool(struct.unpack("<B", stream.read(1))[0]),
+                #    has_images=self._version >= 4 and bool(struct.unpack("<B", stream.read(1))[0]),
+                #    token_data_type = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]],
+                #    num_documents = struct.unpack("<Q", stream.read(8))[0]
+                # )
+            else:
+                header_length = struct.unpack("<Q", stream.read(8))[0]
+                self._header = GPTMemmapDatasetHeader(**json.loads(stream.read(header_length).decode("utf-8")))
 
-            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].torch
-            self._num_documents = struct.unpack("<Q", stream.read(8))[0]
-            _ = struct.unpack("<Q", stream.read(8))[0]
-            offset = stream.tell()
+            offset = BufferOffset(stream.tell())
 
-        if num_documents is not None:
-            assert self._num_documents == num_documents
+        if num_documents is not None and self._header.num_documents != num_documents:
+            raise ValueError(
+                f"Inconsistent num_documents for dataset {self.name} - {self._prefix}."
+                f" Expected {num_documents}, got {self._header.num_documents}."
+            )
 
-        self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
-        self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
+        self._index_binary_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
+        self._index_binary_buffer = memoryview(self._index_binary_buffer_mmap)
+        self._binary_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
+        self._binary_buffer = memoryview(self._binary_buffer_mmap)
 
-        # read document sizes
-        self._document_sizes = np.frombuffer(
-            self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
-        )
+        self._tokens = GPTTokensDatasetComponent(self._header, self._index_binary_buffer, self._binary_buffer, offset)
 
-        # read pointers
-        self._pointers = np.frombuffer(
-            self._index_bin_buffer,
+        # Read pointers to the beginning of each document
+        self._buffer_offsets = np.frombuffer(
+            self._index_binary_buffer,
             dtype=np.int64,
-            count=self._num_documents,
-            offset=offset + self._document_sizes.nbytes,
+            count=self._header.num_documents,
+            offset=offset.value,
+        )
+        offset.value += self._buffer_offsets.nbytes
+
+        self._spans = (
+            GPTSpansDatasetComponent(self._header, self._index_binary_buffer, self._binary_buffer, offset)
+            if self._header.has_spans
+            else None
+        )
+        self._images = (
+            GPTImageDatasetComponent(self._header, self._index_binary_buffer, self._binary_buffer, offset)
+            if self._header.has_images
+            else None
         )
 
-        # read spans
-        self._spans = None
-        if self._has_spans and self._version >= 2:
-            self._spans = []
-            self._num_spans = np.frombuffer(
-                self._index_bin_buffer,
-                dtype=np.int32,
-                count=self._num_documents,
-                offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
-            )
-            span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
-            self._num_spans_cumsum = np.r_[0, np.cumsum(self._num_spans[:-1], dtype=np.int64)]
-            for idx in range(self._num_documents):
-                self._spans.append(
-                    np.frombuffer(
-                        self._index_bin_buffer,
-                        dtype=np.int32,
-                        count=self._num_spans[idx] * 2,
-                        offset=span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
-                    ).reshape(-1, 2)
-                )
+        if num_pixels is not None:
+            Assert.eq(num_pixels, self._images.total_pixels)
 
-        # read preference spans
-        self._chosen_spans = None
-        self._rejected_spans = None
-        if self._has_preference_spans and self._version >= 3:
-            self._chosen_spans = []
-            self._rejected_spans = []
-            chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
-            for idx in range(self._num_documents):
-                self._chosen_spans.append(
-                    np.frombuffer(
-                        self._index_bin_buffer,
-                        dtype=np.int32,
-                        count=2,
-                        offset=chosen_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    )
-                )
-
-            rejected_span_offset = (
-                offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
-            )
-            for idx in range(self._num_documents):
-                self._rejected_spans.append(
-                    np.frombuffer(
-                        self._index_bin_buffer,
-                        dtype=np.int32,
-                        count=2,
-                        offset=rejected_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    )
-                )
-
-        self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
-        self._bin_buffer = memoryview(self._bin_buffer_mmap)
-
-        self._num_tokens = div(self._bin_buffer_mmap.size, self._dtype.itemsize)
+        # TODO: Simplify.
+        self._num_tokens = (
+            self._binary_buffer_mmap.size
+            if self._images is None
+            else self._binary_buffer_mmap.size - self._images.total_pixels
+        )
         if num_tokens is not None:
-            assert self._num_tokens == num_tokens
+            Assert.eq(num_tokens, self._num_tokens)
 
-    def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
-        return (self._name, self._prefix, self._num_documents, self._num_tokens)
+    def __getstate__(self) -> tuple[str, pathlib.Path]:
+        return (self._name, self._prefix)
 
-    def __setstate__(self, state: tuple[str, pathlib.Path, int | None, int | None]):
+    def __setstate__(self, state: tuple[str, pathlib.Path]):
         self._init(*state)
 
     def __del__(self):
         if hasattr(self, "_bin_buffer_mmap"):
-            self._bin_buffer_mmap._mmap.close()  # noqa
-            del self._bin_buffer_mmap
+            self._binary_buffer_mmap._mmap.close()  # noqa
+            del self._binary_buffer_mmap
         if hasattr(self, "_index_bin_buffer"):
-            self._index_bin_buffer_mmap._mmap.close()  # noqa
-            del self._index_bin_buffer_mmap
+            self._index_binary_buffer_mmap._mmap.close()  # noqa
+            del self._index_binary_buffer_mmap
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
-    ) -> SampleType:
-        if end is None:
-            end = self.get_document_size(index)
-        sample_size = self._document_sizes[index].item()
-        assert 0 <= begin <= end <= sample_size, (0, begin, end, sample_size)
-        token_ids = (
-            torch.frombuffer(
-                self._bin_buffer,
-                dtype=self._dtype,
-                count=end - begin,
-                offset=self._pointers[index].item() + begin * self._dtype.itemsize,
+    def get(
+        self,
+        index: int,
+        start_offset: int = 0,
+        end_offset: int | None = None,
+        parameters: GPTSamplingParameters | None = None,
+    ) -> GPTSample:
+
+        if end_offset is None:
+            end_offset = self.get_document_size(index, parameters)
+
+        shift_map = ShiftMap(
+            self._images.get_unshifted_positions_and_sizes(index, parameters) if parameters.use_images else []
+        )
+
+        buffer_offset = BufferOffset(self._buffer_offsets[index].item())
+        sample = GPTSample(token_ids=self._tokens.get(index, start_offset, end_offset, shift_map, buffer_offset))
+
+        if parameters.use_loss_masking_spans:
+            sample.loss_masking_spans = self._spans.get(index, start_offset, end_offset, shift_map)
+
+        if parameters.use_images:
+            sample.images, sample.image_positions = self._images.get(
+                index, start_offset, end_offset, shift_map, buffer_offset
             )
-            if end > begin
-            else torch.empty(0, dtype=self._dtype)
-        )
-        if not self._dtype.is_signed:
-            # Needed because torch doesn't yet support type promotion between signed and unsigned types. TODO: Remove when supported.
-            token_ids = token_ids.to(torch.int64)
-        if parameters is not None and parameters.use_loss_masking_spans:
-            assert self._spans is not None
-            # TODO: ====== Store in range format (begin, end) ======
-            sample_spans = RangeSample(
-                [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
-            ).crop(begin, end)
-        else:
-            sample_spans = None
 
-        if parameters is not None and parameters.use_preference_loss_spans:
-            if not self._has_preference_spans:
-                raise ValueError("No preference spans found in memmap dataset.")
-            elif self._has_preference_spans and self._chosen_spans is None:
-                raise ValueError("Failed to read chosen spans from memmap dataset.")
-            elif self._has_preference_spans and self._rejected_spans is None:
-                raise ValueError("Failed to read rejected spans from memmap dataset.")
-            # TODO: ====== Store in range format ======
-            chosen_spans = RangeSample(
-                [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
-                sample_size,
-            ).crop(begin, end)
-            rejected_spans = RangeSample(
-                [(self._rejected_spans[index][0].item(), self._rejected_spans[index][1].item() + 1)],
-                sample_size,
-            ).crop(begin, end)
-        else:
-            chosen_spans = rejected_spans = None
+            start_pos = 0
+            sample_token_ids = []
+            for idx, im_position in enumerate(sample.image_positions):
+                # add placeholder masked tokens for images
+                # if image_break_token is set, it is appended after every row
+                # if image_end_token is set, it is appended at the end of the image instead  of image_break_token
+                text_part = sample.token_ids[start_pos:im_position]
+                if parameters.image_break_token is not None:
+                    height, width = resized_image_lengths[idx]
+                    num_patches_h = div(height, parameters.patch_size)
+                    num_patches_w = div(width, parameters.patch_size)
+                    image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
+                    # account for break tokens after each row
+                    for row in range(num_patches_h - 1):
+                        position = (row + 1) * num_patches_w + row
+                        image_token_array[position] = parameters.image_break_token
+                    # handle the last row separately
+                    last_row_position = num_patches_h * num_patches_w + num_patches_h - 1
+                    if parameters.image_end_token is not None:
+                        image_token_array[last_row_position] = parameters.image_end_token
+                    else:
+                        image_token_array[last_row_position] = parameters.image_break_token
+                else:
+                    image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
+                    if parameters.image_end_token is not None:
+                        image_token_array[-1] = parameters.image_end_token
+                sample_token_ids.append(np.concatenate([text_part, image_token_array], dtype=np.int64))
+                text_tokens_added += len(text_part)
+                image_positions.append(text_tokens_added + image_tokens_added)
+                image_sizes[idx]
+                start_pos = im_position
 
-        return LanguageModelSample(
-            tokens=TokenSample(token_ids),
-            loss_masking_spans=sample_spans,
-            chosen_spans=chosen_spans,
-            rejected_spans=rejected_spans,
-        )
+        return sample
 
     @property
     def name(self) -> str:
         return self._name
 
     def __len__(self) -> int:
-        return self._num_documents
+        return self._header.num_documents
 
-    @property
-    def num_tokens(self) -> int:
-        return self._num_tokens
-
-    def get_document_sizes(self) -> torch.Tensor:
+    def get_document_sizes(self, parameters: GPTSamplingParameters | None = None) -> np.ndarray:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
-        return torch.from_numpy(self._document_sizes)
+        if parameters is not None and parameters.use_images:
+            # TODO: Optimize this.
+            return np.array([self.get_document_size(index, parameters) for index in range(self._header.num_documents)])
+        return self._tokens.sizes
 
-    def get_document_size(self, index: int) -> int:
-        return self._document_sizes[index].item()
+    def get_document_size(self, index: int, parameters: GPTSamplingParameters | None = None) -> int:
+        size = self._tokens.sizes[index].item()
+        if parameters is not None and parameters.use_images:
+            for _, size_ in self._images.get_positions_and_sizes(index, parameters):
+                size += size_
+        return size
+
+    def _shift_offset(self, offset, index: int, parameters: GPTSamplingParameters | None = None) -> int:
+        if parameters is not None and parameters.use_images:
+            offset += sum(
+                size for position, size in self._images.get_positions_and_sizes(index, parameters) if position < offset
+            )
+        return offset
+
+    def _unshift_offset(self, offset, index: int, parameters: GPTSamplingParameters | None = None) -> int:
+        unshifted_offset = offset
+        if parameters is not None and parameters.use_images:
+            for position, size in self._images.get_positions_and_sizes(index, parameters):
+                shifted_position = self._shift_offset(position, index, parameters)
+                if shifted_position < offset:
+                    unshifted_offset -= size
+        return unshifted_offset
 
     @classmethod
-    def write_dataset(
-        cls,
-        prefix: pathlib.Path | str,
-        documents: typing.Iterable[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]],
-    ) -> None:
-        # Initialize metadata
-        dtype = None
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
+        buffer_offsets = []
+        index_data = {}
         num_documents = 0
-        lengths = []
-        pointers = []
-        offset = 0
-        # number of spans for each document
-        num_spans = []
-        spans = []
-        chosen_spans = []
-        rejected_spans = []
+        component_classes = (GPTTokensDatasetComponent, GPTSpansDatasetComponent, GPTImageDatasetComponent)
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
-
         # Write the binary data file (.bin) lazily
-        with prefix.with_suffix(".bin").open("wb") as bin_stream:
-            for token_ids, loss_masking_spans, chosen_span, rejected_span in documents:
-                # Infer dtype from the first document
-                if dtype is None:
-                    dtype = token_ids.dtype
-                    assert dtype is not None, "Document dtype could not be inferred from the data."
+        with prefix.with_suffix(".bin").open("wb") as binary_stream:
 
-                # Ensure all documents have the same dtype
-                assert token_ids.dtype == dtype, f"Expected dtype {dtype}, got {token_ids.dtype}."
+            for document in documents:
+                buffer_offsets.append(binary_stream.tell())
+                for component_class in component_classes:
+                    component_class.write_document_and_gather_index(document, index_data, binary_stream)
 
-                # Write document to binary file
-                bin_stream.write(token_ids.numpy().tobytes(order="C"))
+                # TODO: Address
+                assert document.chosen_span is None and document.rejected_span is None
 
-                # Update metadata
-                doc_length = len(token_ids)
-                lengths.append(doc_length)
-                pointers.append(offset)
-                if loss_masking_spans is not None:
-                    num_spans.append(len(loss_masking_spans))
-                    spans.append(loss_masking_spans)
-                if chosen_span is not None:
-                    chosen_spans.append(chosen_span)
-                if rejected_span is not None:
-                    rejected_spans.append(rejected_span)
-                offset += doc_length * dtype.itemsize
                 num_documents += 1
 
-        # Finalize metadata arrays
-        lengths = np.array(lengths, dtype=np.int32)
-        pointers = np.array(pointers, dtype=np.int64)
-        num_spans = np.array(num_spans, dtype=np.int32)
-        if len(spans) > 0:
-            spans = np.vstack(spans, dtype=np.int32)
-        else:
-            spans = np.array(spans, dtype=np.int32)
-        chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
-        rejected_spans = np.array(rejected_spans, dtype=np.int32).reshape(-1, 2)
-
         # Write the index file (.idx)
-        with prefix.with_suffix(".idx").open("wb") as idx_stream:
-            idx_stream.write(MEMMAP_INDEX_HEADER)
-            # Indicates the version
-            # Version 2 optionally adds loss-masking spans
-            # Version 3 optionally adds chosen/rejected spans
-            idx_stream.write(struct.pack("<Q", 3))
-            # Flag to indicate whether loss-masking spans are present
-            idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
-            # Flag to indicate whether preference loss-masking spans are present
-            idx_stream.write(struct.pack("<B", 1 if chosen_spans.size > 0 and rejected_spans.size > 0 else 0))
-            # Data type
-            idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_torch(dtype)]))
-            # "Number of sequences", same as documents in our case
-            idx_stream.write(struct.pack("<Q", num_documents))
-            # "Number of documents", needs a +1 for some reason
-            idx_stream.write(struct.pack("<Q", num_documents + 1))
-            # Sequence (document) lengths
-            idx_stream.write(lengths.tobytes(order="C"))
-            # Sequence (document) begin offsets in the bin file
-            idx_stream.write(pointers.tobytes(order="C"))
-            # Number of spans per document
-            idx_stream.write(num_spans.tobytes(order="C"))
-            # Span indices for each document
-            idx_stream.write(spans.tobytes(order="C"))
-            # Chosen indices for each document
-            idx_stream.write(chosen_spans.tobytes(order="C"))
-            # Rejected indices for each document
-            idx_stream.write(rejected_spans.tobytes(order="C"))
-            # Document indices, unused but needed for compatibility with Megatron-LM
-            idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
+        with prefix.with_suffix(".idx").open("wb") as index_stream:
+            index_stream.write(MEMMAP_INDEX_HEADER)
+            # Version.
+            index_stream.write(struct.pack("<Q", 5))
+            header = GPTMemmapDatasetHeader(
+                num_documents=num_documents,
+                token_data_type=index_data["token_data_type"],
+                has_spans=index_data["has_spans"],
+                has_images=index_data["has_images"],
+            )
+            header_binary = json.dumps(header).encode("utf-8")
+            index_stream.write(struct.pack("<Q", len(header_binary)))
+            index_stream.write(header_binary)
+
+            # Document begin offsets in the binary file TODO: Address reordering.
+            index_stream.write(np.array(buffer_offsets, dtype=np.int64).tobytes(order="C"))
+
+            for component_class in component_classes:
+                component_class.write_index(index_data, index_stream)
