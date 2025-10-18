@@ -6,7 +6,7 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
 )
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_PREFIX, TOKENIZER_PATH
+from tests.utils.global_variables import DATASET_PATH, TOKENIZER_PATH
 
 GPT_FIM_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],
@@ -32,7 +32,7 @@ def test_gpt_fim():
     sampled = get_dataset_config(
         {
             "type": "fim",
-            "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+            "dataset": {"type": "memmap", "path": DATASET_PATH},
             "tokenizer": {"path": TOKENIZER_PATH},
             "rate": 0.5,
             "prefix_token": "w",
@@ -52,7 +52,7 @@ def test_gpt_fim_data():
             "datasets": {
                 "training": {
                     "type": "fim",
-                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "dataset": {"type": "memmap", "path": DATASET_PATH},
                     "tokenizer": {"path": TOKENIZER_PATH},
                     "rate": 0.5,
                     "prefix_token": "w",

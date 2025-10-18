@@ -6,16 +6,16 @@ import pytest
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SampledDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingData
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.config import MemmapDatasetConfig, SampledDatasetConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
 from fast_llm.data.dataset.sampled import logger
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PREFIX
+from tests.utils.global_variables import MODEL_DATASET_PATH
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
@@ -69,7 +69,7 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
         compare="megatron",
         config_args=[
             "model.distributed.compute_dtype=fp32",
-            f'data.datasets.training={{"type":"megatron","path":{MODEL_DATASET_PREFIX}}}',
+            f'data.datasets.training={{"type":"megatron","path":{MODEL_DATASET_PATH}}}',
             "data.sampling.seed=1234",
             "model.base_model.use_megatron_initialization=True",
         ],
@@ -82,25 +82,23 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "megatron"})
-class GPTMegatronDatasetConfig(GPTMemmapDatasetConfig):
+class MegatronDatasetConfig[SampleType: LanguageModelSample](MemmapDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: str = Field(
         desc="Dataset path (prefix).",
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTMemmapDataset":
-        return GPTMegatronMemmapDataset(
-            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens
-        )
+    def build(self) -> "LegacyMemmapDataset[SampleType]":
+        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path)
 
 
-class GPTMegatronMemmapDataset(GPTMemmapDataset):
-    def sample(self, sampling: GPTSamplingData) -> "MegatronGPTSampledIndexedDataset":
-        return MegatronGPTSampledIndexedDataset(self, sampling)
+class MegatronMemmapDataset(LegacyMemmapDataset):
+    def sample(self, sampling: GPTSamplingData) -> "MegatronSampledIndexedDataset":
+        return MegatronSampledIndexedDataset(self, sampling)
 
 
-class MegatronGPTSampledIndexedDataset(SampledDataset):
+class MegatronSampledIndexedDataset(SampledDataset):
     """
     A GPT sampled dataset that exactly matches Megatron-LM, for testing purposes.
     Minimalistic implementation, implements only the required features.
@@ -108,7 +106,7 @@ class MegatronGPTSampledIndexedDataset(SampledDataset):
 
     def __init__(
         self,
-        indexed_dataset: GPTMegatronMemmapDataset,
+        indexed_dataset: MegatronMemmapDataset,
         sampling: GPTSamplingData,
     ):
         assert isinstance(sampling, GPTSamplingData)

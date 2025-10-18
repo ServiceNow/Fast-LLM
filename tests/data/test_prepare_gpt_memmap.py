@@ -8,10 +8,12 @@ import torch
 
 from fast_llm.data.dataset.config import IndexedDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
+from fast_llm.data.sample.range import RangeSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.data.common import MockGPTMemmapDatasetConfig  # Noqa
 
@@ -31,15 +33,17 @@ def get_preparator(output_path: str, dataset_path_name: str) -> GPTMemmapDataset
 @pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
 def test_write_memmap_dataset(dtype):
     documents = [
-        (torch.from_numpy(np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype)), None, None, None)
+        LanguageModelSample(
+            TokenSample(torch.from_numpy(np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype)))
+        )
         for _ in range(100)
     ]
     with tempfile.TemporaryDirectory() as temp_dir:
-        prefix = pathlib.Path(temp_dir)
-        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
-        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
-        for i, (tokens, _, _, _) in enumerate(documents):
-            Assert.all_equal(dataset.get_document(i).tokens.tokens, tokens.to(torch.int64))
+        path = pathlib.Path(temp_dir) / "dataset"
+        MemmapDataset.write_dataset(path, documents, LanguageModelWriter)
+        dataset = MemmapDataset("dataset", path)
+        for i, document in enumerate(documents):
+            Assert.all_equal(dataset.get_document(i).tokens.tokens, document.tokens.tokens.to(torch.int64))
 
 
 def _generate_valid_span(max_seq_length):
@@ -49,26 +53,26 @@ def _generate_valid_span(max_seq_length):
 @pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
 def test_write_memmap_preference_dataset(dtype):
     documents = [
-        (
-            torch.from_numpy(np.random.randint(1000, size=100).astype(dtype)),
+        LanguageModelSample(
+            TokenSample(torch.from_numpy(np.random.randint(1000, size=100).astype(dtype))),
             None,
-            _generate_valid_span(100),
-            _generate_valid_span(100),
+            RangeSample(_generate_valid_span(100), 100),
+            RangeSample(_generate_valid_span(100), 100),
         )
         for _ in range(50)
     ]
     with tempfile.TemporaryDirectory() as temp_dir:
-        prefix = pathlib.Path(temp_dir)
-        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
-        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
+        path = pathlib.Path(temp_dir) / "dataset"
+        MemmapDataset.write_dataset(path, documents, LanguageModelWriter)
+        dataset = MemmapDataset("dataset", path)
         parameters = GPTSamplingParameters(
             num_samples=0, sequence_length=0, vocab_size=0, use_preference_loss_spans=True
         )
-        for i, (token_ids, _, (chosen_begin, chosen_end), (rejected_begin, rejected_end)) in enumerate(documents):
-            document = dataset.get_document(i, parameters=parameters)
-            Assert.all_equal(document.tokens.tokens, token_ids.to(torch.int64))
-            Assert.eq(document.chosen_spans.ranges, [(chosen_begin, chosen_end + 1)])
-            Assert.eq(document.rejected_spans.ranges, [(rejected_begin, rejected_end + 1)])
+        for i, document in enumerate(documents):
+            dataset_document = dataset.get_document(i, parameters=parameters)
+            Assert.all_equal(dataset_document.tokens.tokens, document.tokens.tokens.to(torch.int64))
+            Assert.eq(dataset_document.chosen_spans.ranges, document.chosen_spans.ranges)
+            Assert.eq(dataset_document.rejected_spans.ranges, document.rejected_spans.ranges)
 
 
 def test_load_metadata_from_hub():

@@ -1,3 +1,4 @@
+import functools
 import os
 import pathlib
 import typing
@@ -25,14 +26,9 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-@config_class(registry=True)
-class SourceSchemaConfig(Config):
-    pass
-
-
-@config_class(dynamic_type={SourceSchemaConfig: "text_column"})
-class TextColumnConfig(SourceSchemaConfig):
-    input_column: str = Field(
+@config_class()
+class LanguageModelSourceConfig(Config):
+    text_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
@@ -40,6 +36,38 @@ class TextColumnConfig(SourceSchemaConfig):
     loss_masking_spans_column: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
+    chosen_spans_column: None | str = Field(
+        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
+    )
+    rejected_spans_column: None | str = Field(
+        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
+    )
+
+    @functools.cached_property
+    def columns(self) -> list[str]:
+        columns = [self.text_column]
+        if self.has_loss_masking_span:
+            columns.append(self.loss_masking_spans_column)
+        if self.has_preference_spans:
+            columns.extend([self.chosen_spans_column, self.rejected_spans_column])
+        return columns
+
+    @functools.cached_property
+    def has_loss_masking_span(self) -> bool:
+        return self.loss_masking_spans_column is not None
+
+    @functools.cached_property
+    def has_preference_spans(self) -> bool:
+        Assert.eq(self.chosen_spans_column is None, self.rejected_spans_column is None)
+        return self.chosen_spans_column is not None
+
+    def _validate(self):
+        super()._validate()
+        if self.has_loss_masking_span != self.rejected_spans_column is not None:
+            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
+        if self.has_preference_spans == self.has_loss_masking_span:
+            # TODO: ====== Still needed? ======
+            raise ValueError(f"Can not enable both loss masking and preference spans.")
 
 
 @config_class()
@@ -69,15 +97,9 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Split of the dataset to use.",
         hint=FieldHint.optional,
     )
-    source_schema: SourceSchemaConfig = Field(
+    source_schema: LanguageModelSourceConfig = Field(
         desc="Configuration for the data source.",
         hint=FieldHint.optional,
-    )
-    chosen_text: None | str = Field(
-        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
-    )
-    rejected_text: None | str = Field(
-        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
     data_type: DataType | None = Field(
         default=None,
@@ -133,7 +155,6 @@ class DatasetPreparatorDistributedConfig(Config):
 @config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
-
     output_path: pathlib.Path = Field(
         default=None,
         desc="Output directory for the processed dataset.",

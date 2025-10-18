@@ -9,7 +9,7 @@ from tests.data.common import (
 )
 from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_TOKENS
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_PREFIX
+from tests.utils.global_variables import DATASET_PATH
 
 GPT_CONCATENATED_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],
@@ -27,7 +27,7 @@ def test_gpt_concatenate():
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
     get_test_dataset()
     dataset = get_dataset_config(
-        {"type": "concatenated", "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)]},
+        {"type": "concatenated", "datasets": [{"type": "memmap", "path": DATASET_PATH} for _ in range(3)]},
         ConcatenatedDatasetConfig[LanguageModelSample],
     ).build()
     compare_indexed_dataset(
@@ -47,7 +47,7 @@ def test_gpt_concatenate_data():
             "datasets": {
                 "training": {
                     "type": "concatenated",
-                    "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)],
+                    "datasets": [{"type": "memmap", "path": DATASET_PATH} for _ in range(3)],
                 }
             }
         },

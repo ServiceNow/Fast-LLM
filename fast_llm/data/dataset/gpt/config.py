@@ -8,19 +8,12 @@ import yaml
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.dataset.config import (
-    IndexedDatasetConfig,
-    SamplableDatasetConfig,
-    SampledDatasetConfig,
-    SamplingData,
-    SamplingParameters,
-)
+from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.fim import GPTFimDataset
-    from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
 
@@ -58,33 +51,6 @@ class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
         from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
         return GPTRandomDataset[SampleType](self.name)
-
-
-@config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class GPTMemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[SampleType]):
-    _abstract: typing.ClassVar[bool] = False
-    path: pathlib.Path = Field(
-        default=None,
-        desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
-        hint=FieldHint.core,
-    )
-    num_documents: int | None = Field(
-        default=None,
-        desc="Expected number of documents in the dataset.",
-        hint=FieldHint.optional,
-    )
-    num_tokens: int | None = Field(
-        default=None,
-        desc="Expected number of tokens in the dataset.",
-        hint=FieldHint.optional,
-    )
-
-    def build(self) -> "GPTMemmapDataset[SampleType]":
-        from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-
-        return GPTMemmapDataset[SampleType](
-            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens
-        )
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})

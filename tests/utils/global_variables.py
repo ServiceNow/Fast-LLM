@@ -37,12 +37,13 @@ def set_testing_global_variables():
 TOKENIZER_PATH = SHARED_RESULT_PATH / "tokenizer"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_CACHE = SHARED_RESULT_PATH / "dataset"
-DATASET_PREFIX = DATASET_CACHE / "common_dataset"
+DATASET_PATH = DATASET_CACHE / "common_dataset.fast_llm_dataset"
+DATASET_WITH_SPANS_PATH = DATASET_CACHE / "dataset_with_spans.fast_llm_dataset"
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset_sampling_cache"
 TEST_VOCAB_SIZE = 8192
 # Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
 TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
 TEST_DATASET_TOKENS = 1000000
 
-MODEL_DATASET_PREFIX = DATASET_CACHE / "model_dataset"
+MODEL_DATASET_PATH = DATASET_CACHE / "model_dataset.fast_llm_dataset"
 MODEL_TEST_VOCAB_SIZE = 384

@@ -13,7 +13,7 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
 )
 from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_CACHE, DATASET_PREFIX
+from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH
 
 _DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
 
@@ -118,7 +118,7 @@ def test_gpt_blended():
         {
             "type": "blended",
             "datasets": [
-                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "memmap", "path": DATASET_PATH},
                 {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
             ],
             "weights": [0.75, 0.25],
@@ -137,7 +137,7 @@ def test_gpt_blended_data():
                 "training": {
                     "type": "blended",
                     "datasets": [
-                        {"type": "memmap", "path": DATASET_PREFIX},
+                        {"type": "memmap", "path": DATASET_PATH},
                         {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
@@ -157,7 +157,7 @@ def test_gpt_blended_mixed():
         {
             "type": "blended",
             "datasets": [
-                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "memmap", "path": DATASET_PATH},
                 {"type": "random"},
             ],
             "weights": [0.6, 0.4],
@@ -174,7 +174,7 @@ def test_gpt_blended_mixed_data():
             "datasets": {
                 "training": {
                     "type": "blended",
-                    "datasets": [{"type": "memmap", "path": DATASET_PREFIX}, {"type": "random"}],
+                    "datasets": [{"type": "memmap", "path": DATASET_PATH}, {"type": "random"}],
                     "weights": [0.6, 0.4],
                 }
             }

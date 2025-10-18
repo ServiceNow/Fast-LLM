@@ -4,6 +4,7 @@ from transformers import AutoTokenizer
 
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.utils import Assert
 
 
 class Tokenizer:
@@ -41,7 +42,7 @@ class Tokenizer:
     def inv_vocab(self) -> dict[int, str]:
         return self._inv_vocab
 
-    def tokenize(self, text: str, begin=True, end=True) -> list[int]:
+    def tokenize(self, text: str, begin: bool = True, end: bool = True) -> list[int]:
         return (
             ([self.bod_id] if begin else [])
             + self.tokenizer.encode(text, add_special_tokens=False)
@@ -49,36 +50,35 @@ class Tokenizer:
         )
 
     def tokenize_with_spans(
-        self, text: str, char_spans: list[tuple[int, int]]
+        self, text: str, begin: bool = True, end: bool = True, *, spans: list[tuple[int, int]]
     ) -> tuple[list[int], list[tuple[int, int]]]:
         """
         Perform span-aware tokenization and return the tokenized input_ids along with token spans.
         """
-        input_ids = []
-        token_spans = []
-        char_pos = 0
-        beginning_of_text = True
+        if not spans:
+            return self.tokenize(text, begin, end), []
+        input_ids, token_splits = self.tokenize_with_splits(
+            text, begin, end, text_splits=[split for splits in spans for split in splits]
+        )
+        return input_ids, [(begin, end) for begin, end in zip(token_splits[::2], token_splits[1::2], strict=True)]
 
-        for start, end in char_spans:
-            if char_pos < start:
-                curr_text = text[char_pos:start]
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                input_ids.extend(tokenized_text)
-            curr_text = text[start : end + 1]
-            if end >= len(text) - 1:
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
-            else:
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=False)
-            beginning_of_text = False
-            token_spans.append((len(input_ids), len(input_ids) + len(tokenized_text) - 1))
-            input_ids.extend(tokenized_text)
-            char_pos = end + 1
-        if char_pos < len(text):
-            curr_text = text[char_pos:]
-            tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
-            input_ids.extend(tokenized_text)
-        return input_ids, token_spans
+    def tokenize_with_splits(
+        self, text: str, begin: bool = True, end: bool = True, *, text_splits: list[int]
+    ) -> tuple[list[int], list[int]]:
+        Assert.eq(sorted(text_splits), text_splits)
+        input_ids = []
+        text_splits = [0, *text_splits, len(text_splits)]
+        token_splits = []
+
+        for split_begin, split_end in zip(text_splits[:-1], text_splits[1:]):
+            input_ids.extend(
+                self.tokenize(
+                    text[split_begin:split_end], begin=begin and split_begin == 0, end=end and split_end == len(text)
+                )
+            )
+            token_splits.append(len(input_ids))
+
+        return input_ids, token_splits[:-1]
 
     def detokenize(self, token_ids: int | list[int] | np.ndarray | torch.Tensor) -> str:
         return self.tokenizer.decode(token_ids)

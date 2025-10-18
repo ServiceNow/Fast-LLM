@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import multiprocessing
 import pathlib
 import shutil
@@ -18,13 +19,15 @@ from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
     DatasetSliceConfig,
     IndexedDatasetConfig,
+    MemmapDatasetConfig,
     SampledDatasetConfig,
 )
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
+from fast_llm.data.sample.range import RangeSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -35,154 +38,24 @@ logger = logging.getLogger(__name__)
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
     _tokenizer: Tokenizer
     _data_type: DataType
-    _text_column: str
-    _loss_masking_spans_column: str | None
     _sample_type: typing.ClassVar[type[LanguageModelSample]] = LanguageModelSample
+    _config: GPTMemmapDatasetPreparatorConfig
 
-    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy) for text in batch[self._text_column]
-        ]
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "num_tokens": num_tokens,
-        }
+    def __init__(self, config: ConfigType):
+        super().__init__(config)
+        self._source_shema: LanguageModelSourceConfig = self._config.dataset.source_shema
 
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans = map(
-            list,
-            zip(
-                *[
-                    (
-                        np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
-                    )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(batch[self._text_column], batch[self._loss_masking_spans_column])
-                    ]
-                ]
-            ),
-        )
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "token_spans": token_spans,
-            "num_tokens": num_tokens,
-        }
+    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> MemmapDatasetConfig:
+        shard_index, shard_dataset = args
+        file_name = f"shard_{self._config.distributed.rank}_{shard_index}.fast_llm_dataset"
 
-    def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        packed_texts = []
-        chosen_spans = []
-        rejected_spans = []
-
-        for conv_history, chosen_text, rejected_text in zip(
-            batch[self._config.dataset.field],
-            batch[self._config.dataset.chosen_text],
-            batch[self._config.dataset.rejected_text],
-        ):
-            # compute chosen span
-            full_chosen_text = conv_history + chosen_text + self._tokenizer.tokenizer.eos_token
-            chosen_span = [len(conv_history), len(full_chosen_text) - 1]
-            offset = len(full_chosen_text)
-            chosen_spans.append(chosen_span)
-
-            # compute rejected span
-            full_rejected_text = self._tokenizer.tokenizer.bos_token + conv_history + rejected_text
-            rejected_span = [
-                offset + len(self._tokenizer.tokenizer.bos_token + conv_history),
-                offset + len(full_rejected_text) - 1,
-            ]
-            rejected_spans.append(rejected_span)
-
-            # pack texts
-            packed_text = full_chosen_text + full_rejected_text
-
-            assert (
-                packed_text[chosen_span[0] : chosen_span[1] + 1] == chosen_text + self._tokenizer.tokenizer.eos_token
-            ), f"{packed_text[chosen_span[0]: chosen_span[1] + 1]} does not match {chosen_text}"
-
-            assert (
-                packed_text[rejected_span[0] : rejected_span[1] + 1] == rejected_text
-            ), f"{packed_text[rejected_span[0]: rejected_span[1] + 1]} does not match {rejected_text}"
-            packed_texts.append(packed_text)
-
-        # tokenize with spans
-        input_ids, chosen_token_spans, rejected_token_spans = map(
-            list,
-            zip(
-                *[
-                    (
-                        np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans[0], dtype=np.int32),
-                        np.array(
-                            [token_spans[1][0], token_spans[1][1] + 1], dtype=np.int32
-                        ),  # adding 1 to end for eos token
-                    )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, [chosen_span, rejected_span])
-                        for text, chosen_span, rejected_span in zip(packed_texts, chosen_spans, rejected_spans)
-                    ]
-                ]
-            ),
+        MemmapDataset.write_dataset(
+            self._config.output_path / file_name,
+            tqdm.tqdm((sample["sample"] for sample in shard_dataset), desc=f"Saving shard {shard_index}", unit="docs"),
+            LanguageModelWriter,
         )
 
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "chosen_token_spans": chosen_token_spans,
-            "rejected_token_spans": rejected_token_spans,
-            "num_tokens": num_tokens,
-        }
-
-    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
-        shard_idx, shard_dataset = args
-        prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
-        shard_output_path = self._config.output_path / prefix
-
-        def _document_generator():
-            # TODO: Yield `LanguageModelSample`
-            if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        torch.tensor(item["token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        None,
-                        None,
-                    )
-            elif (
-                "chosen_token_spans" in shard_dataset.column_names
-                and "rejected_token_spans" in shard_dataset.column_names
-                and self._config.dataset.chosen_text is not None
-                and self._config.dataset.rejected_text is not None
-            ):
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        None,
-                        torch.tensor(item["chosen_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        torch.tensor(item["rejected_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                    )
-            else:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        None,
-                        None,
-                        None,
-                    )
-
-        GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
-
-        return GPTMemmapDatasetConfig.from_dict(
-            {
-                "type": "memmap",
-                "path": prefix,
-                "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
-                "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
-            }
-        )
+        return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name})
 
     def _load_dataset(self) -> datasets.Dataset:
         dataset = datasets.load_dataset(
@@ -270,7 +143,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Prepare output directory
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
-        if pathlib.Path(self._config.dataset.path).is_dir():
+        downloaded = pathlib.Path(self._config.dataset.path).is_dir()
+        if self._config.distributed.world_size > 1:
+            torch.distributed.barrier()
+
+        if downloaded:
             # Dataset is already downloaded, load from disk
             dataset = self._load_dataset()
         else:
@@ -296,54 +173,24 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             index=self._config.distributed.rank,
         )
 
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._text_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
-            )
-
-        if self._text_column not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._text_column}'.")
-
-        if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
-            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
-        ):
-            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
-        if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
-            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
-
-        # route tokenize function
-        if self._loss_masking_spans_column is not None:
-            if self._loss_masking_spans_column not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
-            tokenize_fn = self._tokenize_batch_with_spans
-        elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
-            if self._config.dataset.chosen_text not in dataset.column_names:
-                raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
-            if self._config.dataset.rejected_text not in dataset.column_names:
-                raise ValueError(f"Dataset does not have rejected spans field '{self._config.dataset.rejected_text}'.")
-            tokenize_fn = self._tokenize_preference_batch_with_spans
-        else:
-            tokenize_fn = self._tokenize_batch
+        for column_name in self._source_shema.columns:
+            if column_name not in dataset.column_names:
+                raise ValueError(f"Dataset does not have field '{column_name}'.")
 
         # Tokenize the dataset in parallel
-        tokenized_dataset = dataset.map(
-            tokenize_fn,
+        prepared_dataset = dataset.map(
+            self._prepare_batch,
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",
         )
 
-        # Calculate total number of tokens
-        total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
-
         # Split dataset into shards based on number of tokens
-        num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
+        num_shards = math.ceil(
+            sum(len(sample) for sample in prepared_dataset["samples"]) / self._config.tokens_per_shard
+        )
         shards = [
-            (i, tokenized_dataset.shard(num_shards=num_shards, index=i))
+            (i, prepared_dataset.shard(num_shards=num_shards, index=i))
             for i in tqdm.tqdm(range(num_shards), desc="Creating shards")
         ]
 
@@ -353,7 +200,67 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         self.generate_config_yaml_for_sharded_dst(dataset_configs)
 
-    def generate_config_yaml_for_sharded_dst(self, dataset_configs: list[GPTMemmapDatasetConfig]) -> None:
+    def _prepare_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[LanguageModelSample]]:
+        # Gather values by sample using zip*
+        sample_column_values = zip(*(batch[column_name] for column_name in self._source_shema.columns))
+        # Convert to dicts using column names.
+        sample_dicts = (
+            {column_name: column_value for column_name, column_value in zip(self._source_shema.columns, sample_data)}
+            for sample_data in sample_column_values
+        )
+        # Prepare each sample, wrap in dict for the `Dataset` interface
+        return {"samples": [self._prepare_sample(sample_dict) for sample_dict in sample_dicts]}
+
+    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
+        text = sample[self._source_shema.text_column]
+        all_spans = []
+        if self._source_shema.has_loss_masking_span:
+            # TODO: ====== What is the input format? ======
+            # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
+            loss_masking_spans = _sort_spans(
+                (begin, last + 1)
+                for begin, last in np.array(sample[self._source_shema.loss_masking_spans_column], dtype=np.int32)
+                .reshape(-1, 2)
+                .tolist()
+            )
+            all_spans.extend(loss_masking_spans)
+
+        if self._source_shema.has_preference_spans:
+            # TODO: ===== Was `self._config.dataset.field` (bug?) ======
+            full_chosen_text = (
+                text + sample[self._source_shema.chosen_spans_column] + self._tokenizer.tokenizer.eos_token
+            )
+            full_rejected_text = (
+                self._tokenizer.tokenizer.bos_token + text + sample[self._source_shema.rejected_spans_column]
+            )
+            # compute chosen span
+            chosen_spans = [[len(text), len(full_chosen_text)]]
+
+            # compute rejected span
+            rejected_span = [
+                [
+                    len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
+                    len(full_chosen_text) + len(full_rejected_text),
+                ]
+            ]
+            # pack texts
+            text = full_chosen_text + full_rejected_text
+            all_spans.extend(chosen_spans + rejected_span)
+
+        tokens = torch.tensor(
+            self._tokenizer.tokenize_with_spans(text, True, True, spans=_sort_spans(all_spans)),
+            dtype=self._data_type.torch,
+        )
+        sample_size = len(tokens)
+
+        return LanguageModelSample(
+            TokenSample(tokens, [sample_size]),
+            RangeSample(loss_masking_spans, sample_size) if self._source_shema.has_loss_masking_span else None,
+            RangeSample(chosen_spans, sample_size) if self._source_shema.has_preference_spans else None,
+            RangeSample(rejected_span, sample_size) if self._source_shema.has_preference_spans else None,
+        )
+
+    def generate_config_yaml_for_sharded_dst(self, dataset_configs: list[MemmapDatasetConfig]) -> None:
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
             if self._config.distributed.rank == 0:
@@ -397,7 +304,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]]
+        cls, dataset_configs: list[MemmapDatasetConfig[_sample_type]]
     ) -> IndexedDatasetConfig[_sample_type]:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
@@ -412,10 +319,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     @classmethod
     def _split_and_blend_dataset_configs(
         cls,
-        dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]],
+        dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
     ) -> dict[str, SampledDatasetConfig[_sample_type]]:
+        # TODO: ====== Missing `num_tokens`, `num_documents`. ======
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
@@ -481,6 +389,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 )
 
         return dataset_splits
+
+
+def _sort_spans(spans: typing.Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    return sorted(spans, key=lambda span: span[0])
 
 
 def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:

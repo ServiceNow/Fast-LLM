@@ -1,21 +1,19 @@
 import pathlib
 import struct
-import typing
 
 import numpy as np
 import torch
 
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
+from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 
-class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
+class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -28,12 +26,10 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
         self,
         name: str,
         prefix: pathlib.Path | str,
-        num_documents: int | None = None,
-        num_tokens: int | None = None,
     ):
-        self._init(name, prefix, num_documents, num_tokens)
+        self._init(name, prefix)
 
-    def _init(self, name: str, prefix: pathlib.Path | str, num_documents: int | None, num_tokens: int | None) -> None:
+    def _init(self, name: str, prefix: pathlib.Path | str) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
@@ -53,9 +49,6 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
-
-        if num_documents is not None:
-            assert self._num_documents == num_documents
 
         self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
@@ -129,13 +122,11 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
         self._num_tokens = div(self._bin_buffer_mmap.size, self._dtype.itemsize)
-        if num_tokens is not None:
-            assert self._num_tokens == num_tokens
 
-    def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
-        return (self._name, self._prefix, self._num_documents, self._num_tokens)
+    def __getstate__(self) -> tuple[str, pathlib.Path]:
+        return (self._name, self._prefix)
 
-    def __setstate__(self, state: tuple[str, pathlib.Path, int | None, int | None]):
+    def __setstate__(self, state: tuple[str, pathlib.Path]):
         self._init(*state)
 
     def __del__(self):
@@ -168,7 +159,7 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
             token_ids = token_ids.to(torch.int64)
         if parameters is not None and parameters.use_loss_masking_spans:
             assert self._spans is not None
-            # TODO: ====== Store in range format (begin, end) ======
+            # Convert to in range format (begin, end).
             sample_spans = RangeSample(
                 [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
             ).crop(begin, end)
@@ -182,7 +173,7 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
                 raise ValueError("Failed to read chosen spans from memmap dataset.")
             elif self._has_preference_spans and self._rejected_spans is None:
                 raise ValueError("Failed to read rejected spans from memmap dataset.")
-            # TODO: ====== Store in range format ======
+            # Convert to in range format (begin, end).
             chosen_spans = RangeSample(
                 [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
                 sample_size,
@@ -222,95 +213,3 @@ class GPTMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleTyp
 
     def get_document_size(self, index: int) -> int:
         return self._document_sizes[index].item()
-
-    @classmethod
-    def write_dataset(
-        cls,
-        prefix: pathlib.Path | str,
-        documents: typing.Iterable[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]],
-    ) -> None:
-        # Initialize metadata
-        dtype = None
-        num_documents = 0
-        lengths = []
-        pointers = []
-        offset = 0
-        # number of spans for each document
-        num_spans = []
-        spans = []
-        chosen_spans = []
-        rejected_spans = []
-
-        prefix = pathlib.Path(prefix)
-        prefix.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write the binary data file (.bin) lazily
-        with prefix.with_suffix(".bin").open("wb") as bin_stream:
-            for token_ids, loss_masking_spans, chosen_span, rejected_span in documents:
-                # Infer dtype from the first document
-                if dtype is None:
-                    dtype = token_ids.dtype
-                    assert dtype is not None, "Document dtype could not be inferred from the data."
-
-                # Ensure all documents have the same dtype
-                assert token_ids.dtype == dtype, f"Expected dtype {dtype}, got {token_ids.dtype}."
-
-                # Write document to binary file
-                bin_stream.write(token_ids.numpy().tobytes(order="C"))
-
-                # Update metadata
-                doc_length = len(token_ids)
-                lengths.append(doc_length)
-                pointers.append(offset)
-                if loss_masking_spans is not None:
-                    num_spans.append(len(loss_masking_spans))
-                    spans.append(loss_masking_spans)
-                if chosen_span is not None:
-                    chosen_spans.append(chosen_span)
-                if rejected_span is not None:
-                    rejected_spans.append(rejected_span)
-                offset += doc_length * dtype.itemsize
-                num_documents += 1
-
-        # Finalize metadata arrays
-        lengths = np.array(lengths, dtype=np.int32)
-        pointers = np.array(pointers, dtype=np.int64)
-        num_spans = np.array(num_spans, dtype=np.int32)
-        if len(spans) > 0:
-            spans = np.vstack(spans, dtype=np.int32)
-        else:
-            spans = np.array(spans, dtype=np.int32)
-        chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
-        rejected_spans = np.array(rejected_spans, dtype=np.int32).reshape(-1, 2)
-
-        # Write the index file (.idx)
-        with prefix.with_suffix(".idx").open("wb") as idx_stream:
-            idx_stream.write(MEMMAP_INDEX_HEADER)
-            # Indicates the version
-            # Version 2 optionally adds loss-masking spans
-            # Version 3 optionally adds chosen/rejected spans
-            idx_stream.write(struct.pack("<Q", 3))
-            # Flag to indicate whether loss-masking spans are present
-            idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
-            # Flag to indicate whether preference loss-masking spans are present
-            idx_stream.write(struct.pack("<B", 1 if chosen_spans.size > 0 and rejected_spans.size > 0 else 0))
-            # Data type
-            idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_torch(dtype)]))
-            # "Number of sequences", same as documents in our case
-            idx_stream.write(struct.pack("<Q", num_documents))
-            # "Number of documents", needs a +1 for some reason
-            idx_stream.write(struct.pack("<Q", num_documents + 1))
-            # Sequence (document) lengths
-            idx_stream.write(lengths.tobytes(order="C"))
-            # Sequence (document) begin offsets in the bin file
-            idx_stream.write(pointers.tobytes(order="C"))
-            # Number of spans per document
-            idx_stream.write(num_spans.tobytes(order="C"))
-            # Span indices for each document
-            idx_stream.write(spans.tobytes(order="C"))
-            # Chosen indices for each document
-            idx_stream.write(chosen_spans.tobytes(order="C"))
-            # Rejected indices for each document
-            idx_stream.write(rejected_spans.tobytes(order="C"))
-            # Document indices, unused but needed for compatibility with Megatron-LM
-            idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
