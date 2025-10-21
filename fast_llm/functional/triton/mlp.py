@@ -572,11 +572,25 @@ def mlp_autograd_looped(
     # Chunk biases if present
     if bias_1 is not None:
         _, bias_1_chunked = chunk_weight(hidden_states, bias_1, num_experts)
+        # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
+        bias_1_chunked = [b.squeeze(0) if b.ndim == 2 else b for b in bias_1_chunked]
+        # DEBUG: Check bias shape
+        if "bias_shapes" not in _MLP_DEBUG_TRACES:
+            _MLP_DEBUG_TRACES["bias_shapes"] = {}
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_1_orig"] = bias_1.shape
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_1_chunk_0"] = bias_1_chunked[0].shape
     else:
         bias_1_chunked = [None] * num_experts
 
     if bias_2 is not None:
         _, bias_2_chunked = chunk_weight(hidden_states, bias_2, num_experts)
+        # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
+        bias_2_chunked = [b.squeeze(0) if b.ndim == 2 else b for b in bias_2_chunked]
+        # DEBUG: Check bias shape
+        if "bias_shapes" not in _MLP_DEBUG_TRACES:
+            _MLP_DEBUG_TRACES["bias_shapes"] = {}
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_2_orig"] = bias_2.shape
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_2_chunk_0"] = bias_2_chunked[0].shape
     else:
         bias_2_chunked = [None] * num_experts
 
@@ -599,7 +613,7 @@ def mlp_autograd_looped(
                     sequence_parallel,
                     training,
                     recompute_level,
-                    True,
+                    False,  # transposed_layer_2_weight - weight_2 is already in transposed storage format
                 )
                 * scores[column, row, None]
             )
