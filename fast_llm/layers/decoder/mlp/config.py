@@ -128,7 +128,7 @@ class MoEMLPConfig(MLPConfig):
         valid=check_field(Assert.geq, 0),
     )
     dropless: bool = Field(
-        default=False, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
+        default=True, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
     )
     dropless_dynamic_shape: bool = Field(
         default=False,

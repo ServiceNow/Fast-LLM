@@ -70,6 +70,8 @@ class LinearConfig(LinearBaseConfig):
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "LinearBase":
+        from fast_llm.layers.common.linear.linear import InputParallelLinear, Linear, OutputParallelLinear
+
         lr_scale = combine_lr_scales(lr_scale, self.lr_scale)
         weight = self.weight.get_parameter(
             (in_dim, out_dim) if transposed_weight else (out_dim, in_dim),

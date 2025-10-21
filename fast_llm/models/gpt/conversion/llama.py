@@ -221,7 +221,7 @@ class LlamaAttentionConverter:
             "heads": config["num_attention_heads"],
             "head_groups": config["num_key_value_heads"],
             "head_size": config.get("head_dim"),
-            "add_linear_biases": config["attention_bias"],
+            "add_linear_biases": config.get("attention_bias", False),
             "dropout": config["attention_dropout"],
         }
         if out["head_size"] is None:

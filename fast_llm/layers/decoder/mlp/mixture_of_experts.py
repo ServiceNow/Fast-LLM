@@ -130,8 +130,11 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
+            # Create flattened dimension for debug logging
+            batch_seq_dim = TensorDim("batch_seq", hidden_states.size(0))
+            router_expert_dim = TensorDim("router_experts", self._config.unshared_experts)
             self._debug(
-                logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+                logits, "Router logits", (batch_seq_dim, router_expert_dim), kwargs
             )
 
         # Apply z_loss if applicable
@@ -162,13 +165,15 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
 
         if self._debug.enabled:
             # To log all ranks set `global_=False`
+            # Use flattened dimension for debug logging
+            batch_seq_dim = TensorDim("batch_seq", hidden_states.size(0))
             self._debug(
-                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+                scores, "Router scores", (batch_seq_dim, self._top_expert_dim), kwargs
             )
             self._debug(
                 top_experts,
                 "Router top experts",
-                kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
+                (batch_seq_dim, self._top_expert_dim),
                 kwargs,
             )
 
