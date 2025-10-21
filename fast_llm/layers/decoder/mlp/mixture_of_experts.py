@@ -6,11 +6,16 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, triton_mlp_activation_autograd, torch_mlp_activation
+from fast_llm.functional.triton.mlp import (
+    mlp_autograd,
+    mlp_autograd_looped,
+    torch_mlp_activation,
+    triton_mlp_activation_autograd,
+)
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
@@ -88,7 +93,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
             default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            transposed_weight=True,
+            transposed_weight=True,  # Weights stored in (out_features, experts*in_features) format
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -191,7 +196,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             sequence_parallel=self._sequence_parallel,
             training=self.training,
             recompute_level=self._config.recompute_level,
-            transposed_layer_2_weight=True,
+            transposed_layer_2_weight=True,  # Weights: (out, experts*in) - transposed
             sparse_map=sparse_map,
         )
 

@@ -571,9 +571,17 @@ def mlp_autograd_looped(
 
     # Chunk biases if present
     if bias_1 is not None:
-        _, bias_1_chunked = chunk_weight(hidden_states, bias_1, num_experts)
+        _, bias_1_chunked_raw = chunk_weight(hidden_states, bias_1, num_experts)
         # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
-        bias_1_chunked = [b.squeeze(0) if b.ndim == 2 else b for b in bias_1_chunked]
+        # Preserve grad_buffer attribute after squeezing
+        bias_1_chunked = []
+        for b in bias_1_chunked_raw:
+            squeezed = b.squeeze(0) if b.ndim == 2 else b
+            if hasattr(b, "grad_buffer"):
+                squeezed.grad_buffer = b.grad_buffer.squeeze(0) if b.grad_buffer.ndim == 2 else b.grad_buffer
+            if hasattr(b, "param_grad_is_zero"):
+                squeezed.param_grad_is_zero = b.param_grad_is_zero
+            bias_1_chunked.append(squeezed)
         # DEBUG: Check bias shape
         if "bias_shapes" not in _MLP_DEBUG_TRACES:
             _MLP_DEBUG_TRACES["bias_shapes"] = {}
@@ -583,9 +591,17 @@ def mlp_autograd_looped(
         bias_1_chunked = [None] * num_experts
 
     if bias_2 is not None:
-        _, bias_2_chunked = chunk_weight(hidden_states, bias_2, num_experts)
+        _, bias_2_chunked_raw = chunk_weight(hidden_states, bias_2, num_experts)
         # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
-        bias_2_chunked = [b.squeeze(0) if b.ndim == 2 else b for b in bias_2_chunked]
+        # Preserve grad_buffer attribute after squeezing
+        bias_2_chunked = []
+        for b in bias_2_chunked_raw:
+            squeezed = b.squeeze(0) if b.ndim == 2 else b
+            if hasattr(b, "grad_buffer"):
+                squeezed.grad_buffer = b.grad_buffer.squeeze(0) if b.grad_buffer.ndim == 2 else b.grad_buffer
+            if hasattr(b, "param_grad_is_zero"):
+                squeezed.param_grad_is_zero = b.param_grad_is_zero
+            bias_2_chunked.append(squeezed)
         # DEBUG: Check bias shape
         if "bias_shapes" not in _MLP_DEBUG_TRACES:
             _MLP_DEBUG_TRACES["bias_shapes"] = {}
@@ -613,7 +629,7 @@ def mlp_autograd_looped(
                     sequence_parallel,
                     training,
                     recompute_level,
-                    False,  # transposed_layer_2_weight - weight_2 is already in transposed storage format
+                    True,  # transposed_layer_2_weight - weight_2 stored as (out, experts*in)
                 )
                 * scores[column, row, None]
             )
