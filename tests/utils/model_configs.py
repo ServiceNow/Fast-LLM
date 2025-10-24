@@ -545,6 +545,8 @@ _update_and_add_testing_config(
     updates={
         ("model", "base_model", "decoder", "block", "mlp", "type"): "moe",
         ("model", "base_model", "decoder", "block", "mlp", "router", "weight"): init_1,
+        ("model", "base_model", "decoder", "block", "mlp", "layer_1", "type"): "moe_affine_linear",
+        ("model", "base_model", "decoder", "block", "mlp", "layer_2", "type"): "moe_affine_linear",
         ("model", "base_model", "decoder", "block", "mlp", "experts"): 4,
         ("model", "base_model", "decoder", "block", "mlp", "experts_per_token"): 4,
     },
