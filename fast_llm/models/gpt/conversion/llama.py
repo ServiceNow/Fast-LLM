@@ -119,33 +119,25 @@ class LlamaNormalizationConverter:
 
 class LlamaMLPConverter:
     @classmethod
-    def import_config(cls, config: dict, has_mlp_bias_param: bool = True) -> dict:
-        out = {
+    def import_config(cls, config: dict) -> dict:
+        return {
             "intermediate_size": config["intermediate_size"],
+            "add_linear_biases": config["mlp_bias"],
             "activation": ActivationType.from_hf_name(config["hidden_act"]),
             "gated": True,
         }
-        if has_mlp_bias_param:
-            out["add_linear_biases"] = config["mlp_bias"]
-        else:
-            out["add_linear_biases"] = False
-
-        return out
 
     @classmethod
-    def export_config(cls, config: MLPConfig, has_mlp_bias_param: bool = True) -> dict:
+    def export_config(cls, config: MLPConfig) -> dict:
         Assert.custom(isinstance, config, MLPConfig)
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
         assert config.gated
-        out = {
+        return {
             "intermediate_size": config.intermediate_size,
+            "mlp_bias": config.add_linear_biases,
             "hidden_act": config.activation.hf_name,
         }
-        if has_mlp_bias_param:
-            out["mlp_bias"] = config.add_linear_biases
-
-        return out
 
     @classmethod
     def get_converters(
@@ -192,7 +184,7 @@ class MLPLayer2Converter(WeightConverter):
 
 class LlamaAttentionConverter:
     @classmethod
-    def import_config(cls, config: dict, has_attention_bias_param: bool = True) -> dict:
+    def import_config(cls, config: dict) -> dict:
         try:
             rope_type = config["rope_scaling"]["rope_type"]
         except (KeyError, TypeError):
@@ -228,32 +220,26 @@ class LlamaAttentionConverter:
             "heads": config["num_attention_heads"],
             "head_groups": config["num_key_value_heads"],
             "head_size": config.get("head_dim"),
+            "add_linear_biases": config["attention_bias"],
             "dropout": config["attention_dropout"],
         }
-        if has_attention_bias_param:
-            out["add_linear_biases"] = config["attention_bias"]
-        else:
-            out["add_linear_biases"] = False
-
         if out["head_size"] is None:
             out["head_size"] = div(config["hidden_size"], out["heads"])
 
         return out
 
     @classmethod
-    def export_config(cls, config: AttentionConfig, has_attention_bias_param: bool = True) -> dict:
+    def export_config(cls, config: AttentionConfig) -> dict:
         cls._check_config(config)
         Assert.eq(config.softmax_scale_power, 0.5)
         out = {
             "num_attention_heads": config.heads,
             "num_key_value_heads": config.head_groups,
             "head_dim": config.head_size,
+            "attention_bias": config.add_linear_biases,
             "attention_dropout": config.dropout,
             "rope_theta": config.rotary.theta,
         }
-        if has_attention_bias_param:
-            out["attention_bias"] = config.add_linear_biases
-
         if type(config.rotary) is DefaultRotaryConfig:
             pass
         elif type(config.rotary) is Llama3RotaryConfig:
