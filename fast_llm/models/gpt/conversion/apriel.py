@@ -232,11 +232,14 @@ class AprielMamba2Converter:
 class AprielMLPConverter(LlamaMLPConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return super().import_config(config, has_mlp_bias_param=False)
+        config["mlp_bias"] = False
+        return super().import_config(config)
 
     @classmethod
     def export_config(cls, config: MLPConfig) -> dict:
-        return super().export_config(config, has_mlp_bias_param=False)
+        out = super().export_config(config)
+        del out["mlp_bias"]
+        return out
 
 
 class AprielBlockConverterBase(MistralBlockConverter):

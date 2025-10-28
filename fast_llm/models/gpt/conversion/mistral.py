@@ -17,17 +17,20 @@ from fast_llm.utils import safe_merge_dicts
 class MistralAttentionConverter(LlamaAttentionConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
+        config["attention_bias"] = False
         return safe_merge_dicts(
-            super().import_config(config, has_attention_bias_param=False),
+            super().import_config(config),
             {"window_size": config["sliding_window"]},
         )
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
-        return safe_merge_dicts(
-            super().export_config(config, has_attention_bias_param=False),
+        out = safe_merge_dicts(
+            super().export_config(config),
             {"sliding_window": config.window_size},
         )
+        del out["attention_bias"]
+        return out
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:
