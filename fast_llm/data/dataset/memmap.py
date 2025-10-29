@@ -33,7 +33,7 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             # Very file type.
             assert stream.read(len(FILE_HEADER)) == FILE_HEADER
             # Go to reader configs.
-            stream.seek(int.from_bytes(stream.read(4), signed=False))
+            stream.seek(int.from_bytes(stream.read(8), signed=False))
             # Read the reader config.
             reader_config = MemmapIndexDatasetReaderConfig.from_dict(
                 json.loads(stream.read(int.from_bytes(stream.read(4), signed=False)).decode("utf-8"))
@@ -91,7 +91,7 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             # Leave space for a pointer to the reader config.
             # We write the config  at the end since we don't know it yet.
             start = stream.tell()
-            stream.seek(start + 4)
+            stream.seek(start + 8)
             # Write the data.
             reader_config = writer_class.write_dataset(stream, documents)
             # Write the reader config.
@@ -101,5 +101,5 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             stream.write(reader_config_bytes)
             # Write a pointer to the reader config.
             stream.seek(start)
-            stream.write(config_offset.to_bytes(4, signed=False))
+            stream.write(config_offset.to_bytes(8, signed=False))
         return reader_config
