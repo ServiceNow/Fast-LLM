@@ -145,14 +145,12 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     consisting of a list of documents of known lengths.
     """
 
-    @abc.abstractmethod
     def __len__(self) -> int:
-        pass
+        raise NotImplementedError()
 
     @property
-    @abc.abstractmethod
     def num_tokens(self) -> int:
-        pass
+        raise NotImplementedError()
 
     @property
     def reader_class(self) -> "type[MemmapIndexedDatasetReader]":

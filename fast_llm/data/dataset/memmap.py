@@ -40,14 +40,15 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             )
 
         self._memmap = np.memmap(self._path, mode="r")
-        # TODO: ===== Check num_documents, num_tokens ======
         self._reader = reader_config.get_reader(memoryview(self._memmap))
 
-    def __getstate__(self) -> tuple[str, pathlib.Path]:
-        return (self._name, self._path)
+    def __getstate__(self) -> tuple[str, pathlib.Path, MemmapIndexDatasetReaderConfig]:
+        # We pass the reader config to force its import in data loader workers.
+        return self._name, self._path, self._reader.config
 
-    def __setstate__(self, state: tuple[str, pathlib.Path]):
-        self._init(*state)
+    def __setstate__(self, state: tuple[str, pathlib.Path, MemmapIndexDatasetReaderConfig]):
+        name, path, _ = state
+        self._init(name, path)
 
     def __del__(self):
         if hasattr(self, "_memmap"):

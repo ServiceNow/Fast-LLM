@@ -205,7 +205,6 @@ class LanguageModelWriter(MemmapWriter):
         return self
 
     def write(self, document: LanguageModelSample):
-        # ====== TODO: Make sure input uses end = 1 past last index (currently use last index) ======
         super().write(document)
         # Write tokens.
         self._token_writer.write(document.tokens)

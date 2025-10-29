@@ -37,6 +37,35 @@ def get_random_spans(num_samples: int, max_spans: int, lengths: np.ndarray | int
     ]
 
 
+def get_test_dataset_samples(
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+    max_spans: int = 0,
+) -> list[LanguageModelSample]:
+    import transformers
+
+    download_santacoder_tokenizer()
+
+    texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
+    tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
+
+    samples = [
+        LanguageModelSample(
+            TokenSample(torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size)),
+        )
+        for document in texts
+    ]
+    if max_spans > 0:
+        spans = get_random_spans(
+            len(samples), max_spans, np.array([[max(len(sample), 1)] for sample in samples]), seed
+        )
+        for sample, sample_spans in zip(samples, spans, strict=True):
+            sample.loss_masking_spans = RangeSample(sample_spans, len(sample))
+    return samples
+
+
 def get_test_dataset(
     path: pathlib.Path = DATASET_PATH,
     seed: int = 1234,
@@ -45,29 +74,16 @@ def get_test_dataset(
     vocab_size: int = TEST_VOCAB_SIZE,
     max_spans: int = 0,
 ):
-    download_santacoder_tokenizer()
     config_path = path.parent.joinpath("fast_llm_config.yaml")
 
     if not (path.is_file() and config_path.is_file()):
-        import transformers
-
-        texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
-        tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
-
-        samples = [
-            LanguageModelSample(
-                TokenSample(
-                    torch.from_numpy(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size)
-                ),
-            )
-            for document in texts
-        ]
-        if max_spans > 0:
-            spans = get_random_spans(
-                len(samples), max_spans, np.array([[max(len(sample), 1)] for sample in samples]), seed
-            )
-            for sample, sample_spans in zip(samples, spans, strict=True):
-                sample.loss_masking_spans = RangeSample(sample_spans, len(sample))
+        samples = get_test_dataset_samples(
+            seed=seed,
+            num_tokens=num_tokens,
+            characters=characters,
+            vocab_size=vocab_size,
+            max_spans=max_spans,
+        )
 
         MemmapDataset.write_dataset(path, samples, LanguageModelWriter)
         yaml.safe_dump({"type": "memmap", "path": path.name}, config_path.open("w"))

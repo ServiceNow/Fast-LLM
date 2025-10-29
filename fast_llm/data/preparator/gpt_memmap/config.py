@@ -12,18 +12,6 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
-MEMMAP_DTYPES = {
-    1: DataType.uint8,
-    2: DataType.int8,
-    3: DataType.int16,
-    4: DataType.int32,
-    5: DataType.int64,
-    6: DataType.float32,
-    7: DataType.float64,
-    8: DataType.uint16,
-}
-MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
-MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
 @config_class()
@@ -66,7 +54,6 @@ class LanguageModelSourceConfig(Config):
         if self.has_loss_masking_span != self.rejected_spans_column is not None:
             raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
         if self.has_preference_spans and self.has_loss_masking_span:
-            # TODO: ====== Still needed? ======
             raise ValueError(f"Can not enable both loss masking and preference spans.")
 
 
@@ -204,10 +191,8 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
 
     def _validate(self) -> None:
-        assert self.tokenizer.path is not None
-        if self.dataset.data_type is not None:
-            Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
         super()._validate()
+        assert self.tokenizer.path is not None
 
     @classmethod
     def get_dataset_preparator_class(cls) -> type["GPTMemmapDatasetPreparator"]:

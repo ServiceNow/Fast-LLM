@@ -8,8 +8,9 @@ import torch
 
 from fast_llm.data.dataset.config import IndexedDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
+from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES
 from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
 from fast_llm.data.sample.range import RangeSample

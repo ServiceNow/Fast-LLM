@@ -142,7 +142,6 @@ class TokenWriter(MemmapWriter):
         return self
 
     def write(self, document: TokenSample):
-        # ====== TODO: Make sure input uses end = 1 past last index (currently use last index) ======
         super().write(document)
         if self._data_type is None:
             self._data_type = document.tokens.dtype

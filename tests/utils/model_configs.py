@@ -279,7 +279,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
-        f"--data-path={MODEL_DATASET_PATH}",
         "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)

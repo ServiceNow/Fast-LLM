@@ -109,7 +109,6 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     """
 
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
-        # TODO: ====== `SamplingData` contains more than needed (ex. `num_samples`)
         raise NotImplementedError()
 
 

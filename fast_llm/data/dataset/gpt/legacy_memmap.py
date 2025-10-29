@@ -6,11 +6,23 @@ import torch
 
 from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
+
+MEMMAP_DTYPES = {
+    1: DataType.uint8,
+    2: DataType.int8,
+    3: DataType.int16,
+    4: DataType.int32,
+    5: DataType.int64,
+    6: DataType.float32,
+    7: DataType.float64,
+    8: DataType.uint16,
+}
+MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
 class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):

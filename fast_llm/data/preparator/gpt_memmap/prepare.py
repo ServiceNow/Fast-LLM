@@ -218,7 +218,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         text = sample[self._source_schema.text_column]
         all_spans = []
         if self._source_schema.has_loss_masking_span:
-            # TODO: ====== What is the input format? ======
+            # TODO: ====== What is the exact input format? ======
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (begin, last + 1)
@@ -333,7 +333,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         splits: dict[str, int | float],
         output_path: pathlib.Path,
     ) -> dict[str, SampledDatasetConfig[_sample_type]]:
-        # TODO: ====== Missing `num_tokens`, `num_documents`. ======
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [reader_config.num_tokens for reader_config in reader_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
