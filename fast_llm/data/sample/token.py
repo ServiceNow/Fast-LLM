@@ -91,6 +91,11 @@ class TokenReaderConfig(MemmapReaderConfig):
     num_documents: int = Field()
     num_tokens: int = Field()
     data_type: DataType = Field()
+    header: typing.ClassVar[bytes] = b"token begin"
+    footer: typing.ClassVar[bytes] = b"token end"
+
+    def __len__(self) -> int:
+        return self.num_documents
 
     @property
     def reader_class(self) -> "type[TokenReader]":
@@ -101,8 +106,8 @@ class TokenReaderConfig(MemmapReaderConfig):
         return TokenWriter
 
     @property
-    def expected_buffer_size(self) -> int:
-        return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.uint64.itemsize
+    def _expected_buffer_size(self) -> int:
+        return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.int64.itemsize
 
 
 class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
@@ -114,12 +119,13 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
             count=self._config.num_tokens,
         )
         self._size_cumsums = torch.frombuffer(
-            self._buffer, dtype=torch.uint64, count=self._config.num_documents + 1, offset=self._tokens.nbytes
+            self._buffer, dtype=torch.int64, count=self._config.num_documents + 1, offset=self._tokens.nbytes
         )
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         begin_ = self._size_cumsums[index].item()
-        return TokenSample(torch.from_numpy(self._tokens[begin_ + begin : begin_ + end]), [end - begin])
+        # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
+        return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
 
     def get_document_sizes(self) -> torch.Tensor:
         return self._size_cumsums[1:] - self._size_cumsums[:-1]
@@ -146,8 +152,12 @@ class TokenWriter(MemmapWriter):
         self._size_cumsum.append(self._size_cumsum[-1] + len(document.tokens))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(np.array(self._size_cumsum, dtype=np.uint64).tobytes(order="C"))
+        self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
+
+    @classmethod
+    def _get_config_class(cls) -> type[TokenReaderConfig]:
+        return TokenReaderConfig
 
     def _get_config(self, begin: int, end: int):
         return TokenReaderConfig(

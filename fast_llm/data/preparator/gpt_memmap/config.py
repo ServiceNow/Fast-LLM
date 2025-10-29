@@ -65,7 +65,7 @@ class LanguageModelSourceConfig(Config):
         super()._validate()
         if self.has_loss_masking_span != self.rejected_spans_column is not None:
             raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
-        if self.has_preference_spans == self.has_loss_masking_span:
+        if self.has_preference_spans and self.has_loss_masking_span:
             # TODO: ====== Still needed? ======
             raise ValueError(f"Can not enable both loss masking and preference spans.")
 

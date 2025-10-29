@@ -125,11 +125,20 @@ def _crop_optional[T: Sample | Batch](sample_or_batch: T, begin: int, end: int) 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "language_model"})
 class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     _abstract = False
+    header: typing.ClassVar[bytes] = b"lm begin"
+    footer: typing.ClassVar[bytes] = b"lm end"
     tokens: TokenReaderConfig = Field()
     # Using dynamic type for optional readers for enabling/disabling
     loss_masking_spans: MemmapReaderBaseConfig = Field()
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
+
+    def __len__(self) -> int:
+        return len(self.tokens)
+
+    @property
+    def num_tokens(self) -> int:
+        return self.tokens.num_tokens
 
     @property
     def reader_class(self) -> "type[LanguageModelReader]":
@@ -140,7 +149,7 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         return LanguageModelWriter
 
     @property
-    def expected_buffer_size(self) -> int:
+    def _expected_buffer_size(self) -> int:
         return (
             self.tokens.expected_buffer_size
             + self.loss_masking_spans.expected_buffer_size
@@ -155,13 +164,19 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         # Using `buffer` and not `self._buffer` because nested offsets (`begin`, `end`) are global.
         self._tokens = self._config.tokens.get_reader(buffer)
         self._loss_masking_spans = self._config.loss_masking_spans.get_reader(buffer)
-        self._preference_spans = self._config.preference_spans.get_reader(buffer)
+        self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
+        self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
+
+    @property
+    def num_tokens(self) -> int:
+        return self._config.tokens.num_tokens
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         return LanguageModelSample(
             self._tokens.get_document(index, begin, end),
-            self._loss_masking_spans.get_document(index, begin, end),
-            self._preference_spans.get_document(index, begin, end),
+            None if self._loss_masking_spans is None else self._loss_masking_spans.get_document(index, begin, end),
+            None if self._chosen_spans is None else self._chosen_spans.get_document(index, begin, end),
+            None if self._rejected_spans is None else self._rejected_spans.get_document(index, begin, end),
         )
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -248,8 +263,12 @@ class LanguageModelWriter(MemmapWriter):
         self._directory.cleanup()
         super().__exit__(exc_type, exc_val, exc_tb)
 
+    @classmethod
+    def _get_config_class(cls) -> type[LanguageModelReaderConfig]:
+        return LanguageModelReaderConfig
+
     def _get_config(self, begin: int, end: int | None):
-        tokens = self._token_writer.get_config(begin)
+        tokens = self._token_writer.get_config(begin + len(LanguageModelReaderConfig.header))
         offset = tokens.end
         if self._has_loss_masking_spans:
             loss_masking_spans = self._loss_masking_span_writer.get_config(offset)
@@ -266,7 +285,7 @@ class LanguageModelWriter(MemmapWriter):
             rejected_spans = NullReaderConfig()
 
         if end is None:
-            end = offset
+            end = offset + len(LanguageModelReaderConfig.footer)
 
         return LanguageModelReaderConfig(
             begin=begin,

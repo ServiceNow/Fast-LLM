@@ -111,7 +111,7 @@ def get_test_data_and_compare_samples(
         for phase, samples in samples_per_dataset.items()
     }
     for phase, expected_samples_ in expected_samples.items():
-        Assert.all_equal(tokens[phase].to(torch.int64), expected_samples_)
+        Assert.all_equal(tokens[phase], expected_samples_)
     return data
 
 
@@ -130,7 +130,7 @@ def compare_indexed_dataset(
         sizes[: min(len(dataset), 100)],
     )
     for i, expected_sample in expected_samples.items():
-        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample, dtype=np.int64))
+        Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample))
     if loss_masking_spans:
         for i, loss_masking_span in loss_masking_spans.items():
             print(i)
@@ -147,9 +147,7 @@ def compare_indexed_dataset(
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
-    Assert.all_equal(
-        torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]).to(torch.int64), expected_samples
-    )
+    Assert.all_equal(torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]), expected_samples)
 
 
 def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_samples: list[list[int]] | None = None):
@@ -210,6 +208,9 @@ class MockGPTMemmapDatasetConfig(IndexedDatasetConfig):
     def build(self) -> "IndexedDataset":
         return MockMemmapDataset(self)
 
+    def __len__(self) -> int:
+        return self.num_documents
+
     @property
     def num_tokens(self) -> int:
         return self.num_documents * self.num_tokens_per_document
@@ -224,7 +225,11 @@ class MockMemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         return "mock_memmap"
 
     def __len__(self) -> int:
-        return self._config.num_documents
+        return len(self._config)
+
+    @property
+    def num_tokens(self) -> int:
+        return self._config.num_tokens
 
     def get_document_sizes(self) -> torch.Tensor:
         return torch.full([self._config.num_documents], self._config.num_tokens_per_document, dtype=torch.int64)

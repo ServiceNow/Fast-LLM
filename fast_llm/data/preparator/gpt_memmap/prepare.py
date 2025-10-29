@@ -25,6 +25,7 @@ from fast_llm.data.dataset.config import (
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
@@ -43,19 +44,21 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def __init__(self, config: ConfigType):
         super().__init__(config)
-        self._source_shema: LanguageModelSourceConfig = self._config.dataset.source_shema
+        self._source_schema: LanguageModelSourceConfig = self._config.dataset.source_schema
 
-    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> MemmapDatasetConfig:
+    def _save_shard(
+        self, args: tuple[int, datasets.Dataset]
+    ) -> tuple[MemmapDatasetConfig, MemmapIndexDatasetReaderConfig]:
         shard_index, shard_dataset = args
         file_name = f"shard_{self._config.distributed.rank}_{shard_index}.fast_llm_dataset"
 
-        MemmapDataset.write_dataset(
+        reader_config = MemmapDataset.write_dataset(
             self._config.output_path / file_name,
             tqdm.tqdm((sample["sample"] for sample in shard_dataset), desc=f"Saving shard {shard_index}", unit="docs"),
             LanguageModelWriter,
         )
 
-        return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name})
+        return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 
     def _load_dataset(self) -> datasets.Dataset:
         dataset = datasets.load_dataset(
@@ -173,7 +176,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             index=self._config.distributed.rank,
         )
 
-        for column_name in self._source_shema.columns:
+        for column_name in self._source_schema.columns:
             if column_name not in dataset.column_names:
                 raise ValueError(f"Dataset does not have field '{column_name}'.")
 
@@ -196,42 +199,42 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Use multiprocessing to save each shard in parallel on all ranks
         with multiprocessing.Pool(processes=self._config.saving_workers) as pool:
-            dataset_configs = pool.map(self._save_shard, shards)
+            dataset_and_reader_configs = pool.map(self._save_shard, shards)
 
-        self.generate_config_yaml_for_sharded_dst(dataset_configs)
+        self.generate_config_yaml_for_sharded_dst(dataset_and_reader_configs)
 
     def _prepare_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[LanguageModelSample]]:
         # Gather values by sample using zip*
-        sample_column_values = zip(*(batch[column_name] for column_name in self._source_shema.columns))
+        sample_column_values = zip(*(batch[column_name] for column_name in self._source_schema.columns))
         # Convert to dicts using column names.
         sample_dicts = (
-            {column_name: column_value for column_name, column_value in zip(self._source_shema.columns, sample_data)}
+            {column_name: column_value for column_name, column_value in zip(self._source_schema.columns, sample_data)}
             for sample_data in sample_column_values
         )
         # Prepare each sample, wrap in dict for the `Dataset` interface
         return {"samples": [self._prepare_sample(sample_dict) for sample_dict in sample_dicts]}
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
-        text = sample[self._source_shema.text_column]
+        text = sample[self._source_schema.text_column]
         all_spans = []
-        if self._source_shema.has_loss_masking_span:
+        if self._source_schema.has_loss_masking_span:
             # TODO: ====== What is the input format? ======
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (begin, last + 1)
-                for begin, last in np.array(sample[self._source_shema.loss_masking_spans_column], dtype=np.int32)
+                for begin, last in np.array(sample[self._source_schema.loss_masking_spans_column], dtype=np.int32)
                 .reshape(-1, 2)
                 .tolist()
             )
             all_spans.extend(loss_masking_spans)
 
-        if self._source_shema.has_preference_spans:
+        if self._source_schema.has_preference_spans:
             # TODO: ===== Was `self._config.dataset.field` (bug?) ======
             full_chosen_text = (
-                text + sample[self._source_shema.chosen_spans_column] + self._tokenizer.tokenizer.eos_token
+                text + sample[self._source_schema.chosen_spans_column] + self._tokenizer.tokenizer.eos_token
             )
             full_rejected_text = (
-                self._tokenizer.tokenizer.bos_token + text + sample[self._source_shema.rejected_spans_column]
+                self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_spans_column]
             )
             # compute chosen span
             chosen_spans = [[len(text), len(full_chosen_text)]]
@@ -255,33 +258,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         return LanguageModelSample(
             TokenSample(tokens, [sample_size]),
-            RangeSample(loss_masking_spans, sample_size) if self._source_shema.has_loss_masking_span else None,
-            RangeSample(chosen_spans, sample_size) if self._source_shema.has_preference_spans else None,
-            RangeSample(rejected_span, sample_size) if self._source_shema.has_preference_spans else None,
+            RangeSample(loss_masking_spans, sample_size) if self._source_schema.has_loss_masking_span else None,
+            RangeSample(chosen_spans, sample_size) if self._source_schema.has_preference_spans else None,
+            RangeSample(rejected_span, sample_size) if self._source_schema.has_preference_spans else None,
         )
 
-    def generate_config_yaml_for_sharded_dst(self, dataset_configs: list[MemmapDatasetConfig]) -> None:
+    def generate_config_yaml_for_sharded_dst(
+        self, dataset_and_reader_configs: list[tuple[MemmapDatasetConfig, MemmapIndexDatasetReaderConfig]]
+    ) -> None:
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
             if self._config.distributed.rank == 0:
-                all_dataset_configs = [None] * self._config.distributed.world_size
-                torch.distributed.gather_object(dataset_configs, all_dataset_configs, dst=0)
-                dataset_configs = [item for sublist in all_dataset_configs for item in sublist]
+                all_dataset_and_reader_configs = [None] * self._config.distributed.world_size
+                torch.distributed.gather_object(dataset_and_reader_configs, all_dataset_and_reader_configs, dst=0)
+                dataset_and_reader_configs = [item for sublist in all_dataset_and_reader_configs for item in sublist]
             else:
-                torch.distributed.gather_object(dataset_configs, [], dst=0)
+                torch.distributed.gather_object(dataset_and_reader_configs, [], dst=0)
 
         if self._config.distributed.rank == 0:
             # Create the config file(s) on rank 0
+            dataset_configs, reader_configs = zip(*dataset_and_reader_configs)
             if self._config.splits:
                 for split_name, split_config in self._split_and_blend_dataset_configs(
-                    dataset_configs, self._config.splits, self._config.output_path
+                    dataset_configs, reader_configs, self._config.splits, self._config.output_path
                 ).items():
                     self._save_dataset_config(
                         split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
                     )
             else:
                 self._save_dataset_config(
-                    self._blend_dataset_configs(dataset_configs), self._config.output_path / f"fast_llm_config.yaml"
+                    self._blend_dataset_configs(dataset_configs, reader_configs),
+                    self._config.output_path / f"fast_llm_config.yaml",
                 )
 
             # Save metadata on rank 0
@@ -304,7 +311,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _blend_dataset_configs(
-        cls, dataset_configs: list[MemmapDatasetConfig[_sample_type]]
+        cls,
+        dataset_configs: list[MemmapDatasetConfig[_sample_type]],
+        reader_configs: list[MemmapIndexDatasetReaderConfig],
     ) -> IndexedDatasetConfig[_sample_type]:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
@@ -312,7 +321,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             {
                 "type": "blended",
                 "datasets": dataset_configs,
-                "weights": [dataset_config.num_tokens for dataset_config in dataset_configs],
+                "weights": [reader_config.num_tokens for reader_config in reader_configs],
             }
         )
 
@@ -320,12 +329,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _split_and_blend_dataset_configs(
         cls,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
+        reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
     ) -> dict[str, SampledDatasetConfig[_sample_type]]:
         # TODO: ====== Missing `num_tokens`, `num_documents`. ======
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
-        dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
+        dataset_sizes = [reader_config.num_tokens for reader_config in reader_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
         dataset_cumsums = padded_cumsum(dataset_probabilities).tolist()
         dataset_splits = {}
@@ -333,7 +343,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         for split_index, split_name in enumerate(splits):
             datasets_in_split = []
             dataset_tokens_in_split = []
-            for dataset_index, dataset_config in enumerate(dataset_configs):
+            for dataset_index, (dataset_config, reader_config) in enumerate(
+                zip(dataset_configs, reader_configs, strict=True)
+            ):
                 split_begin_in_dataset = max(
                     (split_cumsum[split_index] - dataset_cumsums[dataset_index])
                     / dataset_probabilities[dataset_index],
@@ -353,17 +365,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
                     sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
-                    Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
+                    Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
+                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
+                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
                     if end_index > begin_index:
                         datasets_in_split.append(
                             DatasetSliceConfig[cls._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
-                                    "begin": begin_index / dataset_config.num_documents,
-                                    "end": end_index / dataset_config.num_documents,
+                                    "begin": begin_index / len(reader_config),
+                                    "end": end_index / len(reader_config),
                                 }
                             )
                         )

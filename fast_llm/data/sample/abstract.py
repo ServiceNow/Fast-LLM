@@ -71,7 +71,7 @@ class MemmapReaderBaseConfig(Config):
     @property
     def expected_buffer_size(self) -> int:
         """
-        The expected buffer size in bytes. Used for self-validation.
+        The expected buffer size in bytes, including header and footer. Used for self-validation.
         """
         raise NotImplementedError()
 
@@ -98,15 +98,33 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
     Configuration for a standard memmap reader.
     """
 
+    # Data location in the file.
     begin: int = Field()
     end: int = Field()
+    # Constant strings for alignment safety.
+    header: typing.ClassVar[bytes]
+    footer: typing.ClassVar[bytes]
 
     @property
     def reader_class(self) -> "type[MemmapReader]":
         raise NotImplementedError()
 
     def get_reader(self, buffer: memoryview) -> "MemmapReader":
-        return self.reader_class(self, buffer[self.begin : self.end])
+        return self.reader_class(self, buffer)
+
+    @property
+    def expected_buffer_size(self) -> int:
+        """
+        The expected buffer size in bytes, including header and footer. Used for self-validation.
+        """
+        return self._expected_buffer_size + len(self.header) + len(self.footer)
+
+    @property
+    def _expected_buffer_size(self) -> int:
+        """
+        The expected buffer size in bytes, excluding header and footer. Used for self-validation.
+        """
+        raise NotImplementedError()
 
     @property
     def writer_class(self) -> "type[MemmapWriter]":
@@ -117,7 +135,6 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
 
     def _validate(self):
         super()._validate()
-        print("AAAAA", self.__class__.__name__, self.begin, self.end, self.expected_buffer_size)
         Assert.eq(self.end - self.begin, self.expected_buffer_size)
 
 
@@ -128,6 +145,15 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     consisting of a list of documents of known lengths.
     """
 
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def num_tokens(self) -> int:
+        pass
+
     @property
     def reader_class(self) -> "type[MemmapIndexedDatasetReader]":
         raise NotImplementedError()
@@ -136,13 +162,17 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
         self,
         buffer: memoryview,
     ) -> "MemmapIndexedDatasetReader":
-        return self.reader_class(self, buffer[self.begin : self.end])
+        return self.reader_class(self, buffer)
 
 
-class MemmapReader[ConfigType: MemmapReaderBaseConfig](Configurable[ConfigType]):
+class MemmapReader[ConfigType: MemmapReaderConfig](Configurable[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview):
         super().__init__(config)
-        self._buffer = buffer[self._config.begin : self._config.end]
+        buffer_begin = self._config.begin + len(self._config.header)
+        buffer_end = self._config.end - len(self._config.footer)
+        Assert.eq(buffer[self._config.begin : buffer_begin].tobytes(), self._config.header)
+        Assert.eq(buffer[buffer_end : self._config.end].tobytes(), self._config.footer)
+        self._buffer = buffer[buffer_begin:buffer_end]
 
     @abc.abstractmethod
     def get_document(self, index: int, begin: int, end: int) -> Sample:
@@ -150,6 +180,13 @@ class MemmapReader[ConfigType: MemmapReaderBaseConfig](Configurable[ConfigType])
 
 
 class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](MemmapReader[ConfigType]):
+    def __len__(self) -> int:
+        return len(self._config)
+
+    @property
+    def num_tokens(self) -> int:
+        return self._config.num_tokens
+
     @abc.abstractmethod
     def get_document_sizes(self) -> "torch.Tensor":
         pass
@@ -159,7 +196,7 @@ class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](Mem
         pass
 
 
-class MemmapWriter:
+class MemmapWriter(abc.ABC):
     def __init__(self, stream: io.BufferedWriter | pathlib.Path):
         self._owns_stream = isinstance(stream, pathlib.Path)
         if self._owns_stream:
@@ -168,15 +205,22 @@ class MemmapWriter:
 
     def __enter__(self):
         self._begin = self._stream.tell()
+        self._stream.write(self._get_config_class().header)
         return self
 
     def write(self, document: Sample):
         assert hasattr(self, "_begin") and not hasattr(self, "_end")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stream.write(self._get_config_class().footer)
         self._end = self._stream.tell()
         if self._owns_stream:
             self._stream.close()
+
+    @classmethod
+    @abc.abstractmethod
+    def _get_config_class(cls) -> type[MemmapReaderConfig]:
+        pass
 
     def get_config(self, offset: int = 0) -> MemmapReaderConfig:
         assert hasattr(self, "_end")

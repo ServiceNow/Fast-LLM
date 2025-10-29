@@ -15,11 +15,11 @@ from tests.data.common import (
 from tests.utils.dataset import get_test_dataset
 from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH
 
-_DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
+_DATASET_PATH_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
 
 
 def _get_test_dataset_mix_1():
-    return get_test_dataset(prefix=_DATASET_PREFIX_MIX_1, seed=2345)
+    return get_test_dataset(_DATASET_PATH_MIX_1, seed=2345)
 
 
 def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray, np.ndarray]:
@@ -119,7 +119,7 @@ def test_gpt_blended():
             "type": "blended",
             "datasets": [
                 {"type": "memmap", "path": DATASET_PATH},
-                {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
+                {"type": "memmap", "path": _DATASET_PATH_MIX_1},
             ],
             "weights": [0.75, 0.25],
         },
@@ -138,7 +138,7 @@ def test_gpt_blended_data():
                     "type": "blended",
                     "datasets": [
                         {"type": "memmap", "path": DATASET_PATH},
-                        {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
+                        {"type": "memmap", "path": _DATASET_PATH_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
                 }

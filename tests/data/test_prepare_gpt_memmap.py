@@ -46,8 +46,8 @@ def test_write_memmap_dataset(dtype):
             Assert.all_equal(dataset.get_document(i).tokens.tokens, document.tokens.tokens.to(torch.int64))
 
 
-def _generate_valid_span(max_seq_length):
-    return np.sort(np.random.choice(np.arange(0, max_seq_length - 1), size=2, replace=False)).tolist()
+def _generate_valid_span(max_seq_length) -> tuple[int, int]:
+    return tuple(np.sort(np.random.choice(np.arange(0, max_seq_length - 1), size=2, replace=False)).tolist())
 
 
 @pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
@@ -56,8 +56,8 @@ def test_write_memmap_preference_dataset(dtype):
         LanguageModelSample(
             TokenSample(torch.from_numpy(np.random.randint(1000, size=100).astype(dtype))),
             None,
-            RangeSample(_generate_valid_span(100), 100),
-            RangeSample(_generate_valid_span(100), 100),
+            RangeSample([_generate_valid_span(100)], 100),
+            RangeSample([_generate_valid_span(100)], 100),
         )
         for _ in range(50)
     ]
@@ -128,6 +128,7 @@ def test_split_dataset():
     dataset_config_0 = IndexedDatasetConfig[LanguageModelSample].from_dict(DATASET_DICT_0.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0],
+        [dataset_config_0],  # Mock reader config.
         {"training": 3, "validation": 1},
         pathlib.Path("."),
     )
@@ -157,6 +158,7 @@ def test_split_datasets_0():
     dataset_config_1 = IndexedDatasetConfig[LanguageModelSample].from_dict(DATASET_DICT_1.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0, dataset_config_1],
+        [dataset_config_0, dataset_config_1],  # Mock reader configs.
         {"training": 1, "validation": 1},
         pathlib.Path("."),
     )
@@ -175,7 +177,10 @@ def test_split_datasets_1():
     dataset_config_0 = IndexedDatasetConfig[LanguageModelSample].from_dict(DATASET_DICT_0.copy())
     dataset_config_1 = IndexedDatasetConfig[LanguageModelSample].from_dict(DATASET_DICT_1.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
-        [dataset_config_0, dataset_config_1], {"training": 3, "validation": 1}, pathlib.Path(".")
+        [dataset_config_0, dataset_config_1],
+        [dataset_config_0, dataset_config_1],  # Mock reader configs.
+        {"training": 3, "validation": 1},
+        pathlib.Path("."),
     )
     config = {key: value.to_dict() for key, value in config.items()}
 

@@ -57,6 +57,8 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
     ) -> SampleType:
+        if end is None:
+            end = self._reader.get_document_size(index)
         return self._reader.get_document(index, begin, end)
 
     @property
@@ -64,12 +66,11 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         return self._name
 
     def __len__(self) -> int:
-        return self._reader
+        return len(self._reader)
 
-    # TODO: ====== needed? ======
-    # @property
-    # def num_tokens(self) -> int:
-    #    return self._reader.num_tokens
+    @property
+    def num_tokens(self) -> int:
+        return self._reader.num_tokens
 
     def get_document_sizes(self) -> torch.Tensor:
         return self._reader.get_document_sizes()
@@ -78,7 +79,9 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         return self._reader.get_document_size(index)
 
     @classmethod
-    def write_dataset(cls, path: pathlib.Path, documents: typing.Iterable[Sample], writer_class: type[MemmapWriter]):
+    def write_dataset(
+        cls, path: pathlib.Path, documents: typing.Iterable[Sample], writer_class: type[MemmapWriter]
+    ) -> MemmapIndexDatasetReaderConfig:
         # TODO: Match `writer_class` with `SampleType`?
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as stream:
@@ -98,3 +101,4 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             # Write a pointer to the reader config.
             stream.seek(start)
             stream.write(config_offset.to_bytes(4, signed=False))
+        return reader_config

@@ -63,6 +63,8 @@ class RangeBatch(Batch):
 @config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
 class RangeReaderConfig(MemmapReaderConfig):
     _abstract = False
+    header: typing.ClassVar[bytes] = b"range begin"
+    footer: typing.ClassVar[bytes] = b"range end"
     num_documents: int = Field()
     num_ranges: int = Field()
 
@@ -75,8 +77,8 @@ class RangeReaderConfig(MemmapReaderConfig):
         return RangeWriter
 
     @property
-    def expected_buffer_size(self) -> int:
-        return (self.num_ranges + 1) * torch.uint32.itemsize * 2 + (self.num_documents + 1) * torch.uint32.itemsize
+    def _expected_buffer_size(self) -> int:
+        return self.num_ranges * torch.int32.itemsize * 2 + (self.num_documents + 1) * torch.int32.itemsize
 
 
 class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
@@ -84,17 +86,17 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
         super().__init__(config, buffer)
         self._ranges = torch.frombuffer(
             self._buffer,
-            dtype=torch.uint32,
-            count=self._config.num_ranges,
+            dtype=torch.int32,
+            count=self._config.num_ranges * 2,
         ).reshape(-1, 2)
         self._count_cumsums = torch.frombuffer(
             self._buffer,
-            dtype=torch.uint32,
+            dtype=torch.int32,
             count=self._config.num_documents + 1,
             offset=self._ranges.nbytes,
         )
 
-    def get(self, index: int, begin: int, end: int) -> RangeSample:
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
         sample_size = end - begin
         cropped_ranges = (
             (max(begin_ - begin, 0), min(end_ - begin, sample_size))
@@ -110,14 +112,17 @@ class RangeWriter(MemmapWriter):
         return self
 
     def write(self, document: RangeSample):
-        # ====== TODO: Make sure input uses end = 1 past last index (currently use last index) ======
         super().write(document)
-        self._stream.write(np.array(document.ranges, dtype=np.uint32).tobytes(order="C"))
+        self._stream.write(np.array(document.ranges, dtype=np.int32).tobytes(order="C"))
         self._count_cumsum.append(self._count_cumsum[-1] + len(document.ranges))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(np.array(self._count_cumsum, dtype=np.uint32).tobytes(order="C"))
+        self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
+
+    @classmethod
+    def _get_config_class(cls) -> type[RangeReaderConfig]:
+        return RangeReaderConfig
 
     def _get_config(self, begin: int, end: int):
         return RangeReaderConfig(
