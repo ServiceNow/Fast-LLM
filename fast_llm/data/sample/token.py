@@ -88,11 +88,11 @@ class TokenBatch(Batch):
 @config_class(dynamic_type={MemmapReaderBaseConfig: "token"})
 class TokenReaderConfig(MemmapReaderConfig):
     _abstract = False
+    header: typing.ClassVar[bytes] = b"token begin"
+    footer: typing.ClassVar[bytes] = b"token end"
     num_documents: int = Field()
     num_tokens: int = Field()
     data_type: DataType = Field()
-    header: typing.ClassVar[bytes] = b"token begin"
-    footer: typing.ClassVar[bytes] = b"token end"
 
     def __len__(self) -> int:
         return self.num_documents

@@ -15,6 +15,7 @@ from fast_llm.data.sample.abstract import (
     NullReaderConfig,
     Sample,
 )
+from fast_llm.data.sample.patch import PatchBatch, PatchSample, PatchWriter
 from fast_llm.data.sample.range import RangeBatch, RangeSample, RangeWriter
 from fast_llm.data.sample.token import TokenBatch, TokenReaderConfig, TokenSample, TokenWriter
 from fast_llm.utils import Assert
@@ -27,11 +28,13 @@ class LanguageModelSample(Sample):
         loss_masking_spans: RangeSample | None = None,
         chosen_spans: RangeSample | None = None,
         rejected_spans: RangeSample | None = None,
+        image_patches: PatchSample | None = None,
     ):
         self.tokens = tokens
         self.loss_masking_spans = loss_masking_spans
         self.chosen_spans = chosen_spans
         self.rejected_spans = rejected_spans
+        self.image_patches = image_patches
 
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
@@ -40,6 +43,7 @@ class LanguageModelSample(Sample):
             _merge_optional(RangeSample.from_documents, [document.loss_masking_spans for document in documents]),
             _merge_optional(RangeSample.from_documents, [document.chosen_spans for document in documents]),
             _merge_optional(RangeSample.from_documents, [document.rejected_spans for document in documents]),
+            _merge_optional(PatchSample.from_documents, [document.patches for document in documents]),
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -48,6 +52,7 @@ class LanguageModelSample(Sample):
             _crop_optional(self.loss_masking_spans, begin, end),
             _crop_optional(self.chosen_spans, begin, end),
             _crop_optional(self.rejected_spans, begin, end),
+            _crop_optional(self.image_patches, begin, end),
         )
 
     def __len__(self) -> int:
@@ -59,6 +64,7 @@ class LanguageModelSample(Sample):
             None if self.loss_masking_spans is None else self.loss_masking_spans.get_padding(size),
             None if self.chosen_spans is None else self.chosen_spans.get_padding(size),
             None if self.rejected_spans is None else self.rejected_spans.get_padding(size),
+            None if self.image_patches is None else self.image_patches.get_padding(size),
         )
 
 
@@ -69,11 +75,13 @@ class LanguageModelBatch(Batch):
         loss_masking_spans: RangeBatch | None = None,
         chosen_spans: RangeBatch | None = None,
         rejected_spans: RangeBatch | None = None,
+        image_patches: PatchBatch | None = None,
     ):
         self.tokens = tokens
         self.loss_masking_spans = loss_masking_spans
         self.chosen_spans = chosen_spans
         self.rejected_spans = rejected_spans
+        self.image_patches = image_patches
 
     @classmethod
     def from_samples(cls, samples: typing.Iterable[LanguageModelSample]) -> typing.Self:
@@ -82,16 +90,18 @@ class LanguageModelBatch(Batch):
             _merge_optional(RangeBatch.from_samples, [sample.loss_masking_spans for sample in samples]),
             _merge_optional(RangeBatch.from_samples, [sample.chosen_spans for sample in samples]),
             _merge_optional(RangeBatch.from_samples, [sample.rejected_spans for sample in samples]),
+            _merge_optional(PatchBatch.from_samples, [sample.image_patches for sample in samples]),
         )
 
     def to_samples(self) -> list[LanguageModelSample]:
         return [
             LanguageModelSample(tokens, loss_masking_spans, chosen_spans, rejected_spans)
-            for tokens, loss_masking_spans, chosen_spans, rejected_spans in zip(
+            for tokens, loss_masking_spans, chosen_spans, rejected_spans, image_patches in zip(
                 self.tokens.to_samples(),
-                self.loss_masking_spans.to_samples(),
-                self.chosen_spans.to_samples(),
-                self.rejected_spans.to_samples(),
+                None if self.loss_masking_spans is None else self.loss_masking_spans.to_samples(),
+                None if self.chosen_spans is None else self.chosen_spans.to_samples(),
+                None if self.rejected_spans is None else self.rejected_spans.to_samples(),
+                None if self.image_patches is None else self.image_patches.to_samples(),
                 strict=True,
             )
         ]
@@ -102,6 +112,7 @@ class LanguageModelBatch(Batch):
             _crop_optional(self.loss_masking_spans, begin, end),
             _crop_optional(self.chosen_spans, begin, end),
             _crop_optional(self.rejected_spans, begin, end),
+            _crop_optional(self.image_patches, begin, end),
         )
 
     def to_device_(self, device: "torch.device | str"):
@@ -112,6 +123,8 @@ class LanguageModelBatch(Batch):
             self.chosen_spans.to_device_(device)
         if self.rejected_spans is not None:
             self.rejected_spans.to_device_(device)
+        if self.image_patches is not None:
+            self.image_patches.to_device_(device)
 
 
 def _merge_optional[T](fn: typing.Callable[[typing.Iterable], T], args: typing.Iterable) -> T | None:
@@ -132,6 +145,7 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     loss_masking_spans: MemmapReaderBaseConfig = Field()
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
+    image_patches: MemmapReaderBaseConfig = Field()
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -155,6 +169,7 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.loss_masking_spans.expected_buffer_size
             + self.chosen_spans.expected_buffer_size
             + self.rejected_spans.expected_buffer_size
+            + self.image_patches.expected_buffer_size
         )
 
 
@@ -166,6 +181,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         self._loss_masking_spans = self._config.loss_masking_spans.get_reader(buffer)
         self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
         self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
+        self._image_patches = self._config.image_patches.get_reader(buffer)
 
     @property
     def num_tokens(self) -> int:
@@ -177,6 +193,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             None if self._loss_masking_spans is None else self._loss_masking_spans.get_document(index, begin, end),
             None if self._chosen_spans is None else self._chosen_spans.get_document(index, begin, end),
             None if self._rejected_spans is None else self._rejected_spans.get_document(index, begin, end),
+            None if self._image_patches is None else self._image_patches.get_document(index, begin, end),
         )
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -189,6 +206,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
 class LanguageModelWriter(MemmapWriter):
     _has_loss_masking_spans: bool | None = None
     _has_preference_spans: bool | None = None
+    _has_image_patches: bool | None = None
 
     def __enter__(self):
         super().__enter__()
@@ -202,6 +220,7 @@ class LanguageModelWriter(MemmapWriter):
         self._loss_masking_span_writer = RangeWriter(self._path.joinpath("loss_masking_spans")).__enter__()
         self._chosen_spans_writer = RangeWriter(self._path.joinpath("chosen_spans")).__enter__()
         self._rejected_spans_writer = RangeWriter(self._path.joinpath("rejected_spans")).__enter__()
+        self._image_patches_writer = PatchWriter(self._path.joinpath("image_patches")).__enter__()
         return self
 
     def write(self, document: LanguageModelSample):
@@ -231,11 +250,22 @@ class LanguageModelWriter(MemmapWriter):
             self._chosen_spans_writer.write(document.chosen_spans)
             self._rejected_spans_writer.write(document.rejected_spans)
 
+        # Ensure either all samples have image patches or none of them do.
+        if self._has_image_patches is None:
+            self._has_image_patches = document.image_patches is not None
+        else:
+            Assert.eq(self._has_image_patches, document.image_patches is not None)
+
+        # Write image patches
+        if self._has_image_patches:
+            self._image_patches_writer.write(document.image_patches)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._token_writer.__exit__(exc_type, exc_val, exc_tb)
         self._loss_masking_span_writer.__exit__(exc_type, exc_val, exc_tb)
         self._chosen_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         self._rejected_spans_writer.__exit__(exc_type, exc_val, exc_tb)
+        self._image_patches_writer.__exit__(exc_type, exc_val, exc_tb)
 
         # A dummy config so we can verify the begin and end offsets.
         config = self._get_config(self._begin, None)
@@ -257,6 +287,14 @@ class LanguageModelWriter(MemmapWriter):
                 self._stream,
                 config.rejected_spans.begin,
                 config.rejected_spans.end,
+            )
+
+        if self._has_image_patches:
+            _copy_chunked(
+                self._path.joinpath("image_patches"),
+                self._stream,
+                config.image_patches.begin,
+                config.image_patches.end,
             )
 
         self._directory.cleanup()
@@ -282,6 +320,11 @@ class LanguageModelWriter(MemmapWriter):
         else:
             chosen_spans = NullReaderConfig()
             rejected_spans = NullReaderConfig()
+        if self._has_image_patches:
+            image_patches = self._image_patches_writer.get_config(offset)
+            offset = image_patches.end
+        else:
+            image_patches = NullReaderConfig()
 
         if end is None:
             end = offset + len(LanguageModelReaderConfig.footer)
@@ -293,6 +336,7 @@ class LanguageModelWriter(MemmapWriter):
             loss_masking_spans=loss_masking_spans,
             chosen_spans=chosen_spans,
             rejected_spans=rejected_spans,
+            image_patches=image_patches,
         )
 
 
