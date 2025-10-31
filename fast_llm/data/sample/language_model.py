@@ -6,6 +6,7 @@ import typing
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.image_patch import ImageNormalizationConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapIndexDatasetReaderConfig,
@@ -183,6 +184,10 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
         self._image_patches = self._config.image_patches.get_reader(buffer)
 
+        if self._image_patches is not None:
+            # TODO: Make this configurable.
+            self._image_normalization_config = ImageNormalizationConfig()
+
     @property
     def num_tokens(self) -> int:
         return self._config.tokens.num_tokens
@@ -193,7 +198,11 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             None if self._loss_masking_spans is None else self._loss_masking_spans.get_document(index, begin, end),
             None if self._chosen_spans is None else self._chosen_spans.get_document(index, begin, end),
             None if self._rejected_spans is None else self._rejected_spans.get_document(index, begin, end),
-            None if self._image_patches is None else self._image_patches.get_document(index, begin, end),
+            (
+                None
+                if self._image_patches is None
+                else self._image_normalization_config.normalize(self._image_patches.get_document(index, begin, end))
+            ),
         )
 
     def get_document_sizes(self) -> torch.Tensor:

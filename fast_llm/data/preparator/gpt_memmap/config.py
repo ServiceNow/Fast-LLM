@@ -4,8 +4,9 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
+from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
+from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert
@@ -30,6 +31,10 @@ class LanguageModelSourceConfig(Config):
     rejected_spans_column: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
+    image_column: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
+    image_position_column: None | str = Field(
+        default=None, desc="Field containing image positions in the text.", hint=FieldHint.optional
+    )
 
     @functools.cached_property
     def columns(self) -> list[str]:
@@ -49,10 +54,13 @@ class LanguageModelSourceConfig(Config):
         Assert.eq(self.chosen_spans_column is None, self.rejected_spans_column is None)
         return self.chosen_spans_column is not None
 
+    @functools.cached_property
+    def has_images(self) -> bool:
+        Assert.eq(self.image_column is None, self.image_position_column is None)
+        return self.image_column is not None
+
     def _validate(self):
         super()._validate()
-        if self.has_loss_masking_span != self.rejected_spans_column is not None:
-            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
         if self.has_preference_spans and self.has_loss_masking_span:
             raise ValueError(f"Can not enable both loss masking and preference spans.")
 
@@ -141,7 +149,6 @@ class DatasetPreparatorDistributedConfig(Config):
 
 @config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
-    preparator_name: typing.ClassVar[str] = "gpt_memmap"
     output_path: pathlib.Path = Field(
         default=None,
         desc="Output directory for the processed dataset.",
@@ -151,27 +158,15 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )
-    tokens_per_shard: int = Field(
-        default=10**9,
-        desc="Approximate number of tokens per shard.",
+    documents_per_shard: int = Field(
+        default=10**6,
+        desc="Target number of documents per shard.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 10**5),
+        valid=check_field(Assert.geq, 1000),
     )
-    loading_workers: int = Field(
+    num_workers: int = Field(
         default=1,
-        desc="Number of workers in load_dataset() call.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    tokenize_workers: int = Field(
-        default=1,
-        desc="Number of workers for tokenization.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    saving_workers: int = Field(
-        default=1,
-        desc="Number of processes for saving the data.",
+        desc="Number of parallel workers.",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
@@ -181,6 +176,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     tokenizer: TokenizerConfig = Field(
         desc="Configuration for the tokenizer.",
+        hint=FieldHint.feature,
+    )
+    image_patches: ImagePatchConfig = Field(
+        desc="Configuration for the image patches.",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(

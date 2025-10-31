@@ -6,9 +6,9 @@ import typing
 import yaml
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
+from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 

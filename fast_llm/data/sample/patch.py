@@ -23,11 +23,13 @@ class PatchSample(Sample):
     each of which providing a single token embedding in a multimodal model.
     """
 
-    def __init__(self, patches: torch.Tensor, token_map: torch.Tensor, sample_size: int):
+    def __init__(self, patches: torch.Tensor, token_map: torch.Tensor, position_ids: torch.Tensor, sample_size: int):
         # Tensor of dimensions (patch, *patch_shape)
         self.patches = patches
         # Mapping from patch to token index
         self.token_map = token_map
+        # A position identifier for each patch.
+        self.position_ids = position_ids
         # Number of tokens in the sample (not the number of patches)
         self.sample_size = sample_size
 
@@ -41,13 +43,19 @@ class PatchSample(Sample):
         return cls(
             torch.cat([document.patches for document in documents]),
             torch.cat(embedding_maps),
+            torch.cat([document.position_ids for document in documents]),
             total_size,
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
         sample_size = end - begin
         patch_filter = begin <= self.token_map < end
-        return self.__class__(self.patches[patch_filter], self.token_map[patch_filter] - begin, sample_size)
+        return self.__class__(
+            self.patches[patch_filter],
+            self.token_map[patch_filter] - begin,
+            self.position_ids[patch_filter],
+            sample_size,
+        )
 
     def __len__(self) -> int:
         return self.sample_size
@@ -56,6 +64,7 @@ class PatchSample(Sample):
         return PatchSample(
             self.patches.new_empty((0, *self.patches.shape[1:])),
             self.token_map.new_empty(0),
+            self.position_ids.new_empty(0),
             size,
         )
 
@@ -66,6 +75,7 @@ class PatchBatch(Batch):
         patches: torch.Tensor,
         sample_map: torch.Tensor,
         token_map: torch.Tensor,
+        position_ids: torch.Tensor,
         num_samples: int,
         sample_size: int,
     ):
@@ -74,6 +84,7 @@ class PatchBatch(Batch):
         # Mapping from patch to sample index
         self.sample_map = sample_map
         self.token_map = token_map
+        self.position_ids = position_ids
         self.num_samples = num_samples
         self.sample_size = sample_size
 
@@ -85,6 +96,7 @@ class PatchBatch(Batch):
                 [torch.full_like(sample.token_map, sample_index) for sample_index, sample in enumerate(samples)]
             ),
             torch.cat([sample.token_map for sample in samples]),
+            torch.cat([sample.position_ids for sample in samples]),
             len(samples),
             get_unique(sample.sample_size for sample in samples),
         )
@@ -93,7 +105,14 @@ class PatchBatch(Batch):
         samples = []
         for sample_index in range(self.num_samples):
             patch_filter = self.sample_map == sample_index
-            samples.append(PatchSample(self.patches[patch_filter], self.token_map[patch_filter], self.sample_size))
+            samples.append(
+                PatchSample(
+                    self.patches[patch_filter],
+                    self.token_map[patch_filter],
+                    self.position_ids[patch_filter],
+                    self.sample_size,
+                )
+            )
         return samples
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -103,6 +122,7 @@ class PatchBatch(Batch):
             self.patches[patch_filter],
             self.sample_map[patch_filter],
             self.token_map[patch_filter],
+            self.position_ids[patch_filter],
             self.num_samples,
             sample_size,
         )
@@ -111,6 +131,7 @@ class PatchBatch(Batch):
         self.patches = self.patches.to(device, non_blocking=True)
         self.sample_map = self.sample_map.to(device, non_blocking=True)
         self.token_map = self.token_map.to(device, non_blocking=True)
+        self.position_ids = self.position_ids.to(device, non_blocking=True)
 
 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
@@ -160,11 +181,17 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapIndexedDatasetReader[Conf
             count=self._config.num_patches,
             offset=self._patches.nbytes,
         )
+        self._position_ids = torch.frombuffer(
+            self._buffer,
+            dtype=torch.int32,
+            count=self._config.num_patches,
+            offset=self._patches.nbytes + self._token_map.nbytes,
+        )
         self._count_cumsums = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
             count=self._config.num_documents + 1,
-            offset=self._patches.nbytes + self._token_map.nbytes,
+            offset=self._patches.nbytes + self._token_map.nbytes + self._position_ids.nbytes,
         )
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
@@ -173,6 +200,7 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapIndexedDatasetReader[Conf
         return PatchSample(
             self._patches[token_slice][patch_filter],
             token_map[patch_filter] - begin,
+            self._position_ids[patch_filter],
             end - begin,
         )
 
@@ -182,6 +210,7 @@ class PatchWriter(MemmapWriter):
         super().__enter__()
         self._count_cumsum = [0]
         self._token_map = []
+        self._position_ids = []
         self._data_type = None
         self._patch_shape = None
         return self
@@ -198,11 +227,13 @@ class PatchWriter(MemmapWriter):
             Assert.eq(self._patch_shape, document.patches.shape[1:])
         self._stream.write(document.patches.numpy().tobytes())
         self._token_map.extend(document.token_map)
+        self._position_ids.extend(document.position_ids)
         self._count_cumsum.append(self._count_cumsum[-1] + len(document.patches))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
         self._stream.write(np.array(self._token_map, dtype=np.int32).tobytes(order="C"))
+        self._stream.write(np.array(self._position_ids, dtype=np.int32).tobytes(order="C"))
         self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
