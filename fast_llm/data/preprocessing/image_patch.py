@@ -3,6 +3,7 @@ import math
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -51,7 +52,9 @@ class ImagePatchConfig(Config):
     )
 
     # TODO: ====== Image type? =====
-    def get_patches(self, image_bytes: typing.Any) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list[int]]:
+    def get_patches(
+        self, image_bytes: typing.Any, token_data_type: DataType = DataType.int64
+    ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import PIL.Image
         import torch
 
@@ -88,7 +91,7 @@ class ImagePatchConfig(Config):
             if self.image_end_token is not None:
                 token_ids[-1] = self.image_end_token
 
-        return patches, position_ids, token_map, token_ids
+        return patches, position_ids, token_map, torch.tensor(token_ids, dtype=token_data_type.torch)
 
     def _resize(self, image: "torch.Tensor") -> "torch.Tensor":
         """

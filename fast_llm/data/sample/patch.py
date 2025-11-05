@@ -231,10 +231,11 @@ class PatchWriter(MemmapWriter):
         self._count_cumsum.append(self._count_cumsum[-1] + len(document.patches))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
-        self._stream.write(np.array(self._token_map, dtype=np.int32).tobytes(order="C"))
-        self._stream.write(np.array(self._position_ids, dtype=np.int32).tobytes(order="C"))
-        self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
+        if exc_type is None:
+            Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
+            self._stream.write(np.array(self._token_map, dtype=np.int32).tobytes(order="C"))
+            self._stream.write(np.array(self._position_ids, dtype=np.int32).tobytes(order="C"))
+            self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod

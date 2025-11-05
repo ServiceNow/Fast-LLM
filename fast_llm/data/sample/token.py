@@ -151,7 +151,8 @@ class TokenWriter(MemmapWriter):
         self._size_cumsum.append(self._size_cumsum[-1] + len(document.tokens))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
+        if exc_type is None:
+            self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod

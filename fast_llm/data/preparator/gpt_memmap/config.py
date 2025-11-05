@@ -17,47 +17,52 @@ if typing.TYPE_CHECKING:
 
 @config_class()
 class LanguageModelSourceConfig(Config):
-    text_column: str = Field(
+    """
+    A schema holding the name of each relevant column in the dataset.
+    Setting optional entries will enable the associated feature.
+    """
+
+    text: str = Field(
         default="text",
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
     )
-    loss_masking_spans_column: None | str = Field(
+    loss_masking_spans: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
-    chosen_spans_column: None | str = Field(
+    chosen_span: None | str = Field(
         default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
     )
-    rejected_spans_column: None | str = Field(
+    rejected_span: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
-    image_column: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
-    image_position_column: None | str = Field(
+    image: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
+    image_position: None | str = Field(
         default=None, desc="Field containing image positions in the text.", hint=FieldHint.optional
     )
 
     @functools.cached_property
     def columns(self) -> list[str]:
-        columns = [self.text_column]
+        columns = [self.text]
         if self.has_loss_masking_span:
-            columns.append(self.loss_masking_spans_column)
+            columns.append(self.loss_masking_spans)
         if self.has_preference_spans:
-            columns.extend([self.chosen_spans_column, self.rejected_spans_column])
+            columns.extend([self.chosen_span, self.rejected_span])
         return columns
 
     @functools.cached_property
     def has_loss_masking_span(self) -> bool:
-        return self.loss_masking_spans_column is not None
+        return self.loss_masking_spans is not None
 
     @functools.cached_property
     def has_preference_spans(self) -> bool:
-        Assert.eq(self.chosen_spans_column is None, self.rejected_spans_column is None)
-        return self.chosen_spans_column is not None
+        Assert.eq(self.chosen_span is None, self.rejected_span is None)
+        return self.chosen_span is not None
 
     @functools.cached_property
     def has_images(self) -> bool:
-        Assert.eq(self.image_column is None, self.image_position_column is None)
-        return self.image_column is not None
+        Assert.eq(self.image is None, self.image_position is None)
+        return self.image is not None
 
     def _validate(self):
         super()._validate()
@@ -67,7 +72,7 @@ class LanguageModelSourceConfig(Config):
 
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
-    path: str = Field(
+    path: str | pathlib.Path = Field(
         default=None,
         desc="Name or path of the dataset.",
         hint=FieldHint.core,
@@ -111,6 +116,11 @@ class GPTHuggingfaceDatasetConfig(Config):
         default=False,
         desc="Disable disk space check. Useful for environments where disk space is not accurately reported.",
         hint=FieldHint.optional,
+    )
+    load_from_disk: bool = Field(
+        default=False,
+        desc="Use the `load_from_disk` method for datasets saved with `save_to_disk`.",
+        hint=FieldHint.feature,
     )
 
 
@@ -162,7 +172,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         default=10**6,
         desc="Target number of documents per shard.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 1000),
     )
     num_workers: int = Field(
         default=1,
@@ -179,7 +188,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.feature,
     )
     image_patches: ImagePatchConfig = Field(
-        desc="Configuration for the image patches.",
+        desc="Configuration for the image patches, if enabled.",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(

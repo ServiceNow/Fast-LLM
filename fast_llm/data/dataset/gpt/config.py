@@ -23,7 +23,8 @@ class GPTSamplingParameters(SamplingParameters):
     Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
     """
 
-    vocab_size: int
+    # TODO: Only used for random dataset. Remove? Or use as safety check?
+    vocab_size: int | None = None
     use_loss_masking_spans: bool = False
     use_preference_loss_spans: bool = False
 

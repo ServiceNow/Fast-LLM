@@ -34,6 +34,7 @@ from fast_llm.data.sample.patch import PatchSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
@@ -57,15 +58,18 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         self._source_schema: LanguageModelSourceConfig = self._config.dataset.source_schema
 
     def _load_dataset(self) -> datasets.Dataset:
-        dataset = datasets.load_dataset(
-            path=self._config.dataset.path,
-            name=self._config.dataset.config_name,
-            data_dir=self._config.dataset.data_directory,
-            data_files=self._config.dataset.data_files,
-            split=self._config.dataset.split,
-            num_proc=self._config.num_workers,
-            trust_remote_code=self._config.dataset.trust_remote_code,
-        )
+        if self._config.dataset.load_from_disk:
+            dataset = datasets.load_from_disk(self._config.dataset.path)[self._config.dataset.split]
+        else:
+            dataset = datasets.load_dataset(
+                path=self._config.dataset.path,
+                name=self._config.dataset.config_name,
+                data_dir=self._config.dataset.data_directory,
+                data_files=self._config.dataset.data_files,
+                split=self._config.dataset.split,
+                num_proc=self._config.num_workers,
+                trust_remote_code=self._config.dataset.trust_remote_code,
+            )
         assert isinstance(dataset, datasets.Dataset)
         return dataset
 
@@ -133,6 +137,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
+            log_main_rank(f"> Initializing distributed process groups ...")
             torch.distributed.init_process_group(
                 backend=self._config.distributed.backend,
                 rank=self._config.distributed.rank,
@@ -142,6 +147,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Prepare output directory
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
+        log_main_rank(f"> Loading dataset `{self._config.dataset.path}` ...")
         if self._config.distributed.world_size == 1:
             dataset = self._load_dataset()
         elif self._config.distributed.rank == 0:
@@ -153,7 +159,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Load the downloaded dataset on remaining ranks
             dataset = self._load_dataset()
 
-        assert isinstance(dataset, datasets.Dataset)
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
@@ -167,10 +172,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         num_shards = math.ceil(len(dataset) / self._config.documents_per_shard)
         shards = [(i, dataset.shard(num_shards=num_shards, index=i)) for i in range(num_shards)]
 
+        log_main_rank(f"> Preparing samples on {self._config.num_workers} workers ...")
+
         # Use multiprocessing to save each shard in parallel on all ranks
         with multiprocessing.Pool(processes=self._config.num_workers) as pool:
             dataset_and_reader_configs = pool.map(self._prepare_shard, shards)
 
+        log_main_rank(f"> Generating dataset config ...")
         self.generate_config_yaml_for_sharded_dst(dataset_and_reader_configs)
 
     def _prepare_shard(
@@ -191,14 +199,14 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
         # TODO: ======= Extract so we can use elsewhere? (ex. inference) ======
-        text = sample[self._source_schema.text_column]
+        text = sample[self._source_schema.text]
         all_spans = []
         if self._source_schema.has_loss_masking_span:
             # TODO: ====== What is the exact input format? ======
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (SpanType.loss_masking, (begin, last + 1))
-                for begin, last in np.array(sample[self._source_schema.loss_masking_spans_column], dtype=np.int32)
+                for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
                 .reshape(-1, 2)
                 .tolist()
             )
@@ -206,12 +214,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         if self._source_schema.has_preference_spans:
             # TODO: ===== Was `self._config.dataset.field` (bug?) ======
-            full_chosen_text = (
-                text + sample[self._source_schema.chosen_spans_column] + self._tokenizer.tokenizer.eos_token
-            )
-            full_rejected_text = (
-                self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_spans_column]
-            )
+            full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
+            full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
             # compute chosen span
             chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
 
@@ -234,8 +238,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             images, image_positions = zip(
                 *sorted(
                     zip(
-                        sample[self._source_schema.image_column],
-                        sample[self._source_schema.image_position_column]["bytes"],
+                        sample[self._source_schema.image],
+                        sample[self._source_schema.image_position]["bytes"],
                         strict=True,
                     ),
                     key=lambda x: x[1],
@@ -250,9 +254,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Sort the spans by location (begin), keeping track of their type.
         # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
-        span_types, spans = zip(*_sort_spans(all_spans))
+        span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
         # Tokenize the text, and determine the span locations in the tokenized text.
-        tokens, token_spans = self._tokenizer.tokenize_with_spans(text, True, True, spans=spans)
+        tokens, token_spans = self._tokenizer.tokenize_with_spans(
+            text, True, True, text_spans=spans, data_type=self._data_type
+        )
 
         # Gather token spans by type.
         token_spans_by_type = collections.defaultdict(list)
@@ -268,7 +274,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # Shift the token map to the image location.
                     image_token_maps[image_index] += begin
                     # Insert the placeholder and image break tokens.
-                    tokens = tokens[:begin] + image_token_ids[image_index] + tokens[begin:]
+                    tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
                     tokens_shift += len(image_token_ids[image_index])
                     image_index += 1
                 else:
@@ -292,7 +298,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 else None
             ),
             (
-                RangeSample(token_spans_by_type[SpanType.rejected], sample_size)
+                # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
+                RangeSample([(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]], sample_size)
                 if self._source_schema.has_preference_spans
                 else None
             ),

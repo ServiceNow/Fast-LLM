@@ -117,11 +117,12 @@ class ConcatenatedDataset[SampleType: Sample](IndexedDataset[SampleType]):
     def __len__(self) -> int:
         return self._dataset_splits[-1].item()
 
+    @property
     def num_tokens(self) -> int:
         """
         Number of tokens in the dataset.
         """
-        return sum(len(dataset) for dataset in self._datasets)
+        return sum(dataset.num_tokens for dataset in self._datasets)
 
     def get_document_sizes(self) -> torch.Tensor:
         # TODO: This can be really big.

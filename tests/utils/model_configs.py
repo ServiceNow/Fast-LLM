@@ -22,7 +22,7 @@ from fast_llm.models.gpt.conversion.config import (
     Qwen2CheckpointFormat,
 )
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PATH, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import MODEL_DATASET_YAML_PATH, MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
@@ -234,18 +234,18 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "data": {
             "datasets": {
                 "training": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_YAML_PATH},
                     "type": "slice",
                     "end": 0.969,
                 },
                 "validation": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_YAML_PATH},
                     "type": "slice",
                     "begin": 0.969,
                     "end": 0.999,
                 },
                 "test": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PATH},
+                    "dataset": {"type": "memmap", "path": MODEL_DATASET_YAML_PATH},
                     "type": "slice",
                     "begin": 0.999,
                     "end": 1,
