@@ -88,11 +88,11 @@ class TokenBatch(Batch):
 @config_class(dynamic_type={MemmapReaderBaseConfig: "token"})
 class TokenReaderConfig(MemmapReaderConfig):
     _abstract = False
+    header: typing.ClassVar[bytes] = b"token begin"
+    footer: typing.ClassVar[bytes] = b"token end"
     num_documents: int = Field()
     num_tokens: int = Field()
     data_type: DataType = Field()
-    header: typing.ClassVar[bytes] = b"token begin"
-    footer: typing.ClassVar[bytes] = b"token end"
 
     def __len__(self) -> int:
         return self.num_documents
@@ -151,7 +151,8 @@ class TokenWriter(MemmapWriter):
         self._size_cumsum.append(self._size_cumsum[-1] + len(document.tokens))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
+        if exc_type is None:
+            self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod

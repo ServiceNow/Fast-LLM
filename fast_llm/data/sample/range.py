@@ -12,7 +12,7 @@ from fast_llm.data.sample.abstract import (
     MemmapWriter,
     Sample,
 )
-from fast_llm.utils import get_unique
+from fast_llm.utils import Assert, get_unique
 
 
 class RangeSample(Sample):
@@ -88,7 +88,7 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
             self._buffer,
             dtype=torch.int32,
             count=self._config.num_ranges * 2,
-        ).reshape(-1, 2)
+        ).view(-1, 2)
         self._count_cumsums = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -117,7 +117,9 @@ class RangeWriter(MemmapWriter):
         self._count_cumsum.append(self._count_cumsum[-1] + len(document.ranges))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
+        if exc_type is None:
+            Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
+            self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod

@@ -89,9 +89,9 @@ class LanguageModelBatch(Batch):
             LanguageModelSample(tokens, loss_masking_spans, chosen_spans, rejected_spans)
             for tokens, loss_masking_spans, chosen_spans, rejected_spans in zip(
                 self.tokens.to_samples(),
-                self.loss_masking_spans.to_samples(),
-                self.chosen_spans.to_samples(),
-                self.rejected_spans.to_samples(),
+                None if self.loss_masking_spans is None else self.loss_masking_spans.to_samples(),
+                None if self.chosen_spans is None else self.chosen_spans.to_samples(),
+                None if self.rejected_spans is None else self.rejected_spans.to_samples(),
                 strict=True,
             )
         ]
@@ -237,27 +237,31 @@ class LanguageModelWriter(MemmapWriter):
         self._chosen_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         self._rejected_spans_writer.__exit__(exc_type, exc_val, exc_tb)
 
-        # A dummy config so we can verify the begin and end offsets.
-        config = self._get_config(self._begin, None)
-        _copy_chunked(self._path.joinpath("tokens"), self._stream, config.tokens.begin, config.tokens.end)
+        if exc_type is None:
+            # A dummy config so we can verify the begin and end offsets.
+            config = self._get_config(self._begin, None)
+            _copy_chunked(self._path.joinpath("tokens"), self._stream, config.tokens.begin, config.tokens.end)
 
-        if self._has_loss_masking_spans:
-            _copy_chunked(
-                self._path.joinpath("loss_masking_spans"),
-                self._stream,
-                config.loss_masking_spans.begin,
-                config.loss_masking_spans.end,
-            )
-        if self._has_preference_spans:
-            _copy_chunked(
-                self._path.joinpath("chosen_spans"), self._stream, config.chosen_spans.begin, config.chosen_spans.end
-            )
-            _copy_chunked(
-                self._path.joinpath("rejected_spans"),
-                self._stream,
-                config.rejected_spans.begin,
-                config.rejected_spans.end,
-            )
+            if self._has_loss_masking_spans:
+                _copy_chunked(
+                    self._path.joinpath("loss_masking_spans"),
+                    self._stream,
+                    config.loss_masking_spans.begin,
+                    config.loss_masking_spans.end,
+                )
+            if self._has_preference_spans:
+                _copy_chunked(
+                    self._path.joinpath("chosen_spans"),
+                    self._stream,
+                    config.chosen_spans.begin,
+                    config.chosen_spans.end,
+                )
+                _copy_chunked(
+                    self._path.joinpath("rejected_spans"),
+                    self._stream,
+                    config.rejected_spans.begin,
+                    config.rejected_spans.end,
+                )
 
         self._directory.cleanup()
         super().__exit__(exc_type, exc_val, exc_tb)

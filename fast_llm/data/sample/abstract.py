@@ -210,8 +210,9 @@ class MemmapWriter(abc.ABC):
         assert hasattr(self, "_begin") and not hasattr(self, "_end")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(self._get_config_class().footer)
-        self._end = self._stream.tell()
+        if exc_type is None:
+            self._stream.write(self._get_config_class().footer)
+            self._end = self._stream.tell()
         if self._owns_stream:
             self._stream.close()
 
