@@ -63,8 +63,8 @@ def reference_dpo_loss(
 
 def test_dpo_loss():
     random_state = np.random.RandomState(0)
-    logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).requires_grad_()
-    reference_model_logits = torch.randn((10, 50, 100))
+    logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32).requires_grad_()
+    reference_model_logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32)
     targets = torch.from_numpy(random_state.randint(0, 100, (10, 50)))
 
     spans = get_random_spans(10, 10, 50, random_state)

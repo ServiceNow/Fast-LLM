@@ -39,7 +39,7 @@ TOKENIZER_NAME = "bigcode/santacoder"
 
 DATASET_CACHE = SHARED_RESULT_PATH / "dataset"
 
-MODEL_DATASET_YAML_PATH = DATASET_CACHE / "model_dataset/dataset.fast_llm_dataset"
+MODEL_DATASET_SHARD_PATH = DATASET_CACHE / "model_dataset/shard_0_0.fast_llm_dataset"
 
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset_sampling_cache"
 MODEL_TEST_VOCAB_SIZE = 384
