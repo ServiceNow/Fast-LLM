@@ -9,12 +9,12 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class,
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.fim import GPTFimDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    from fast_llm.data.sample.language_model import LanguageModelSample
 
 
 @dataclasses.dataclass(kw_only=True)
