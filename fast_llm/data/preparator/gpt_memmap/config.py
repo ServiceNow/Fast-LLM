@@ -36,8 +36,8 @@ class LanguageModelSourceConfig(Config):
     rejected_span: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
-    image: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
-    image_position: None | str = Field(
+    images: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
+    image_positions: None | str = Field(
         default=None, desc="Field containing image positions in the text.", hint=FieldHint.optional
     )
 
@@ -61,8 +61,8 @@ class LanguageModelSourceConfig(Config):
 
     @functools.cached_property
     def has_images(self) -> bool:
-        Assert.eq(self.image is None, self.image_position is None)
-        return self.image is not None
+        Assert.eq(self.images is None, self.image_positions is None)
+        return self.images is not None
 
     def _validate(self):
         super()._validate()

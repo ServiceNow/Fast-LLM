@@ -1,5 +1,6 @@
 import datasets
 import numpy as np
+import pytest
 import torch
 
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
@@ -36,6 +37,7 @@ TOKEN_PREFERENCE_SPANS = {
 }
 
 
+@pytest.mark.slow
 def test_gpt_data_with_spans():
     _, config, hf_path = get_test_dataset_with_preference_spans()
     dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
@@ -101,5 +103,5 @@ def test_gpt_data_with_spans():
         document = dataset.get_document(
             index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
         )
-        Assert.all_equal(document.tokens.tokens, DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
-        Assert.all_equal(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])
+        Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
+        Assert.eq(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])

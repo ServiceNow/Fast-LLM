@@ -193,16 +193,17 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         return self._config.tokens.num_tokens
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
+        if self._image_patches is None:
+            image_patches = None
+        else:
+            image_patches = self._image_patches.get_document(index, begin, end)
+            image_patches.patches = self._image_normalization_config.normalize(image_patches.patches)
         return LanguageModelSample(
             self._tokens.get_document(index, begin, end),
             None if self._loss_masking_spans is None else self._loss_masking_spans.get_document(index, begin, end),
             None if self._chosen_spans is None else self._chosen_spans.get_document(index, begin, end),
             None if self._rejected_spans is None else self._rejected_spans.get_document(index, begin, end),
-            (
-                None
-                if self._image_patches is None
-                else self._image_normalization_config.normalize(self._image_patches.get_document(index, begin, end))
-            ),
+            image_patches,
         )
 
     def get_document_sizes(self) -> torch.Tensor:

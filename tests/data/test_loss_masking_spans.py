@@ -1,4 +1,5 @@
 import datasets
+import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
 from fast_llm.data.dataset.memmap import MemmapDataset
@@ -34,6 +35,7 @@ TOKEN_LOSS_MASKING_SPANS = {
 }
 
 
+@pytest.mark.slow
 def test_gpt_data_with_spans():
     _, config, hf_path = get_test_dataset_with_loss_masking_spans()
     dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
@@ -74,5 +76,5 @@ def test_gpt_data_with_spans():
         document = dataset.get_document(
             index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
         )
-        Assert.all_equal(document.tokens.tokens, DATASET_WITH_SPAN_SAMPLES[index])
-        Assert.all_equal(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])
+        Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_SPAN_SAMPLES[index])
+        Assert.eq(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])

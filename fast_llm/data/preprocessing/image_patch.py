@@ -2,9 +2,11 @@ import io
 import math
 import typing
 
+import numpy as np
+
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert, div, padded_cumsum
 
 if typing.TYPE_CHECKING:
     import torch
@@ -51,9 +53,34 @@ class ImagePatchConfig(Config):
         hint=FieldHint.optional,
     )
 
-    # TODO: ====== Image type? =====
     def get_patches(
-        self, image_bytes: typing.Any, token_data_type: DataType = DataType.int64
+        self, images: list[bytes], token_data_type: DataType = DataType.int64
+    ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
+        import torch
+
+        if len(images) > 0:
+            image_patches, image_position_ids, image_token_maps, image_token_ids = zip(
+                *(self._get_patches(image, token_data_type) for image in images)
+            )
+            return (
+                torch.cat(image_patches),
+                torch.cat(image_position_ids),
+                torch.cat(image_token_maps),
+                image_token_ids,
+                padded_cumsum([len(position_ids) for position_ids in image_position_ids]).tolist(),
+            )
+        else:
+            # Return empty tensors of appropriate shapes and data types so we can concatenate with other documents.
+            return (
+                torch.empty(0, 3, self.height, self.width, dtype=torch.uint8),
+                torch.empty(0, dtype=torch.int64),
+                torch.empty(0, dtype=torch.int64),
+                [],
+                [0],
+            )
+
+    def _get_patches(
+        self, image_bytes: bytes, token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import PIL.Image
         import torch
@@ -63,19 +90,20 @@ class ImagePatchConfig(Config):
             if image.mode != "RGB":
                 # Convert all images to RGB
                 image = image.convert("RGB")
-            image = torch.tensor(image).permute(2, 0, 1)  # HWC to CHW
+            image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
             Assert.eq(image.dtype, torch.uint8)
 
         # Resize to a multiple of patch size smaller or equal to max size.
         image = self._resize(image)
-
-        # Convert to patches.
-        patches = torch.nn.functional.unfold(
-            image, kernel_size=(self.height, self.width), stride=(self.height, self.width)
-        ).T.reshape(-1, 3, self.height, self.width)
-
         num_patches_height = div(image.size(1), self.height)
         num_patches_width = div(image.size(2), self.width)
+        # Convert to patches. (`torch.nn.functional.unfold` not supported for uint8.)
+        patches = (
+            image.view(3, num_patches_height, self.height, num_patches_width, self.width)
+            .permute(3, 1, 0, 2, 4)
+            .flatten(0, 1)
+        )
+
         position_ids = torch.arange(num_patches_height).repeat_interleave(num_patches_width) * div(
             self.max_image_width, self.width
         ) + torch.arange(num_patches_width).repeat(num_patches_height)

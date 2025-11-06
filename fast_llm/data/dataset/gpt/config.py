@@ -25,8 +25,10 @@ class GPTSamplingParameters(SamplingParameters):
 
     # TODO: Only used for random dataset. Remove? Or use as safety check?
     vocab_size: int | None = None
+    # TODO: ====== Get these to memmap dataset (currently ignored) ======
     use_loss_masking_spans: bool = False
     use_preference_loss_spans: bool = False
+    use_images: bool = False
 
 
 @dataclasses.dataclass(kw_only=True)

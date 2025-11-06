@@ -7,7 +7,7 @@ import torch
 from fast_llm.config import Field, config_class
 from fast_llm.data.sample.abstract import (
     Batch,
-    MemmapIndexedDatasetReader,
+    MemmapReader,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
@@ -49,7 +49,7 @@ class PatchSample(Sample):
 
     def crop(self, begin: int, end: int) -> typing.Self:
         sample_size = end - begin
-        patch_filter = begin <= self.token_map < end
+        patch_filter = (self.token_map >= begin) & (self.token_map < end)
         return self.__class__(
             self.patches[patch_filter],
             self.token_map[patch_filter] - begin,
@@ -117,7 +117,7 @@ class PatchBatch(Batch):
 
     def crop(self, begin: int, end: int) -> typing.Self:
         sample_size = end - begin
-        patch_filter = begin <= self.token_map < end
+        patch_filter = (self.token_map >= begin) & (self.token_map < end)
         return self.__class__(
             self.patches[patch_filter],
             self.sample_map[patch_filter],
@@ -163,18 +163,18 @@ class PatchReaderConfig(MemmapReaderConfig):
     def _expected_buffer_size(self) -> int:
         return (
             self.num_patches * self.patch_size * self.data_type.torch.itemsize
-            + (self.num_patches + self.num_documents + 1) * torch.int32.itemsize
+            + (2 * self.num_patches + self.num_documents + 1) * torch.int32.itemsize
         )
 
 
-class PatchReader[ConfigType: PatchReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
+class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview):
         super().__init__(config, buffer)
         self._patches = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
             count=self._config.num_patches * self._config.patch_size,
-        ).view(self._config.num_patches, *self._config.patch_size)
+        ).view(self._config.num_patches, *self._config.patch_shape)
         self._token_map = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -196,11 +196,11 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapIndexedDatasetReader[Conf
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         token_map = self._token_map[token_slice := slice(self._count_cumsums[index], self._count_cumsums[index + 1])]
-        patch_filter = begin <= token_map < end
+        patch_filter = (token_map >= begin) & (token_map < end)
         return PatchSample(
             self._patches[token_slice][patch_filter],
             token_map[patch_filter] - begin,
-            self._position_ids[patch_filter],
+            self._position_ids[token_slice][patch_filter],
             end - begin,
         )
 

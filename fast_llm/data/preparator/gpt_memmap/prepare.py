@@ -235,19 +235,23 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         if self._source_schema.has_images:
             # Get the images and positions, sorted by position.
-            images, image_positions = zip(
-                *sorted(
-                    zip(
-                        sample[self._source_schema.image],
-                        sample[self._source_schema.image_position]["bytes"],
-                        strict=True,
-                    ),
-                    key=lambda x: x[1],
+            images, image_positions = (
+                zip(
+                    *sorted(
+                        zip(
+                            sample[self._source_schema.images],
+                            sample[self._source_schema.image_positions],
+                            strict=True,
+                        ),
+                        key=lambda x: x[1],
+                    )
                 )
+                if len(sample[self._source_schema.images]) > 0
+                else ([], [])
             )
             # Get the image patches and associated data.
-            image_patches, image_position_ids, image_token_maps, image_token_ids = zip(
-                *(self._config.image_patches.get_patches(image) for image in images)
+            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_count_cumsum = (
+                self._config.image_patches.get_patches(images, self._data_type)
             )
             # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
             all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
@@ -272,7 +276,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 end = end + tokens_shift
                 if span_type == SpanType.image:
                     # Shift the token map to the image location.
-                    image_token_maps[image_index] += begin
+                    image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
                     # Insert the placeholder and image break tokens.
                     tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
                     tokens_shift += len(image_token_ids[image_index])
@@ -304,9 +308,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 else None
             ),
             (
-                PatchSample(
-                    torch.cat(image_patches), torch.cat(image_token_maps), torch.cat(image_position_ids), sample_size
-                )
+                PatchSample(image_patches, image_token_maps, image_position_ids, sample_size)
                 if self._source_schema.has_images
                 else None
             ),
