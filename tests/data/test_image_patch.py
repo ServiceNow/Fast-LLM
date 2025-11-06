@@ -120,28 +120,6 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
     Assert.eq(len(dataset), len(hf_dataset), COMMON_DATASET_LENGTH)
     Assert.eq(dataset.num_tokens, DATASET_WITH_IMAGE_PATCHES_TOKENS[test_index])
 
-    # for index in range(0, 200, 8):
-    #    expected_text = hf_dataset[index]["text"]
-    #    expected_text_spans = [(begin, last + 1) for begin, last in hf_dataset[index]["loss_masking_spans"]]
-    #    expected_tokens, expected_spans = tokenizer.tokenize_with_spans(
-    #        hf_dataset[index]["text"],
-    #        text_spans=[(begin, last + 1) for begin, last in hf_dataset[index]["loss_masking_spans"]],
-    #    )
-    #    document = dataset.get_document(
-    #        index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
-    #    )
-
-    #    # Compare tokens and token spans.
-    #    Assert.all_equal(document.tokens.tokens, expected_tokens)
-    #    Assert.eq(document.loss_masking_spans.ranges, expected_spans)
-
-    #    # Compare text.
-    #    text, text_spans = tokenizer.detokenize_with_spans(
-    #        document.tokens.tokens, True, True, token_spans=document.loss_masking_spans.ranges
-    #    )
-    #    Assert.eq(text, expected_text)
-    #    Assert.eq(text_spans, expected_text_spans)
-
     # Check some numerical values.
     for index in DATASET_WITH_IMAGE_PATCHES_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
