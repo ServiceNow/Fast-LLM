@@ -1,4 +1,5 @@
 import datasets
+import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
 from fast_llm.data.dataset.memmap import MemmapDataset
@@ -10,30 +11,31 @@ from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_TEX
 from tests.utils.dataset import get_test_dataset_with_loss_masking_spans
 from tests.utils.global_variables import TOKENIZER_NAME
 
-DATASET_WITH_SPAN_TOKENS = 46199
+DATASET_WITH_SPAN_TOKENS = 45577
 DATASET_WITH_SPAN_SAMPLES = {
-    27: [49152, 63, 82, 11, 84, 71, 49152],
-    30: [49152, 31, 85, 78, 27, 34, 46, 62, 43, 49152],
+    27: [49152, 63, 82, 11, 27799, 49152],
+    30: [49152, 31, 85, 78, 27, 1448, 62, 43, 49152],
     31: [49152, 60, 55, 80, 30, 85, 22, 18, 49152],
     77: [49152, 73, 80, 85, 52, 22, 46, 5, 88, 78, 49152],
-    87: [49152, 52, 89, 75, 11, 71, 49152],
+    87: [49152, 52, 42536, 11, 71, 49152],
 }
 HF_LOSS_MASKING_SPANS = {
-    27: [[0, 1], [3, 3]],
-    30: [[0, 0], [2, 2], [5, 5]],
-    31: [[0, 0], [2, 2], [4, 4]],
-    77: [[0, 0], [3, 5], [7, 7]],
-    87: [[1, 1], [3, 3]],
+    27: [[0, 1]],
+    30: [[0, 1]],
+    31: [[0, 0], [2, 2], [5, 5]],
+    77: [[0, 0], [2, 2], [5, 5], [7, 7]],
+    87: [[0, 0], [3, 3]],
 }
 TOKEN_LOSS_MASKING_SPANS = {
-    27: [(1, 3), (4, 5)],
-    30: [(1, 2), (3, 4), (6, 7)],
-    31: [(1, 2), (3, 4), (5, 6)],
-    77: [(1, 2), (4, 7), (8, 9)],
-    87: [(2, 3), (4, 5)],
+    27: [(1, 3)],
+    30: [(1, 3)],
+    31: [(1, 2), (3, 4), (6, 7)],
+    77: [(1, 2), (3, 4), (6, 7), (8, 9)],
+    87: [(1, 2), (3, 4)],
 }
 
 
+@pytest.mark.slow
 def test_gpt_data_with_spans():
     _, config, hf_path = get_test_dataset_with_loss_masking_spans()
     dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
@@ -74,5 +76,5 @@ def test_gpt_data_with_spans():
         document = dataset.get_document(
             index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
         )
-        Assert.all_equal(document.tokens.tokens, DATASET_WITH_SPAN_SAMPLES[index])
-        Assert.all_equal(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])
+        Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_SPAN_SAMPLES[index])
+        Assert.eq(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])

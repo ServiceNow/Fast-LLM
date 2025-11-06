@@ -16,27 +16,45 @@ def download_santacoder_tokenizer():
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
 
+def get_random_text(
+    num_documents: int = 1000,
+    min_document_size: int = 5,
+    max_document_size: int = 99,
+    random_state: np.random.RandomState = np.random,
+):
+    # Randomize document sizes
+    document_sizes = random_state.randint(min_document_size, max_document_size + 1, num_documents)
+    size_cumsums = padded_cumsum(document_sizes)
+    # Generate random ascii characters.
+    random_text = random_state.randint(32, 127, document_sizes.sum(), dtype=np.uint8).tobytes().decode()
+    # Gather text by documents.
+    texts = [
+        random_text[size_cumsums[document_index] : size_cumsums[document_index + 1]]
+        for document_index in range(num_documents)
+    ]
+    return texts, document_sizes
+
+
 def get_random_spans(
-    num_documents: int,
+    document_sizes: np.ndarray,
+    min_spans: int,
     max_spans: int,
-    lengths: np.ndarray | int,
     random_state: np.random.RandomState = np.random,
     use_last_format: bool = False,
-    variable_length: bool = True,
 ):
-    if variable_length:
-        spans = random_state.randint(
-            0, lengths[:, None] if isinstance(lengths, np.ndarray) else lengths, [num_documents, max_spans * 2]
-        )
-    else:
-        spans = [
-            random_state.choice(range(length), max_spans * 2, replace=False)
-            for length in (lengths if isinstance(lengths, np.ndarray) else (lengths for _ in range(num_documents)))
-        ]
-    spans = [np.unique(sample_spans).tolist() for sample_spans in np.sort(spans)]
+    # Randomize span counts. Actual count may be lower for small documents.
+    span_counts = random_state.randint(min_spans, max_spans + 1, len(document_sizes))
+    # Generate random spans.
     return [
-        [(begin, end - use_last_format) for begin, end in zip(sample_spans[::2], sample_spans[1::2], strict=False)]
-        for sample_spans in spans
+        [
+            (begin, end - use_last_format)
+            for begin, end in np.sort(
+                random_state.choice(range(length), min(num_spans, length // 2) * 2, replace=False)
+            )
+            .reshape([-1, 2])
+            .tolist()
+        ]
+        for length, num_spans in zip(document_sizes, span_counts, strict=True)
     ]
 
 
@@ -57,17 +75,14 @@ def _get_hf_test_dataset(
     seed: int = 1234,
     num_documents: int = 1000,
     min_document_size: int = 5,
-    max_document_size: int = 100,
+    max_document_size: int = 99,
+    min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
 ):
     random_state = np.random.RandomState(seed)
     # Generate random document sizes (character count).
-    document_sizes = random_state.randint(min_document_size, max_document_size, num_documents)
-    size_cumsums = padded_cumsum(document_sizes)
-    # Generate random ascii characters.
-    random_text = random_state.randint(32, 127, document_sizes.sum(), dtype=np.uint8).tobytes().decode()
-    texts = [random_text[begin:end] for begin, end in zip(size_cumsums[:-1], size_cumsums[1:])]
+    texts, document_sizes = get_random_text(num_documents, min_document_size, max_document_size, random_state)
 
     if has_preference_spans:
         dataset_dict = get_random_preference_spans(texts, random_state)
@@ -76,7 +91,7 @@ def _get_hf_test_dataset(
 
     if max_loss_masking_spans > 0:
         dataset_dict["loss_masking_spans"] = get_random_spans(
-            num_documents, max_loss_masking_spans, document_sizes, random_state, use_last_format=True
+            document_sizes, min_loss_masking_spans, max_loss_masking_spans, random_state, use_last_format=True
         )
 
     return datasets.Dataset.from_dict(dataset_dict)
@@ -90,7 +105,8 @@ def _get_test_dataset(
     documents_per_shard: int = 10**6,
     num_documents: int = 1000,
     min_document_size: int = 5,
-    max_document_size: int = 100,
+    max_document_size: int = 99,
+    min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
     splits: dict[str, float] | None = None,
@@ -104,7 +120,13 @@ def _get_test_dataset(
 
     if not all(config_path.is_file() for config_path in config_paths):
         dataset = _get_hf_test_dataset(
-            seed, num_documents, min_document_size, max_document_size, max_loss_masking_spans, has_preference_spans
+            seed=seed,
+            num_documents=num_documents,
+            min_document_size=min_document_size,
+            max_document_size=max_document_size,
+            min_loss_masking_spans=min_loss_masking_spans,
+            max_loss_masking_spans=max_loss_masking_spans,
+            has_preference_spans=has_preference_spans,
         )
         datasets.DatasetDict({"train": dataset}).save_to_disk(hf_path)
         source_schema = {"text": "text"}

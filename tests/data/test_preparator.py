@@ -72,7 +72,7 @@ def test_common_prepared_dataset():
     for index in COMMON_DATASET_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
         document = dataset.get_document(index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0))
-        Assert.all_equal(document.tokens.tokens, COMMON_DATASET_SAMPLES[index])
+        Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
 
 
 @pytest.mark.slow
