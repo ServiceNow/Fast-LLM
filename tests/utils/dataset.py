@@ -102,7 +102,7 @@ def _get_test_dataset(
     )
     hf_path = path / "hf"
 
-    if not (path.is_file() and all(config_path.is_file() for config_path in config_paths)):
+    if not all(config_path.is_file() for config_path in config_paths):
         dataset = _get_hf_test_dataset(
             seed, num_documents, min_document_size, max_document_size, max_loss_masking_spans, has_preference_spans
         )
