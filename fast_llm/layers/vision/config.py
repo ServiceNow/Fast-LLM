@@ -1,3 +1,4 @@
+import functools
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
@@ -72,11 +73,11 @@ class PatchConvolutionConfig(BlockConfig):
         desc="Width of image patches, in pixels.",
         hint=FieldHint.core,
     )
-    input_channels: int = Field(
-        default=3,
-        desc="Number of pixel channels (usually 3).",
-        hint=FieldHint.feature,
-    )
+
+    @functools.cached_property
+    def input_channels(self):
+        # Number of input channels. Currently hard-coded to 3 (RGB).
+        return 3
 
 
 @config_class(registry=True)

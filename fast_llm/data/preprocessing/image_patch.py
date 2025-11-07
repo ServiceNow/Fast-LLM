@@ -1,10 +1,11 @@
+import functools
 import io
 import math
 import typing
 
 import numpy as np
 
-from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -23,20 +24,22 @@ class ImagePatchConfig(Config):
         default=16,
         desc="Height of the image patches, in pixels.",
         hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
     width: int = Field(
         default=16,
         desc="Height of the image patches, in pixels.",
         hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
-    max_image_height: int | None = Field(
-        default=None,
+    max_image_height: int = Field(
+        default=1024,
         desc="Maximum height of the complete image, in pixels."
         "If the original image is larger than this, it will be resized to this height.",
         hint=FieldHint.optional,
     )
-    max_image_width: int | None = Field(
-        default=None,
+    max_image_width: int = Field(
+        default=1024,
         desc="Maximum width of the complete image, in pixels."
         "If the original image is larger than this, it will be resized to this width.",
         hint=FieldHint.optional,
@@ -52,6 +55,24 @@ class ImagePatchConfig(Config):
         "If `image_break_token` is also defined, only `image_end_token` is added after the last row.",
         hint=FieldHint.optional,
     )
+
+    @property
+    def num_channels(self) -> int:
+        # assume 3 channels (RGB) for all images
+        return 3
+
+    @functools.cached_property
+    def max_patches_height(self) -> int:
+        return div(self.max_image_height, self.height)
+
+    @functools.cached_property
+    def max_patches_width(self) -> int:
+        return div(self.max_image_width, self.width)
+
+    def _validate(self):
+        super()._validate()
+        Assert.gt(self.max_patches_height, 0)
+        Assert.gt(self.max_patches_width, 0)
 
     def get_patches(
         self, images: list[bytes], token_data_type: DataType = DataType.int64
@@ -72,7 +93,7 @@ class ImagePatchConfig(Config):
         else:
             # Return empty tensors of appropriate shapes and data types so we can concatenate with other documents.
             return (
-                torch.empty(0, 3, self.height, self.width, dtype=torch.uint8),
+                torch.empty(0, self.num_channels, self.height, self.width, dtype=torch.uint8),
                 torch.empty(0, dtype=torch.int64),
                 torch.empty(0, dtype=torch.int64),
                 [],
@@ -85,7 +106,6 @@ class ImagePatchConfig(Config):
         import PIL.Image
         import torch
 
-        # assume 3 channels (RGB) for all images
         with PIL.Image.open(io.BytesIO(image_bytes)) as image:
             if image.mode != "RGB":
                 # Convert all images to RGB
@@ -99,7 +119,7 @@ class ImagePatchConfig(Config):
         num_patches_width = div(image.size(2), self.width)
         # Convert to patches. (`torch.nn.functional.unfold` not supported for uint8.)
         patches = (
-            image.view(3, num_patches_height, self.height, num_patches_width, self.width)
+            image.view(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
             .permute(3, 1, 0, 2, 4)
             .flatten(0, 1)
         )
