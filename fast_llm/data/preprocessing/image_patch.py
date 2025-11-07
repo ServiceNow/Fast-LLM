@@ -6,7 +6,7 @@ import numpy as np
 
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert, div, padded_cumsum
+from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     import torch
@@ -67,7 +67,7 @@ class ImagePatchConfig(Config):
                 torch.cat(image_position_ids),
                 torch.cat(image_token_maps),
                 image_token_ids,
-                padded_cumsum([len(position_ids) for position_ids in image_position_ids]).tolist(),
+                [len(position_ids) for position_ids in image_position_ids],
             )
         else:
             # Return empty tensors of appropriate shapes and data types so we can concatenate with other documents.
