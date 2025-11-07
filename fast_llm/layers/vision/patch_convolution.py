@@ -32,16 +32,14 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
             lr_scale=lr_scale,
             peft=peft,
         )
-        input_dim = TensorDim("input_channels", self._config.input_channels)
-        patch_dim = TensorDim("patch", self._config.patch_size)
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         self.convolution = self._config.convolution.get_layer(
             self._hidden_dim,
-            input_dim,
-            patch_dim,
-            patch_dim,
-            stride=(self._config.patch_size, self._config.patch_size),
+            TensorDim("input_channels", self._config.input_channels),
+            TensorDim("patch_height", self._config.patch_height),
+            TensorDim("patch_width", self._config.patch_width),
+            stride=(self._config.patch_height, self._config.patch_width),
             default_add_bias=False,
             lr_scale=self._lr_scale,
             peft=self._peft,

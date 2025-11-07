@@ -235,7 +235,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 if kwargs[AttentionKwargs.sequence_first]
                 else cropped_tokens.tokens
             ).contiguous()
-            self.preprocess(tokens, kwargs)
+            self.preprocess(kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed

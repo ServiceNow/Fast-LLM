@@ -3,9 +3,12 @@ import typing
 
 import torch
 
-from fast_llm.data.data.gpt.data import GPTBatch
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.data.sample.language_model import LanguageModelBatch
+from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
+from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalBatchConfig, MultiModalModelConfig
@@ -14,112 +17,82 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
-class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](GPTBaseModel[ConfigType]):
+class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
+    VisionMultiModalModel[ConfigType], GPTBaseModel[ConfigType]
+):
     """
     A transformer-based language model generalizing the GPT model architecture.
     """
 
     _config: ConfigType
 
-    def __init__(
-        self,
-        config: ConfigType,
-        distributed_config: DistributedConfig,
-    ):
-        super().__init__(config, distributed_config)
-        self.vision_encoder = self._config.vision_encoder.get_layer(
-            distributed_config,
-            self._hidden_dim,
-            lr_scale=None,
-            peft=self._config.peft,
-        )
-
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
-        # TODO Remove (Move batch splitting elsewhere)
-        # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    try:
-        #        max_image_size = batch_meta.max_image_size
-        #    except AttributeError:
-        #        max_image_size = 256
-        #        logger.warning("Inference mode: max_image_size not provided, defaulting to 256")
-        #    vision_kwargs = {
-        #        VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
-        #        VisionEncoderKwargs.max_image_size: max_image_size,
-        #        VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
-        #        VisionEncoderKwargs.kv_channels: self._tensor_space[VisionTransformerDimNames.kv_channels].size,
-        #        VisionEncoderKwargs.out_channels: self._tensor_space[VisionEncoderDimNames.out_channels].size,
-        #    }
-        #    vision_hidden_dim = self._tensor_space[VisionTransformerDimNames.hidden]
-        #    vision_hidden_dims = (
-        #        (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
-        #        if sequence_first
-        #        else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
-        #    )
-        #    vision_kwargs.update(
-        #        {
-        #            VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
-        #        }
-        #    )
-        #    common_kwargs.update(vision_kwargs)
+        preprocessed_meta = []
+        for tokens, kwargs in super().preprocess_meta(batch_meta, phase):
+            kwargs[LanguageModelKwargs.token_ids] = tokens
+            image_patches = TensorMeta.from_dims(
+                (
+                    # We combine the batch and sequence dims to allow for variable sequence lengths.
+                    # Gives the same result, assuming we disable cross-image attention (TODO: Enforce)
+                    scalar_dim,
+                    # TODO: Wrong (variable size).
+                    ConcatenatedTensorDim("image_sequence", tokens.dims),
+                    # TODO: Relate to tensor dims in patch convolution.
+                    TensorDim("input_channels", self._config.vision_encoder.patch_convolution.input_channels),
+                    TensorDim("patch_height", self._config.vision_encoder.patch_convolution.patch_height),
+                    TensorDim("patch_width", self._config.vision_encoder.patch_convolution.patch_width),
+                )
+            )
+            preprocessed_meta.append((image_patches, kwargs))
 
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #     # patch_dimensions are (batch * sequence_length) x 3 x patch_size x patch_size
-        #     preprocessed_meta.append((kwargs[VisionEncoderKwargs.image_patches_meta], kwargs))
-        # else:
-        #     preprocessed_meta.append((tokens, kwargs))
-        pass
+        return preprocessed_meta
 
     def preprocess_batch(
         self,
-        batch: GPTBatch,
+        batch: LanguageModelBatch,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO Move batch splitting elsewhere, align interface with LayerBase
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    if self._config.vision_encoder.image_break_token is not None:
-        #        if not labels_cloned:
-        #            labels = labels.clone()
-        #            labels_cloned = True
-        #        labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
-        #    if self._config.vision_encoder.image_end_token is not None:
-        #        if not labels_cloned:
-        #            labels = labels.clone()
-        #            labels_cloned = True
-        #        labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
-        # Loss-masking for distillation losses
-        # TODO ====== Vision ======
-        # if self._config.vision_encoder.enabled:
-        #    batch_images = (
-        #        batch.images if batch.images is not None else [[]] * kwargs[AttentionKwargs.micro_batch_size]
-        #    )
-        #    kwargs[VisionEncoderKwargs.images] = [
-        #        [
-        #            img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
-        #            for img in images
-        #        ]
-        #        for images in batch_images
-        #    ]
-        #    kwargs[VisionEncoderKwargs.image_positions] = (
-        #        batch.image_positions
-        #        if batch.image_positions is not None
-        #        else [[]] * kwargs[AttentionKwargs.micro_batch_size]
-        #    )
-        #    kwargs[LanguageModelKwargs.tokens] = tokens
-        # image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
-        # if image_patches is not None:
-        #     preprocessed.append((image_patches, kwargs))
-        # else:
-        #     preprocessed.append((tokens, kwargs))
+        preprocessed = super().preprocess_batch(
+            batch, preprocessed_meta, phase=phase, iteration=iteration, metrics=metrics
+        )
+        # TODO: Support micro-sequences.
+        assert len(preprocessed) == 1, "Micro-sequences not supported for MultiModalModel."
+        tokens, kwargs = preprocessed[0]
+
+        kwargs[LanguageModelKwargs.token_ids] = tokens
+
+        kwargs[LanguageModelKwargs.embedding_map] = batch.image_patches.token_map
+
+        image_patches = batch.image_patches.patches
+        sequence_length = image_patches.size(0)
+        sequence_dim = TensorDim("image_sequence", sequence_length)
+
+        hidden_dims = (
+            (sequence_dim, scalar_dim, self.vision_encoder._hidden_dim)
+            if (sequence_first := kwargs[LanguageModelKwargs.sequence_first])
+            else (scalar_dim, sequence_dim, self.vision_encoder._hidden_dim)
+        )
+        kwargs[self._vision_encoder_namespace] = {
+            LanguageModelKwargs.sequence_first: sequence_first,
+            LanguageModelKwargs.position_ids: batch.image_patches.position_ids,
+            LanguageModelKwargs.sequence_lengths: batch.image_patches.lengths,
+            LanguageModelKwargs.sequence_length: sequence_length,
+            LanguageModelKwargs.sequence_k_dim: sequence_dim,
+            LanguageModelKwargs.sequence_q_dim: sequence_dim,
+            LanguageModelKwargs.hidden_dims: hidden_dims,
+        }
+        super().preprocess(kwargs)
+
+        return [(image_patches, kwargs)]
+
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        # Hack to delay preprocessing in super().preprocess_batch (TODO: Improve)
         pass
 
 

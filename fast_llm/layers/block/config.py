@@ -71,6 +71,7 @@ class BlockConfig(ModuleConfig):
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
+        *,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "BlockBase":

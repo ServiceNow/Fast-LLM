@@ -1,4 +1,5 @@
 import abc
+import functools
 import typing
 
 import torch.nn
@@ -52,10 +53,15 @@ class LayerBase(torch.nn.Module, abc.ABC):
                 losses += layer.get_loss_definitions(count)
         return losses
 
-    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         for layer in self.get_layers():
             if layer is not self:
-                layer.preprocess(batch, kwargs)
+                layer.preprocess(kwargs)
+
+    def unwrap(self) -> "LayerBase":
+        # Get the actual module contained in this layer,
+        # undoing any wrapping for the Fast-LLM engine (ex. `LayerBaseWithNamespace`)
+        return self
 
 
 class Layer(LayerBase):
@@ -74,19 +80,17 @@ class Layer(LayerBase):
         pass
 
     def unwrap(self) -> "Layer":
-        # Get the actual module contained in this layer,
-        # undoing any wrapping for the Fast-LLM engine (ex. `LayerWithNamespace`)
         return self
 
 
-class LayerWithNamespace(Layer):
+class LayerBaseWithNamespace(LayerBase):
     """
-    A layer with its own namespace for preprocessing (kwargs),
+    A layer base with its own namespace for preprocessing (kwargs),
      so that it doesn't inadvertently interact with other layers.
     TODO: Consider namespace for losses and metrics?
     """
 
-    def __init__(self, layer: Layer, namespace: str = None):
+    def __init__(self, layer: LayerBase, namespace: str = None):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
@@ -98,6 +102,42 @@ class LayerWithNamespace(Layer):
         self._layer.setup(distributed)
         super().setup(distributed)
 
+    def get_layers(self) -> list["Layer"]:
+        """
+        Wrap individual layers so the namespace is used in forward.
+        """
+        return self._layers_with_namespace
+
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        """
+        Preprocess with namespace.
+        """
+        if self._namespace not in kwargs:
+            kwargs[self._namespace] = kwargs.copy()
+        self._layer.preprocess(kwargs[self._namespace])
+
+    def unwrap(self) -> "LayerBase":
+        return self._layer.unwrap()
+
+    @functools.cached_property
+    def _layers_with_namespace(self) -> list[Layer]:
+        # This needs to be in a property because `module_name` is set after `__init__`.
+        # Wrap each set of blocks with identical config in a namespace
+        # using the unique module name of the first such block.
+        return [LayerWithNamespace(layer, self._namespace) for layer in self._layer.get_layers()]
+
+
+class LayerWithNamespace(LayerBaseWithNamespace, Layer):
+    _layer: Layer
+
+    def __init__(self, layer: Layer, namespace: str = None):
+        super().__init__(layer, namespace)
+        self.layer_count = self._layer.layer_count
+
+    def get_layers(self) -> list["Layer"]:
+        # Need to override since `LayerBaseWithNamespace.get_layers` comes first in the MRO.
+        return [self]
+
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
@@ -108,11 +148,6 @@ class LayerWithNamespace(Layer):
             #   Using kwargs as-is since it's generally unused.
             assert isinstance(input_, TensorMeta)
         return self._layer.forward(input_, kwargs, losses, metrics)
-
-    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
-        assert self._namespace not in kwargs
-        kwargs[self._namespace] = kwargs.copy()
-        self._layer.preprocess(batch, kwargs[self._namespace])
 
     def unwrap(self) -> "Layer":
         return self._layer.unwrap()

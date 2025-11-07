@@ -443,14 +443,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             )
         )
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        self._rotary.preprocess(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._rotary.preprocess(kwargs)
         if self._implementation == AttentionImplementation.backup:
-            self._preprocess_for_backup_attention(batch, kwargs)
+            self._preprocess_for_backup_attention(kwargs)
         elif self._implementation == AttentionImplementation.flash:
-            self._preprocess_for_flash_attention(batch, kwargs)
+            self._preprocess_for_flash_attention(kwargs)
 
-    def _preprocess_for_backup_attention(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         if (
             sequence_length := kwargs[AttentionKwargs.sequence_length]
         ) > self._backup_attention_tensor_cache_max_sequence_length:
@@ -460,7 +460,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             self._backup_attention_mask = torch.ones(
                 (sequence_length, sequence_length),
                 dtype=torch.bool,
-                device=batch.device,
+                device=self._distributed.device,
             ).tril_()
 
             if self._config.window_size is not None:
@@ -469,9 +469,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 [],
                 torch.finfo(self._distributed_config.compute_dtype.torch).min,
                 dtype=self._distributed_config.compute_dtype.torch,
-                device=batch.device,
+                device=self._distributed.device,
             )
-
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
         kwargs[AttentionKwargs.attention_mask] = self._backup_attention_mask[
@@ -484,14 +483,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     for sample_lens in kwargs[AttentionKwargs.sequence_lengths]
                 ]
             )
-            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(batch.device)
+            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._distributed.device)
             kwargs[AttentionKwargs.attention_mask] = (
                 kwargs[AttentionKwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
         kwargs[AttentionKwargs.attention_mask_value] = self._backup_attention_mask_value
 
-    def _preprocess_for_flash_attention(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def _preprocess_for_flash_attention(self, kwargs: dict[str, typing.Any]) -> None:
         """
         Prepares cu_seqlens_q and cu_seqlens_k for flash_attn_varlen_func:
         https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/flash_attn_interface.py#L1375
@@ -542,14 +541,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             seqlens_k = torch.cat(sequence_lengths)
         kwargs[AttentionKwargs.cu_seqlens_q] = torch.cat(
             (
-                torch.zeros(1, dtype=torch.int32, device=batch.device),
-                torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(batch.device),
+                torch.zeros(1, dtype=torch.int32, device=self._distributed.device),
+                torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(self._distributed.device),
             )
         )
         kwargs[AttentionKwargs.cu_seqlens_k] = torch.cat(
             (
-                torch.zeros(1, dtype=torch.int32, device=batch.device),
-                torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(batch.device),
+                torch.zeros(1, dtype=torch.int32, device=self._distributed.device),
+                torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(self._distributed.device),
             )
         )
         kwargs[AttentionKwargs.max_seqlen_q] = seqlens_q.max()

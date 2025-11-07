@@ -6,7 +6,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.vision.config import VisionEncoderConfig
+from fast_llm.layers.vision.config import VisionEncoderConfig, VisionMultiModalModelConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
     GPTBatchConfig,
@@ -16,8 +16,7 @@ from fast_llm.models.gpt.config import (
 )
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
-    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel, MultiModalModelInferenceRunner
+    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ class MultiModalBatchConfig(GPTBatchConfig):
 
 
 @config_class()
-class MultiModalBaseModelConfig(GPTBaseModelConfig):
+class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig):
     vision_encoder: VisionEncoderConfig = Field(
         hint=FieldHint.architecture,
         desc="Configuration for the vision encoder.",
@@ -77,8 +76,6 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
-    data: MultiModalDataConfig = FieldUpdate()
-    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 

@@ -80,7 +80,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     @torch.compile
     def _forward(
         self,
-        input_: torch.Tensor,
+        input_: torch.Tensor | None,
         token_ids: torch.Tensor,
         position_ids: torch.Tensor | None,
         mask_inputs: bool,
@@ -153,24 +153,33 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
+        if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
+            # Language model: input_ contains token ids.
+            token_ids = input_
+            input_ = None
+        else:
+            # Multimodal case: input_ contains encoder output, token ids stores in kwargs.
+            # TODO: Support multiple encoders.
+            # TODO: Support pipeline-parallel.
+            token_ids = kwargs.get(LanguageModelKwargs.token_ids)
 
         return self._forward(
             input_,
-            kwargs.get(LanguageModelKwargs.token_ids),
+            token_ids,
             kwargs.get(LanguageModelKwargs.position_ids),
             # TODO ====== Vision ====== Review input masking.
             kwargs.get(LanguageModelKwargs.mask_inputs),
-            kwargs.get(LanguageModelKwargs.embedding_map),
+            embedding_map,
         )
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (embeddings)
         return 0
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if not self._config.position_embeddings.enabled:
             return
-        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], batch.device)
+        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], self._distributed.device)
         sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
         sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
         if not self._config.cross_document_position_embeddings:
@@ -179,7 +188,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                     torch.cat([torch.arange(x) for x in sample_lens])
                     for sample_lens in kwargs[LanguageModelKwargs.sequence_lengths]
                 ]
-            ).to(batch.device, dtype=torch.int64)
+            ).to(self._distributed.device, dtype=torch.int64)
             position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
             if kwargs[LanguageModelKwargs.sequence_first]:
                 position_ids = position_ids.transpose(0, 1)

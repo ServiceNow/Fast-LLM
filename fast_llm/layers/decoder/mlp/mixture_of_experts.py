@@ -88,6 +88,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> tuple[torch.Tensor, None]:
+        if isinstance(input_, TensorMeta):
+            return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
