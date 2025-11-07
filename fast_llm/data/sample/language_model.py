@@ -94,19 +94,6 @@ class LanguageModelBatch(Batch):
             _merge_optional(PatchBatch.from_samples, [sample.image_patches for sample in samples]),
         )
 
-    def to_samples(self) -> list[LanguageModelSample]:
-        return [
-            LanguageModelSample(tokens, loss_masking_spans, chosen_spans, rejected_spans)
-            for tokens, loss_masking_spans, chosen_spans, rejected_spans, image_patches in zip(
-                self.tokens.to_samples(),
-                None if self.loss_masking_spans is None else self.loss_masking_spans.to_samples(),
-                None if self.chosen_spans is None else self.chosen_spans.to_samples(),
-                None if self.rejected_spans is None else self.rejected_spans.to_samples(),
-                None if self.image_patches is None else self.image_patches.to_samples(),
-                strict=True,
-            )
-        ]
-
     def crop(self, begin: int, end: int) -> typing.Self:
         return self.__class__(
             self.tokens.crop(begin, end),

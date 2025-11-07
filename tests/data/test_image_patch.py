@@ -82,6 +82,13 @@ DATASET_WITH_IMAGE_PATCHES_POSITION_IDS = {
     77: [],
     87: _shifted_range(0, 4, 1, 3) + _shifted_range(0, 4, 3, 1),
 }
+DATASET_WITH_IMAGE_PATCHES_LENGTHS = {
+    27: [],
+    30: [4],
+    31: [8, 12],
+    77: [],
+    87: [4, 12],
+}
 DATASET_WITH_IMAGE_PATCHES_PATCHES_MD5 = {
     27: "d41d8cd98f00b204e9800998ecf8427e",
     30: "f9e5a216990b1a3646677195532dddec",
@@ -148,6 +155,7 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
         Assert.eq(document.tokens.tokens.tolist(), expected_tokens)
         Assert.eq(document.image_patches.token_map.tolist(), DATASET_WITH_IMAGE_PATCHES_TOKEN_MAP[index][test_index])
         Assert.eq(document.image_patches.position_ids.tolist(), DATASET_WITH_IMAGE_PATCHES_POSITION_IDS[index])
+        Assert.eq(document.image_patches.lengths, DATASET_WITH_IMAGE_PATCHES_LENGTHS[index])
         Assert.eq(
             hashlib.md5(document.image_patches.patches.numpy().tobytes()).hexdigest(),
             DATASET_WITH_IMAGE_PATCHES_PATCHES_MD5[index],

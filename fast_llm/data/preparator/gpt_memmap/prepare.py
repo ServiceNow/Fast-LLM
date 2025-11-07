@@ -250,9 +250,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 else ([], [])
             )
             # Get the image patches and associated data.
-            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_count_cumsum = (
+            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
                 self._config.image_patches.get_patches(images, self._data_type)
             )
+            patch_count_cumsum = padded_cumsum(patch_counts).tolist()
             # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
             all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
 
@@ -308,7 +309,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 else None
             ),
             (
-                PatchSample(image_patches, image_token_maps, image_position_ids, sample_size)
+                PatchSample(image_patches, image_token_maps, image_position_ids, sample_size, patch_counts)
                 if self._source_schema.has_images
                 else None
             ),

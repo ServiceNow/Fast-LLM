@@ -16,6 +16,23 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 
+def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
+    if len(lengths) == 1:
+        # Shortcut for the frequent case of a single document.
+        return [end - begin]
+    begin_ = 0
+    lengths = []
+    for length in lengths:
+        end_ = begin_ + length
+        cropped_length = min(end_, end) - max(begin_, begin)
+        if cropped_length > 0:
+            lengths.append(cropped_length)
+        if end_ > end:
+            break
+        begin_ = end_
+    return lengths
+
+
 class TokenSample(Sample):
     def __init__(self, tokens: torch.Tensor, lengths: list[int] | None = None):
         self.tokens = tokens
@@ -34,22 +51,7 @@ class TokenSample(Sample):
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
-        sample_size = end - begin
-        if self.lengths == [len(self.tokens)]:
-            # Shortcut for the frequent case of a single document.
-            lengths = [sample_size]
-        else:
-            begin_ = 0
-            lengths = []
-            for length in self.lengths:
-                end_ = begin_ + length
-                cropped_length = min(end_, end) - max(begin_, begin)
-                if cropped_length > 0:
-                    lengths.append(cropped_length)
-                if end_ > end:
-                    break
-                begin_ = end_
-        return self.__class__(self.tokens[begin:end], lengths)
+        return self.__class__(self.tokens[begin:end], crop_lengths(self.lengths, begin, end))
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -72,12 +74,10 @@ class TokenBatch(Batch):
             [sample.lengths for sample in samples],
         )
 
-    def to_samples(self) -> list[TokenSample]:
-        return [TokenSample(tokens, lengths) for tokens, lengths in zip(self.tokens, self.lengths, strict=True)]
-
     def crop(self, begin: int, end: int) -> typing.Self:
         return self.__class__(
-            self.tokens[:, begin:end], [sample.crop(begin, end).lengths for sample in self.to_samples()]
+            self.tokens[:, begin:end],
+            [crop_lengths(lengths, begin, end) for lengths in self.lengths],
         )
 
     def to_device_(self, device: "torch.device | str"):

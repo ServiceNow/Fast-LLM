@@ -37,11 +37,8 @@ class Batch(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def to_samples(self) -> list[Sample]:
-        pass
-
     def crop(self, begin: int, end: int) -> typing.Self:
-        return self.from_samples(sample.crop(begin, end) for sample in self.to_samples())
+        pass
 
     def to_device_(self, device: "torch.device | str"):
         pass
