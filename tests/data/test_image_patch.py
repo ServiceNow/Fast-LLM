@@ -75,12 +75,18 @@ DATASET_WITH_IMAGE_PATCHES_TOKEN_MAP = {
         _shifted_range(2, 4, 1) + _shifted_range(11, 4, 3),
     ],
 }
-DATASET_WITH_IMAGE_PATCHES_POSITION_IDS = {
+
+
+def _position_ids(height_patches: int, width_patches: int):
+    return [[i, j] for i in range(height_patches) for j in range(width_patches)]
+
+
+DATASET_WITH_IMAGE_PATCHES_POSITIONS = {
     27: [],
-    30: _shifted_range(0, 4, 1, 3),
-    31: [*range(8), *range(12)],
+    30: _position_ids(4, 1),
+    31: _position_ids(2, 4) + _position_ids(3, 4),
     77: [],
-    87: _shifted_range(0, 4, 1, 3) + _shifted_range(0, 4, 3, 1),
+    87: _position_ids(4, 1) + _position_ids(4, 3),
 }
 DATASET_WITH_IMAGE_PATCHES_LENGTHS = {
     27: [],
@@ -154,7 +160,7 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
         ]
         Assert.eq(document.tokens.tokens.tolist(), expected_tokens)
         Assert.eq(document.image_patches.token_map.tolist(), DATASET_WITH_IMAGE_PATCHES_TOKEN_MAP[index][test_index])
-        Assert.eq(document.image_patches.position_ids.tolist(), DATASET_WITH_IMAGE_PATCHES_POSITION_IDS[index])
+        Assert.eq(document.image_patches.positions.tolist(), DATASET_WITH_IMAGE_PATCHES_POSITIONS[index])
         Assert.eq(document.image_patches.lengths, DATASET_WITH_IMAGE_PATCHES_LENGTHS[index])
         Assert.eq(
             hashlib.md5(document.image_patches.patches.numpy().tobytes()).hexdigest(),
