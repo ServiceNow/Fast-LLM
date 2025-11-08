@@ -8,6 +8,7 @@ from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, Tenso
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
@@ -79,13 +80,13 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
             else (scalar_dim, sequence_dim, self.vision_encoder._hidden_dim)
         )
         kwargs[self._vision_encoder_namespace] = {
-            LanguageModelKwargs.sequence_first: sequence_first,
-            LanguageModelKwargs.position_ids: batch.image_patches.position_ids,
-            LanguageModelKwargs.sequence_lengths: batch.image_patches.lengths,
-            LanguageModelKwargs.sequence_length: sequence_length,
-            LanguageModelKwargs.sequence_k_dim: sequence_dim,
-            LanguageModelKwargs.sequence_q_dim: sequence_dim,
-            LanguageModelKwargs.hidden_dims: hidden_dims,
+            VisionKwargs.sequence_first: sequence_first,
+            VisionKwargs.patch_positions: batch.image_patches.positions,
+            VisionKwargs.sequence_lengths: batch.image_patches.lengths,
+            VisionKwargs.sequence_length: sequence_length,
+            VisionKwargs.sequence_k_dim: sequence_dim,
+            VisionKwargs.sequence_q_dim: sequence_dim,
+            VisionKwargs.hidden_dims: hidden_dims,
         }
         super().preprocess(kwargs)
 

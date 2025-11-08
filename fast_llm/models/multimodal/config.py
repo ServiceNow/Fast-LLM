@@ -1,12 +1,12 @@
 import logging
 import typing
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
+from fast_llm.config import FieldUpdate, config_class
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.vision.config import VisionEncoderConfig, VisionMultiModalModelConfig
+from fast_llm.layers.vision.config import VisionMultiModalModelConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
     GPTBatchConfig,
@@ -29,11 +29,6 @@ class MultiModalBatchConfig(GPTBatchConfig):
 
 @config_class()
 class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig):
-    vision_encoder: VisionEncoderConfig = Field(
-        hint=FieldHint.architecture,
-        desc="Configuration for the vision encoder.",
-    )
-
     @property
     def base_model_class(self) -> type["MultiModalBaseModel"]:
         from fast_llm.models.multimodal.model import MultiModalBaseModel
@@ -41,10 +36,10 @@ class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig)
         return MultiModalBaseModel
 
 
-@config_class(dynamic_type={FastLLMModelConfig: "gpt"})
+@config_class(dynamic_type={FastLLMModelConfig: "multimodal"})
 class MultiModalModelConfig(GPTModelConfig):
     _abstract = False
-    model_name: typing.ClassVar[str] = "gpt"
+    model_name: typing.ClassVar[str] = "multimodal"
     base_model: GPTBaseModelConfig = FieldUpdate()
     # TODO: ====== Conversion ======
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats
@@ -74,7 +69,7 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
     model: MultiModalModelConfig = FieldUpdate()
 
 
-@config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
+@config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()

@@ -2,7 +2,7 @@ import functools
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.linear.config import Convolution2DConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
@@ -11,6 +11,10 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.vision.vision_encoder import VisionEncoder, VisionMultiModalModel
+
+
+class VisionKwargs(BlockKwargs):
+    patch_positions = "patch_positions"
 
 
 @config_class()
@@ -87,12 +91,13 @@ class VisionEncoderConfig(BlockConfig):
         desc="Configuration for the patch convolution layer.",
         hint=FieldHint.architecture,
     )
-    adapter: MLPBaseConfig = Field(
-        desc="Configuration for the adapter layer.",
-        hint=FieldHint.architecture,
-    )
+    # TODO: Should use varlen mixer, 2d rotary, non-causal. Enforce?
     encoder: BlockSequenceConfig = Field(
         desc="Configuration for the vision decoder.",
+        hint=FieldHint.architecture,
+    )
+    adapter: MLPBaseConfig = Field(
+        desc="Configuration for the adapter layer.",
         hint=FieldHint.architecture,
     )
     hidden_size: int = Field(

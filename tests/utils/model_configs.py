@@ -653,35 +653,25 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests hybrid discrete Mamba 2.
     "llama",
-    "hybrid_discrete_mamba_2",
+    "llava",
     updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m2d": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "discrete_mamba_2",
-                        "d_inner": 512,
-                        "state_size": 8,
-                        "n_qk_heads": 8,
-                        "n_v_heads": 16,
-                        "chunk_size": 32,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m2d"],
+        ("model", "type"): "multimodal",
+        ("model", "base_model", "vision_encoder"): {
+            "patch_convolution": {},
+            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
+            "adapter": {"intermediate_size": 512},
+            "hidden_size": 256,
         },
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): {"default_2d"},
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
     },
     megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    checkpoint_format=None,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement
