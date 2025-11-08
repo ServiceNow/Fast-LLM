@@ -3,8 +3,6 @@ import io
 import math
 import typing
 
-import numpy as np
-
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
@@ -80,21 +78,21 @@ class ImagePatchConfig(Config):
         import torch
 
         if len(images) > 0:
-            image_patches, image_position_ids, image_token_maps, image_token_ids = zip(
+            image_patches, image_positions, image_token_maps, image_token_ids = zip(
                 *(self._get_patches(image, token_data_type) for image in images)
             )
             return (
                 torch.cat(image_patches),
-                torch.cat(image_position_ids),
+                torch.cat(image_positions),
                 torch.cat(image_token_maps),
                 image_token_ids,
-                [len(position_ids) for position_ids in image_position_ids],
+                [len(position_ids) for position_ids in image_positions],
             )
         else:
             # Return empty tensors of appropriate shapes and data types so we can concatenate with other documents.
             return (
                 torch.empty(0, self.num_channels, self.height, self.width, dtype=torch.uint8),
-                torch.empty(0, dtype=torch.int64),
+                torch.empty(0, 2, dtype=torch.int64),
                 torch.empty(0, dtype=torch.int64),
                 [],
                 [0],
@@ -103,6 +101,7 @@ class ImagePatchConfig(Config):
     def _get_patches(
         self, image_bytes: bytes, token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+        import numpy as np
         import PIL.Image
         import torch
 
@@ -124,9 +123,13 @@ class ImagePatchConfig(Config):
             .flatten(0, 1)
         )
 
-        position_ids = torch.arange(num_patches_height).repeat_interleave(num_patches_width) * div(
-            self.max_image_width, self.width
-        ) + torch.arange(num_patches_width).repeat(num_patches_height)
+        positions = torch.stack(
+            [
+                torch.arange(num_patches_height).repeat_interleave(num_patches_width),
+                torch.arange(num_patches_width).repeat(num_patches_height),
+            ],
+            1,
+        )
 
         token_map = torch.arange(0, num_patches_width * num_patches_height, dtype=torch.int64)
         if self.image_break_token is None:
@@ -139,7 +142,7 @@ class ImagePatchConfig(Config):
             if self.image_end_token is not None:
                 token_ids[-1] = self.image_end_token
 
-        return patches, position_ids, token_map, torch.tensor(token_ids, dtype=token_data_type.torch)
+        return patches, positions, token_map, torch.tensor(token_ids, dtype=token_data_type.torch)
 
     def _resize(self, image: "torch.Tensor") -> "torch.Tensor":
         """

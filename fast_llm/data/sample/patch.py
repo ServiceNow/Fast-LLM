@@ -33,7 +33,7 @@ class PatchSample(Sample):
         self,
         patches: torch.Tensor,
         token_map: torch.Tensor,
-        position_ids: torch.Tensor,
+        positions: torch.Tensor,
         sample_size: int,
         lengths: list[int] | None = None,
     ):
@@ -41,8 +41,9 @@ class PatchSample(Sample):
         self.patches = patches
         # Mapping from patch to token index
         self.token_map = token_map
-        # A position identifier for each patch.
-        self.position_ids = position_ids
+        # A position identifier for each patch in the patch grid.
+        Assert.eq(positions.shape, (self.patches.size(0), self.patches.ndim - 2))
+        self.positions = positions
         # Number of tokens in the sample (not the number of patches)
         self.sample_size = sample_size
         # Length of each patch group (ex. image) in the sample. TODO: Use cumsums instead?
@@ -62,7 +63,7 @@ class PatchSample(Sample):
         return cls(
             torch.cat([document.patches for document in documents]),
             torch.cat(embedding_maps),
-            torch.cat([document.position_ids for document in documents]),
+            torch.cat([document.positions for document in documents]),
             total_size,
             sum((document.lengths for document in documents), []),
         )
@@ -73,7 +74,7 @@ class PatchSample(Sample):
         return self.__class__(
             self.patches[patch_filter],
             self.token_map[patch_filter] - begin,
-            self.position_ids[patch_filter],
+            self.positions[patch_filter],
             sample_size,
             filter_lengths(self.lengths, patch_filter),
         )
@@ -85,7 +86,7 @@ class PatchSample(Sample):
         return PatchSample(
             self.patches.new_empty((0, *self.patches.shape[1:])),
             self.token_map.new_empty(0),
-            self.position_ids.new_empty(0),
+            self.positions.new_empty(0),
             size,
             [],
         )
@@ -97,7 +98,7 @@ class PatchBatch(Batch):
         patches: torch.Tensor,
         sample_map: torch.Tensor,
         token_map: torch.Tensor,
-        position_ids: torch.Tensor,
+        positions: torch.Tensor,
         num_samples: int,
         sample_size: int,
         lengths: list[int],
@@ -107,7 +108,7 @@ class PatchBatch(Batch):
         # Mapping from patch to sample index
         self.sample_map = sample_map
         self.token_map = token_map
-        self.position_ids = position_ids
+        self.positions = positions
         self.num_samples = num_samples
         self.sample_size = sample_size
         self.lengths = lengths
@@ -120,7 +121,7 @@ class PatchBatch(Batch):
                 [torch.full_like(sample.token_map, sample_index) for sample_index, sample in enumerate(samples)]
             ),
             torch.cat([sample.token_map for sample in samples]),
-            torch.cat([sample.position_ids for sample in samples]),
+            torch.cat([sample.positions for sample in samples]),
             len(samples),
             get_unique(sample.sample_size for sample in samples),
             [length for sample in samples for length in sample.lengths],
@@ -134,7 +135,7 @@ class PatchBatch(Batch):
             self.patches[patch_filter],
             self.sample_map[patch_filter],
             self.token_map[patch_filter],
-            self.position_ids[patch_filter],
+            self.positions[patch_filter],
             self.num_samples,
             sample_size,
             filter_lengths(self.lengths, patch_filter),
@@ -144,7 +145,7 @@ class PatchBatch(Batch):
         self.patches = self.patches.to(device, non_blocking=True)
         self.sample_map = self.sample_map.to(device, non_blocking=True)
         self.token_map = self.token_map.to(device, non_blocking=True)
-        self.position_ids = self.position_ids.to(device, non_blocking=True)
+        self.positions = self.positions.to(device, non_blocking=True)
 
 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
@@ -174,10 +175,15 @@ class PatchReaderConfig(MemmapReaderConfig):
         return math.prod(self.patch_shape)
 
     @property
+    def grid_dims(self) -> int:
+        return len(self.patch_shape) - 1
+
+    @property
     def _expected_buffer_size(self) -> int:
         return (
             self.num_patches * self.patch_size * self.data_type.torch.itemsize
-            + (2 * self.num_patches + self.num_patch_groups + 2 * self.num_documents + 2) * torch.int32.itemsize
+            + ((1 + self.grid_dims) * self.num_patches + self.num_patch_groups + 2 * self.num_documents + 2)
+            * torch.int32.itemsize
         )
 
 
@@ -197,13 +203,13 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
             offset=offset,
         )
         offset += self._token_map.nbytes
-        self._position_ids = torch.frombuffer(
+        self._positions = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
-            count=self._config.num_patches,
+            count=self._config.num_patches * self._config.grid_dims,
             offset=offset,
-        )
-        offset += self._position_ids.nbytes
+        ).view(self._config.num_patches, self._config.grid_dims)
+        offset += self._positions.nbytes
         self._patch_count_cumsums = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -233,7 +239,7 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
         return PatchSample(
             self._patches[token_slice][patch_filter],
             token_map[patch_filter] - begin,
-            self._position_ids[token_slice][patch_filter],
+            self._positions[token_slice][patch_filter],
             end - begin,
             filter_lengths(
                 self._group_lengths[self._group_count_cumsums[index] : self._group_count_cumsums[index + 1]].tolist(),
@@ -248,7 +254,7 @@ class PatchWriter(MemmapWriter):
         self._patch_count_cumsum = [0]
         self._group_count_cumsum = [0]
         self._token_map = []
-        self._position_ids = []
+        self._positions = []
         self._group_lengths = []
         self._data_type = None
         self._patch_shape = None
@@ -266,7 +272,7 @@ class PatchWriter(MemmapWriter):
             Assert.eq(self._patch_shape, document.patches.shape[1:])
         self._stream.write(document.patches.numpy().tobytes())
         self._token_map.extend(document.token_map)
-        self._position_ids.extend(document.position_ids)
+        self._positions.extend(document.positions)
         self._patch_count_cumsum.append(self._patch_count_cumsum[-1] + len(document.patches))
         self._group_count_cumsum.append(self._group_count_cumsum[-1] + len(document.lengths))
         self._group_lengths.extend(document.lengths)
@@ -275,7 +281,7 @@ class PatchWriter(MemmapWriter):
         if exc_type is None:
             Assert.lt(self._patch_count_cumsum[-1], np.iinfo(np.int32).max)
             self._stream.write(np.array(self._token_map, dtype=np.int32).tobytes(order="C"))
-            self._stream.write(np.array(self._position_ids, dtype=np.int32).tobytes(order="C"))
+            self._stream.write(np.array(self._positions, dtype=np.int32).tobytes(order="C"))
             self._stream.write(np.array(self._patch_count_cumsum, dtype=np.int32).tobytes(order="C"))
             self._stream.write(np.array(self._group_lengths, dtype=np.int32).tobytes(order="C"))
             self._stream.write(np.array(self._group_count_cumsum, dtype=np.int32).tobytes(order="C"))
