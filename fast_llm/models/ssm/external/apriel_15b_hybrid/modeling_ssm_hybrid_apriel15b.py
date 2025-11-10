@@ -21,7 +21,8 @@ from transformers.processing_utils import Unpack
 from transformers.utils import LossKwargs, can_return_tuple, logging
 from transformers.utils.generic import ModelOutput
 
-from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
+# relative import so that it works both in fast-llm and in the exported checkpoint
+from .configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 
 # from vllm.model_executor.layers.mamba.ops.mamba_ssm import selective_scan_fn as varlen_selective_scan_fn
 # from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn as varlen_causal_conv1d_fn
@@ -1246,7 +1247,7 @@ class AprielThinkerSSMHybridModel(MistralModel):
     ) -> BaseModelOutputWithPast:
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache and past_key_values is None:
-             # for the case where prepare_inputs_for_generation is not called to create the cache (as in fast-llm test)
+            # for the case where prepare_inputs_for_generation is not called to create the cache (as in fast-llm test)
             batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
             past_key_values = HybridMambaAttentionDynamicCache(self.config, batch_size, self.dtype, device=self.device)
         output = super().forward(
