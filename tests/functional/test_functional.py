@@ -67,7 +67,7 @@ def test_dpo_loss():
     reference_model_logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32)
     targets = torch.from_numpy(random_state.randint(0, 100, (10, 50)))
 
-    spans = get_random_spans(10, 10, 50, random_state)
+    spans = get_random_spans(np.full(10, 50), 0, 10, random_state)
 
     fastllm_loss, fast_llm_grad = compute_dpo_loss(
         logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1, grad_output=1
