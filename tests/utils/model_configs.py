@@ -653,6 +653,49 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests hybrid discrete Mamba 2.
     "llama",
+    "hybrid_discrete_mamba_2",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "m2d": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "discrete_mamba_2",
+                        "d_inner": 512,
+                        "state_size": 8,
+                        "n_qk_heads": 8,
+                        "n_v_heads": 16,
+                        "chunk_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "m2d"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        # TODO: Implement
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests hybrid discrete Mamba 2.
+    "llama",
     "llava",
     updates={
         ("model", "type"): "multimodal",
