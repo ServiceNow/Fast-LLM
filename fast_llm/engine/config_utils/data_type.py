@@ -50,9 +50,13 @@ class DataType(enum.StrEnum):
         return _TORCH_DTYPE_MAP_INV[dtype]
 
     @classmethod
-    def from_numpy(cls, dtype: "np.dtype") -> "DataType":
+    def from_numpy(cls, dtype: "np.dtype | type[np.number]") -> "DataType":
+        import numpy as np
+
         if not _NUMPY_DTYPE_MAP_INV:
             _set_numpy_dtype_map()
+        if isinstance(dtype, np.dtype):
+            dtype = dtype.type
         return _NUMPY_DTYPE_MAP_INV[dtype]
 
     @classmethod

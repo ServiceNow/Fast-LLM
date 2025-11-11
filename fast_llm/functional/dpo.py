@@ -37,7 +37,7 @@ def compute_dpo_loss(
             reference_log_probabilities, chosen_spans
         ) - _get_target_log_probability_for_spans(reference_log_probabilities, rejected_spans)
 
-        # TODO: ====== Shouldn't the sigmoid be computed independently for each document?
+        # TODO: ====== Shouldn't the sigmoid be computed independently for each document? =======
         losses = -torch.nn.functional.logsigmoid(beta * (policy_log_ratios - reference_log_ratios))
 
         if grad_output is None:

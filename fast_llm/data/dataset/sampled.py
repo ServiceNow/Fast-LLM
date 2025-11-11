@@ -414,7 +414,6 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             document_sampling_index += 1
             token_count += document_size
 
-        # TODO: ====== Better way to get the class method? ======
         return documents[0].from_documents(documents)
 
     @property
