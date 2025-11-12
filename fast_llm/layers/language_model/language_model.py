@@ -60,8 +60,25 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        # Seed a shared root pointer so nested layers (including namespaced ones) can exchange activation distillation state.
-        kwargs.setdefault(BlockKwargs.root, kwargs)
+        # TODO: remove root_kwargs
+        activation_factor = getattr(self.head._config, "activation_distillation_factor", 0.0)
+        if (
+            activation_factor > 0.0
+            or BlockKwargs.activation_distillation_targets in kwargs
+            or BlockKwargs.activation_distillation_storage in kwargs
+        ):
+            root_state = kwargs.get(BlockKwargs.root)
+            if root_state is None or root_state is kwargs:
+                root_state = {}
+                kwargs[BlockKwargs.root] = root_state
+            if BlockKwargs.activation_distillation_targets in kwargs:
+                root_state[BlockKwargs.activation_distillation_targets] = kwargs[
+                    BlockKwargs.activation_distillation_targets
+                ]
+            if BlockKwargs.activation_distillation_storage in kwargs:
+                root_state[BlockKwargs.activation_distillation_storage] = kwargs[
+                    BlockKwargs.activation_distillation_storage
+                ]
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
         self.embeddings.preprocess(batch, kwargs)
         self.decoder.preprocess(batch, kwargs)
