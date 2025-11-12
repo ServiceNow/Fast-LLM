@@ -120,14 +120,14 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             cls.base_model_converter_class.export_config(config.base_model),
             {
                 "model_type": cls.get_huggingface_model_type(),
-                "architecture": cls.architecture,
+                "architectures": [cls.architecture],
             },
         )
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
-        Assert.eq(config["architecture"], cls.architecture)
+        Assert.eq(config["architectures"], [cls.architecture])
         return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
 
     def _create_weight_converters(self) -> list[WeightConverter]:
