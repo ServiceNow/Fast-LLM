@@ -279,8 +279,7 @@ class AprielStochasticMixerConverter:
     @classmethod
     def export_config(cls, config: StochasticMixerConfig) -> dict:
         Assert.custom(isinstance, config, StochasticMixerConfig)
-        main_mixer_name = config.main_mixer_name or next(iter(config.mixers.keys()))
-        inference_mixer = config.mixers[main_mixer_name]
+        inference_mixer = config.mixers[config.main_mixer_name]
         mixer_type = type(inference_mixer)
         converter_class = cls._mixer_block_converters.get(mixer_type)
         if converter_class is None:
@@ -297,7 +296,6 @@ class AprielStochasticMixerConverter:
     ) -> list[WeightConverter]:
         Assert.custom(isinstance, config, StochasticMixerConfig)
         converters = []
-        main_mixer_name = config.main_mixer_name or next(iter(config.mixers.keys()))
         for mixer_name, mixer in config.mixers.items():
             mixer_type = type(mixer)
             converter_class = cls._mixer_block_converters.get(mixer_type)
@@ -305,7 +303,7 @@ class AprielStochasticMixerConverter:
                 raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
             mixer_converter_class = converter_class.mixer_converter_class
             # Only export the main mixer, but keep all mixers on import
-            is_main_mixer = mixer_name == main_mixer_name
+            is_main_mixer = mixer_name == config.main_mixer_name
             converters.extend(
                 mixer_converter_class.get_converters(
                     mixer,
@@ -382,10 +380,10 @@ class AprielDecoderConverter(MistralDecoderConverter):
 
     @classmethod
     def export_config(cls, config: BlockSequenceConfig) -> dict:
-        if isinstance(config, FixedBlockSequenceConfig):
+        if type(config) is FixedBlockSequenceConfig:
             block_configs = [config.block]
             pattern_block_configs = [config.block] * config.num_blocks
-        elif isinstance(config, PatternBlockSequenceConfig):
+        elif type(config) is PatternBlockSequenceConfig:
             block_configs = config.blocks.values()
             pattern_block_configs = [config.blocks[block_name] for block_name in config.pattern]
         else:
@@ -398,11 +396,7 @@ class AprielDecoderConverter(MistralDecoderConverter):
                 "hybrid_block_layout": [
                     cls.block_converter_class.layout_names[
                         (
-                            type(
-                                block_config.mixer.mixers[
-                                    block_config.mixer.main_mixer_name or next(iter(block_config.mixer.mixers.keys()))
-                                ]
-                            )
+                            type(block_config.mixer.mixers[block_config.mixer.main_mixer_name])
                             if isinstance(block_config.mixer, StochasticMixerConfig)
                             else type(block_config.mixer)
                         )
@@ -421,7 +415,7 @@ class AprielDecoderConverter(MistralDecoderConverter):
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
         converters = []
-        if isinstance(config, FixedBlockSequenceConfig):
+        if type(config) is FixedBlockSequenceConfig:
             for block_index in range(config.num_blocks):
                 converters += cls.block_converter_class.get_converters(
                     config.block,
@@ -429,7 +423,7 @@ class AprielDecoderConverter(MistralDecoderConverter):
                     f"{hf_prefix}.{block_index}",
                     drop_on_export,
                 )
-        elif isinstance(config, PatternBlockSequenceConfig):
+        elif type(config) is PatternBlockSequenceConfig:
             for block_index in range(config.num_blocks):
                 block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
                 converters += cls.block_converter_class.get_converters(

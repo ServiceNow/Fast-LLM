@@ -154,8 +154,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
-        # Seed generators before preprocessing so stochastic components use the correct random state
-        self._distributed.set_step(iteration, schedule.phase)
         context.data_iterator = self._preprocess_data(context, data_iterator, preprocessed)
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
@@ -163,6 +161,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 lambda: log_memory_usage(f"Beginning of {context.phase.value} iteration {iteration}", str)
             )
         self._multi_stage.train(context.is_training)
+        self._distributed.set_step(iteration, schedule.phase)
 
         # Synchronize streams
         Assert.eq(torch.cuda.current_stream(self._distributed.device), self._compute_stream)

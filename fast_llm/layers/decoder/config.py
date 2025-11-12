@@ -117,12 +117,12 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.feature,
     )
 
-    main_mixer_name: str = Field(
-        default="",
+    main_mixer_name: str | None = Field(
+        default=None,
         desc="Name of the main mixer. "
         "Used for inference/eval, checkpoint loading (receives pretrained weights), "
         "and checkpoint saving (only this mixer is exported). "
-        "If empty, uses the first mixer in the dict.",
+        "If None, uses the first mixer in the dict.",
         hint=FieldHint.feature,
     )
 
@@ -131,6 +131,15 @@ class StochasticMixerConfig(MixerConfig):
 
         # Validate mixers dict is not empty
         Assert.gt(len(self.mixers), 0)
+
+        # Set main_mixer_name to first mixer if not specified
+        if self.main_mixer_name is None:
+            with self._set_implicit_default():
+                self.main_mixer_name = next(iter(self.mixers.keys()))
+
+        # Validate main mixer name exists
+        if self.main_mixer_name not in self.mixers:
+            raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
 
         # Validate sampling weights
         if self.sampling_weights is not None:
@@ -142,11 +151,6 @@ class StochasticMixerConfig(MixerConfig):
             # Check all weights are non-negative
             if any(w < 0 for w in self.sampling_weights.values()):
                 raise ValueError("All sampling weights must be non-negative")
-
-        # Validate main mixer name
-        if self.main_mixer_name:
-            if self.main_mixer_name not in self.mixers:
-                raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
 
     @property
     def layer_class(self) -> "type[StochasticMixer]":
