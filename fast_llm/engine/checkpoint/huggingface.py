@@ -133,6 +133,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     def _create_weight_converters(self) -> list[WeightConverter]:
         return self.base_model_converter_class.get_converters(self._model.config.base_model, self._exported_config)
 
+
     def _load_weights(
         self, config: CheckpointLoadConfig, device
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:

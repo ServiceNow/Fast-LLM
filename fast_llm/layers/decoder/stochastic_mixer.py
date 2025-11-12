@@ -3,14 +3,14 @@ import typing
 
 import torch
 
-from fast_llm.core.distributed import set_generator
+from fast_llm.core.distributed import check_parallel_match, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.decoder.config import SamplingStrategy, StochasticMixerConfig
+from fast_llm.layers.decoder.config import SamplingStrategy, StochasticMixerConfig, StochasticMixerKwargs
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -49,39 +49,48 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         )
 
         # Initialize all mixers
-        self.mixers = torch.nn.ModuleList(
-            [
-                mixer_config.get_layer(
+        self.mixers = torch.nn.ModuleDict(
+            {
+                name: mixer_config.get_layer(
                     distributed_config,
                     hidden_dim,
                     lr_scale,
                     peft=peft,
                     return_bias=return_bias,
                 )
-                for mixer_config in self._config.mixers
-            ]
+                for name, mixer_config in self._config.mixers.items()
+            }
         )
 
-        # Precompute sampling probabilities as a tensor
+        # Store mixer names in order
+        self._mixer_names = list(self.mixers.keys())
+
+        # Precompute sampling probabilities as a tensor (ordered by _mixer_names)
         if self._config.sampling_strategy == SamplingStrategy.uniform:
             self._sampling_probs = torch.ones(len(self.mixers)) / len(self.mixers)
         elif self._config.sampling_strategy == SamplingStrategy.weighted:
             if self._config.sampling_weights is None:
                 raise ValueError("sampling_weights must be provided when using weighted sampling strategy")
-            self._sampling_probs = torch.tensor(self._config.sampling_weights, dtype=torch.float32)
+            self._sampling_probs = torch.tensor(
+                [self._config.sampling_weights[name] for name in self._mixer_names], dtype=torch.float32
+            )
         else:
             raise NotImplementedError(f"Sampling strategy {self._config.sampling_strategy} not implemented")
 
+        # Determine main mixer name
+        self._main_mixer_name = self._config.main_mixer_name or self._mixer_names[0]
+
         logger.info(
             f"Initialized StochasticMixer with {len(self.mixers)} mixers: "
-            f"{[type(m).__name__ for m in self.mixers]}"
+            f"{', '.join(f'{name}={type(mixer).__name__}' for name, mixer in self.mixers.items())} "
+            f"(main={self._main_mixer_name})"
         )
 
         # Mark all mixer parameters with allow_no_grad since only one mixer
         # is active per forward pass during training. Even though all mixers
         # will eventually be trained, on any single forward pass, the non-selected
         # mixers won't receive gradients.
-        for mixer in self.mixers:
+        for mixer in self.mixers.values():
             for param in mixer.parameters(recurse=True):
                 if hasattr(param, 'allow_no_grad'):
                     param.allow_no_grad = True
@@ -89,30 +98,36 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
     def setup(self, distributed: Distributed) -> None:
         """Setup all mixers with the distributed context."""
         super().setup(distributed)
-        for mixer in self.mixers:
+        for mixer in self.mixers.values():
             mixer.setup(distributed)
 
-    def _sample_mixer_index(self) -> int:
+    def _sample_mixer_name(self) -> str:
         """
-        Sample a mixer index according to the configured strategy.
+        Sample a mixer name according to the configured strategy.
+        In debug mode, verifies all ranks in the TP/PP group sample the same index.
 
         Returns:
-            Index of the mixer to use for this forward pass.
+            Name of the mixer to use for this forward pass.
         """
         if not self.training:
-            # Inference mode: use the configured main mixer
-            return self._config.main_mixer_index
+            # Use main mixer for inference
+            return self._main_mixer_name
 
-        # Training mode: stochastic sampling
-        # Use distributed RNG to ensure consistency across TP/PP ranks
-        # This ensures all ranks in a TP/PP group use the same mixer
+        # Sample index in training mode
         generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
+        # Move sampling_probs to the same device as the generator for multinomial
+        sampling_probs_device = self._sampling_probs.to(generator.device)
+        mixer_idx_tensor = torch.multinomial(sampling_probs_device, num_samples=1, generator=generator)
 
-        with set_generator(generator):
-            # Sample from categorical distribution
-            idx = torch.multinomial(self._sampling_probs, num_samples=1).item()
+        # Verify all ranks in the TP/PP group sampled the same index (debug only)
+        if self._debug.enabled:
+            group = self._distributed.tensor_group if self._sequence_parallel else self._distributed.pipeline_group
+            if group is not None:
+                check_parallel_match(mixer_idx_tensor, group, "stochastic_mixer_idx")
 
-        return idx
+        # Convert index to name
+        mixer_idx = mixer_idx_tensor.item()
+        return self._mixer_names[mixer_idx]
 
     def _forward(
         self,
@@ -133,24 +148,37 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         Returns:
             Tuple of (output tensor, bias tensor or None)
         """
-        # Sample which mixer to use
-        mixer_idx = self._sample_mixer_index()
+        mixer_name = kwargs.get(StochasticMixerKwargs.mixer_name)
+        if mixer_name is None:
+            logger.warning(
+                "StochasticMixer: mixer name not found in kwargs. "
+                "This causes a costly CUDA sync. Ensure preprocess() is called before forward()."
+            )
+            mixer_name = self._sample_mixer_name()
 
         if self._debug.enabled:
-            logger.debug(f"StochasticMixer selecting mixer {mixer_idx}: {type(self.mixers[mixer_idx]).__name__}")
+            logger.debug(f"StochasticMixer selecting mixer {mixer_name}: {type(self.mixers[mixer_name]).__name__}")
 
         # Forward through selected mixer
-        return self.mixers[mixer_idx]._forward(input_, kwargs, losses, metrics)
+        return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
         """
-        Preprocess for all mixers.
+        Preprocess for all mixers and sample mixer index.
 
         Since we don't know which mixer will be selected during training,
         we need to preprocess for all of them. This includes things like
         attention masks, rotary embeddings, etc.
+
+        We also sample the mixer index here ahead of time to avoid costly
+        CUDA syncs during the forward pass.
         """
-        for mixer in self.mixers:
+        # Sample mixer name (includes parallel match checking)
+        mixer_name = self._sample_mixer_name()
+        kwargs[StochasticMixerKwargs.mixer_name] = mixer_name
+
+        # Preprocess all mixers
+        for mixer in self.mixers.values():
             mixer.preprocess(batch, kwargs)
 
     def get_compute_usage(
@@ -163,7 +191,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         since during training we'll be using all of them according to
         their sampling probabilities.
         """
-        usages = [mixer.get_compute_usage(input_, kwargs, config) for mixer in self.mixers]
+        usages = [mixer.get_compute_usage(input_, kwargs, config) for mixer in self.mixers.values()]
 
         # Weight by sampling probability and return the expected value
         expected_usage = sum(usage * prob.item() for usage, prob in zip(usages, self._sampling_probs))
@@ -172,22 +200,23 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         """
-        Merge loss definitions from all mixers.
+        Merge loss definitions from all mixers with namespacing.
 
-        Returns the union of all loss definitions, deduplicated by name.
+        Each mixer's losses are namespaced with the mixer name to avoid conflicts.
         This ensures we allocate space for any auxiliary losses that any
-        of the mixers might need.
+        of the mixers might need, even if multiple mixers have losses with the same name.
         """
         all_losses = []
-        for mixer in self.mixers:
-            all_losses.extend(mixer.get_loss_definitions(count=count))
+        for mixer_name, mixer in self.mixers.items():
+            mixer_losses = mixer.get_loss_definitions(count=count)
+            # Namespace each loss with the mixer name to avoid conflicts
+            for loss_def in mixer_losses:
+                namespaced_loss = LossDef(
+                    name=f"{mixer_name}/{loss_def.name}",
+                    formatted_name=f"{mixer_name}/{loss_def.formatted_name}",
+                    count=loss_def.count,
+                    dtype=loss_def.dtype,
+                )
+                all_losses.append(namespaced_loss)
 
-        # Deduplicate by loss name
-        seen = set()
-        unique_losses = []
-        for loss_def in all_losses:
-            if loss_def.name not in seen:
-                seen.add(loss_def.name)
-                unique_losses.append(loss_def)
-
-        return unique_losses
+        return all_losses

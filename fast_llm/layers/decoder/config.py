@@ -5,7 +5,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.config import BlockConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
@@ -13,6 +13,11 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     from fast_llm.layers.decoder.block import BlockWithBias, DecoderBlock
     from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+
+class StochasticMixerKwargs(BlockKwargs):
+    """Kwargs keys for stochastic mixer."""
+    mixer_name = "stochastic_mixer_name"
 
 
 @config_class()
@@ -91,8 +96,9 @@ class StochasticMixerConfig(MixerConfig):
 
     _abstract = False
 
-    mixers: list[MixerConfig] = Field(
-        desc="List of mixer options to sample from (must contain at least 1).",
+    mixers: dict[str, MixerConfig] = Field(
+        desc="Dict of mixer options to sample from (must contain at least 1). "
+        "Keys are mixer names used for debugging and namespacing.",
         hint=FieldHint.architecture,
     )
 
@@ -102,42 +108,44 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.feature,
     )
 
-    sampling_weights: list[float] | None = Field(
+    sampling_weights: dict[str, float] | None = Field(
         default=None,
-        desc="Sampling probability for each mixer (must sum to 1.0). "
+        desc="Sampling probability for each mixer by name (must sum to 1.0). "
         "Only used when sampling_strategy='weighted'. "
         "If None with uniform strategy, all mixers have equal probability.",
         hint=FieldHint.feature,
     )
 
-    main_mixer_index: int = Field(
-        default=0,
-        desc="Index of the main mixer. "
+    main_mixer_name: str = Field(
+        default="",
+        desc="Name of the main mixer. "
         "Used for inference/eval, checkpoint loading (receives pretrained weights), "
-        "and checkpoint saving (only this mixer is exported).",
+        "and checkpoint saving (only this mixer is exported). "
+        "If empty, uses the first mixer in the dict.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
     )
 
     def _validate(self) -> None:
         super()._validate()
 
-        # Validate mixers list is not empty
+        # Validate mixers dict is not empty
         Assert.gt(len(self.mixers), 0)
 
         # Validate sampling weights
         if self.sampling_weights is not None:
-            Assert.eq(len(self.sampling_weights), len(self.mixers))
+            Assert.eq(set(self.sampling_weights.keys()), set(self.mixers.keys()))
             # Check sum is close to 1.0
-            weight_sum = sum(self.sampling_weights)
+            weight_sum = sum(self.sampling_weights.values())
             if abs(weight_sum - 1.0) > 1e-5:
                 raise ValueError(f"Sampling weights must sum to 1.0, got {weight_sum}")
             # Check all weights are non-negative
-            if any(w < 0 for w in self.sampling_weights):
+            if any(w < 0 for w in self.sampling_weights.values()):
                 raise ValueError("All sampling weights must be non-negative")
 
-        # Validate main mixer index
-        Assert.lt(self.main_mixer_index, len(self.mixers))
+        # Validate main mixer name
+        if self.main_mixer_name:
+            if self.main_mixer_name not in self.mixers:
+                raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
 
     @property
     def layer_class(self) -> "type[StochasticMixer]":

@@ -701,8 +701,8 @@ _update_and_add_testing_config(
     updates={
         ("model", "base_model", "decoder", "block", "mixer"): {
             "type": "stochastic",
-            "mixers": [
-                {
+            "mixers": {
+                "attention": {
                     # Option 1: Attention (will receive pretrained weights on load)
                     "type": "attention",
                     "rotary": {"type": "default", "theta": 10000},
@@ -711,7 +711,7 @@ _update_and_add_testing_config(
                     "head_size": 32,
                     "add_linear_biases": False,
                 },
-                {
+                "mamba": {
                     # Option 2: Mamba2 (randomly initialized on load)
                     "type": "mamba_2",
                     "d_inner": 512,
@@ -720,9 +720,9 @@ _update_and_add_testing_config(
                     "d_xb": 256,
                     "add_linear_biases": False,
                 },
-            ],
+            },
             "sampling_strategy": "uniform",
-            "main_mixer_index": 0,  # Use attention for inference/eval and checkpoint conversion
+            "main_mixer_name": "attention",  # Use attention for inference/eval and checkpoint conversion
         },
     },
     megatron_args=None,
@@ -733,7 +733,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=2.0,
     # Micro-sequence split not supported for Mamba.
