@@ -155,7 +155,7 @@ def test_conversion(model_testing_config, run_conversion, get_convert_path):
 
 def _compare_safetensor_files(
     reference: pathlib.Path | dict[str, torch.Tensor],
-    *other_paths: pathlib.Path,
+    *others: pathlib.Path | dict[str, torch.Tensor],
     expected_keys: set[str] | None = None,
 ):
     if isinstance(reference, pathlib.Path):
@@ -165,8 +165,9 @@ def _compare_safetensor_files(
     else:
         Assert.geq(set(reference.keys()), expected_keys)
 
-    for other_path in other_paths:
-        other = safetensors.torch.load_file(other_path)
+    for other in others:
+        if isinstance(other, pathlib.Path):
+            other = safetensors.torch.load_file(other)
         Assert.eq(other.keys(), expected_keys)
         for key in expected_keys:
             Assert.all_equal(reference[key], other[key])
@@ -184,6 +185,12 @@ def test_converted_round_trip(model_testing_config, get_convert_path):
             expected_keys={_WEIGHT_SHARD_SAVE_NAME},
         )
     else:
+        # Load config to check for lossy conversion
+        reference_config = _load_config_from_checkpoint(get_convert_path(), model_testing_config.model_config_class)
+        if _is_lossy_hf_conversion(model_testing_config.checkpoint_format, reference_config.base_model):
+            pytest.skip("HuggingFace conversion drops weights (lossy conversion)")
+
+        # Lossless conversion: compare entire files
         _compare_safetensor_files(
             get_convert_path() / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
@@ -195,6 +202,8 @@ def test_converted_round_trip(model_testing_config, get_convert_path):
             get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / "model_0.safetensors",
             get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format) / "model_0.safetensors",
         )
+
+        # HF round-trips should be stable (HF->Dist and HF->FastLLM should produce same HF checkpoint)
         _compare_safetensor_files(
             get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat)
             / "model_0.safetensors",
@@ -208,6 +217,36 @@ def _compare_model_configs(config_ref: FastLLMModelConfig, config_test: FastLLMM
 
 def _compare_architectures(config_ref: FastLLMModelConfig, config_test: FastLLMModelConfig):
     config_ref.base_model.compare_architecture(config_test.base_model)
+
+
+def _load_config_from_test_dir(test_dir: pathlib.Path, model_config_class) -> FastLLMModelConfig:
+    """Load model config from test directory's config.yaml."""
+    config_dict = yaml.safe_load(test_dir.joinpath("config.yaml").open("r"))["model"]
+    return model_config_class.from_dict(config_dict)
+
+
+def _load_config_from_checkpoint(checkpoint_path: pathlib.Path, model_config_class) -> FastLLMModelConfig:
+    """Load model config from checkpoint metadata.yaml."""
+    config_dict = yaml.safe_load(checkpoint_path.joinpath("metadata.yaml").open("r"))["config"]
+    return model_config_class.from_dict(config_dict)
+
+
+def _is_lossy_hf_conversion(checkpoint_format: type[CheckpointFormat] | None, base_model_config) -> bool:
+    """Check if HuggingFace conversion drops weights (lossy conversion)."""
+    if checkpoint_format is None:
+        return False
+
+    from fast_llm.engine.checkpoint.external import IgnoreExportWeightConverter
+    from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+
+    handler_class = checkpoint_format.get_handler_class()
+    if not isinstance(handler_class, type) or not issubclass(handler_class, HuggingfaceStateDictCheckpointHandler):
+        return False
+
+    # Check converters to see if any weights are dropped
+    exported_config = handler_class.base_model_converter_class.export_config(base_model_config)
+    converters = handler_class.base_model_converter_class.get_converters(base_model_config, exported_config)
+    return any(isinstance(conv, IgnoreExportWeightConverter) for conv in converters)
 
 
 @pytest.fixture(scope="module")
@@ -236,8 +275,8 @@ def test_load_pretrained(
     model_testing_config, run_test_script_base_path, get_convert_path, load_and_compare_checkpoints
 ):
     # Test that loadind a pretrained model from either converted checkpoint always yields the exact same model.
-    reference_config = model_testing_config.model_config_class.from_dict(
-        yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
+    reference_config = _load_config_from_test_dir(
+        get_convert_path().parents[1], model_testing_config.model_config_class
     )
     reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
         _WEIGHT_SHARD_SAVE_NAME
@@ -269,6 +308,9 @@ def test_load_pretrained(
     _compare_architectures(reference_config, reference_config_from_hf)
 
     load_and_compare_checkpoints(DistributedCheckpointFormat, get_convert_path(), reference_config, reference_shard)
+
+    if _is_lossy_hf_conversion(model_testing_config.checkpoint_format, reference_config.base_model):
+        pytest.skip("HuggingFace conversion drops weights (lossy conversion)")
 
     load_and_compare_checkpoints(
         DistributedCheckpointFormat,
@@ -325,7 +367,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
             format=DistributedCheckpointFormat,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     test_input = torch.randint(
         0,
         model_ref.config.fast_llm_config.base_model.embeddings.vocab_size,
@@ -334,21 +376,21 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         device="cuda",
     )
     output_ref = model_ref(test_input)
-    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path)
+    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=hf_path,
             format=model_testing_config.checkpoint_format,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     errors = []
     auto_model = (
         transformers.AutoModel
         if model_testing_config.name in ("diffusion_llama", "dream")
         else transformers.AutoModelForCausalLM
     )
-    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda()
+    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),

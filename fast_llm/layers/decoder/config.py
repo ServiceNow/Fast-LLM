@@ -1,16 +1,24 @@
+import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.config import BlockConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.decoder.block import BlockWithBias, DecoderBlock
+    from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+
+class StochasticMixerKwargs(BlockKwargs):
+    """Kwargs keys for stochastic mixer."""
+
+    mixer_name = "stochastic_mixer_name"
 
 
 @config_class()
@@ -55,6 +63,13 @@ class MLPBaseConfig(BlockWithBiasConfig):
         return super()._from_dict(default, strict=strict)
 
 
+class SamplingStrategy(str, enum.Enum):
+    """Strategy for sampling mixers in a stochastic mixer."""
+
+    uniform = "uniform"
+    weighted = "weighted"
+
+
 @config_class(registry=True)
 class MixerConfig(BlockWithBiasConfig):
     """
@@ -69,6 +84,79 @@ class MixerConfig(BlockWithBiasConfig):
             # Default subclass.
             return AttentionConfig._from_dict(default, strict)
         return super()._from_dict(default, strict=strict)
+
+
+@config_class(dynamic_type={MixerConfig: "stochastic"})
+class StochasticMixerConfig(MixerConfig):
+    """
+    Stochastic mixer that uniformly samples from multiple mixer options during training.
+
+    For supernet training, each forward pass randomly selects one mixer to execute,
+    training all mixers with different subsets of data.
+    """
+
+    _abstract = False
+
+    mixers: dict[str, MixerConfig] = Field(
+        desc="Dict of mixer options to sample from (must contain at least 1). "
+        "Keys are mixer names used for debugging and namespacing.",
+        hint=FieldHint.architecture,
+    )
+
+    sampling_strategy: SamplingStrategy = Field(
+        default=SamplingStrategy.uniform,
+        desc="Strategy for sampling mixers during training.",
+        hint=FieldHint.feature,
+    )
+
+    sampling_weights: dict[str, float] | None = Field(
+        default=None,
+        desc="Sampling probability for each mixer by name (must sum to 1.0). "
+        "Only used when sampling_strategy='weighted'. "
+        "If None with uniform strategy, all mixers have equal probability.",
+        hint=FieldHint.feature,
+    )
+
+    main_mixer_name: str | None = Field(
+        default=None,
+        desc="Name of the main mixer. "
+        "Used for inference/eval, checkpoint loading (receives pretrained weights), "
+        "and checkpoint saving (only this mixer is exported). "
+        "If None, uses the first mixer in the dict.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+
+        # Validate mixers dict is not empty
+        Assert.gt(len(self.mixers), 0)
+
+        # Set main_mixer_name to first mixer if not specified
+        if self.main_mixer_name is None:
+            with self._set_implicit_default():
+                self.main_mixer_name = next(iter(self.mixers.keys()))
+
+        # Validate main mixer name exists
+        if self.main_mixer_name not in self.mixers:
+            raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
+
+        # Validate sampling weights
+        if self.sampling_weights is not None:
+            Assert.eq(set(self.sampling_weights.keys()), set(self.mixers.keys()))
+            # Check sum is close to 1.0
+            weight_sum = sum(self.sampling_weights.values())
+            if abs(weight_sum - 1.0) > 1e-5:
+                raise ValueError(f"Sampling weights must sum to 1.0, got {weight_sum}")
+            # Check all weights are non-negative
+            if any(w < 0 for w in self.sampling_weights.values()):
+                raise ValueError("All sampling weights must be non-negative")
+
+    @property
+    def layer_class(self) -> "type[StochasticMixer]":
+        from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+        return StochasticMixer
 
 
 @config_class(dynamic_type={BlockConfig: "decoder"})

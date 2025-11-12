@@ -694,6 +694,53 @@ _update_and_add_testing_config(
 )
 
 
+_update_and_add_testing_config(
+    # Tests stochastic mixer (supernet training) with attention and Mamba options.
+    "llama",
+    "stochastic_mixer",
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer"): {
+            "type": "stochastic",
+            "mixers": {
+                "attention": {
+                    # Option 1: Attention (will receive pretrained weights on load)
+                    "type": "attention",
+                    "rotary": {"type": "default", "theta": 10000},
+                    "heads": 8,
+                    "head_groups": 4,
+                    "head_size": 32,
+                    "add_linear_biases": False,
+                },
+                "mamba": {
+                    # Option 2: Mamba2 (randomly initialized on load)
+                    "type": "mamba_2",
+                    "d_inner": 512,
+                    "state_size": 16,
+                    "dt_rank": 16,
+                    "d_xb": 256,
+                    "add_linear_biases": False,
+                },
+            },
+            "sampling_strategy": "uniform",
+            "main_mixer_name": "attention",  # Use attention for inference/eval and checkpoint conversion
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported for Mamba.
+    skip_tests=("sdp", "ms"),
+)
+
+
 @pytest.fixture(scope="session", params=MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
     models = request.config.getoption("--models")
