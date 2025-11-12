@@ -448,7 +448,6 @@ class BeamSearchConfig(RunnableConfig):
 
     def _create_eval_base_config(self, base_config: TrainerConfig) -> TrainerConfig:
         """Create base evaluation config (train_iters=0)."""
-        import yaml
 
         config_dict = base_config.to_dict()
         config_dict["training"]["train_iters"] = 0

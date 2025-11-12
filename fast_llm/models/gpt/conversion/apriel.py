@@ -397,9 +397,15 @@ class AprielDecoderConverter(MistralDecoderConverter):
                 "num_hidden_layers": config.num_blocks,
                 "hybrid_block_layout": [
                     cls.block_converter_class.layout_names[
-                        type(block_config.mixer.mixers[block_config.mixer.main_mixer_name or next(iter(block_config.mixer.mixers.keys()))])
-                        if isinstance(block_config.mixer, StochasticMixerConfig)
-                        else type(block_config.mixer)
+                        (
+                            type(
+                                block_config.mixer.mixers[
+                                    block_config.mixer.main_mixer_name or next(iter(block_config.mixer.mixers.keys()))
+                                ]
+                            )
+                            if isinstance(block_config.mixer, StochasticMixerConfig)
+                            else type(block_config.mixer)
+                        )
                     ]
                     for block_config in pattern_block_configs
                 ],

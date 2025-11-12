@@ -1252,8 +1252,6 @@ class AprielHybridSSMModel(MistralModel):
         return output
 
 
-
-
 class AprielHybridSSMPreTrainedModel(PreTrainedModel):
     config_class = AprielHybridSSMConfig
     base_model_prefix = "model"

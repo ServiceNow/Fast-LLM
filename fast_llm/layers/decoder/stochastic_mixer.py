@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.core.distributed import check_parallel_match, set_generator
+from fast_llm.core.distributed import check_parallel_match
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -92,7 +92,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         # mixers won't receive gradients.
         for mixer in self.mixers.values():
             for param in mixer.parameters(recurse=True):
-                if hasattr(param, 'allow_no_grad'):
+                if hasattr(param, "allow_no_grad"):
                     param.allow_no_grad = True
 
     def setup(self, distributed: Distributed) -> None:
@@ -181,9 +181,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         for mixer in self.mixers.values():
             mixer.preprocess(batch, kwargs)
 
-    def get_compute_usage(
-        self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig
-    ) -> int:
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         """
         Return expected compute usage (weighted average of all mixers).
 

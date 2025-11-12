@@ -17,6 +17,7 @@ if typing.TYPE_CHECKING:
 
 class StochasticMixerKwargs(BlockKwargs):
     """Kwargs keys for stochastic mixer."""
+
     mixer_name = "stochastic_mixer_name"
 
 
