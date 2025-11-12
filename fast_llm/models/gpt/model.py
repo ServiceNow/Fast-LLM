@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -176,6 +176,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         )
 
         reference_logits = [{} for _ in preprocessed_meta]
+        distillation_model = getattr(self._config.head, "distillation_model", None)
+        activation_distillation_factor = getattr(self._config.head, "activation_distillation_factor", 0.0)
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_meta = [
                 (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
@@ -188,8 +190,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             # TODO: Do things work with >1?
             Assert.eq(len(reference_batch), len(preprocessed_meta), 1)
             for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
+                if (
+                    phase != PhaseType.inference
+                    and name == distillation_model
+                    and activation_distillation_factor > 0.0
+                ):
+                    reference_kwargs[BlockKwargs.activation_distillation_storage] = {}
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
+                if BlockKwargs.activation_distillation_storage in reference_kwargs:
+                    reference_logits[i][f"{name}_activations"] = reference_kwargs[
+                        BlockKwargs.activation_distillation_storage
+                    ]
+                    del reference_kwargs[BlockKwargs.activation_distillation_storage]
 
         token_ids = batch.token_ids
         if sequence_first:
@@ -255,7 +268,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
-                kwargs.update(reference_logits[i])
+                reference_payload = reference_logits[i]
+                kwargs.update(reference_payload)
+
+                if distillation_model is not None and activation_distillation_factor > 0.0:
+                    teacher_key = f"{distillation_model}_activations"
+                    if teacher_key in reference_payload:
+                        kwargs[BlockKwargs.activation_distillation_targets] = reference_payload.pop(teacher_key)
 
                 if batch.chosen_spans is not None:
                     chosen_valid_spans = []

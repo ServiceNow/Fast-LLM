@@ -3,6 +3,7 @@ import logging
 import typing
 
 import torch
+import torch.nn.functional as F
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
@@ -14,6 +15,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +138,32 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
-        if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "mixer output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
+        mixer_output = hidden_states if bias is None else hidden_states + bias
+        root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
+        # Teacher populates mixer activations for distillation.
+        activation_storage = root_kwargs.get(BlockKwargs.activation_distillation_storage)
+        if activation_storage is not None:
+            activation_storage[self.module_name] = mixer_output.detach()
+        # Student gets teacher activations and computes the activation-level loss.
+        activation_targets = root_kwargs.get(BlockKwargs.activation_distillation_targets)
+        if (
+            activation_targets is not None
+            and self.training
+            and (teacher_output := activation_targets.pop(self.module_name, None)) is not None
+        ):
+            # Compare student mixer output with the teacher’s stored activation and accumulate the loss.
+            teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
+            Assert.eq(teacher_tensor.shape, mixer_output.shape)
+            activation_loss = F.mse_loss(mixer_output, teacher_tensor)
+            activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
+            root_kwargs[BlockKwargs.activation_distillation_total] = (
+                activation_loss if activation_total is None else activation_total + activation_loss
             )
+            root_kwargs[BlockKwargs.activation_distillation_count] = (
+                root_kwargs.get(BlockKwargs.activation_distillation_count, 0) + 1
+            )
+        if self._debug.enabled:
+            self._debug(mixer_output, "mixer output", kwargs[BlockKwargs.hidden_dims], kwargs)
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         if self._debug.enabled:

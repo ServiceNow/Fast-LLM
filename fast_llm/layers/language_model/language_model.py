@@ -8,6 +8,7 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
@@ -59,6 +60,8 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        # Seed a shared root pointer so nested layers (including namespaced ones) can exchange activation distillation state.
+        kwargs.setdefault(BlockKwargs.root, kwargs)
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
         self.embeddings.preprocess(batch, kwargs)
         self.decoder.preprocess(batch, kwargs)

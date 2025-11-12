@@ -37,6 +37,11 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
+    root = "_root_kwargs"
+    activation_distillation_storage = "activation_distillation_storage"
+    activation_distillation_targets = "activation_distillation_targets"
+    activation_distillation_total = "activation_distillation_total"
+    activation_distillation_count = "activation_distillation_count"
 
 
 @config_class(registry=True)
