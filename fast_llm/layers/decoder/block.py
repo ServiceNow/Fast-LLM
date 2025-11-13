@@ -139,7 +139,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
 
-        self.activation_distillation_loss(hidden_states, bias, kwargs)
+        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs)
 
         if self._debug.enabled:
             self._debug(
@@ -172,8 +172,10 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         return hidden_states
 
     def activation_distillation_loss(self, hidden_states, bias, kwargs):
+        """
+        Maybe apply activation distillation loss and setup backward hooks
+        """
         mixer_output = hidden_states if bias is None else hidden_states + bias
-        # TODO: wrap in method: activation_distillation
         root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
         # Teacher populates mixer activations for distillation.
         activation_storage = root_kwargs.get(BlockKwargs.activation_distillation_storage)
@@ -200,6 +202,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
             )
             root_kwargs[BlockKwargs.activation_distillation_total] = activation_total
+        return hidden_states, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (normalization, bias_dropout_add)
