@@ -138,6 +138,40 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
+
+        self.activation_distillation_loss(hidden_states, bias, kwargs)
+
+        if self._debug.enabled:
+            self._debug(
+                hidden_states if bias is None else hidden_states + bias,
+                "mixer output",
+                kwargs[BlockKwargs.hidden_dims],
+                kwargs,
+            )
+        with set_generator(generator):
+            input_ = self._bias_dropout_add(hidden_states, bias, input_)
+        if self._debug.enabled:
+            self._debug(input_, "mixer residual", kwargs[BlockKwargs.hidden_dims], kwargs)
+        hidden_states = self.norm_2(input_)
+        if self._debug.enabled:
+            self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
+        hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        if self._debug.enabled:
+            self._debug(
+                hidden_states if bias is None else hidden_states + bias,
+                "MLP output",
+                kwargs[BlockKwargs.hidden_dims],
+                kwargs,
+            )
+        with set_generator(generator):
+            hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
+        if self._debug.enabled:
+            self._debug(None, "MLP residual", kwargs[BlockKwargs.hidden_dims], kwargs)
+        if self._return_input:
+            hidden_states = torch.stack((fw_input, hidden_states), dim=0)
+        return hidden_states
+
+    def activation_distillation_loss(self, hidden_states, bias, kwargs):
         mixer_output = hidden_states if bias is None else hidden_states + bias
         # TODO: wrap in method: activation_distillation
         root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
@@ -166,30 +200,6 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
             )
             root_kwargs[BlockKwargs.activation_distillation_total] = activation_total
-        if self._debug.enabled:
-            self._debug(mixer_output, "mixer output", kwargs[BlockKwargs.hidden_dims], kwargs)
-        with set_generator(generator):
-            input_ = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug.enabled:
-            self._debug(input_, "mixer residual", kwargs[BlockKwargs.hidden_dims], kwargs)
-        hidden_states = self.norm_2(input_)
-        if self._debug.enabled:
-            self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
-        hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
-        if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "MLP output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
-            )
-        with set_generator(generator):
-            hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug.enabled:
-            self._debug(None, "MLP residual", kwargs[BlockKwargs.hidden_dims], kwargs)
-        if self._return_input:
-            hidden_states = torch.stack((fw_input, hidden_states), dim=0)
-        return hidden_states
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (normalization, bias_dropout_add)
