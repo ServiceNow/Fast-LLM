@@ -261,11 +261,17 @@ def log_distributed_tensor[
     if level <= 0:
         return
     if global_:
-        tensor, is_first_rank = meta.local_to_global(tensor)
-        storage = False
-        is_first_rank = is_first_rank and all(group.rank() == 0 for group in duplicate_groups if group)
-        if not is_first_rank:
-            log_fn = None
+        try:
+            tensor, is_first_rank = meta.local_to_global(tensor)
+            storage = False
+            is_first_rank = is_first_rank and all(group.rank() == 0 for group in duplicate_groups if group)
+            if not is_first_rank:
+                log_fn = None
+        except (AssertionError, RuntimeError) as e:
+            # Shape mismatch during local_to_global conversion - log the local tensor instead
+            if log_fn is not None:
+                logger.warning(f"Failed to convert {name} to global tensor (expected shape {meta.shape}, got {tensor.shape}): {e}. Logging local tensor instead.")
+            global_ = False
     if log_fn is not None:
         return log_tensor(
             f"{'Global' if global_ else 'Local'} {name}: {meta.tensor_name}",

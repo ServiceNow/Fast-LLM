@@ -3,14 +3,19 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import Initialization, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
-from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim, scalar_dim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.common.linear.convolution import CausalConv1d
-    from fast_llm.layers.common.linear.linear import LinearBase
+    from fast_llm.layers.common.linear.linear import (
+        LinearBase,
+        Linear,
+        InputParallelLinear,
+        OutputParallelLinear,
+    )
 
 
 @config_class()
@@ -43,7 +48,7 @@ class AffineLinearBaseConfig(LinearBaseConfig):
     )
 
 
-@config_class()
+@config_class(registry=True)
 class LinearConfig(LinearBaseConfig):
     apply_peft: bool | None = Field(
         default=None,
@@ -102,8 +107,16 @@ class LinearConfig(LinearBaseConfig):
         return out
 
 
-@config_class()
+@config_class(dynamic_type={LinearConfig: "affine_linear"})
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
+    def _get_weight_out_dim(self, out_dim: TensorDim, transposed_weight: bool = False) -> TensorDim:
+        """Get the output dimension for weight parameter. Override in subclasses for special handling."""
+        return out_dim
+
+    def _get_bias_dims(self, out_dim: TensorDim) -> tuple[TensorDim, ...]:
+        """Get the dimensions for bias parameter. Override in subclasses for special handling."""
+        return (out_dim,)
+
     def get_layer(
         self,
         in_dim: TensorDim,
@@ -121,21 +134,27 @@ class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
         from fast_llm.layers.common.linear.linear import InputParallelLinear, Linear, OutputParallelLinear
 
         lr_scale = combine_lr_scales(lr_scale, self.lr_scale)
+
+        # Get weight and bias dimensions (may differ for subclasses like MoE)
+        weight_out_dim = self._get_weight_out_dim(out_dim, transposed_weight)
+
         weight = self.weight.get_parameter(
-            (in_dim, out_dim) if transposed_weight else (out_dim, in_dim),
+            (in_dim, weight_out_dim) if transposed_weight else (weight_out_dim, in_dim),
             default_initialization=default_weight_initialization,
             lr_scale=lr_scale,
             peft=None,
         )
         bias = self.bias.get_parameter(
-            (out_dim,),
+            self._get_bias_dims(out_dim),
             default_initialization=default_bias_initialization,
             lr_scale=lr_scale,
             default_enabled=default_add_bias,
             peft=None,
         )
+
+        # Use weight_out_dim for layer selection
         if in_dim.parallel_dim is not None:
-            assert out_dim.parallel_dim is None
+            assert weight_out_dim.parallel_dim is None
             out = InputParallelLinear(
                 weight,
                 bias,
@@ -143,12 +162,12 @@ class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
                 parallel_dim=in_dim.parallel_dim,
                 sequence_parallel=sequence_parallel,
             )
-        elif out_dim.parallel_dim is not None:
+        elif weight_out_dim.parallel_dim is not None:
             out = OutputParallelLinear(
                 weight,
                 bias,
                 transposed_weight=transposed_weight,
-                parallel_dim=out_dim.parallel_dim,
+                parallel_dim=weight_out_dim.parallel_dim,
                 sequence_parallel=sequence_parallel,
             )
         else:
@@ -159,6 +178,44 @@ class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
             out = peft.apply_linear(out, default_apply_peft if self.apply_peft is None else self.apply_peft)
 
         return out
+
+
+@config_class(dynamic_type={LinearConfig: "moe_affine_linear"})
+class MoEAffineLinearConfig(AffineLinearConfig):
+    """
+    AffineLinearConfig for MoE layers with per-expert biases.
+
+    When out_dim is a CompositeTensorDim like (experts_dim, output_features_dim):
+    - Weight dimension depends on transposed_weight:
+      * Non-transposed (layer 1): uses full flattened size (num_experts * output_features_per_expert)
+      * Transposed (layer 2): uses only feature dimension (output_features_per_expert)
+    - Bias always uses structured dimensions (experts_dim, output_features_per_expert) for per-expert biases
+
+    This matches the sparse MoE implementation where:
+    - Layer 1 (output-parallel sparse): weight is (num_experts * features, input), bias is (num_experts, features)
+    - Layer 2 (input-parallel sparse): weight is (num_experts * input, features), bias is (num_experts, features)
+    """
+
+    def _get_weight_out_dim(self, out_dim: TensorDim, transposed_weight: bool = False) -> TensorDim:
+        """For MoE, weight dimension depends on whether output or input is sparse."""
+        if isinstance(out_dim, CompositeTensorDim):
+            if transposed_weight:
+                # For transposed weight (layer 2), input is sparse, output is NOT sparse
+                # Use only the feature dimension (last component)
+                return out_dim._tensor_dims[-1]
+            else:
+                # For non-transposed weight (layer 1), output IS sparse
+                # Use the full flattened dimension
+                return out_dim
+        else:
+            return out_dim
+
+    def _get_bias_dims(self, out_dim: TensorDim) -> tuple[TensorDim, ...]:
+        """For MoE, use the composite structure for biases to get per-expert biases."""
+        if isinstance(out_dim, CompositeTensorDim):
+            return out_dim._tensor_dims
+        else:
+            return (out_dim,)
 
 
 @config_class()

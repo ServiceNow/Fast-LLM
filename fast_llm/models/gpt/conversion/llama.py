@@ -122,7 +122,7 @@ class LlamaMLPConverter:
     def import_config(cls, config: dict) -> dict:
         return {
             "intermediate_size": config["intermediate_size"],
-            "add_linear_biases": config["mlp_bias"],
+            "add_linear_biases": config.get("mlp_bias", False),
             "activation": ActivationType.from_hf_name(config["hidden_act"]),
             "gated": True,
         }
@@ -198,19 +198,20 @@ class LlamaAttentionConverter:
         elif rope_type == "llama3":
             rotary_config.update(
                 {
-                    "scale_factor": config["factor"],
-                    "low_frequency_factor": config["low_freq_factor"],
-                    "high_frequency_factor": config["high_freq_factor"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
+                    "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         elif rope_type == "yarn":
             rotary_config.update(
                 {
-                    "attention_factor": config["attention_factor"],
-                    "beta_fast": config["beta_fast"],
-                    "beta_slow": config["beta_slow"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "attention_factor": config["rope_scaling"].get("attention_factor"),
+                    "beta_fast": config["rope_scaling"]["beta_fast"],
+                    "beta_slow": config["rope_scaling"]["beta_slow"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         else:
@@ -220,7 +221,7 @@ class LlamaAttentionConverter:
             "heads": config["num_attention_heads"],
             "head_groups": config["num_key_value_heads"],
             "head_size": config.get("head_dim"),
-            "add_linear_biases": config["attention_bias"],
+            "add_linear_biases": config.get("attention_bias", False),
             "dropout": config["attention_dropout"],
         }
         if out["head_size"] is None:
@@ -253,6 +254,7 @@ class LlamaAttentionConverter:
         elif type(config.rotary) is YarnRotaryConfig:
             out["rope_scaling"] = {
                 "rope_type": "yarn",
+                "factor": config.rotary.scale_factor,
                 "attention_factor": config.rotary.attention_factor,
                 "beta_fast": config.rotary.beta_fast,
                 "beta_slow": config.rotary.beta_slow,

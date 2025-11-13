@@ -143,6 +143,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         # Rotary embeddings.
         self._rotary = self._config.rotary.get_layer(head_size_dim)
 
+        # Attention sinks for streaming attention (optional)
+        # Sinks are learnable embeddings, one per head
+        sinks_dim = TensorDim("sinks", self._config.heads)
+        self.sinks = self._config.sinks.get_parameter(
+            (sinks_dim,),
+            default_initialization=init_normal_(std=self._hidden_size**-0.5),
+            lr_scale=self._lr_scale,
+            default_enabled=False,
+            peft=None,
+        )
+
         # Output.
         self.dense = self._config.dense_layer.get_layer(
             dense_dim,
@@ -207,7 +218,24 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         attn_weights = attn_weights.to(torch.float32)
         attn_weights = torch.where(mask, attn_weights, mask_value)
-        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
+
+        # Apply attention sinks if enabled
+        if self.sinks is not None:
+            # sinks shape: (local_heads,) where local_heads = local_head_groups * local_heads_per_group
+            # Reshape to match attn_weights: (b, local_head_groups, sq, local_heads_per_group, sk)
+            sinks = self.sinks.reshape(self._local_head_groups, self._local_heads_per_group)
+            sinks = sinks.reshape(1, self._local_head_groups, 1, self._local_heads_per_group, 1)
+            sinks = sinks.expand(b, -1, sq, -1, 1)
+            # Concatenate sinks as an extra dimension
+            combined_logits = torch.cat([attn_weights, sinks], dim=-1)
+            # Subtract max for numerical stability (matching HF implementation)
+            combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+            # Apply softmax
+            combined_probs = torch.nn.functional.softmax(combined_logits, dim=-1)
+            # Drop the sink dimension after softmax
+            attn_weights = combined_probs[..., :-1].to(query.dtype)
+        else:
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._distributed.tp_generator):
             attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)

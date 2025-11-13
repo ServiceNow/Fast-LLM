@@ -44,6 +44,7 @@ class ActivationType(enum.StrEnum):
     relu = "relu"
     squared_relu = "squared_relu"
     identity = "identity"
+    gpt_oss_glu = "gpt_oss_glu"  # Custom GLU for GPT-OSS: (up + 1) * (gate * sigmoid(gate * 1.702))
 
     @property
     def activation_fn(self) -> typing.Callable[["torch.Tensor"], "torch.Tensor"]:
@@ -66,12 +67,25 @@ def _set_activation_fn_map() -> None:
 
     global _ACTIVATION_FN_MAP
 
+    def gpt_oss_glu_activation(x: torch.Tensor) -> torch.Tensor:
+        # Custom GPT-OSS GLU: (up + 1) * (gate * sigmoid(gate * 1.702))
+        # Input x has shape [..., 2*dim] where first half is gate, second half is up
+        # Includes clamping: gate max 7.0, up in [-7.0, 7.0]
+        gate, up = x.chunk(2, dim=-1)
+        alpha = 1.702
+        limit = 7.0
+        gate = gate.clamp(max=limit)
+        up = up.clamp(min=-limit, max=limit)
+        glu = gate * torch.sigmoid(gate * alpha)
+        return (up + 1.0) * glu
+
     _ACTIVATION_FN_MAP = {
         ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ActivationType.silu: torch.nn.functional.silu,
         ActivationType.relu: torch.nn.functional.relu,
         ActivationType.squared_relu: lambda x: torch.pow(torch.nn.functional.relu(x), 2),
         ActivationType.identity: lambda x: x,
+        ActivationType.gpt_oss_glu: gpt_oss_glu_activation,
     }
 
 
@@ -83,6 +97,7 @@ _ACTIVATION_HF_NAMES = {
     ActivationType.relu: "relu",
     ActivationType.squared_relu: "relu2",
     ActivationType.identity: "identity",
+    ActivationType.gpt_oss_glu: "gpt_oss_glu",  # Custom activation for GPT-OSS
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 
