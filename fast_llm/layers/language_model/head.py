@@ -422,15 +422,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         activation_loss = None
         root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
         activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
-        activation_count = root_kwargs.get(BlockKwargs.activation_distillation_count, 0)
-        if activation_total is not None and activation_count and self._config.activation_distillation_factor > 0.0:
-            activation_loss = (activation_total / activation_count) * self._config.activation_distillation_factor
+        if activation_total is not None and self._config.activation_distillation_factor > 0.0:
+            activation_loss = activation_total * self._config.activation_distillation_factor
             if losses is not None and self._activation_distillation_loss_name in losses:
                 losses[self._activation_distillation_loss_name].append(activation_loss.detach())
         # Activation targets are no longer needed past this point.
         root_kwargs.pop(BlockKwargs.activation_distillation_targets, None)
         root_kwargs.pop(BlockKwargs.activation_distillation_total, None)
-        root_kwargs.pop(BlockKwargs.activation_distillation_count, None)
 
         # TODO: de-allocate earlier.
         del logits

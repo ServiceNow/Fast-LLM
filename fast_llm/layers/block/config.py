@@ -41,7 +41,6 @@ class BlockKwargs:
     activation_distillation_storage = "activation_distillation_storage"
     activation_distillation_targets = "activation_distillation_targets"
     activation_distillation_total = "activation_distillation_total"
-    activation_distillation_count = "activation_distillation_count"
 
 
 @config_class(registry=True)

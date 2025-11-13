@@ -3,7 +3,6 @@ import logging
 import typing
 
 import torch
-import torch.nn.functional as F
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
@@ -12,6 +11,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta
@@ -139,6 +139,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
         mixer_output = hidden_states if bias is None else hidden_states + bias
+        # TODO: wrap in method: activation_distillation
         root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
         # Teacher populates mixer activations for distillation.
         activation_storage = root_kwargs.get(BlockKwargs.activation_distillation_storage)
@@ -154,14 +155,14 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # Compare student mixer output with the teacher’s stored activation and accumulate the loss.
             teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
-            activation_loss = F.mse_loss(mixer_output, teacher_tensor)
+            # TODO: handle sequence-first?
+            activation_loss = torch.mean(torch.norm(mixer_output - teacher_tensor, p=2, dim=(1, 2)))
+            mixer_output = AuxiliaryLoss.apply(mixer_output, activation_loss, 1.0)
             activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
-            root_kwargs[BlockKwargs.activation_distillation_total] = (
-                activation_loss if activation_total is None else activation_total + activation_loss
+            activation_total = (
+                activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
             )
-            root_kwargs[BlockKwargs.activation_distillation_count] = (
-                root_kwargs.get(BlockKwargs.activation_distillation_count, 0) + 1
-            )
+            root_kwargs[BlockKwargs.activation_distillation_total] = activation_total
         if self._debug.enabled:
             self._debug(mixer_output, "mixer output", kwargs[BlockKwargs.hidden_dims], kwargs)
         with set_generator(generator):
