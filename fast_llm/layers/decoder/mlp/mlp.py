@@ -114,7 +114,12 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if isinstance(input_, TensorMeta):
-            return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
+            return (
+                TensorMeta.from_dims(
+                    input_.dims[:-1] + (self._output_dim,), tensor_name="MLP output", dtype=input_.dtype
+                ),
+                None,
+            )
         return (
             mlp_autograd(
                 input_,

@@ -44,6 +44,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         *,
         # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
+        output_dim: TensorDim | None = None,
         lr_scale: float | None,
         peft: PeftConfig | None,
         return_bias: bool = True,
@@ -55,6 +56,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             config,
             distributed_config,
             hidden_dim=hidden_dim,
+            output_dim=output_dim,
             lr_scale=lr_scale,
             peft=peft,
             return_bias=return_bias,

@@ -10,6 +10,7 @@ from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.layers.vision.patch_convolution import PatchConvolution
     from fast_llm.layers.vision.vision_encoder import VisionEncoder, VisionMultiModalModel
 
 
@@ -82,6 +83,12 @@ class PatchConvolutionConfig(BlockConfig):
     def input_channels(self):
         # Number of input channels. Currently hard-coded to 3 (RGB).
         return 3
+
+    @property
+    def layer_class(self) -> "type[PatchConvolution]":
+        from fast_llm.layers.vision.patch_convolution import PatchConvolution
+
+        return PatchConvolution
 
 
 @config_class(registry=True)

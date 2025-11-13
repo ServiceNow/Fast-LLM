@@ -14,7 +14,7 @@ from fast_llm.layers.vision.config import VisionEncoderConfig, VisionMultiModalM
 logger = logging.getLogger(__name__)
 
 
-class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[VisionEncoderConfig]):
+class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
     _config: ConfigType
 
     def __init__(
@@ -26,8 +26,8 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[VisionEncoderConf
         lr_scale: float | None,
         peft: PeftConfig | None,
     ):
-        vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
         super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
+        vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
         self.patch_convolution = self._config.patch_convolution.get_layer(
             distributed_config,
             vision_hidden_dim,
@@ -67,7 +67,6 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[VisionEncoderConf
 
 
 class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageModel[ConfigType]):
-
     _config: ConfigType
 
     def __init__(

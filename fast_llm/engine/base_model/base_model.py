@@ -94,7 +94,6 @@ class LayerBaseWithNamespace(LayerBase):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
-        self.layer_count = self._layer.layer_count
         self.get_compute_usage = self._layer.get_compute_usage
         self.module_name = self._layer.module_name
 

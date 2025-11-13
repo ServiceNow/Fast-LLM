@@ -43,7 +43,8 @@ def test_varlen_preprocessing():
             ),
             AttentionKwargs.sequence_length: sequence_length,
             AttentionKwargs.sequence_lengths: sequence_lengths,
+            AttentionKwargs.device: torch.device("cpu"),
         }
-        attention.preprocess(torch.empty(1, device="cpu"), kwargs)
+        attention.preprocess(kwargs)
         Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_q], cumulative_sequences_q[micro_seq_idx])
         Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_k], cumulative_sequences_k[micro_seq_idx])

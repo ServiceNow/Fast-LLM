@@ -77,15 +77,14 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             peft=self._peft,
         )
 
-    @torch.compile
+    # @torch.compile
     def _forward(
         self,
         input_: torch.Tensor | None,
         token_ids: torch.Tensor,
         position_ids: torch.Tensor | None,
         mask_inputs: bool,
-        # TODO: Flatten the batch and sequence in the map?
-        embedding_map: tuple[tuple[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]] | None,
+        embedding_map: tuple[torch.Tensor, torch.Tensor] | None,
     ) -> torch.Tensor:
         Assert.eq(position_ids is None, self.position_embeddings_weight is None)
         group = self._parallel_dim.group
@@ -98,12 +97,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             if self.position_embeddings_weight is not None:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
 
-            if embedding_map is not None:
+            if input_ is not None:
                 # TODO: Accumulate redundant with masking?
-                input_index, embedding_index = embedding_map
                 if self._sequence_parallel:
                     input_ = gather(input_, group=group, dim=0)
-                embeddings = embeddings.index_put(embedding_index, input_[input_index], accumulate=True)
+                # Out-of-place equivalent of `embeddings[embedding_map] += input_`
+                embeddings = embeddings.index_put(embedding_map, input_, accumulate=True)
 
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
@@ -122,17 +121,16 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             if mask_inputs:
                 embeddings = embeddings * token_mask.unsqueeze(2)
 
-            if embedding_map is not None:
+            if input_ is not None:
                 # TODO: Accumulate redundant with masking?
-                input_index, embedding_index = embedding_map
                 if self._sequence_parallel:
                     #  TODO:: Filter and shift embedding map instead? (needs cuda sync)
                     input_ = gather(input_, group=group, dim=0)
                     embeddings_ = embeddings.new_zeros(embeddings.shape[0] * group.size(), *embeddings.shape[1:])
-                    embeddings_.index_put(embedding_index, input_[input_index], accumulate=True)
+                    embeddings_.index_put(embedding_map, input_, accumulate=True)
                     embeddings = embeddings + split(embeddings_, group=group, dim=0)
                 else:
-                    embeddings = embeddings.index_put(embedding_index, input_[input_index], accumulate=True)
+                    embeddings = embeddings.index_put(embedding_map, input_, accumulate=True)
 
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
@@ -162,6 +160,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             # TODO: Support multiple encoders.
             # TODO: Support pipeline-parallel.
             token_ids = kwargs.get(LanguageModelKwargs.token_ids)
+            # Drop the placeholder batch dimension, remove patch padding.
+            input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))[: embedding_map[0].size(0)]
 
         return self._forward(
             input_,

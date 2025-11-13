@@ -90,7 +90,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )
@@ -98,7 +98,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mlp = self._config.mlp.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )

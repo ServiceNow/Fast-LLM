@@ -224,7 +224,7 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
         )
 
 
-@config_class
+@config_class()
 class Convolution2DConfig(AffineLinearBaseConfig):
     def get_layer(
         self,

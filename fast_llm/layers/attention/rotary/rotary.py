@@ -56,7 +56,7 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         pass
 
 
@@ -71,8 +71,8 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[AttentionKwargs.sequence_length], batch.device)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(kwargs[AttentionKwargs.sequence_length], kwargs[AttentionKwargs.device])
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
             :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
@@ -190,11 +190,11 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
         super().__init__(config, head_size_dim)
         Assert.multiple(self._head_size, 4)
 
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         patch_positions = kwargs[VisionKwargs.patch_positions]
         if not hasattr(self, "_frequencies"):
             self._frequencies = self._config.theta ** -torch.arange(
-                0, 1, 4 / self._head_size, device=patch_positions.device, dtype=torch.float64
+                0, 1, 4 / self._head_size, device=kwargs[AttentionKwargs.device], dtype=torch.float64
             )
         # TODO: Pre-compute 2d frequencies?
         angles = torch.outer(patch_positions.flatten(), self._frequencies).view(

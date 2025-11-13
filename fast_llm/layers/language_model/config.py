@@ -22,6 +22,8 @@ if typing.TYPE_CHECKING:
 class LanguageModelKwargs(BlockKwargs):
     token_ids = "token_ids"
     position_ids = "position_ids"
+    token_map = "token_map"
+    sample_map = "sample_map"
     embedding_map = "embedding_map"
     # TODO: These are generic
     labels = "labels"

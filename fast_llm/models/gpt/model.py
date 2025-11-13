@@ -199,6 +199,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 AttentionKwargs.sequence_lengths: batch.tokens.lengths,
+                AttentionKwargs.device: self._distributed.device,
                 **reference_logits[i],
             }
 

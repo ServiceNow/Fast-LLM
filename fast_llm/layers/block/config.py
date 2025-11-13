@@ -37,6 +37,7 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
+    device = "device"
 
 
 @config_class(registry=True)

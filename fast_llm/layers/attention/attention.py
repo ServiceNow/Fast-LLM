@@ -15,7 +15,7 @@ from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import div
+from fast_llm.utils import Assert, div
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -451,6 +451,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             self._preprocess_for_flash_attention(kwargs)
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
+        device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
         if (
             sequence_length := kwargs[AttentionKwargs.sequence_length]
         ) > self._backup_attention_tensor_cache_max_sequence_length:
@@ -460,7 +461,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             self._backup_attention_mask = torch.ones(
                 (sequence_length, sequence_length),
                 dtype=torch.bool,
-                device=self._distributed.device,
+                device=device,
             ).tril_()
 
             if self._config.window_size is not None:
@@ -469,7 +470,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 [],
                 torch.finfo(self._distributed_config.compute_dtype.torch).min,
                 dtype=self._distributed_config.compute_dtype.torch,
-                device=self._distributed.device,
+                device=device,
             )
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
@@ -483,7 +484,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     for sample_lens in kwargs[AttentionKwargs.sequence_lengths]
                 ]
             )
-            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._distributed.device)
+            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(device)
             kwargs[AttentionKwargs.attention_mask] = (
                 kwargs[AttentionKwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
@@ -502,54 +503,27 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         """
         if self._config.cross_document_attention:
             return
-        sequence_lengths = kwargs[AttentionKwargs.sequence_lengths]
-        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
-        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
-        if sequence_q < kwargs[AttentionKwargs.sequence_length]:
-            cumsums = [torch.cumsum(x, dim=0) for x in sequence_lengths]
-            # The first and last documents in a microsequence need to be handled separately. Include all tokens from other documents
-            # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the offsets
-            # of the first documents so that we can index into their kv pairs
-            start_seq_idx = [
-                torch.argmax((cu_seqlens >= sequence_k - sequence_q).to(torch.uint8), dim=0) for cu_seqlens in cumsums
-            ]
-            end_seq_idx = [torch.argmax((cu_seqlens >= sequence_k).to(torch.uint8), dim=0) for cu_seqlens in cumsums]
-            seqlens_q = []
-            seqlens_k = []
-            for idx, sample_seqlens in enumerate(sequence_lengths):
-                start_idx = start_seq_idx[idx]
-                end_idx = end_seq_idx[idx]
-                seqlens_q.extend([0] * start_idx)
-                n_attention_tokens = sample_seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k)
-                if start_idx == end_idx:
-                    seqlens_q.append(sequence_q)
-                else:
-                    start_q_tokens = cumsums[idx][start_idx] - (sequence_k - sequence_q)
-                    seqlens_q.extend(
-                        [
-                            start_q_tokens,
-                            *(sample_seqlens[idx] for idx in range(start_idx + 1, end_idx)),
-                            n_attention_tokens,
-                        ]
-                    )
-                seqlens_k.extend(sample_seqlens[: end_idx + 1])
-                seqlens_k[-1] = n_attention_tokens
-            seqlens_q = torch.tensor(seqlens_q, dtype=torch.int32)
-            seqlens_k = torch.tensor(seqlens_k, dtype=torch.int32)
-        else:
-            seqlens_q = torch.cat(sequence_lengths)
-            seqlens_k = torch.cat(sequence_lengths)
-        kwargs[AttentionKwargs.cu_seqlens_q] = torch.cat(
-            (
-                torch.zeros(1, dtype=torch.int32, device=self._distributed.device),
-                torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(self._distributed.device),
-            )
+        device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
+
+        # TODO: ====== Fix (need to know how much first sequence was cropped) ======
+        Assert.eq(kwargs[AttentionKwargs.sequence_k_dim].size, kwargs[AttentionKwargs.sequence_q_dim].size)
+
+        # TODO: Calculate these in batch preprocessing?
+        sequence_lengths_q = torch.tensor(
+            [
+                0,
+                *(
+                    sequence_length
+                    for sequence_lengths in kwargs[AttentionKwargs.sequence_lengths]
+                    for sequence_length in sequence_lengths
+                ),
+            ],
+            dtype=torch.int32,
         )
-        kwargs[AttentionKwargs.cu_seqlens_k] = torch.cat(
-            (
-                torch.zeros(1, dtype=torch.int32, device=self._distributed.device),
-                torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(self._distributed.device),
-            )
-        )
-        kwargs[AttentionKwargs.max_seqlen_q] = seqlens_q.max()
-        kwargs[AttentionKwargs.max_seqlen_k] = seqlens_k.max()
+        max_sequence_length = sequence_lengths_q.max().item()
+        cu_seqlens_q = sequence_lengths_q.cumsum_(0).to(device)
+        max_seqlen_q = cu_seqlens_q.new_full((1,), max_sequence_length)
+        kwargs[AttentionKwargs.cu_seqlens_q] = cu_seqlens_q
+        kwargs[AttentionKwargs.cu_seqlens_k] = cu_seqlens_q
+        kwargs[AttentionKwargs.max_seqlen_q] = max_seqlen_q
+        kwargs[AttentionKwargs.max_seqlen_k] = max_seqlen_q

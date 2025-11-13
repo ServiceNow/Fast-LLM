@@ -40,7 +40,7 @@ class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig)
 class MultiModalModelConfig(GPTModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "multimodal"
-    base_model: GPTBaseModelConfig = FieldUpdate()
+    base_model: MultiModalBaseModelConfig = FieldUpdate()
     # TODO: ====== Conversion ======
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats
 

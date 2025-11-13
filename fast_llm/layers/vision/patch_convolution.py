@@ -3,10 +3,11 @@ import typing
 import torch
 
 from fast_llm.core.ops import split
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.block import Block
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.vision.config import PatchConvolutionConfig
 from fast_llm.tensor import TensorMeta
@@ -35,8 +36,8 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         self.convolution = self._config.convolution.get_layer(
-            self._hidden_dim,
             TensorDim("input_channels", self._config.input_channels),
+            self._hidden_dim,
             TensorDim("patch_height", self._config.patch_height),
             TensorDim("patch_width", self._config.patch_width),
             stride=(self._config.patch_height, self._config.patch_width),
@@ -55,15 +56,27 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
-                input_.dims[:-1] + (self._hidden_dim,), tensor_name="patch conv output", dtype=input_.dtype
+                (
+                    (
+                        input_.dims[0],
+                        scalar_dim,
+                        self._hidden_dim,
+                    )
+                    if kwargs[BlockKwargs.sequence_first]
+                    else (
+                        scalar_dim,
+                        input_.dims[0],
+                        self._hidden_dim,
+                    )
+                ),
+                tensor_name="patch convolution output",
+                dtype=input_.dtype,
             )
-        # TODO: Avoid padding
-        input_ = self.convolution(input_)
-        patch_embeddings = self.normalization(input_.flatten(1)).view_as(input_)
-
-        # TODO: Permute earlier?
-        if kwargs[AttentionKwargs.sequence_first]:
-            patch_embeddings = patch_embeddings.permute(1, 0, 2).contiguous()
+        patch_embeddings = (
+            self.normalization(self.convolution(input_).flatten(1))
+            .view(-1, self._hidden_dim.size)
+            .unsqueeze(int(kwargs[AttentionKwargs.sequence_first]))
+        )
         if self._sequence_parallel:
             patch_embeddings = split(patch_embeddings, group=self._parallel_dim.group, dim=0)
         return patch_embeddings
