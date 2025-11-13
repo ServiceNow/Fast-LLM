@@ -562,6 +562,37 @@ _update_and_add_testing_config(
     ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
+_update_and_add_testing_config(
+    # Tests hybrid Mamba 2.
+    "llama",
+    "hybrid_nm2",
+    model_type="hybrid_ssm",
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','nm2']",
+        "model.base_model.ssm.state_size=8",
+        "model.base_model.ssm.d_xb=16",
+        "model.base_model.ssm.head_dim=8",
+        "model.base_model.ssm.n_groups=4",
+        # f"model.base_model.transformer.debug_transformer={_LOG_LEVEL}"
+    ],
+    megatron_args=None,
+    checkpoint_format=AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported.
+    skip_tests=(
+        "sdp",
+        "ms",
+    ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
+)
+
 
 _update_and_add_testing_config(
     # Tests hybrid discrete Mamba 2.
