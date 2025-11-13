@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, logging
+from transformers.utils import TransformersKwargs, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
@@ -1252,9 +1252,6 @@ class AprielHybridSSMModel(MistralModel):
         return output
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
-
-
 class AprielHybridSSMPreTrainedModel(PreTrainedModel):
     config_class = AprielHybridSSMConfig
     base_model_prefix = "model"
@@ -1383,7 +1380,7 @@ class AprielHybridSSMForCausalLM(AprielHybridSSMPreTrainedModel, GenerationMixin
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        **kwargs: Unpack[KwargsForCausalLM],
+        **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, CausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
