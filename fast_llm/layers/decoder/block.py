@@ -157,7 +157,10 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
             # TODO: handle sequence-first?
             activation_loss = torch.mean(torch.norm(mixer_output - teacher_tensor, p=2, dim=(1, 2)))
-            mixer_output = AuxiliaryLoss.apply(mixer_output, activation_loss, 1.0)
+            # Backward hooks
+            hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
+            bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
+            # Logging
             activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
             activation_total = (
                 activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
