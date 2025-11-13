@@ -698,9 +698,8 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "num_blocks"): 1,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
         ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
-        # TODO: ====== Make it work with these ======
-        # ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
-        # ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
     },
     get_dataset=get_multimodal_test_dataset,
     megatron_args=None,

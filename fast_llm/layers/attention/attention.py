@@ -179,11 +179,15 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             dense_dim,
         )
 
-    def _attn_fused(
-        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
+    def _attn_backup(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kwargs: dict[str, typing.Any],
     ) -> torch.Tensor:
         # Backup attention (inefficient)
-        b, sq, hidden = query.shape
+        b, sq, _, _ = query.shape
         sk = key.size(1)
 
         if self._local_head_groups == 1:
@@ -191,14 +195,12 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             key = key.transpose(-1, -2)
         else:
             query = (
-                query.unflatten(-1, (self._local_head_groups, self._local_heads_per_group, self._config.head_size))
+                query.unflatten(2, (self._local_head_groups, self._local_heads_per_group))
                 .transpose(1, 2)
                 .reshape(b * self._local_head_groups, sq * self._local_heads_per_group, self._config.head_size)
             )
-            key = key.unflatten(-1, (self._local_head_groups, self._config.head_size)).movedim(1, 3).flatten(0, 1)
-            value = (
-                value.unflatten(-1, (self._local_head_groups, self._config.head_size)).transpose(1, 2).flatten(0, 1)
-            )
+            key = key.movedim(1, 3).flatten(0, 1)
+            value = value.transpose(1, 2).flatten(0, 1)
 
         attn_weights = torch.empty(
             (b * self._local_head_groups, sq * self._local_heads_per_group, sk), device=query.device, dtype=query.dtype
@@ -212,7 +214,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32)
-        attn_weights = torch.where(mask, attn_weights, mask_value)
+        if (attention_mask := kwargs[AttentionKwargs.attention_mask]) is not None:
+            attn_weights = torch.where(attention_mask, attn_weights, kwargs[AttentionKwargs.attention_mask_value])
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
@@ -227,6 +230,40 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 attn_output.view(b, self._local_head_groups, sq, self._local_heads_per_group, self._config.head_size)
                 .transpose(1, 2)
                 .flatten(2)
+            )
+
+    def _attn_flash(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, kwargs: dict[str, typing.Any]
+    ) -> torch.Tensor:
+        assert _flash_available
+        window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
+        if self._config.cross_document_attention:
+            return _flash_attn_func(
+                query,
+                key,
+                value,
+                window_size=window_size,
+                dropout_p=self._config.dropout if self.training else 0.0,
+                causal=self._config.causal,
+                softmax_scale=self._softmax_scale,
+            ).flatten(-2)
+        else:
+            return (
+                _flash_attn_varlen_func(
+                    query.view(-1, query.size(-2), query.size(-1)),
+                    key.view(-1, key.size(-2), key.size(-1)),
+                    value.view(-1, value.size(-2), value.size(-1)),
+                    kwargs[AttentionKwargs.cu_seqlens_q],
+                    kwargs[AttentionKwargs.cu_seqlens_k],
+                    kwargs[AttentionKwargs.max_seqlen_q],
+                    kwargs[AttentionKwargs.max_seqlen_k],
+                    dropout_p=self._config.dropout if self.training else 0.0,
+                    window_size=window_size,
+                    causal=self._config.causal,
+                    softmax_scale=self._softmax_scale,
+                )
+                .view(query.size())
+                .flatten(-2)
             )
 
     def _query_key_value_forward(
@@ -332,47 +369,12 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
-        window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
         with set_generator(self._distributed.tp_generator):
             if self._implementation == AttentionImplementation.flash:
-                assert _flash_available
-                if self._config.cross_document_attention:
-                    input_ = _flash_attn_func(
-                        query,
-                        key,
-                        value,
-                        window_size=window_size,
-                        dropout_p=self._config.dropout if self.training else 0.0,
-                        causal=self._config.causal,
-                        softmax_scale=self._softmax_scale,
-                    ).flatten(-2)
-                else:
-                    input_ = (
-                        _flash_attn_varlen_func(
-                            query.view(-1, query.size(-2), query.size(-1)),
-                            key.view(-1, key.size(-2), key.size(-1)),
-                            value.view(-1, value.size(-2), value.size(-1)),
-                            cu_seqlens_q=kwargs.get(AttentionKwargs.cu_seqlens_q),
-                            cu_seqlens_k=kwargs.get(AttentionKwargs.cu_seqlens_k),
-                            max_seqlen_q=kwargs.get(AttentionKwargs.max_seqlen_q),
-                            max_seqlen_k=kwargs.get(AttentionKwargs.max_seqlen_k),
-                            dropout_p=self._config.dropout if self.training else 0.0,
-                            window_size=window_size,
-                            causal=self._config.causal,
-                            softmax_scale=self._softmax_scale,
-                        )
-                        .view(query.size())
-                        .flatten(-2)
-                    )
+                input_ = self._attn_flash(query, key, value, kwargs)
             elif self._implementation == AttentionImplementation.backup:
                 # TODO: Avoid the flattens.
-                input_ = self._attn_fused(
-                    query.flatten(-2),
-                    key.flatten(-2),
-                    value.flatten(-2),
-                    kwargs[AttentionKwargs.attention_mask],
-                    kwargs[AttentionKwargs.attention_mask_value],
-                )
+                input_ = self._attn_backup(query, key, value, kwargs)
             else:
                 raise NotImplementedError(self._implementation)
 
@@ -452,44 +454,54 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
-        if (
-            sequence_length := kwargs[AttentionKwargs.sequence_length]
-        ) > self._backup_attention_tensor_cache_max_sequence_length:
-            # Create tensor cache.
-            self._backup_attention_tensor_cache_max_sequence_length = sequence_length
-
-            self._backup_attention_mask = torch.ones(
-                (sequence_length, sequence_length),
-                dtype=torch.bool,
-                device=device,
-            ).tril_()
-
-            if self._config.window_size is not None:
-                self._backup_attention_mask.triu_(-self._config.window_size + 1)
-            self._backup_attention_mask_value = torch.full(
-                [],
-                torch.finfo(self._distributed_config.compute_dtype.torch).min,
-                dtype=self._distributed_config.compute_dtype.torch,
-                device=device,
-            )
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
-        kwargs[AttentionKwargs.attention_mask] = self._backup_attention_mask[
-            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-        ]
+        if self._config.causal:
+            if (
+                sequence_length := kwargs[AttentionKwargs.sequence_length]
+            ) > self._backup_attention_tensor_cache_max_sequence_length:
+                # Create tensor cache.
+                self._backup_attention_tensor_cache_max_sequence_length = sequence_length
+
+                self._backup_attention_mask = torch.ones(
+                    (sequence_length, sequence_length),
+                    dtype=torch.bool,
+                    device=device,
+                ).tril_()
+
+                if self._config.window_size is not None:
+                    self._backup_attention_mask.triu_(-self._config.window_size + 1)
+            attention_mask = self._backup_attention_mask[
+                None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+            ]
+        else:
+            attention_mask = None
         if not self._config.cross_document_attention:
             seq_ids = torch.stack(
                 [
-                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
+                    torch.cat([torch.full((x,), i, device=device) for i, x in enumerate(sample_lens)])
                     for sample_lens in kwargs[AttentionKwargs.sequence_lengths]
                 ]
             )
-            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(device)
-            kwargs[AttentionKwargs.attention_mask] = (
-                kwargs[AttentionKwargs.attention_mask]
-                & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
-            )
-        kwargs[AttentionKwargs.attention_mask_value] = self._backup_attention_mask_value
+            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None])[
+                :, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+            ]
+            if attention_mask is None:
+                attention_mask = document_mask
+            else:
+                attention_mask = attention_mask & document_mask
+
+        kwargs[AttentionKwargs.attention_mask] = attention_mask
+
+        if attention_mask is not None:
+            if not hasattr(self, "_backup_attention_mask_value"):
+                self._backup_attention_mask_value = torch.full(
+                    [],
+                    torch.finfo(self._distributed_config.compute_dtype.torch).min,
+                    dtype=self._distributed_config.compute_dtype.torch,
+                    device=device,
+                )
+            kwargs[AttentionKwargs.attention_mask_value] = self._backup_attention_mask_value
 
     def _preprocess_for_flash_attention(self, kwargs: dict[str, typing.Any]) -> None:
         """
