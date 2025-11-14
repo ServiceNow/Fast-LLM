@@ -90,7 +90,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )
@@ -98,7 +98,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mlp = self._config.mlp.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )
@@ -175,9 +175,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             )
         )
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        self.mixer.preprocess(batch, kwargs)
-        self.mlp.preprocess(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self.mixer.preprocess(kwargs)
+        self.mlp.preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)

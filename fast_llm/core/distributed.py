@@ -91,6 +91,22 @@ def allreduce_scalar(
         return value
 
 
+def all_gather_scalar(
+    value: float | int,
+    dtype: torch.dtype = torch.float64,
+    group: torch.distributed.ProcessGroup | None = None,
+    timeout: float | None = None,
+):
+    if group:
+        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
+        add_ephemeral_timeout(group, timeout)
+        output_tensor = value.new_empty((group.size(),))
+        torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
+        return output_tensor.tolist()
+    else:
+        return value
+
+
 def broadcast_scalar(
     value: float | int,
     dtype: torch.dtype = torch.float64,

@@ -14,12 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 class TensorDim:
-    def __init__(self, name: str, global_size: int | None, parallel_dim: DistributedDim | None = None):
+    def __init__(
+        self, name: str, global_size: int, parallel_dim: DistributedDim | None = None, variable_size: bool = False
+    ):
         # TODO: Handle None for unknown sizes?
         self._name = name
         self._global_size = global_size
         self._size = self._global_size if parallel_dim is None else div(global_size, parallel_dim.size)
         self._parallel_dim = parallel_dim
+        self._variable_size = variable_size
 
     def __repr__(self) -> str:
         return (
@@ -28,6 +31,7 @@ class TensorDim:
             f" size={self._size},"
             f" global_size={self._global_size},"
             f" parallel_dim={self._parallel_dim}"
+            f" variable_size={self._variable_size}"
             f")"
         )
 
@@ -60,9 +64,13 @@ class TensorDim:
         # TODO: Make more flexible for derived classes?
         return None if self._parallel_dim is None else self._parallel_dim.group
 
+    @property
+    def variable_size(self) -> bool:
+        return self._variable_size
+
     def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
         assert self.is_parallel
-        return TensorDim(self.name, self.size * distributed_dim.size, distributed_dim)
+        return TensorDim(self.name, self.size * distributed_dim.size, distributed_dim, self.variable_size)
 
     def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
         if self.is_parallel:
@@ -99,6 +107,7 @@ class CompositeTensorDim(TensorDim):
                 assert parallel_dim is None
                 parallel_dim = tensor_dim.parallel_dim
                 self._parallel_dim_index = dim
+            assert not tensor_dim.variable_size
 
         super().__init__(
             name=name,
@@ -142,6 +151,7 @@ class ConcatenatedTensorDim(TensorDim):
         for dim, tensor_dim in enumerate(tensor_dims[1:]):
             # TODO: Allow more flexibility?
             Assert.is_(tensor_dim.parallel_dim, parallel_dim)
+            assert not tensor_dim.variable_size
 
         super().__init__(
             name=name,

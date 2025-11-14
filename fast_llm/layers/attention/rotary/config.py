@@ -10,7 +10,14 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.attention.rotary.rotary import DefaultRotary, Llama3Rotary, NoRotary, Rotary, YarnRotary
+    from fast_llm.layers.attention.rotary.rotary import (
+        DefaultRotary,
+        Llama3Rotary,
+        NoRotary,
+        Rotary,
+        Rotary2D,
+        YarnRotary,
+    )
 
 
 @config_class(registry=True)
@@ -135,3 +142,11 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         from fast_llm.layers.attention.rotary.rotary import YarnRotary
 
         return YarnRotary
+
+
+@config_class(dynamic_type={RotaryConfig: "default_2d"})
+class Rotary2DConfig(DefaultRotaryConfig):
+    def _get_configurable_class(self) -> "type[Rotary2D]":
+        from fast_llm.layers.attention.rotary.rotary import Rotary2D
+
+        return Rotary2D
