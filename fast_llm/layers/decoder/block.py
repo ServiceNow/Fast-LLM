@@ -14,6 +14,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
+from fast_llm.layers.language_model.head import _format_name
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -139,7 +140,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
 
-        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs)
+        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
 
         if self._debug.enabled:
             self._debug(
@@ -171,7 +172,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
 
-    def activation_distillation_loss(self, hidden_states, bias, kwargs):
+    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses):
         """
         Maybe apply activation distillation loss and setup backward hooks
         """
@@ -192,7 +193,12 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
             # TODO: handle sequence-first?
-            activation_loss = torch.mean(torch.norm(mixer_output - teacher_tensor, p=2, dim=(1, 2)))
+            # TODO: un-scaled loss for reporting? Average loss over layers?
+            # L2 loss
+            activation_loss_factor = self._config.activation_distillation_factor
+            activation_loss = activation_loss_factor * torch.mean(
+                torch.norm(mixer_output - teacher_tensor, p=2, dim=(2))
+            )
             # Backward hooks
             hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
             bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
@@ -202,6 +208,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
             )
             root_kwargs[BlockKwargs.activation_distillation_total] = activation_total
+
+            if losses is not None and self._activation_distillation_loss_name in losses:
+                losses[self._activation_distillation_loss_name].append(activation_total.detach())
         return hidden_states, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
@@ -217,5 +226,21 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mixer.preprocess(batch, kwargs)
         self.mlp.preprocess(batch, kwargs)
 
+    # TODO: add layer_index
+    _activation_distillation_loss_name = "activation_distillation_loss"
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)
+        loss_definitions = []
+        if self._config.activation_distillation_factor > 0.0 and self._config.distillation_model is not None:
+            loss_definitions.append(
+                LossDef(
+                    name=self._activation_distillation_loss_name,
+                    formatted_name=_format_name(self._activation_distillation_loss_name),
+                    count=count,
+                )
+            )
+        return (
+            loss_definitions
+            + self.mixer.get_loss_definitions(count=count)
+            + self.mlp.get_loss_definitions(count=count)
+        )

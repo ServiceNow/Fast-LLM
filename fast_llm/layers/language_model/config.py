@@ -162,12 +162,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Factor to scale the distillation loss by when using distillation.",
         hint=FieldHint.feature,
     )
-    activation_distillation_factor: float = Field(
-        default=0.0,
-        desc="Factor to scale the activation-level distillation loss by when using distillation.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
     logits_scale_factor: float = Field(
         default=1.0,
         desc="Multiply output logits by scale factor.",
@@ -239,8 +233,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                     self.language_model_loss_factor = 0.0
         super()._validate()
         assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
-        if self.activation_distillation_factor > 0.0 and self.distillation_model is None:
-            raise ValueError("Activation distillation requires a distillation_model to be configured.")
 
     @property
     def max_prediction_distance(self) -> int:

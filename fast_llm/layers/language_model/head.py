@@ -18,7 +18,7 @@ from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, re
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
-from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
@@ -419,17 +419,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             distillation_loss, distillation_grad = None, None
 
-        activation_loss = None
-        root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
-        activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
-        if activation_total is not None and self._config.activation_distillation_factor > 0.0:
-            activation_loss = activation_total * self._config.activation_distillation_factor
-            if losses is not None and self._activation_distillation_loss_name in losses:
-                losses[self._activation_distillation_loss_name].append(activation_loss.detach())
-        # Activation targets are no longer needed past this point.
-        root_kwargs.pop(BlockKwargs.activation_distillation_targets, None)
-        root_kwargs.pop(BlockKwargs.activation_distillation_total, None)
-
         # TODO: de-allocate earlier.
         del logits
 
@@ -437,7 +426,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
 
         # TODO: Return individual losses?
-        loss = _add_tensors(dpo_loss, lm_loss, distillation_loss, activation_loss)
+        loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
         if self.training and losses is not None:
             if dpo_loss is not None:
                 losses[self._dpo_loss_name].append(dpo_loss.detach())
@@ -483,13 +472,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             name = f"{name}_{self._prediction_distance}"
         return name
 
-    @functools.cached_property
-    def _activation_distillation_loss_name(self) -> str:
-        name = "activation_distillation_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
         if self._config.logit_z_loss:
@@ -517,15 +499,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                         count=count,
                     )
                 )
-
-        if self._config.activation_distillation_factor > 0.0 and self._config.distillation_model is not None:
-            loss_defs.append(
-                LossDef(
-                    name=self._activation_distillation_loss_name,
-                    formatted_name=_format_name(self._activation_distillation_loss_name),
-                    count=count,
-                )
-            )
 
         return loss_defs
 

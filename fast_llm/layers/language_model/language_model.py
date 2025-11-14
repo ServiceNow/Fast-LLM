@@ -61,7 +61,7 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
         # TODO: remove root_kwargs
-        activation_factor = getattr(self.head._config, "activation_distillation_factor", 0.0)
+        activation_factor = getattr(self.decoder.config.block, "activation_distillation_factor", 0.0)
         if (
             activation_factor > 0.0
             or BlockKwargs.activation_distillation_targets in kwargs
