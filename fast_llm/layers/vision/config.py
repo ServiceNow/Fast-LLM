@@ -78,6 +78,11 @@ class PatchConvolutionConfig(BlockConfig):
         desc="Width of image patches, in pixels.",
         hint=FieldHint.core,
     )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the model in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
+    )
 
     @functools.cached_property
     def input_channels(self):

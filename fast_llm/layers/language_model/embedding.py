@@ -102,7 +102,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 if self._sequence_parallel:
                     input_ = gather(input_, group=group, dim=0)
                 # Out-of-place equivalent of `embeddings[embedding_map] += input_`
-                embeddings = embeddings.index_put(embedding_map, input_, accumulate=True)
+                embeddings = embeddings.index_put(embedding_map, input_[: embedding_map[0].size(0)], accumulate=True)
 
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
@@ -127,10 +127,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                     #  TODO:: Filter and shift embedding map instead? (needs cuda sync)
                     input_ = gather(input_, group=group, dim=0)
                     embeddings_ = embeddings.new_zeros(embeddings.shape[0] * group.size(), *embeddings.shape[1:])
-                    embeddings_.index_put(embedding_map, input_, accumulate=True)
+                    embeddings_.index_put(embedding_map, input_[: embedding_map[0].size(0)], accumulate=True)
                     embeddings = embeddings + split(embeddings_, group=group, dim=0)
                 else:
-                    embeddings = embeddings.index_put(embedding_map, input_, accumulate=True)
+                    embeddings = embeddings.index_put(
+                        embedding_map, input_[: embedding_map[0].size(0)], accumulate=True
+                    )
 
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
@@ -161,7 +163,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             # TODO: Support pipeline-parallel.
             token_ids = kwargs.get(LanguageModelKwargs.token_ids)
             # Drop the placeholder batch dimension, remove patch padding.
-            input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))[: embedding_map[0].size(0)]
+            input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))
 
         return self._forward(
             input_,

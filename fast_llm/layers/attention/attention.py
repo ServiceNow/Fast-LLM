@@ -454,8 +454,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
-        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
-        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
+        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].global_size
+        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].global_size
         if self._config.causal:
             if (
                 sequence_length := kwargs[AttentionKwargs.sequence_length]
@@ -518,7 +518,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
 
         # TODO: ====== Fix (need to know how much first sequence was cropped) ======
-        Assert.eq(kwargs[AttentionKwargs.sequence_k_dim].size, kwargs[AttentionKwargs.sequence_q_dim].size)
+        Assert.eq(
+            kwargs[AttentionKwargs.sequence_k_dim].global_size, kwargs[AttentionKwargs.sequence_q_dim].global_size
+        )
 
         # TODO: Calculate these in batch preprocessing?
         sequence_lengths_q = torch.tensor(

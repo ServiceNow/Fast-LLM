@@ -3,13 +3,12 @@ import typing
 import torch
 
 from fast_llm.core.ops import split
-from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.block import Block
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.vision.config import PatchConvolutionConfig
+from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionKwargs
 from fast_llm.tensor import TensorMeta
 
 
@@ -33,6 +32,11 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
             lr_scale=lr_scale,
             peft=peft,
         )
+        self._residual_dtype = (
+            self._distributed_config.optimization_dtype
+            if self._config.full_precision_residual
+            else self._distributed_config.compute_dtype
+        ).torch
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         self.convolution = self._config.convolution.get_layer(
@@ -56,27 +60,15 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
-                (
-                    (
-                        input_.dims[0],
-                        scalar_dim,
-                        self._hidden_dim,
-                    )
-                    if kwargs[BlockKwargs.sequence_first]
-                    else (
-                        scalar_dim,
-                        input_.dims[0],
-                        self._hidden_dim,
-                    )
-                ),
-                tensor_name="patch convolution output",
-                dtype=input_.dtype,
+                kwargs[VisionKwargs.hidden_dims],
+                tensor_name="Patch convolution output",
+                dtype=self._residual_dtype,
             )
+        if self._sequence_parallel:
+            input_ = split(input_, group=self._parallel_dim.group, dim=0)
         patch_embeddings = (
             self.normalization(self.convolution(input_).flatten(1))
             .view(-1, self._hidden_dim.size)
             .unsqueeze(int(kwargs[AttentionKwargs.sequence_first]))
         )
-        if self._sequence_parallel:
-            patch_embeddings = split(patch_embeddings, group=self._parallel_dim.group, dim=0)
-        return patch_embeddings
+        return patch_embeddings.to(self._residual_dtype)
