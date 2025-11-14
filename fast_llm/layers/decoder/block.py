@@ -196,6 +196,8 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # TODO: un-scaled loss for reporting? Average loss over layers?
             # L2 loss
             activation_loss_factor = self._config.activation_distillation_factor
+            # (batch, sequence, hidden). Take the norm over hidden dim.
+            # TODO: handle possible padding?
             activation_loss = activation_loss_factor * torch.mean(
                 torch.norm(mixer_output - teacher_tensor, p=2, dim=(2))
             )
@@ -203,14 +205,8 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
             bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
             # Logging
-            activation_total = root_kwargs.get(BlockKwargs.activation_distillation_total)
-            activation_total = (
-                activation_loss.detach() if activation_total is None else activation_total + activation_loss.detach()
-            )
-            root_kwargs[BlockKwargs.activation_distillation_total] = activation_total
-
             if losses is not None and self._activation_distillation_loss_name in losses:
-                losses[self._activation_distillation_loss_name].append(activation_total.detach())
+                losses[self._activation_distillation_loss_name].append(activation_loss.detach())
         return hidden_states, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

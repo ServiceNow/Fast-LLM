@@ -176,8 +176,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             non_blocking=True,
         )
 
-        distillation_model = getattr(self._config.head, "distillation_model", None)
-        activation_factor = getattr(self._config.head, "activation_distillation_factor", 0.0)
+        # TODO: decoder doesn't necessarily have a `block` attribute
+        distillation_model = self._config.decoder.block.distillation_model
+        activation_factor = self._config.decoder.block.activation_distillation_factor
         reference_logits: list[dict[str, typing.Any]] | None = None
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
@@ -190,7 +191,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 reference_preprocessed_meta,
                 phase=PhaseType.inference,
                 iteration=iteration,
-                setup_activation_storage=activation_factor > 0.0,
+                setup_activation_storage=activation_factor > 0.0 and distillation_model == name,
             )
 
             # TODO: Do things work with >1?
