@@ -11,9 +11,12 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
+from fast_llm.layers.language_model.head import _format_name
 from fast_llm.tensor import TensorMeta
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
+
+        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
+
         if self._debug.enabled:
             self._debug(
                 hidden_states if bias is None else hidden_states + bias,
@@ -166,6 +172,42 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
 
+    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses):
+        """
+        Maybe apply activation distillation loss and setup backward hooks
+        """
+        mixer_output = hidden_states if bias is None else hidden_states + bias
+        # Teacher populates mixer activations for distillation.
+        activation_storage = kwargs.get(BlockKwargs.activation_distillation_storage)
+        if activation_storage is not None:
+            activation_storage[self.module_name] = mixer_output.detach()
+        # Student gets teacher activations and computes the activation-level loss.
+        activation_targets = kwargs.get(BlockKwargs.activation_distillation_targets)
+        if (
+            activation_targets is not None
+            and self.training
+            and (teacher_output := activation_targets.pop(self.module_name, None)) is not None
+        ):
+            # Compare student mixer output with the teacher’s stored activation and accumulate the loss.
+            teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
+            Assert.eq(teacher_tensor.shape, mixer_output.shape)
+            # TODO: handle sequence-first?
+            # TODO: un-scaled loss for reporting? Average loss over layers?
+            # L2 loss
+            activation_loss_factor = self._config.activation_distillation_factor
+            # (batch, sequence, hidden). Take the norm over hidden dim.
+            # TODO: handle possible padding?
+            activation_loss = activation_loss_factor * torch.mean(
+                torch.norm(mixer_output - teacher_tensor, p=2, dim=(2))
+            )
+            # Backward hooks
+            hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
+            bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
+            # Logging
+            if losses is not None and self._activation_distillation_loss_name in losses:
+                losses[self._activation_distillation_loss_name].append(activation_loss.detach())
+        return hidden_states, bias
+
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (normalization, bias_dropout_add)
         return sum(
@@ -179,5 +221,21 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mixer.preprocess(batch, kwargs)
         self.mlp.preprocess(batch, kwargs)
 
+    # TODO: add layer_index
+    _activation_distillation_loss_name = "activation_distillation_loss"
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.mixer.get_loss_definitions(count=count) + self.mlp.get_loss_definitions(count=count)
+        loss_definitions = []
+        if self._config.activation_distillation_factor > 0.0 and self._config.distillation_model is not None:
+            loss_definitions.append(
+                LossDef(
+                    name=self._activation_distillation_loss_name,
+                    formatted_name=_format_name(self._activation_distillation_loss_name),
+                    count=count,
+                )
+            )
+        return (
+            loss_definitions
+            + self.mixer.get_loss_definitions(count=count)
+            + self.mlp.get_loss_definitions(count=count)
+        )
