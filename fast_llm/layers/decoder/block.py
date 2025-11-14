@@ -177,13 +177,12 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         Maybe apply activation distillation loss and setup backward hooks
         """
         mixer_output = hidden_states if bias is None else hidden_states + bias
-        root_kwargs = kwargs.get(BlockKwargs.root, kwargs)
         # Teacher populates mixer activations for distillation.
-        activation_storage = root_kwargs.get(BlockKwargs.activation_distillation_storage)
+        activation_storage = kwargs.get(BlockKwargs.activation_distillation_storage)
         if activation_storage is not None:
             activation_storage[self.module_name] = mixer_output.detach()
         # Student gets teacher activations and computes the activation-level loss.
-        activation_targets = root_kwargs.get(BlockKwargs.activation_distillation_targets)
+        activation_targets = kwargs.get(BlockKwargs.activation_distillation_targets)
         if (
             activation_targets is not None
             and self.training

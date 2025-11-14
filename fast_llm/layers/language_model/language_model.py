@@ -8,7 +8,6 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
@@ -60,25 +59,6 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        # TODO: remove root_kwargs
-        activation_factor = getattr(self.decoder.config.block, "activation_distillation_factor", 0.0)
-        if (
-            activation_factor > 0.0
-            or BlockKwargs.activation_distillation_targets in kwargs
-            or BlockKwargs.activation_distillation_storage in kwargs
-        ):
-            root_state = kwargs.get(BlockKwargs.root)
-            if root_state is None or root_state is kwargs:
-                root_state = {}
-                kwargs[BlockKwargs.root] = root_state
-            if BlockKwargs.activation_distillation_targets in kwargs:
-                root_state[BlockKwargs.activation_distillation_targets] = kwargs[
-                    BlockKwargs.activation_distillation_targets
-                ]
-            if BlockKwargs.activation_distillation_storage in kwargs:
-                root_state[BlockKwargs.activation_distillation_storage] = kwargs[
-                    BlockKwargs.activation_distillation_storage
-                ]
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
         self.embeddings.preprocess(batch, kwargs)
         self.decoder.preprocess(batch, kwargs)
