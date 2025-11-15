@@ -159,7 +159,15 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             Assert.eq(i, len(self._parameter_metas))
             assert not tied_parameter_duplicate_buffers, tied_parameter_duplicate_buffers.keys()
 
+    def initialize_weights_for_parameters(self, parameter_names: set[str]) -> None:
+        """Initialize only the specified parameters. Used for partial initialization after checkpoint load."""
+        self._initialize_weights_internal(lambda meta: meta.tensor_name in parameter_names)
+
     def initialize_weights(self) -> None:
+        """Initialize all weights."""
+        self._initialize_weights_internal(lambda meta: True)
+
+    def _initialize_weights_internal(self, should_initialize: typing.Callable) -> None:
         # TODO: Avoid all the _on_device checks
         assert self._is_setup
         with torch.no_grad():
@@ -180,6 +188,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             ]
 
             for meta in metas:
+                # Skip parameters we shouldn't initialize
+                if not should_initialize(meta):
+                    continue
                 if meta.tensor_name in self._tied_parameter_duplicates:
                     # Initialization is not managed by this stage.
                     continue
