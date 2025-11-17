@@ -50,5 +50,5 @@ COPY --chmod=777 --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
 
 # Set a dummy default user so we don't run in root by default.
 # The image is still compatible with any user id.
-RUN useradd user
-USER user
+# RUN useradd user
+# USER user
