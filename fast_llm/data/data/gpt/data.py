@@ -2,7 +2,6 @@ import logging
 import pathlib
 import typing
 import warnings
-from functools import partial
 
 import torch
 import torch.utils.data
@@ -14,7 +13,7 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
-from fast_llm.data.sample.gpt import GPTBatch, GPTSample
+from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -24,32 +23,9 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
-    stacked_spans = None
-    sequence_lengths = None
-    stacked_chosen_spans = None
-    stacked_rejected_spans = None
-    if sampling_parameters.use_loss_masking_spans:
-        stacked_spans = [sample.loss_masking_spans for sample in batch]
-    if sampling_parameters.use_preference_loss_spans:
-        stacked_chosen_spans = [sample.chosen_span for sample in batch]
-        stacked_rejected_spans = [sample.rejected_span for sample in batch]
-    if not sampling_parameters.cross_document_attention:
-        sequence_lengths = [sample.sequence_lengths for sample in batch]
-    return GPTBatch(
-        token_ids=torch.stack([sample.token_ids for sample in batch]),
-        loss_masking_spans=stacked_spans,
-        sequence_lengths=sequence_lengths,
-        chosen_spans=stacked_chosen_spans,
-        rejected_spans=stacked_rejected_spans,
-    )
-
-
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
-    Currently hard-coded to a GPT dataset.
-    TODO: Separate generic and GPT classes.
     """
 
     _datasets: dict[str, SampledDataset]
@@ -124,7 +100,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         num_workers: int,
         prefetch_factor: int | None = None,
         timeout: float = 60,
-    ) -> typing.Iterator[GPTBatch]:
+    ) -> typing.Iterator[LanguageModelBatch]:
         assert self._is_setup
 
         # Some dataset names may come from phases and are capitalized,
@@ -149,10 +125,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
-                collate_fn=partial(
-                    gpt_data_collate_fn,
-                    sampling_parameters=sampling_parameters,
-                ),
+                collate_fn=LanguageModelBatch.from_samples,
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
         )

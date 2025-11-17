@@ -1,5 +1,4 @@
 import dataclasses
-import enum
 import pathlib
 import time
 import typing
@@ -13,47 +12,16 @@ from fast_llm.data.dataset.config import (
     IndexedDatasetConfig,
     SamplableDatasetConfig,
     SampledDatasetConfig,
-    SamplingConfig,
     SamplingData,
     SamplingParameters,
 )
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.gpt.fim import GPTFimDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomDataset
-
-
-class ShufflingType(str, enum.Enum):
-    # Shuffle all epochs together. Not extendable.
-    full = "full"
-    # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
-    epoch = "epoch"
-    # Shuffle all epochs except the first one. Recommended for pre-shuffled datasets, especially big ones.
-    skip_first_epoch = "skip_first_epoch"
-    # Disable shuffling entirely.
-    disabled = "disabled"
-
-
-@config_class()
-class GPTSamplingConfig(SamplingConfig):
-    """
-    A dataset-dependent configuration for sampling.
-    """
-
-    gpu: bool = Field(
-        default=True,
-        desc="Enable fast sampling on GPU."
-        " Note that random sampling works differently on GPU,"
-        " so the sample won't match the CPU equivalent.",
-        hint=FieldHint.feature,
-    )
-    shuffle: ShufflingType = Field(
-        default=ShufflingType.epoch,
-        desc="Shuffling strategy.",
-        hint=FieldHint.feature,
-    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -62,15 +30,9 @@ class GPTSamplingParameters(SamplingParameters):
     Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
     """
 
-    sequence_length: int
     vocab_size: int
     use_loss_masking_spans: bool = False
     use_preference_loss_spans: bool = False
-    cross_document_attention: bool = True
-    truncate_documents: bool = True
-    # How many extra tokens to add to the sequence length.
-    # This is used to provide labels even for the last tokens in the sequence.
-    extra_tokens: int = 1
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -80,12 +42,11 @@ class GPTSamplingData(SamplingData):
     usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
     """
 
-    config: GPTSamplingConfig
     parameters: GPTSamplingParameters
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -93,14 +54,14 @@ class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[Sampl
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTRandomDataset":
+    def build(self) -> "GPTRandomDataset[SampleType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
-        return GPTRandomDataset(self.name)
+        return GPTRandomDataset[SampleType](self.name)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class GPTMemmapDatasetConfig[SampleType: GPTSample](IndexedDatasetConfig[SampleType]):
+class GPTMemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -118,14 +79,16 @@ class GPTMemmapDatasetConfig[SampleType: GPTSample](IndexedDatasetConfig[SampleT
         hint=FieldHint.optional,
     )
 
-    def build(self) -> "GPTMemmapDataset":
+    def build(self) -> "GPTMemmapDataset[SampleType]":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
-        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
+        return GPTMemmapDataset[SampleType](
+            str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens
+        )
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
-class GPTDatasetFromFileConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -235,14 +198,14 @@ class FimConfig(Config):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "fim"})
-class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType], FimConfig):
+class GPTFimSampledDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType], FimConfig):
     """
     Configuration for FIM.
     """
 
     _abstract: typing.ClassVar[bool] = False
 
-    dataset: SampledDatasetConfig = Field(
+    dataset: SampledDatasetConfig[SampleType] = Field(
         default=None,
         desc="The dataset to wrap with fim.",
         hint=FieldHint.core,
@@ -250,15 +213,15 @@ class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[Sam
 
     def build_and_sample(
         self,
-        sampling: SamplingData,
-    ) -> SampledDataset:
+        sampling: GPTSamplingData,
+    ) -> "GPTFimDataset[SampleType]":
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return GPTFimDataset(self, self.dataset.build_and_sample(sampling), sampling)
+        return GPTFimDataset[SampleType](self, self.dataset.build_and_sample(sampling), sampling)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
-class GPTTestSlowDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType]):
+class GPTTestSlowDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType]):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
     """
