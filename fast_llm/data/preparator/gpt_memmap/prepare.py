@@ -1,5 +1,8 @@
+import collections
+import enum
 import json
 import logging
+import math
 import multiprocessing
 import pathlib
 import shutil
@@ -18,182 +21,53 @@ from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
     DatasetSliceConfig,
     IndexedDatasetConfig,
+    MemmapDatasetConfig,
     SampledDatasetConfig,
 )
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.preprocessing.tokenizer import Tokenizer
+from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
+from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
+from fast_llm.data.sample.range import RangeSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
 
 
+class SpanType(enum.StrEnum):
+    loss_masking = "loss_masking"
+    chosen = "chosen"
+    rejected = "rejected"
+
+
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
     _tokenizer: Tokenizer
     _data_type: DataType
-    _text_column: str
-    _loss_masking_spans_column: str | None
     _sample_type: typing.ClassVar[type[LanguageModelSample]] = LanguageModelSample
+    _config: GPTMemmapDatasetPreparatorConfig
 
-    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy) for text in batch[self._text_column]
-        ]
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "num_tokens": num_tokens,
-        }
-
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans = map(
-            list,
-            zip(
-                *[
-                    (
-                        np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
-                    )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(batch[self._text_column], batch[self._loss_masking_spans_column])
-                    ]
-                ]
-            ),
-        )
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "token_spans": token_spans,
-            "num_tokens": num_tokens,
-        }
-
-    def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        packed_texts = []
-        chosen_spans = []
-        rejected_spans = []
-
-        for conv_history, chosen_text, rejected_text in zip(
-            batch[self._config.dataset.field],
-            batch[self._config.dataset.chosen_text],
-            batch[self._config.dataset.rejected_text],
-        ):
-            # compute chosen span
-            full_chosen_text = conv_history + chosen_text + self._tokenizer.tokenizer.eos_token
-            chosen_span = [len(conv_history), len(full_chosen_text) - 1]
-            offset = len(full_chosen_text)
-            chosen_spans.append(chosen_span)
-
-            # compute rejected span
-            full_rejected_text = self._tokenizer.tokenizer.bos_token + conv_history + rejected_text
-            rejected_span = [
-                offset + len(self._tokenizer.tokenizer.bos_token + conv_history),
-                offset + len(full_rejected_text) - 1,
-            ]
-            rejected_spans.append(rejected_span)
-
-            # pack texts
-            packed_text = full_chosen_text + full_rejected_text
-
-            assert (
-                packed_text[chosen_span[0] : chosen_span[1] + 1] == chosen_text + self._tokenizer.tokenizer.eos_token
-            ), f"{packed_text[chosen_span[0]: chosen_span[1] + 1]} does not match {chosen_text}"
-
-            assert (
-                packed_text[rejected_span[0] : rejected_span[1] + 1] == rejected_text
-            ), f"{packed_text[rejected_span[0]: rejected_span[1] + 1]} does not match {rejected_text}"
-            packed_texts.append(packed_text)
-
-        # tokenize with spans
-        input_ids, chosen_token_spans, rejected_token_spans = map(
-            list,
-            zip(
-                *[
-                    (
-                        np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans[0], dtype=np.int32),
-                        np.array(
-                            [token_spans[1][0], token_spans[1][1] + 1], dtype=np.int32
-                        ),  # adding 1 to end for eos token
-                    )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, [chosen_span, rejected_span])
-                        for text, chosen_span, rejected_span in zip(packed_texts, chosen_spans, rejected_spans)
-                    ]
-                ]
-            ),
-        )
-
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "chosen_token_spans": chosen_token_spans,
-            "rejected_token_spans": rejected_token_spans,
-            "num_tokens": num_tokens,
-        }
-
-    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
-        shard_idx, shard_dataset = args
-        prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
-        shard_output_path = self._config.output_path / prefix
-
-        def _document_generator():
-            # TODO: Yield `LanguageModelSample`
-            if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        torch.tensor(item["token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        None,
-                        None,
-                    )
-            elif (
-                "chosen_token_spans" in shard_dataset.column_names
-                and "rejected_token_spans" in shard_dataset.column_names
-                and self._config.dataset.chosen_text is not None
-                and self._config.dataset.rejected_text is not None
-            ):
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        None,
-                        torch.tensor(item["chosen_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        torch.tensor(item["rejected_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                    )
-            else:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield (
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        None,
-                        None,
-                        None,
-                    )
-
-        GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
-
-        return GPTMemmapDatasetConfig.from_dict(
-            {
-                "type": "memmap",
-                "path": prefix,
-                "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
-                "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
-            }
-        )
+    def __init__(self, config: ConfigType):
+        super().__init__(config)
+        self._source_schema: LanguageModelSourceConfig = self._config.dataset.source_schema
 
     def _load_dataset(self) -> datasets.Dataset:
-        dataset = datasets.load_dataset(
-            path=self._config.dataset.path,
-            name=self._config.dataset.config_name,
-            data_dir=self._config.dataset.data_directory,
-            data_files=self._config.dataset.data_files,
-            split=self._config.dataset.split,
-            num_proc=self._config.loading_workers,
-            trust_remote_code=self._config.dataset.trust_remote_code,
-        )
+        if self._config.dataset.load_from_disk:
+            dataset = datasets.load_from_disk(self._config.dataset.path)[self._config.dataset.split]
+        else:
+            dataset = datasets.load_dataset(
+                path=self._config.dataset.path,
+                name=self._config.dataset.config_name,
+                data_dir=self._config.dataset.data_directory,
+                data_files=self._config.dataset.data_files,
+                split=self._config.dataset.split,
+                num_proc=self._config.num_workers,
+                trust_remote_code=self._config.dataset.trust_remote_code,
+            )
         assert isinstance(dataset, datasets.Dataset)
         return dataset
 
@@ -261,6 +135,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
+            log_main_rank(f"> Initializing distributed process groups ...")
             torch.distributed.init_process_group(
                 backend=self._config.distributed.backend,
                 rank=self._config.distributed.rank,
@@ -270,111 +145,153 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Prepare output directory
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
-        if pathlib.Path(self._config.dataset.path).is_dir():
-            # Dataset is already downloaded, load from disk
+        log_main_rank(f"> Loading dataset `{self._config.dataset.path}` ...")
+        if self._config.distributed.world_size == 1:
             dataset = self._load_dataset()
+        elif self._config.distributed.rank == 0:
+            # Load first on rank 0 to prevent parallel downloads.
+            dataset = self._load_dataset()
+            torch.distributed.barrier()
         else:
-            # Dataset is not downloaded, download on rank 0
-            if self._config.distributed.rank == 0:
-                dataset = self._load_dataset()
-
-            # Synchronize processes to wait for the download to finish on rank 0
-            if self._config.distributed.world_size > 1:
-                torch.distributed.barrier()
-
+            torch.distributed.barrier()
             # Load the downloaded dataset on remaining ranks
-            if self._config.distributed.rank != 0:
-                dataset = self._load_dataset()
+            dataset = self._load_dataset()
 
-            # Synchronize processes to wait for the dataset to load on remaining ranks
-            if self._config.distributed.world_size > 1:
-                torch.distributed.barrier()
-
-        assert isinstance(dataset, datasets.Dataset)
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
 
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._text_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
-            )
-
-        if self._text_column not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._text_column}'.")
-
-        if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
-            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
-        ):
-            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
-        if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
-            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
-
-        # route tokenize function
-        if self._loss_masking_spans_column is not None:
-            if self._loss_masking_spans_column not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
-            tokenize_fn = self._tokenize_batch_with_spans
-        elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
-            if self._config.dataset.chosen_text not in dataset.column_names:
-                raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
-            if self._config.dataset.rejected_text not in dataset.column_names:
-                raise ValueError(f"Dataset does not have rejected spans field '{self._config.dataset.rejected_text}'.")
-            tokenize_fn = self._tokenize_preference_batch_with_spans
-        else:
-            tokenize_fn = self._tokenize_batch
-
-        # Tokenize the dataset in parallel
-        tokenized_dataset = dataset.map(
-            tokenize_fn,
-            batched=True,
-            num_proc=self._config.tokenize_workers,
-            desc="Tokenizing batches",
-        )
-
-        # Calculate total number of tokens
-        total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
+        for column_name in self._source_schema.columns:
+            if column_name not in dataset.column_names:
+                raise ValueError(f"Dataset does not have field '{column_name}'.")
 
         # Split dataset into shards based on number of tokens
-        num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
-        shards = [
-            (i, tokenized_dataset.shard(num_shards=num_shards, index=i))
-            for i in tqdm.tqdm(range(num_shards), desc="Creating shards")
-        ]
+        num_shards = math.ceil(len(dataset) / self._config.documents_per_shard)
+        shards = [(i, dataset.shard(num_shards=num_shards, index=i)) for i in range(num_shards)]
+
+        log_main_rank(f"> Preparing samples on {self._config.num_workers} workers ...")
 
         # Use multiprocessing to save each shard in parallel on all ranks
-        with multiprocessing.Pool(processes=self._config.saving_workers) as pool:
-            dataset_configs = pool.map(self._save_shard, shards)
+        with multiprocessing.Pool(processes=self._config.num_workers) as pool:
+            dataset_and_reader_configs = pool.map(self._prepare_shard, shards)
 
-        self.generate_config_yaml_for_sharded_dst(dataset_configs)
+        log_main_rank(f"> Generating dataset config ...")
+        self.generate_config_yaml_for_sharded_dst(dataset_and_reader_configs)
 
-    def generate_config_yaml_for_sharded_dst(self, dataset_configs: list[GPTMemmapDatasetConfig]) -> None:
+    def _prepare_shard(
+        self, args: tuple[int, datasets.Dataset]
+    ) -> tuple[MemmapDatasetConfig, MemmapIndexDatasetReaderConfig]:
+        shard_index, shard_dataset = args
+        file_name = f"shard_{self._config.distributed.rank}_{shard_index}.fast_llm_dataset"
+
+        reader_config = MemmapDataset.write_dataset(
+            self._config.output_path / file_name,
+            (
+                self._prepare_sample(sample)
+                for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
+            ),
+            LanguageModelWriter,
+        )
+        return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
+
+    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
+        # TODO: ======= Extract so we can use elsewhere? (ex. inference) ======
+        text = sample[self._source_schema.text]
+        all_spans = []
+        if self._source_schema.has_loss_masking_span:
+            # TODO: ====== What is the exact input format? ======
+            # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
+            loss_masking_spans = _sort_spans(
+                (SpanType.loss_masking, (begin, last + 1))
+                for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
+                .reshape(-1, 2)
+                .tolist()
+            )
+            all_spans.extend(loss_masking_spans)
+
+        if self._source_schema.has_preference_spans:
+            # TODO: ===== Was `self._config.dataset.field` (bug?) ======
+            full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
+            full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
+            # compute chosen span
+            chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
+
+            # compute rejected span
+            rejected_span = [
+                (
+                    SpanType.rejected,
+                    (
+                        len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
+                        len(full_chosen_text) + len(full_rejected_text),
+                    ),
+                )
+            ]
+            # pack texts
+            text = full_chosen_text + full_rejected_text
+            all_spans.extend(chosen_spans + rejected_span)
+
+        # Sort the spans by location (begin), keeping track of their type.
+        # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
+        span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
+        # Tokenize the text, and determine the span locations in the tokenized text.
+        tokens, token_spans = self._tokenizer.tokenize_with_spans(
+            text, True, True, text_spans=spans, data_type=self._data_type
+        )
+
+        # Gather token spans by type.
+        token_spans_by_type = collections.defaultdict(list)
+        for span_type, token_span in zip(span_types, token_spans, strict=True):
+            token_spans_by_type[span_type].append(token_span)
+
+        sample_size = len(tokens)
+
+        return LanguageModelSample(
+            TokenSample(tokens, [sample_size]),
+            (
+                RangeSample(token_spans_by_type[SpanType.loss_masking], sample_size)
+                if self._source_schema.has_loss_masking_span
+                else None
+            ),
+            (
+                RangeSample(token_spans_by_type[SpanType.chosen], sample_size)
+                if self._source_schema.has_preference_spans
+                else None
+            ),
+            (
+                # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
+                RangeSample([(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]], sample_size)
+                if self._source_schema.has_preference_spans
+                else None
+            ),
+        )
+
+    def generate_config_yaml_for_sharded_dst(
+        self, dataset_and_reader_configs: list[tuple[MemmapDatasetConfig, MemmapIndexDatasetReaderConfig]]
+    ) -> None:
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
             if self._config.distributed.rank == 0:
-                all_dataset_configs = [None] * self._config.distributed.world_size
-                torch.distributed.gather_object(dataset_configs, all_dataset_configs, dst=0)
-                dataset_configs = [item for sublist in all_dataset_configs for item in sublist]
+                all_dataset_and_reader_configs = [None] * self._config.distributed.world_size
+                torch.distributed.gather_object(dataset_and_reader_configs, all_dataset_and_reader_configs, dst=0)
+                dataset_and_reader_configs = [item for sublist in all_dataset_and_reader_configs for item in sublist]
             else:
-                torch.distributed.gather_object(dataset_configs, [], dst=0)
+                torch.distributed.gather_object(dataset_and_reader_configs, [], dst=0)
 
         if self._config.distributed.rank == 0:
             # Create the config file(s) on rank 0
+            dataset_configs, reader_configs = zip(*dataset_and_reader_configs)
             if self._config.splits:
                 for split_name, split_config in self._split_and_blend_dataset_configs(
-                    dataset_configs, self._config.splits, self._config.output_path
+                    dataset_configs, reader_configs, self._config.splits, self._config.output_path
                 ).items():
                     self._save_dataset_config(
                         split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
                     )
             else:
                 self._save_dataset_config(
-                    self._blend_dataset_configs(dataset_configs), self._config.output_path / f"fast_llm_config.yaml"
+                    self._blend_dataset_configs(dataset_configs, reader_configs),
+                    self._config.output_path / f"fast_llm_config.yaml",
                 )
 
             # Save metadata on rank 0
@@ -397,7 +314,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]]
+        cls,
+        dataset_configs: list[MemmapDatasetConfig[_sample_type]],
+        reader_configs: list[MemmapIndexDatasetReaderConfig],
     ) -> IndexedDatasetConfig[_sample_type]:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
@@ -405,19 +324,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             {
                 "type": "blended",
                 "datasets": dataset_configs,
-                "weights": [dataset_config.num_tokens for dataset_config in dataset_configs],
+                "weights": [reader_config.num_tokens for reader_config in reader_configs],
             }
         )
 
     @classmethod
     def _split_and_blend_dataset_configs(
         cls,
-        dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]],
+        dataset_configs: list[MemmapDatasetConfig[_sample_type]],
+        reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
     ) -> dict[str, SampledDatasetConfig[_sample_type]]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
-        dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
+        dataset_sizes = [reader_config.num_tokens for reader_config in reader_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
         dataset_cumsums = padded_cumsum(dataset_probabilities).tolist()
         dataset_splits = {}
@@ -425,7 +345,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         for split_index, split_name in enumerate(splits):
             datasets_in_split = []
             dataset_tokens_in_split = []
-            for dataset_index, dataset_config in enumerate(dataset_configs):
+            for dataset_index, (dataset_config, reader_config) in enumerate(
+                zip(dataset_configs, reader_configs, strict=True)
+            ):
                 split_begin_in_dataset = max(
                     (split_cumsum[split_index] - dataset_cumsums[dataset_index])
                     / dataset_probabilities[dataset_index],
@@ -445,17 +367,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
                     sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
-                    Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
+                    Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
+                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
+                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
                     if end_index > begin_index:
                         datasets_in_split.append(
                             DatasetSliceConfig[cls._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
-                                    "begin": begin_index / dataset_config.num_documents,
-                                    "end": end_index / dataset_config.num_documents,
+                                    "begin": begin_index / len(reader_config),
+                                    "end": end_index / len(reader_config),
                                 }
                             )
                         )
@@ -481,6 +403,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 )
 
         return dataset_splits
+
+
+def _sort_spans(spans: typing.Iterable[tuple[SpanType, tuple[int, int]]]) -> list[tuple[SpanType, tuple[int, int]]]:
+    return sorted(spans, key=lambda span: span[1][0])
 
 
 def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:

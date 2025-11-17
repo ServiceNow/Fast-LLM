@@ -5,6 +5,7 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
@@ -168,9 +169,10 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix, end=False)], dtype=sequence.dtype)
-        middle = np.array([*self._tokenizer.tokenize(middle, begin=False, end=False)], dtype=sequence.dtype)
-        suffix = np.array([*self._tokenizer.tokenize(suffix, begin=False)], dtype=sequence.dtype)
+        data_type = DataType.from_numpy(sequence.dtype)
+        prefix = self._tokenizer.tokenize(prefix, end=False, data_type=data_type).numpy()
+        middle = self._tokenizer.tokenize(middle, begin=False, end=False, data_type=data_type).numpy()
+        suffix = self._tokenizer.tokenize(suffix, begin=False, data_type=data_type).numpy()
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?
