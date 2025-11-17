@@ -14,6 +14,7 @@ from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointForma
 from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
+    MistralBlockConverter,
     MistralDecoderConverter,
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
@@ -223,12 +224,12 @@ class AprielMamba2Converter:
         ]
 
 
-class AprielDiscreteMamba2BlockConverter(AprielBlockConverterBase):
+class AprielDiscreteMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielDiscreteMamba2Converter]] = AprielDiscreteMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
-class AprielMamba2BlockConverter(AprielBlockConverterBase):
+class AprielMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielMamba2Converter]] = AprielMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
@@ -240,7 +241,7 @@ class AprielBlockConverter:
         DiscreteMamba2Config: "m2d",
     }
     _converter_classes = {
-        AttentionConfig: AprielBlockConverterBase,
+        AttentionConfig: MistralBlockConverter,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
     }
