@@ -13,19 +13,24 @@ from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 from torch import nn
 from transformers import GenerationMixin
 from transformers.cache_utils import Cache, DynamicCache
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
+from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, can_return_tuple, logging
+from transformers.utils import logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 
-# from vllm.model_executor.layers.mamba.ops.mamba_ssm import selective_scan_fn as varlen_selective_scan_fn
-# from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn as varlen_causal_conv1d_fn
-
+try:
+    from fla.modules import FusedRMSNormGated, ShortConvolution
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
+except ImportError:
+    raise ImportError("Plese run `pip install -U fla-core`")
 
 logger = logging.get_logger(__name__)
 
@@ -387,6 +392,162 @@ class AprielHybridCausalOutput(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
     attention_weights: Optional[torch.FloatTensor] = None
     past_key_values: Optional[Cache] = None
+
+
+class KimiDeltaAttention(nn.Module):
+    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.mode = "chunk"
+
+        self.hidden_size = config.hidden_size
+        self.conv_size = config.short_conv_kernel_size
+        self.head_dim = config.head_dim
+        self.num_heads = config.num_heads
+        self.head_k_dim = self.head_dim
+        self.num_k_heads = self.num_heads
+
+        self.layer_idx = layer_idx
+
+        assert self.mode in ["chunk", "fused_recurrent"], f"Not suppoerted mode `{self.mode}`."
+
+        projection_k_size = self.head_k_dim * self.num_k_heads
+        projection_size = self.head_dim * self.num_heads
+
+        self.q_proj = nn.Linear(self.hidden_size, projection_k_size, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, projection_k_size, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, projection_size, bias=False)
+
+        self.q_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+        self.k_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+        self.v_conv1d = ShortConvolution(
+            hidden_size=projection_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+
+        self.A_log = torch.nn.Parameter(
+            torch.log(torch.empty(self.num_heads, dtype=torch.float32).uniform_(1, 16)).view(1, 1, -1, 1)
+        )
+
+        self.f_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.f_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
+
+        self.dt_bias = nn.Parameter(torch.empty(projection_size, dtype=torch.float32))
+
+        self.b_proj = nn.Linear(self.hidden_size, self.num_heads, bias=False)
+
+        self.g_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.g_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
+
+        self.o_norm = FusedRMSNormGated(self.head_dim, eps=config.rms_norm_eps, activation="sigmoid")
+        self.o_proj = nn.Linear(projection_size, self.hidden_size, bias=False)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        cache_params=None,
+        **kwargs: Unpack[dict],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, Cache | None]:
+        if attention_mask is not None:
+            if attention_mask.dim() != 2:
+                attention_mask = kwargs.get("padding_mask")
+
+            if attention_mask is not None and attention_mask.dim() != 2:
+                raise ValueError(
+                    "attention_mask must be a 0-1 matrix of shape [batch_size, seq_len] "
+                    "(0 = padding). 3D masks are not supported here.",
+                )
+        use_cache = cache_params is not None
+        batch_size, q_len, _ = hidden_states.shape
+        mode = "fused_recurrent" if q_len <= 64 else self.mode
+        if self.training:
+            assert mode == "chunk", "Only chunk mode is supported in training."
+
+        cu_seqlens = kwargs.get("cu_seqlens")
+        indices = None
+        if attention_mask is not None:
+            indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
+            hidden_states = index_first_axis(rearrange(hidden_states, "b s ... -> (b s) ..."), indices).unsqueeze(0)
+
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        if cache_params is not None:
+            if cache_params.conv_states[self.layer_idx] is not None:
+                conv_state_q, conv_state_k, conv_state_v = cache_params.conv_states[self.layer_idx]
+            recurrent_state = cache_params.recurrent_states[self.layer_idx]
+        q, conv_state_q = self.q_conv1d(
+            x=self.q_proj(hidden_states),
+            cache=conv_state_q,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        k, conv_state_k = self.k_conv1d(
+            x=self.k_proj(hidden_states),
+            cache=conv_state_k,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        v, conv_state_v = self.v_conv1d(
+            x=self.v_proj(hidden_states),
+            cache=conv_state_v,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        g = self.f_b_proj(self.f_a_proj(hidden_states))
+        g = fused_kda_gate(g, self.A_log, self.head_dim, g_bias=self.dt_bias)
+        beta = self.b_proj(hidden_states).float().sigmoid()
+
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_dim)
+
+        if mode == "chunk":
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+        if cache_params is not None:
+            cache_params.recurrent_states[self.layer_idx] = recurrent_state
+            cache_params.conv_states[self.layer_idx] = (conv_state_q, conv_state_k, conv_state_v)
+
+        g = self.g_b_proj(self.g_a_proj(hidden_states))
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+        o = self.o_norm(o, g)
+
+        o = rearrange(o, "b t h d -> b t (h d)")
+        o = self.o_proj(o)
+        if attention_mask is not None:
+            o = pad_input(o.squeeze(0), indices, batch_size, q_len)
+
+        return o
 
 
 def segsum(x):
@@ -1187,6 +1348,63 @@ class AprielSSMDecoderLayer(nn.Module):
         return outputs
 
 
+class AprielKLDecoderLayer(nn.Module):
+    _mixer_class = KimiDeltaAttention
+
+    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int, device=None, dtype=None, **kwargs):
+        super().__init__(**kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.hidden_size = config.hidden_size
+
+        self.mixer = self._mixer_class(config, layer_idx=layer_idx)
+
+        self.mlp = MistralMLP(config)
+        self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+
+class AprielGDNDecoderLayer(nn.Module):
+    _mixer_class = Qwen3NextGatedDeltaNet
+
+    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int, device=None, dtype=None, **kwargs):
+        super().__init__(**kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.hidden_size = config.hidden_size
+
+        self.mixer = self._mixer_class(config, layer_idx=layer_idx)
+
+        self.mlp = MistralMLP(config)
+        self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self, hidden_states: torch.Tensor, **kwargs
+    ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
+
+        outputs = {}
+        residual = hidden_states
+
+        hidden_states = self.input_layernorm(hidden_states)
+
+        mixer_outputs = self.mixer(
+            hidden_states,
+            **kwargs,
+        )
+
+        hidden_states = mixer_outputs["hidden_states"].to(residual.dtype) + residual
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        # outputs["hidden_states"] = hidden_states
+        outputs = (hidden_states,)
+
+        return outputs
+
+
 class AprielSSMM2DecoderLayer(AprielSSMDecoderLayer):
     _mixer_class = Mamba2
 
@@ -1200,9 +1418,23 @@ class AprielHybridIdentity(nn.Module):
         return (hidden_states,)
 
 
+class MistralDecoderLayerSWA(MistralDecoderLayer):
+    """
+    Thin wrapper over `MistralDecoderLayer` that marks layers meant to run with sliding-window attention.
+    """
+
+    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int):
+        super().__init__(config, layer_idx)
+        self.is_swa_layer = True
+
+
 class AprielThinkerSSMHybridModel(MistralModel):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`AprielDecoderLayer`, `AprielSSMDecoderLayer`]
+    Note regarding SWA:
+    - in the origiinal Msitral model if self.config.sliding_window is set, all layers use SWA.
+    - in this hybrid model, only layers marked as `swa` in the `hybrid_block_layout` use SWA ans use the global `self.config.sliding_window`, otherwise 't' layers ignore `self.config.sliding_window`
+    TODO: this has not been tested yet, focused on vllm compatibility first.
     Args:
         config: AprielSSMHybridConfig
     """
@@ -1221,8 +1453,17 @@ class AprielThinkerSSMHybridModel(MistralModel):
                 blocks.append(AprielSSMM2DecoderLayer(config, layer_idx))
             elif type == "t":
                 blocks.append(MistralDecoderLayer(config, layer_idx))
+            elif type == "swa":
+                blocks.append(MistralDecoderLayerSWA(config, layer_idx))
+                assert (
+                    config.sliding_window is not None
+                ), "Found `swa` layers in hybrid layout but `swa_sliding_window` is not set."
             elif type == "i":
                 blocks.append(AprielHybridIdentity(config))
+            elif type == "gdn":
+                blocks.append(AprielGDNDecoderLayer(config, layer_idx))
+            elif type == "kl":
+                blocks.append(AprielKLDecoderLayer(config, layer_idx))
             else:
                 raise ValueError(f"Invalid block type: {type}")
         self.layers = nn.ModuleList(blocks)
@@ -1230,7 +1471,7 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    @can_return_tuple
+    # @can_return_tuple
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1246,34 +1487,116 @@ class AprielThinkerSSMHybridModel(MistralModel):
     ) -> BaseModelOutputWithPast:
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache and past_key_values is None:
-             # for the case where prepare_inputs_for_generation is not called to create the cache (as in fast-llm test)
+            # for the case where prepare_inputs_for_generation is not called to create the cache (as in fast-llm test)
             batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
             past_key_values = HybridMambaAttentionDynamicCache(self.config, batch_size, self.dtype, device=self.device)
-        output = super().forward(
-            input_ids=input_ids,
+
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
+
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
+
+        causal_mask = create_causal_mask(
+            config=self.config,
+            input_embeds=inputs_embeds,
             attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
             cache_position=cache_position,
-            **flash_attn_kwargs,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
         )
-        past_key_values: HybridMambaAttentionDynamicCache = output.past_key_values
-        if past_key_values and not past_key_values.has_previous_state:
-            past_key_values.has_previous_state = True
-        return output
+
+        sliding_causal_mask = None
+        has_swa_blocks = any(block == "swa" for block in self.config.hybrid_block_layout)
+        if has_swa_blocks:
+            if self.config.sliding_window is None:
+                raise ValueError("Found `swa` layers in hybrid layout but `swa_sliding_window` is not set.")
+            sliding_causal_mask = create_sliding_window_causal_mask(
+                config=self.config,
+                input_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                past_key_values=past_key_values,
+                position_ids=position_ids,
+            )
+
+        hidden_states = inputs_embeds
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+
+        layers = self.layers[: self.config.num_hidden_layers]
+        for layer_idx, decoder_layer in enumerate(layers):
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (hidden_states,)
+
+            block_type = self.config.hybrid_block_layout[layer_idx]
+            layer_mask = sliding_causal_mask if block_type == "swa" else causal_mask
+
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=layer_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **flash_attn_kwargs,
+            )
+
+            if isinstance(layer_outputs, tuple):
+                hidden_states = layer_outputs[0]
+                remaining = layer_outputs[1:]
+            else:
+                hidden_states = layer_outputs
+                remaining = ()
+
+            if output_attentions:
+                attn_tensor = remaining[0] if remaining else None
+                all_self_attns = all_self_attns + (attn_tensor,)
+
+        hidden_states = self.norm(hidden_states)
+        if output_hidden_states:
+            all_hidden_states = all_hidden_states + (hidden_states,)
+
+        outputs = BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values if use_cache else None,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+        )
+
+        if (
+            isinstance(outputs.past_key_values, HybridMambaAttentionDynamicCache)
+            and not outputs.past_key_values.has_previous_state
+        ):
+            outputs.past_key_values.has_previous_state = True
+
+        return outputs
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
+# class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
 
 class AprielThinkerSSMHybridPreTrainedModel(PreTrainedModel):
     config_class = AprielSSMHybridConfig
     base_model_prefix = "model"
-    _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer", "AprielSSMM2DecoderLayer"]
+    _no_split_modules = [
+        "MistralDecoderLayer",
+        "MistralDecoderLayerSWA",
+        "AprielSSMDecoderLayer",
+        "AprielSSMM2DecoderLayer",
+    ]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
@@ -1398,7 +1721,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        **kwargs: Unpack[KwargsForCausalLM],
+        **kwargs,  #: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, CausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
