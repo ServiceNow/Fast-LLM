@@ -48,13 +48,10 @@ class MistrallMLPConverter(LlamaMLPConverter):
 
     @classmethod
     def export_config(cls, config: MLPConfig) -> dict:
+        assert not config.add_linear_biases
         out = super().export_config(config)
         del out["mlp_bias"]
         return out
-
-    @classmethod
-    def _check_config(cls, config: MLPConfig) -> None:
-        assert not config.add_linear_biases
 
 
 class MistralBlockConverter(LlamaBlockConverter):
