@@ -251,7 +251,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                                     loss_mask[start : end + 1, idx] = False
                                 else:
                                     loss_mask[idx, start : end + 1] = False
-                            if self._config.output_layer.distillation_model is not None:
+                            if self._config.head.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
