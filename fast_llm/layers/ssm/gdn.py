@@ -30,50 +30,6 @@ def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
     return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
 
 
-def torch_recurrent_gated_delta_rule(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    g: torch.Tensor,
-    beta: torch.Tensor,
-    *,
-    use_qk_l2norm_in_kernel: bool,
-) -> torch.Tensor:
-    """
-    Simplified gated Delta rule used during training.
-    Args expect tensors shaped as (batch, heads, seq, dim) except for g/beta which are (batch, heads, seq).
-    """
-    initial_dtype = query.dtype
-    if use_qk_l2norm_in_kernel:
-        query = _l2norm(query, dim=-1)
-        key = _l2norm(key, dim=-1)
-
-    query = query.to(torch.float32)
-    key = key.to(torch.float32)
-    value = value.to(torch.float32)
-    beta = beta.to(torch.float32)
-    g = g.to(torch.float32)
-
-    batch_size, num_heads, sequence_length, k_head_dim = key.shape
-    v_head_dim = value.shape[-1]
-    state = torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim, device=key.device, dtype=key.dtype)
-    outputs = torch.zeros(batch_size, num_heads, sequence_length, v_head_dim, device=value.device, dtype=value.dtype)
-
-    for idx in range(sequence_length):
-        q_t = query[:, :, idx]
-        k_t = key[:, :, idx]
-        v_t = value[:, :, idx]
-        g_t = g[:, :, idx].exp().unsqueeze(-1).unsqueeze(-1)
-        beta_t = beta[:, :, idx].unsqueeze(-1)
-        state = state * g_t
-        kv_mem = (state * k_t.unsqueeze(-1)).sum(dim=-2)
-        delta = (v_t - kv_mem) * beta_t
-        state = state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-        outputs[:, :, idx] = (state * q_t.unsqueeze(-1)).sum(dim=-2)
-
-    return outputs.to(initial_dtype), state
-
-
 def torch_chunk_gated_delta_rule(
     query,
     key,
@@ -154,23 +110,11 @@ def torch_chunk_gated_delta_rule(
     return core_attn_out, last_recurrent_state
 
 
-# class _GatedRMSNorm(torch.nn.Module):
-#     def __init__(self, hidden_size: int, eps: float):
-#         super().__init__()
-#         self.weight = torch.nn.Parameter(torch.ones(hidden_size))
-#         self.eps = eps
-
-#     def forward(self, hidden_states: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-#         dtype = hidden_states.dtype
-#         hidden_states = hidden_states.to(torch.float32)
-#         variance = hidden_states.pow(2).mean(dim=-1, keepdim=True)
-#         hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
-#         hidden_states = self.weight * hidden_states.to(dtype)
-#         hidden_states = hidden_states * F.silu(gate.to(torch.float32))
-#         return hidden_states.to(dtype)
-
-
 class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
+    """
+    Follows implementation here: https://github.com/huggingface/transformers/blob/a5c903f877fda21e739027eed133e03162eb7712/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L593
+    """
+
     _config: ConfigType
 
     def __init__(
@@ -265,11 +209,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         self.norm = self._config.normalization.get_layer(
             self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
         )
-        # _GatedRMSNorm(self._config.value_head_dim, self._config.norm_epsilon)
-        self._use_qk_l2norm = self._config.use_qk_l2norm
 
-        self._value_dim = value_dim
-        self._query_dim = query_dim
         self.chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
 
         if not is_fast_path_available:
@@ -277,9 +217,41 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
             )
 
-    def _reshape_heads(self, tensor: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-        batch, seq, _ = tensor.shape
-        return tensor.view(batch, seq, num_heads, head_dim)
+    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
+        """
+        Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
+        """
+
+        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
+            self._local_key_heads,
+            2 * self._config.key_head_dim
+            + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
+        )
+        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
+            self._local_key_heads,
+            2 * self._local_value_heads // self._local_key_heads,
+        )
+
+        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
+        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
+        split_arg_list_qkvz = [
+            self._config.key_head_dim,
+            self._config.key_head_dim,
+            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+        ]
+        split_arg_list_ba = [
+            self._local_value_heads // self._local_key_heads,
+            self._local_value_heads // self._local_key_heads,
+        ]
+        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
+        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
+        value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
+        z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
+        b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
+        a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
+        return query, key, value, z, b, a
 
     def _forward(
         self,
@@ -289,32 +261,22 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[BlockKwargs.sequence_first]
+
+        # TODO: do we need maksing of padding tokens?
         if sequence_first:
             hidden_states = input_.transpose(0, 1)
         else:
             hidden_states = input_
 
-        batch_size, sequence_length, _ = hidden_states.shape
-        qkvz = self.in_proj_qkvz(hidden_states)
-        ba = self.in_proj_ba(hidden_states)
-        key_size = self._query_dim.size
-        value_size = self._value_dim.size
-        query, key, value, z = torch.split(qkvz, (key_size, key_size, value_size, value_size), dim=-1)
-        beta, alpha = torch.split(ba, (self._local_value_heads, self._local_value_heads), dim=-1)
-
-        query = self._reshape_heads(query, self._local_key_heads, self._config.key_head_dim)
-        key = self._reshape_heads(key, self._local_key_heads, self._config.key_head_dim)
-        value = self._reshape_heads(value, self._local_value_heads, self._config.value_head_dim)
-        z = self._reshape_heads(z, self._local_value_heads, self._config.value_head_dim)
-
-        mixed_qkv = torch.cat(
-            (
-                query.reshape(batch_size, sequence_length, -1),
-                key.reshape(batch_size, sequence_length, -1),
-                value.reshape(batch_size, sequence_length, -1),
-            ),
-            dim=-1,
+        # batch_size, sequence_length, _ = hidden_states.shape
+        projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs x seq_len x (qkvz)
+        projected_states_ba = self.in_proj_ba(hidden_states)  # bs x seq_len x (b a)
+        query, key, value, z, beta, alpha = self.fix_query_key_value_ordering(
+            projected_states_qkvz, projected_states_ba
         )
+        query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
+
+        mixed_qkv = torch.cat((query, key, value), dim=-1)
         mixed_qkv = mixed_qkv.transpose(1, 2)
         mixed_qkv = self.convolution(mixed_qkv)
         mixed_qkv = mixed_qkv.transpose(1, 2)
@@ -327,37 +289,35 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             ),
             dim=-1,
         )
-        query = self._reshape_heads(query, self._local_key_heads, self._config.key_head_dim)
-        key = self._reshape_heads(key, self._local_key_heads, self._config.key_head_dim)
-        value = self._reshape_heads(value, self._local_value_heads, self._config.value_head_dim)
+        query = query.reshape(query.shape[0], query.shape[1], -1, self._config.key_head_dim)
+        key = key.reshape(key.shape[0], key.shape[1], -1, self._config.key_head_dim)
+        value = value.reshape(value.shape[0], value.shape[1], -1, self._config.value_head_dim)
 
-        beta = beta.view(batch_size, sequence_length, self._local_value_heads).sigmoid()
-        alpha = alpha.view(batch_size, sequence_length, self._local_value_heads)
-        dt_bias = self.dt_bias.to(hidden_states.dtype)
-        a_log = self.A_log.to(hidden_states.dtype)
-        g = -torch.exp(a_log) * F.softplus(alpha + dt_bias)
+        beta = beta.sigmoid()
+        g = -torch.exp(self.A_log) * F.softplus(alpha + self.dt_bias)
 
         if self._value_heads_per_key > 1:
             query = query.repeat_interleave(self._value_heads_per_key, dim=2)
             key = key.repeat_interleave(self._value_heads_per_key, dim=2)
 
         core_attn_out, _ = self.chunk_gated_delta_rule(
-            query.permute(0, 2, 1, 3),
-            key.permute(0, 2, 1, 3),
-            value.permute(0, 2, 1, 3),
-            g=g.permute(0, 2, 1),
-            beta=beta.permute(0, 2, 1),
-            use_qk_l2norm_in_kernel=self._use_qk_l2norm,
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=None,
+            output_final_state=False,
+            use_qk_l2norm_in_kernel=True,
         )
 
-        core_attn_out = core_attn_out.permute(0, 2, 1, 3).reshape(
-            batch_size, sequence_length, -1, self._config.value_head_dim
-        )
-        z = z.reshape(batch_size, sequence_length, -1, self._config.value_head_dim)
-        norm_input = core_attn_out.reshape(-1, self._config.value_head_dim)
-        norm_gate = z.reshape(-1, self._config.value_head_dim)
-        norm_out = self.norm(norm_input, norm_gate).view(batch_size, sequence_length, -1)
-        output = self.out_proj(norm_out)
+        z_shape_og = z.shape
+        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
+        z = z.reshape(-1, z.shape[-1])
+        core_attn_out = self.norm(core_attn_out, z)
+        core_attn_out = core_attn_out.reshape(z_shape_og)
+        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+        output = self.out_proj(core_attn_out)
 
         if sequence_first:
             output = output.transpose(0, 1)
