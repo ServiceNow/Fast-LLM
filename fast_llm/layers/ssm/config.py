@@ -106,6 +106,97 @@ class GatedDeltaNetConfig(MixerConfig):
         return GatedDeltaNet
 
 
+@config_class(dynamic_type={MixerConfig: "kda"})
+class KimiDeltaAttentionConfig(MixerConfig):
+    """
+    Configuration for the KimiDeltaAttention mixer inspired by the Kimi Linear models.
+    """
+
+    _abstract = False
+    normalization: NormalizationConfig = Field(
+        desc="Configuration for the gated normalization applied to the KDA output.",
+        hint=FieldHint.architecture,
+    )
+    q_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces query vectors.",
+        hint=FieldHint.architecture,
+    )
+    k_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces key vectors.",
+        hint=FieldHint.architecture,
+    )
+    v_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces value vectors.",
+        hint=FieldHint.architecture,
+    )
+    f_a_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the Delta gating pre-activation.",
+        hint=FieldHint.architecture,
+    )
+    f_b_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the Delta gating expansion.",
+        hint=FieldHint.architecture,
+    )
+    g_a_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the output gating pre-activation.",
+        hint=FieldHint.architecture,
+    )
+    g_b_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the output gating expansion.",
+        hint=FieldHint.architecture,
+    )
+    beta_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces the Beta gate.",
+        hint=FieldHint.architecture,
+    )
+    output_projection_layer: AffineLinearConfig = Field(
+        desc="Projection applied after the Delta recurrence and gated normalization.",
+        hint=FieldHint.architecture,
+    )
+    convolution_layer: CausalConv1dConfig = Field(
+        desc="Depth-wise convolution applied independently on each Q, K and V stream.",
+        hint=FieldHint.architecture,
+    )
+    dt_bias_weight: ParameterConfig = Field(
+        desc="Parameter configuration for the Delta gate bias.",
+        hint=FieldHint.architecture,
+    )
+    a_log_weight: ParameterConfig = Field(
+        desc="Parameter configuration for the decay rates.",
+        hint=FieldHint.architecture,
+    )
+
+    heads: int = Field(
+        default=16,
+        desc="Number of attention heads.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    head_dim: int = Field(
+        default=64,
+        desc="Dimension of each head.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    recurrent_threshold: int = Field(
+        default=64,
+        desc="Switch to the fused recurrent kernel below this sequence length.",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0),
+    )
+    use_qk_l2norm: bool = Field(
+        default=True,
+        desc="Apply L2 normalization to query/key vectors inside the Delta kernel.",
+        hint=FieldHint.architecture,
+    )
+
+    @property
+    def layer_class(self) -> "type":
+        from fast_llm.layers.ssm.kda import KimiDeltaAttention
+
+        return KimiDeltaAttention
+
+
 @config_class()
 class SSMConfig(MixerConfig):
     # Layers
