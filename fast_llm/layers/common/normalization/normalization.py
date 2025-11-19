@@ -1,6 +1,7 @@
 import abc
 
 import torch
+import torch.nn.functional as F
 
 from fast_llm.config import Configurable
 from fast_llm.engine.config_utils.initialization import init_ones_, init_zeros_
@@ -9,6 +10,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
 from fast_llm.layers.common.normalization.config import (
+    GatedRMSNormalizationConfig,
     LayerNormalizationConfig,
     NoNormalizationConfig,
     NormalizationConfig,
@@ -31,6 +33,12 @@ try:
     _fast_normalization_available = True
 except ImportError:
     _fast_normalization_available = False
+
+
+try:
+    from fla.modules.fused_norm_gate import rms_norm_gated  # noqa
+except ImportError:
+    rms_norm_gated = None
 
 
 _PERSIST_LN_SIZES = (
@@ -292,3 +300,37 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
         return torch.rms_norm(input_.to(self.weight.dtype), self._normalized_shape, self.weight, self._config.epsilon)
+
+
+class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormalization[ConfigType], torch.nn.Module):
+    """
+    A gated RMS normalization layer.
+    """
+
+    def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
+        super().__init__(config, hidden_dim, lr_scale)
+
+        if rms_norm_gated is not None:
+            self._forward = self._forward_fused
+        else:
+            self._forward = self._forward
+
+    def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return self._forward(input_.view(-1, *self._normalized_shape), gate).view_as(input_)
+
+    def _forward_fused(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return rms_norm_gated(
+            input_,
+            gate,
+            self.weight,
+            None,
+            activation="silu",
+            eps=self._config.epsilon,
+            residual=None,
+            prenorm=False,
+            residual_in_fp32=False,
+        )
+
+    def _forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        normalized = self.rmsnorm(input_)
+        return normalized * F.silu(gate)
