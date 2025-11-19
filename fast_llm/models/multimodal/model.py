@@ -32,7 +32,7 @@ class PatchSequenceTensorDim(TensorDim):
     Note that `local_unpadded_size` must be set manually before any call to `local_to_global`.
     """
 
-    local_unpadded_size: int
+    local_unpadded_size: typing.ClassVar[int]
 
     def __init__(self, name: str, global_size: int, parallel_dim: DistributedDim, batch_parallel_dim: DistributedDim):
         super().__init__(name, global_size * batch_parallel_dim.size, parallel_dim, variable_size=True)
@@ -203,7 +203,7 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
         print(kwargs[self._vision_encoder_namespace][VisionKwargs.hidden_dims])
         print(hidden_batch_and_sequence_q_dim)
         assert isinstance(hidden_batch_and_sequence_q_dim, PatchSequenceTensorDim)
-        hidden_batch_and_sequence_q_dim.local_unpadded_size = cropped_image_patches.patches.size(0)
+        PatchSequenceTensorDim.local_unpadded_size = cropped_image_patches.patches.size(0)
 
         kwargs[LanguageModelKwargs.embedding_map] = (
             (cropped_image_patches.token_map, cropped_image_patches.sample_map)
