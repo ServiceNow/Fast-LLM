@@ -202,12 +202,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         # same as rearrange(v, '... (h d) -> ... h d', d=self.head_dim)
         return tensor.view(tensor.shape[0], tensor.shape[1], self._local_heads, self._config.head_dim)
 
-    def _get_dt_bias(self) -> torch.Tensor:
-        return self.dt_bias.view(1, 1, self._local_heads, self._config.head_dim)
-
-    def _get_a_log(self) -> torch.Tensor:
-        return self.a_log.view(1, 1, self._local_heads, 1)
-
     def _forward(
         self,
         input_: torch.Tensor,
@@ -228,14 +222,14 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         v = self._apply_conv(self.v_proj(hidden_states), self.v_conv)
 
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
-        g_kernel = fused_kda_gate(g_kernel, self._get_a_log(), self._config.head_dim, g_bias=self._get_dt_bias())
+        g_kernel = fused_kda_gate(g_kernel, self.a_log, self._config.head_dim, g_bias=self.dt_bias)
 
         beta = torch.sigmoid(self.beta_proj(hidden_states).float())
 
         q = self._reshape_heads(q)
         k = self._reshape_heads(k)
         v = self._reshape_heads(v)
-        # currently on supports Ampere???
+        # need to install nightly triton for now
         attn_out, _ = chunk_kda(
             q=q,
             k=k,
@@ -244,7 +238,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             beta=beta,
             initial_state=None,
             output_final_state=False,
-            use_qk_l2norm_in_kernel=self._config.use_qk_l2norm,
+            use_qk_l2norm_in_kernel=True,
             cu_seqlens=None,
         )
 
