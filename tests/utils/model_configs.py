@@ -669,13 +669,12 @@ _update_and_add_testing_config(
     megatron_args=None,
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        # TODO: Implement
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
@@ -684,7 +683,7 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests hybrid discrete Mamba 2.
+    # Tests vision multimodal.
     "llama",
     "llava",
     model_type="multimodal",

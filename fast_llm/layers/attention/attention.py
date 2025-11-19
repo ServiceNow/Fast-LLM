@@ -192,7 +192,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         if self._local_head_groups == 1:
             query = query.view(b, sq * self._local_heads, self._config.head_size)
-            key = key.transpose(-1, -2)
+            key = key.flatten(-2).transpose(-1, -2)
+            value = value.flatten(-2)
         else:
             query = (
                 query.unflatten(2, (self._local_head_groups, self._local_heads_per_group))
