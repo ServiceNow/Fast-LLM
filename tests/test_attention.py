@@ -57,7 +57,6 @@ def test_varlen_preprocessing():
 @requires_cuda
 @pytest.mark.parametrize("cross_document_attention", (True, False))
 @pytest.mark.parametrize(("causal", "window_size"), ((True, None), (True, 50), (False, None)))
-@pytest.mark.parametrize("padding", (0, 10))
 def test_attention_implementations(cross_document_attention: bool, causal: bool, window_size: int | None):
     """
     Check that the flash and backup attention implementation give the same result.

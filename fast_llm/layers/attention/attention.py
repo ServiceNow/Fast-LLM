@@ -454,8 +454,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
-        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].global_size
-        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].global_size
+        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
+        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
         if self._config.causal:
             if (
                 sequence_length := kwargs[AttentionKwargs.sequence_length]
