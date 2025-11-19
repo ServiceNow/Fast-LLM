@@ -150,7 +150,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
                 kwargs[LanguageModelKwargs.hidden_dims],
-                tensor_name="embedding output",
+                tensor_name=f"{self.module_name} output",
                 dtype=self._residual_dtype,
             )
         if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
