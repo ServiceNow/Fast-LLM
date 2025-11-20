@@ -14,12 +14,11 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBlockConverter,
     LlamaDecoderConverter,
-    LlamaMLPConverter,
     LlamaNormalizationConverter,
     MLPLayer2Converter,
     get_weight_and_bias_converters,
 )
-from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter
+from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralMLPConverter
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
@@ -44,7 +43,6 @@ class PixtralNormalizationConverter(LlamaNormalizationConverter):
         return {}
 
 
-# TODO: ====== MistralAttentionConverter (#391 / #382) ======
 class PixtralAttentionConverter(LlamaAttentionConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -73,7 +71,7 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
 class PixtralBlockConverter(LlamaBlockConverter):
     mixer_converter_class: typing.ClassVar[type[PixtralAttentionConverter]] = PixtralAttentionConverter
     # TODO: ====== MistralMLPConverter (#391 / #382) ======
-    mlp_converter_class: typing.ClassVar[type[LlamaMLPConverter]] = LlamaMLPConverter
+    mlp_converter_class: typing.ClassVar[type[MistralMLPConverter]] = MistralMLPConverter
     normalization_converter_class: typing.ClassVar[type[PixtralNormalizationConverter]] = PixtralNormalizationConverter
     hf_mixer_name: typing.ClassVar[str] = "attention"
     hf_mlp_name: typing.ClassVar[str] = "feed_forward"
