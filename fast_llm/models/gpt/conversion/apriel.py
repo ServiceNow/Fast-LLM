@@ -280,14 +280,17 @@ class AprielStochasticMixerConverter:
             if converter_class is None:
                 raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
             mixer_converter_class = converter_class.mixer_converter_class
-            # Only export the main mixer, but keep all mixers on import
-            is_main_mixer = mixer_name == config.main_mixer_name
+            # Map mixer types to HF prefixes: attention -> self_attn, others -> mixer
+            if mixer_type is AttentionConfig:
+                hf_mixer_prefix = f"{hf_prefix}.self_attn"
+            else:
+                hf_mixer_prefix = f"{hf_prefix}.mixer"
             converters.extend(
                 mixer_converter_class.get_converters(
                     mixer,
                     f"{fast_llm_prefix}.mixers.{mixer_name}",
-                    hf_prefix,
-                    drop_on_export=drop_on_export or not is_main_mixer,
+                    hf_mixer_prefix,
+                    drop_on_export=drop_on_export,
                 )
             )
         return converters
@@ -339,22 +342,65 @@ class AprielDecoderConverter(MistralDecoderConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
         layout = config["hybrid_block_layout"]
+        # Normalize layout items for comparison (convert lists to tuples for hashability)
+        normalized_layout = [tuple(item) if isinstance(item, list) else item for item in layout]
+        unique_layouts = set(normalized_layout)
+
         # If all blocks are the same type, import as FixedBlockSequenceConfig
-        if len(set(layout)) == 1:
+        if len(unique_layouts) == 1:
+            layout_item = layout[0]
+            if isinstance(layout_item, list):
+                # Stochastic mixer block
+                block_config = cls._import_stochastic_block_config(config, layout_item)
+            else:
+                block_config = cls.block_converter_class.import_config(config, layout_item)
             return {
-                "block": cls.block_converter_class.import_config(config, layout[0]),
+                "block": block_config,
                 "num_blocks": config["num_hidden_layers"],
             }
         else:
+            # Pattern config with potentially mixed blocks
+            blocks = {}
+            pattern = []
+            for layout_item in layout:
+                if isinstance(layout_item, list):
+                    # Use tuple as dict key for stochastic blocks
+                    key = tuple(layout_item)
+                    if key not in blocks:
+                        blocks[key] = cls._import_stochastic_block_config(config, layout_item)
+                    pattern.append(key)
+                else:
+                    if layout_item not in blocks:
+                        blocks[layout_item] = cls.block_converter_class.import_config(config, layout_item)
+                    pattern.append(layout_item)
+
             return {
                 "type": "pattern",
-                "blocks": {
-                    layout_name: cls.block_converter_class.import_config(config, layout_name)
-                    for layout_name in set(layout)
-                },
-                "pattern": layout,
+                "blocks": blocks,
+                "pattern": pattern,
                 "num_blocks": config["num_hidden_layers"],
             }
+
+    @classmethod
+    def _import_stochastic_block_config(cls, config: dict, mixer_types: list[str]) -> dict:
+        """Import a stochastic mixer block config from a list of mixer type names."""
+        # Import each mixer's config, using layout names (t, m2, etc.) as mixer names
+        mixer_configs = {}
+        for mixer_type in mixer_types:
+            mixer_config = cls.block_converter_class.import_config(config, mixer_type)["mixer"]
+            mixer_configs[mixer_type] = mixer_config
+
+        # Create stochastic mixer block config
+        return {
+            "mixer": {
+                "type": "stochastic",
+                "mixers": mixer_configs,
+                "main_mixer_name": config.get("stochastic_main_mixer", mixer_types[0]),
+                "sampling_strategy": config.get("stochastic_sampling", "uniform"),
+            },
+            # MLP and other components same as any block
+            "mlp": cls.block_converter_class.import_config(config, mixer_types[0])["mlp"],
+        }
 
     @classmethod
     def export_config(cls, config: BlockSequenceConfig) -> dict:
@@ -367,20 +413,36 @@ class AprielDecoderConverter(MistralDecoderConverter):
         else:
             raise NotImplementedError(f"Unsupported config type: {type(config).__name__}")
         # There may be all sorts of blocks, but `safe_merge_dicts` ensures they are compatible.
+        # Generate hybrid_block_layout with nested lists for stochastic mixers
+        hybrid_block_layout = []
+        for block_config in pattern_block_configs:
+            if isinstance(block_config.mixer, StochasticMixerConfig):
+                # Export as list of mixer type names
+                mixer_names = [
+                    cls.block_converter_class.layout_names[type(mixer)]
+                    for mixer in block_config.mixer.mixers.values()
+                ]
+                hybrid_block_layout.append(mixer_names)
+            else:
+                # Single mixer - export as string
+                mixer_name = cls.block_converter_class.layout_names[type(block_config.mixer)]
+                hybrid_block_layout.append(mixer_name)
+
         return safe_merge_dicts(
             *[cls.block_converter_class.export_config(block_config) for block_config in block_configs],
             {
                 "num_hidden_layers": config.num_blocks,
-                "hybrid_block_layout": [
-                    cls.block_converter_class.layout_names[
-                        (
-                            type(block_config.mixer.mixers[block_config.mixer.main_mixer_name])
-                            if isinstance(block_config.mixer, StochasticMixerConfig)
-                            else type(block_config.mixer)
-                        )
-                    ]
-                    for block_config in pattern_block_configs
-                ],
+                "hybrid_block_layout": hybrid_block_layout,
+                "stochastic_main_mixer": (
+                    pattern_block_configs[0].mixer.main_mixer_name
+                    if isinstance(pattern_block_configs[0].mixer, StochasticMixerConfig)
+                    else "t"
+                ),
+                "stochastic_sampling": (
+                    pattern_block_configs[0].mixer.sampling_strategy.value
+                    if isinstance(pattern_block_configs[0].mixer, StochasticMixerConfig)
+                    else "uniform"
+                ),
             },
         )
 

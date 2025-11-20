@@ -16,7 +16,13 @@ from transformers.cache_utils import Cache, DynamicCache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
+from transformers.models.mistral.modeling_mistral import (
+    MistralAttention,
+    MistralDecoderLayer,
+    MistralMLP,
+    MistralModel,
+    MistralRMSNorm,
+)
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, logging
 from transformers.utils.generic import ModelOutput
@@ -1186,6 +1192,90 @@ class AprielHybridIdentity(nn.Module):
         return (hidden_states,)
 
 
+class AprielStochasticDecoderLayer(nn.Module):
+    """
+    Stochastic mixer layer with multiple mixers (e.g., attention + mamba).
+    Directly instantiates mixer modules, not full layer classes.
+    Uses only the main mixer for inference.
+
+    Limitation: Only supports one attention + one non-attention mixer (identity excluded).
+    """
+
+    def __init__(
+        self, config: AprielHybridSSMConfig, layer_idx: int, mixer_types: list[str], device=None, dtype=None, **kwargs
+    ):
+        super().__init__(**kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.hidden_size = config.hidden_size
+
+        print(f"[HF DEBUG] AprielStochasticDecoderLayer.__init__ layer_idx={layer_idx}, mixer_types={mixer_types}")
+
+        # Validate: only one non-attention mixer allowed (excluding identity)
+        has_attention = "t" in mixer_types
+        non_attn_types = [t for t in mixer_types if t not in ("t", "i")]
+        if len(non_attn_types) > 1:
+            raise ValueError(
+                f"Stochastic mixer only supports one non-attention mixer per block, got: {non_attn_types}"
+            )
+
+        # Directly instantiate mixer modules (not full layer classes)
+        if has_attention:
+            print(f"[HF DEBUG]   Instantiating MistralAttention for layer {layer_idx}")
+            self.self_attn = MistralAttention(config, layer_idx)
+
+        if non_attn_types:
+            mixer_type = non_attn_types[0]
+            if mixer_type == "m2":
+                self.mixer = Mamba2(
+                    d_model=config.hidden_size,
+                    layer_idx=layer_idx,
+                    **config.ssm_cfg,
+                    **factory_kwargs,
+                )
+            elif mixer_type == "m2d":
+                self.mixer = DiscreteMamba2(
+                    d_model=config.hidden_size,
+                    layer_idx=layer_idx,
+                    **config.ssm_cfg,
+                    **factory_kwargs,
+                )
+            else:
+                raise ValueError(f"Unknown non-attention mixer type: {mixer_type}")
+
+        self.mixer_types = mixer_types
+        self.main_mixer = mixer_types[0]
+
+        # Shared components (one set per layer, not per mixer)
+        self.mlp = MistralMLP(config)
+        print(f"[HF DEBUG]   Instantiating RMS norms for layer {layer_idx}")
+        self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(
+        self, hidden_states: torch.Tensor, **kwargs
+    ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # Use main mixer for inference
+        if self.main_mixer == "t":
+            mixer_outputs = self.self_attn(hidden_states, **kwargs)
+            hidden_states = mixer_outputs[0]
+        else:
+            mixer_outputs = self.mixer(hidden_states, **kwargs)
+            hidden_states = mixer_outputs["hidden_states"]
+
+        hidden_states = hidden_states.to(residual.dtype) + residual
+
+        # MLP
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return (hidden_states,)
+
+
 class AprielHybridSSMModel(MistralModel):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`AprielDecoderLayer`, `AprielSSMDecoderLayer`]
@@ -1199,18 +1289,22 @@ class AprielHybridSSMModel(MistralModel):
         super().__init__(config_copy, **kwargs)
         self.config = config
         blocks = []
-        logger.info(f"Loading hyubrid model with the following layout: {config.hybrid_block_layout}")
-        for layer_idx, type in enumerate(config.hybrid_block_layout):
-            if type == "m2d":
+        logger.info(f"Loading hybrid model with the following layout: {config.hybrid_block_layout}")
+        for layer_idx, type_or_list in enumerate(config.hybrid_block_layout):
+            # Handle stochastic mixers (list of mixer types)
+            if isinstance(type_or_list, list):
+                blocks.append(AprielStochasticDecoderLayer(config, layer_idx, type_or_list))
+            # Handle single mixer types
+            elif type_or_list == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx))
-            elif type == "m2":
+            elif type_or_list == "m2":
                 blocks.append(AprielSSMM2DecoderLayer(config, layer_idx))
-            elif type == "t":
+            elif type_or_list == "t":
                 blocks.append(MistralDecoderLayer(config, layer_idx))
-            elif type == "i":
+            elif type_or_list == "i":
                 blocks.append(AprielHybridIdentity(config))
             else:
-                raise ValueError(f"Invalid block type: {type}")
+                raise ValueError(f"Invalid block type: {type_or_list}")
         self.layers = nn.ModuleList(blocks)
 
         # Initialize weights and apply final processing
@@ -1255,7 +1349,7 @@ class AprielHybridSSMModel(MistralModel):
 class AprielHybridSSMPreTrainedModel(PreTrainedModel):
     config_class = AprielHybridSSMConfig
     base_model_prefix = "model"
-    _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer", "AprielSSMM2DecoderLayer"]
+    _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer", "AprielSSMM2DecoderLayer", "AprielStochasticDecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True

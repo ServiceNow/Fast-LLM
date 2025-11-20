@@ -73,38 +73,10 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def _initialize_missing_parameters(self) -> None:
-        # Parameters that exist in the model but not in the checkpoint import converters
-        missing_params = set(self._export_converters.keys()) - {
-            weight_converter.fast_llm_name[0]
-            for weight_converter in self._import_converters.values()
-            if weight_converter.fast_llm_name
-        }
-
-        print(f"[INIT DEBUG] Checking for missing parameters in HuggingFace checkpoint...")
-        print(f"[INIT DEBUG]   Model has {len(self._export_converters)} parameters")
-        print(f"[INIT DEBUG]   Checkpoint has {len(self._import_converters)} parameters")
-        print(f"[INIT DEBUG]   Missing: {len(missing_params)} parameters")
-
-        if missing_params:
-            logger.warning(
-                f"Initializing {len(missing_params)} parameters not in HuggingFace checkpoint"
-            )
-            print(f"[INIT DEBUG] Initializing {len(missing_params)} parameters:")
-            for param in sorted(missing_params)[:5]:  # Show first 5
-                print(f"[INIT DEBUG]     {param}")
-            if len(missing_params) > 5:
-                print(f"[INIT DEBUG]     ... and {len(missing_params) - 5} more")
-            for stage in self._model._stages:
-                stage.initialize_weights_for_parameters(missing_params)
-
     def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
-        print(f"[INIT DEBUG] HuggingfaceStateDictCheckpointHandler.load() called")
         assert not config.optimizer_state
         metadata = self._model.config.load_metadata(config)
         self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
-        # Initialize parameters not covered by import converters
-        self._initialize_missing_parameters()
         super().load(config)
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:

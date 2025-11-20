@@ -702,8 +702,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "mixer"): {
             "type": "stochastic",
             "mixers": {
-                "attention": {
-                    # Option 1: Attention (will receive pretrained weights on load)
+                "t": {
                     "type": "attention",
                     "rotary": {"type": "default", "theta": 10000},
                     "heads": 8,
@@ -711,8 +710,7 @@ _update_and_add_testing_config(
                     "head_size": 32,
                     "add_linear_biases": False,
                 },
-                "mamba": {
-                    # Option 2: Mamba2 (randomly initialized on load)
+                "m2": {
                     "type": "mamba_2",
                     "d_inner": 512,
                     "state_size": 16,
@@ -722,7 +720,7 @@ _update_and_add_testing_config(
                 },
             },
             "sampling_strategy": "uniform",
-            "main_mixer_name": "attention",  # Use attention for inference/eval and checkpoint conversion
+            "main_mixer_name": "t",
         },
     },
     megatron_args=None,
