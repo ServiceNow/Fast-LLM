@@ -9,7 +9,12 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.ssm.config import DiscreteMamba2Config, Mamba2Config
+from fast_llm.layers.ssm.config import (
+    DiscreteMamba2Config,
+    GatedDeltaNetConfig,
+    KimiDeltaAttentionConfig,
+    Mamba2Config,
+)
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
@@ -229,6 +234,128 @@ class AprielMamba2Converter:
         ]
 
 
+class KimiDeltaAttentionConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "type": "kda",
+            "head_dim": config["linear_attn_config"]["head_dim"],
+            "heads": config["linear_attn_config"]["num_heads"],
+            "convolution_layer": {
+                "kernel_size": config["linear_attn_config"]["short_conv_kernel_size"],
+            },
+        }
+
+    @classmethod
+    def export_config(cls, config: KimiDeltaAttentionConfig) -> dict:
+        return {
+            "linear_attn_config": {
+                "head_dim": config.head_dim,
+                "num_heads": config.heads,
+                "short_conv_kernel_size": config.convolution_layer.kernel_size,
+            },
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: KimiDeltaAttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.q_proj",
+                f"{hf_prefix}.q_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.k_proj",
+                f"{hf_prefix}.k_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.v_proj",
+                f"{hf_prefix}.v_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.q_conv",
+                f"{hf_prefix}.q_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.k_conv",
+                f"{hf_prefix}.k_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.v_conv",
+                f"{hf_prefix}.v_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.f_a_proj",
+                f"{hf_prefix}.f_a_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.f_b_proj",
+                f"{hf_prefix}.f_b_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.g_a_proj",
+                f"{hf_prefix}.g_a_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.g_b_proj",
+                f"{hf_prefix}.g_b_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.beta_proj",
+                f"{hf_prefix}.beta_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.o_proj",
+                f"{hf_prefix}.o_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.A_log",
+                f"{hf_prefix}.A_log",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.dt_bias",
+                f"{hf_prefix}.dt_bias",
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.norm",
+                f"{hf_prefix}.norm",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
 class AprielMLPConverter(LlamaMLPConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -240,6 +367,37 @@ class AprielMLPConverter(LlamaMLPConverter):
         out = super().export_config(config)
         del out["mlp_bias"]
         return out
+
+
+class GatedDeltaNetConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "type": "gated_delta_net",
+            "state_size": config["ssm_cfg"]["d_state"],
+            "d_inner": config["ssm_cfg"].get("d_inner") or config["hidden_size"] * config["ssm_cfg"].get("expand", 1),
+            "add_linear_biases": config["ssm_cfg"]["bias"],
+            "convolution_layer": {"bias": {"enabled": config["ssm_cfg"].get("conv_bias", True)}},
+            "n_heads": config["ssm_cfg"]["n_heads"],
+            "chunk_size": config["ssm_cfg"]["chunk_size"],
+        }
+
+    @classmethod
+    def export_config(cls, config: GatedDeltaNetConfig) -> dict:
+        return {
+            "ssm_cfg": {
+                "d_state": config.state_size,
+                "d_inner": config.d_inner,
+                "bias": config.add_linear_biases,
+                "conv_bias": (
+                    config.add_linear_biases
+                    if config.convolution_layer.bias.enabled is None
+                    else config.convolution_layer.bias.enabled
+                ),
+                "n_heads": config.n_heads,
+                "chunk_size": config.chunk_size,
+            }
+        }
 
 
 class AprielBlockConverterBase(MistralBlockConverter):
@@ -256,16 +414,30 @@ class AprielMamba2BlockConverter(AprielBlockConverterBase):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
+class AprielKimiDeltaAttentionBlockConverter(AprielBlockConverterBase):
+    mixer_converter_class: typing.ClassVar[type[KimiDeltaAttentionConverter]] = KimiDeltaAttentionConverter
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
+
+
+class AprielGatedDeltaNetBlockConverter(AprielBlockConverterBase):
+    mixer_converter_class: typing.ClassVar[type[GatedDeltaNetConverter]] = GatedDeltaNetConverter
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
+
+
 class AprielBlockConverter:
     layout_names = {
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
+        KimiDeltaAttentionConfig: "kda",
+        GatedDeltaNetConfig: "gdn",
     }
     _converter_classes = {
         AttentionConfig: AprielBlockConverterBase,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
+        KimiDeltaAttentionConfig: AprielKimiDeltaAttentionBlockConverter,
+        # GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
     _config_classes = {value: key for key, value in layout_names.items()}
 
