@@ -8,15 +8,10 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
-from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.ssm.config import DiscreteMamba2Config, Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import (
-    LlamaMLPConverter,
-    get_parameter_converter,
-    get_weight_and_bias_converters,
-)
+from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
@@ -229,29 +224,12 @@ class AprielMamba2Converter:
         ]
 
 
-class AprielMLPConverter(LlamaMLPConverter):
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["mlp_bias"] = False
-        return super().import_config(config)
-
-    @classmethod
-    def export_config(cls, config: MLPConfig) -> dict:
-        out = super().export_config(config)
-        del out["mlp_bias"]
-        return out
-
-
-class AprielBlockConverterBase(MistralBlockConverter):
-    mlp_converter_class: typing.ClassVar[type[AprielMLPConverter]] = AprielMLPConverter
-
-
-class AprielDiscreteMamba2BlockConverter(AprielBlockConverterBase):
+class AprielDiscreteMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielDiscreteMamba2Converter]] = AprielDiscreteMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
-class AprielMamba2BlockConverter(AprielBlockConverterBase):
+class AprielMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielMamba2Converter]] = AprielMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
@@ -327,7 +305,7 @@ class AprielBlockConverter:
         StochasticMixerConfig: "stochastic",
     }
     _converter_classes = {
-        AttentionConfig: AprielBlockConverterBase,
+        AttentionConfig: MistralBlockConverter,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
         StochasticMixerConfig: AprielStochasticMixerBlockConverter,
