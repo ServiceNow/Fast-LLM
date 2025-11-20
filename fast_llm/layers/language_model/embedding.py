@@ -77,7 +77,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             peft=self._peft,
         )
 
-    # @torch.compile
+    @torch.compile
     def _forward(
         self,
         input_: torch.Tensor | None,
@@ -127,7 +127,9 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                     #  TODO:: Filter and shift embedding map instead? (needs cuda sync)
                     input_ = gather(input_, group=group, dim=0)
                     embeddings_ = embeddings.new_zeros(embeddings.shape[0] * group.size(), *embeddings.shape[1:])
-                    embeddings_.index_put(embedding_map, input_[: embedding_map[0].size(0)], accumulate=True)
+                    embeddings_ = embeddings_.index_put(
+                        embedding_map, input_[: embedding_map[0].size(0)], accumulate=True
+                    )
                     embeddings = embeddings + split(embeddings_, group=group, dim=0)
                 else:
                     embeddings = embeddings.index_put(
