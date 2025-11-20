@@ -4,8 +4,8 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
+from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert
@@ -16,50 +16,53 @@ if typing.TYPE_CHECKING:
 
 @config_class()
 class LanguageModelSourceConfig(Config):
-    text_column: str = Field(
+    """
+    A schema holding the name of each relevant column in the dataset.
+    Setting optional entries will enable the associated feature.
+    """
+
+    text: str = Field(
         default="text",
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
     )
-    loss_masking_spans_column: None | str = Field(
+    loss_masking_spans: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
-    chosen_spans_column: None | str = Field(
+    chosen_span: None | str = Field(
         default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
     )
-    rejected_spans_column: None | str = Field(
+    rejected_span: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
 
     @functools.cached_property
     def columns(self) -> list[str]:
-        columns = [self.text_column]
+        columns = [self.text]
         if self.has_loss_masking_span:
-            columns.append(self.loss_masking_spans_column)
+            columns.append(self.loss_masking_spans)
         if self.has_preference_spans:
-            columns.extend([self.chosen_spans_column, self.rejected_spans_column])
+            columns.extend([self.chosen_span, self.rejected_span])
         return columns
 
     @functools.cached_property
     def has_loss_masking_span(self) -> bool:
-        return self.loss_masking_spans_column is not None
+        return self.loss_masking_spans is not None
 
     @functools.cached_property
     def has_preference_spans(self) -> bool:
-        Assert.eq(self.chosen_spans_column is None, self.rejected_spans_column is None)
-        return self.chosen_spans_column is not None
+        Assert.eq(self.chosen_span is None, self.rejected_span is None)
+        return self.chosen_span is not None
 
     def _validate(self):
         super()._validate()
-        if self.has_loss_masking_span != self.rejected_spans_column is not None:
-            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
         if self.has_preference_spans and self.has_loss_masking_span:
             raise ValueError(f"Can not enable both loss masking and preference spans.")
 
 
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
-    path: str = Field(
+    path: str | pathlib.Path = Field(
         default=None,
         desc="Name or path of the dataset.",
         hint=FieldHint.core,
@@ -104,6 +107,11 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Disable disk space check. Useful for environments where disk space is not accurately reported.",
         hint=FieldHint.optional,
     )
+    load_from_disk: bool = Field(
+        default=False,
+        desc="Use the `load_from_disk` method for datasets saved with `save_to_disk`.",
+        hint=FieldHint.feature,
+    )
 
 
 @config_class()
@@ -141,7 +149,6 @@ class DatasetPreparatorDistributedConfig(Config):
 
 @config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
-    preparator_name: typing.ClassVar[str] = "gpt_memmap"
     output_path: pathlib.Path = Field(
         default=None,
         desc="Output directory for the processed dataset.",
@@ -151,27 +158,14 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )
-    tokens_per_shard: int = Field(
-        default=10**9,
-        desc="Approximate number of tokens per shard.",
+    documents_per_shard: int = Field(
+        default=10**6,
+        desc="Target number of documents per shard.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 10**5),
     )
-    loading_workers: int = Field(
+    num_workers: int = Field(
         default=1,
-        desc="Number of workers in load_dataset() call.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    tokenize_workers: int = Field(
-        default=1,
-        desc="Number of workers for tokenization.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    saving_workers: int = Field(
-        default=1,
-        desc="Number of processes for saving the data.",
+        desc="Number of parallel workers.",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )

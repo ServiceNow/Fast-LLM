@@ -29,6 +29,7 @@ class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[Sa
         self._name = name
         self._seed = sampling.config.seed
         self._parameters = sampling.parameters
+        assert self._parameters.vocab_size is not None
         # TODO: Support?
         assert not self._parameters.use_loss_masking_spans
         assert not self._parameters.use_preference_loss_spans

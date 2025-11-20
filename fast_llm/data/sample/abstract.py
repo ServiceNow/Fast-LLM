@@ -37,11 +37,8 @@ class Batch(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def to_samples(self) -> list[Sample]:
-        pass
-
     def crop(self, begin: int, end: int) -> typing.Self:
-        return self.from_samples(sample.crop(begin, end) for sample in self.to_samples())
+        pass
 
     def to_device_(self, device: "torch.device | str"):
         pass
@@ -210,8 +207,9 @@ class MemmapWriter(abc.ABC):
         assert hasattr(self, "_begin") and not hasattr(self, "_end")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stream.write(self._get_config_class().footer)
-        self._end = self._stream.tell()
+        if exc_type is None:
+            self._stream.write(self._get_config_class().footer)
+            self._end = self._stream.tell()
         if self._owns_stream:
             self._stream.close()
 

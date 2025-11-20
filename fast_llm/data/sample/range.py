@@ -15,6 +15,11 @@ from fast_llm.data.sample.abstract import (
 from fast_llm.utils import Assert, get_unique
 
 
+def crop_ranges(ranges: list[tuple[int, int]], begin: int, end: int) -> list[tuple[int, int]]:
+    cropped_ranges = ((max(begin_ - begin, 0), min(end_ - begin, end - begin)) for begin_, end_ in ranges)
+    return [(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_]
+
+
 class RangeSample(Sample):
     """
     A reusable component holding a set of ranges in a sample.
@@ -36,9 +41,7 @@ class RangeSample(Sample):
         return cls(ranges, sample_size)
 
     def crop(self, begin: int, end: int) -> typing.Self:
-        sample_size = end - begin
-        cropped_ranges = ((max(begin_ - begin, 0), min(end_ - begin, sample_size)) for begin_, end_ in self.ranges)
-        return self.__class__([(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_], sample_size)
+        return self.__class__(crop_ranges(self.ranges, begin, end), end - begin)
 
     def __len__(self) -> int:
         return self.sample_size
@@ -56,8 +59,8 @@ class RangeBatch(Batch):
     def from_samples(cls, samples: typing.Iterable[RangeSample]) -> typing.Self:
         return cls([sample.ranges for sample in samples], get_unique(sample.sample_size for sample in samples))
 
-    def to_samples(self) -> list[RangeSample]:
-        return [RangeSample(sample_ranges, self.sample_size) for sample_ranges in self.ranges]
+    def crop(self, begin: int, end: int) -> typing.Self:
+        return self.__class__([crop_ranges(sample_ranges, begin, end) for sample_ranges in self.ranges], end - begin)
 
 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
@@ -117,8 +120,9 @@ class RangeWriter(MemmapWriter):
         self._count_cumsum.append(self._count_cumsum[-1] + len(document.ranges))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
-        self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
+        if exc_type is None:
+            Assert.lt(self._count_cumsum[-1], np.iinfo(np.int32).max)
+            self._stream.write(np.array(self._count_cumsum, dtype=np.int32).tobytes(order="C"))
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod

@@ -267,27 +267,31 @@ class LanguageModelWriter(MemmapWriter):
         self._rejected_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         self._image_patches_writer.__exit__(exc_type, exc_val, exc_tb)
 
-        # A dummy config so we can verify the begin and end offsets.
-        config = self._get_config(self._begin, None)
-        _copy_chunked(self._path.joinpath("tokens"), self._stream, config.tokens.begin, config.tokens.end)
+        if exc_type is None:
+            # A dummy config so we can verify the begin and end offsets.
+            config = self._get_config(self._begin, None)
+            _copy_chunked(self._path.joinpath("tokens"), self._stream, config.tokens.begin, config.tokens.end)
 
-        if self._has_loss_masking_spans:
-            _copy_chunked(
-                self._path.joinpath("loss_masking_spans"),
-                self._stream,
-                config.loss_masking_spans.begin,
-                config.loss_masking_spans.end,
-            )
-        if self._has_preference_spans:
-            _copy_chunked(
-                self._path.joinpath("chosen_spans"), self._stream, config.chosen_spans.begin, config.chosen_spans.end
-            )
-            _copy_chunked(
-                self._path.joinpath("rejected_spans"),
-                self._stream,
-                config.rejected_spans.begin,
-                config.rejected_spans.end,
-            )
+            if self._has_loss_masking_spans:
+                _copy_chunked(
+                    self._path.joinpath("loss_masking_spans"),
+                    self._stream,
+                    config.loss_masking_spans.begin,
+                    config.loss_masking_spans.end,
+                )
+            if self._has_preference_spans:
+                _copy_chunked(
+                    self._path.joinpath("chosen_spans"),
+                    self._stream,
+                    config.chosen_spans.begin,
+                    config.chosen_spans.end,
+                )
+                _copy_chunked(
+                    self._path.joinpath("rejected_spans"),
+                    self._stream,
+                    config.rejected_spans.begin,
+                    config.rejected_spans.end,
+                )
 
         if self._has_image_patches:
             _copy_chunked(

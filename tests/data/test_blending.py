@@ -12,17 +12,11 @@ from tests.data.common import (
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
-from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_CACHE, DATASET_PATH
-
-_DATASET_PATH_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
-
-
-def _get_test_dataset_mix_1():
-    return get_test_dataset(_DATASET_PATH_MIX_1, seed=2345)
+from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
 
 
 def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray, np.ndarray]:
+    # Alternate implementation for blending.
     probs = np.array(probs)
     dataset_index = np.zeros(num_samples)
     sample_index = np.zeros(num_samples)
@@ -37,25 +31,25 @@ def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray,
 
 
 GPT_BLENDED_SAMPLES = [
-    [4709, 819, 79, 207, 277, 1790],
-    [1790, 80, 6506, 1735, 542, 88],
-    [4628, 7392, 920, 79, 1322, 387],
-    [88, 4302, 269, 2794, 119, 80],
-    [80, 207, 567, 498, 89, 207],
-    [207, 4700, 549, 79, 417, 3036],
-    [387, 4224, 87, 2713, 423, 324],
-    [3036, 253, 207, 2968, 4536, 1178],
+    [49152, 46, 10, 819, 19, 45],
+    [45, 69, 17, 86, 38826, 15],
+    [49152, 83, 80, 20452, 45, 93],
+    [15, 25, 51, 31, 32348, 64],
+    [64, 17, 93, 78, 40, 1793],
+    [1793, 1, 1746, 38, 27, 58],
+    [93, 90, 39, 6, 75, 9],
+    [58, 22885, 93, 37, 92, 76],
 ]
 
 GPT_BLENDED_MIXED_SAMPLES = [
-    [4709, 819, 79, 207, 277, 1790],
+    [49152, 46, 10, 819, 19, 45],
     [916, 6683, 7685, 1277, 5106, 378],
-    [1790, 80, 6506, 1735, 542, 88],
+    [45, 69, 17, 86, 38826, 15],
     [3359, 6803, 780, 4561, 669, 7878],
-    [88, 4302, 269, 2794, 119, 80],
-    [80, 207, 567, 498, 89, 207],
+    [15, 25, 51, 31, 32348, 64],
+    [64, 17, 93, 78, 40, 1793],
     [6920, 2218, 2921, 3963, 7606, 6904],
-    [207, 4700, 549, 79, 417, 3036],
+    [1793, 1, 1746, 38, 27, 58],
 ]
 
 
@@ -112,38 +106,21 @@ def test_blending(probs):
 
 def test_gpt_blended():
     # Make sure dataset blending works and check for unintended changes in behavior.
-    get_test_dataset()
-    _get_test_dataset_mix_1()
+    _, config, _ = get_common_test_dataset()
+    _, alt_config, _ = get_alt_test_dataset()
     sampled = get_dataset_config(
-        {
+        dataset_config := {
             "type": "blended",
-            "datasets": [
-                {"type": "memmap", "path": DATASET_PATH},
-                {"type": "memmap", "path": _DATASET_PATH_MIX_1},
-            ],
+            "datasets": [config, alt_config],
             "weights": [0.75, 0.25],
         },
         BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5, vocab_size=8192))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
-
-def test_gpt_blended_data():
-    get_test_dataset()
-    _get_test_dataset_mix_1()
+    # Test in data.
     get_test_data_and_compare_samples(
-        {
-            "datasets": {
-                "training": {
-                    "type": "blended",
-                    "datasets": [
-                        {"type": "memmap", "path": DATASET_PATH},
-                        {"type": "memmap", "path": _DATASET_PATH_MIX_1},
-                    ],
-                    "weights": [0.75, 0.25],
-                }
-            }
-        },
+        {"datasets": {"training": dataset_config}},
         8,
         sequence_length=5,
         expected_samples=GPT_BLENDED_SAMPLES,
@@ -152,34 +129,25 @@ def test_gpt_blended_data():
 
 def test_gpt_blended_mixed():
     # Make sure dataset blending works and check for unintended changes in behavior.
-    get_test_dataset()
+    _, config, _ = get_common_test_dataset()
     sampled = get_dataset_config(
-        {
+        dataset_config := {
             "type": "blended",
             "datasets": [
-                {"type": "memmap", "path": DATASET_PATH},
+                config,
                 {"type": "random"},
             ],
             "weights": [0.6, 0.4],
         },
         BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5, vocab_size=8192))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
-
-def test_gpt_blended_mixed_data():
-    get_test_dataset()
+    # Test in data.
     get_test_data_and_compare_samples(
-        {
-            "datasets": {
-                "training": {
-                    "type": "blended",
-                    "datasets": [{"type": "memmap", "path": DATASET_PATH}, {"type": "random"}],
-                    "weights": [0.6, 0.4],
-                }
-            }
-        },
+        {"datasets": {"training": dataset_config}},
         8,
         sequence_length=5,
+        vocab_size=8192,
         expected_samples=GPT_BLENDED_MIXED_SAMPLES,
     )

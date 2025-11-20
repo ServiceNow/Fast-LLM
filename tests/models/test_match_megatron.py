@@ -3,8 +3,10 @@ import pathlib
 import struct
 import typing
 
+import datasets
 import numpy as np
 import pytest
+import torch
 import yaml
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -13,13 +15,15 @@ from fast_llm.data.dataset.config import MemmapDatasetConfig, SampledDatasetConf
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER, LegacyMemmapDataset
 from fast_llm.data.dataset.sampled import logger
+from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
-from tests.utils.dataset import get_test_dataset_samples
+from tests.utils.dataset import get_common_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_NAME
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
@@ -39,7 +43,17 @@ def get_megatron_test_dataset(prefix: pathlib.Path = MEGATRON_DATASET_PREFIX):
         and prefix.with_suffix(".bin").is_file()
         and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
     ):
-        MegatronMemmapDataset.write_dataset(prefix, get_test_dataset_samples(vocab_size=MODEL_TEST_VOCAB_SIZE))
+        _, _, hf_path = get_common_test_dataset()
+        hf_dataset = datasets.load_from_disk(hf_path)["train"]
+        tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
+        samples = [
+            LanguageModelSample(
+                TokenSample((tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16))
+            )
+            for document in hf_dataset
+        ]
+
+        MegatronMemmapDataset.write_dataset(prefix, samples)
         yaml.safe_dump(
             {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
         )

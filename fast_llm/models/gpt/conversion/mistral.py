@@ -2,6 +2,7 @@ import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.layers.attention.config import AttentionConfig
+from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.models.gpt.conversion.config import MistralCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
@@ -10,6 +11,7 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
+    LlamaMLPConverter,
 )
 from fast_llm.utils import safe_merge_dicts
 
@@ -17,14 +19,20 @@ from fast_llm.utils import safe_merge_dicts
 class MistralAttentionConverter(LlamaAttentionConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return safe_merge_dicts(super().import_config(config), {"window_size": config["sliding_window"]})
+        config["attention_bias"] = False
+        return safe_merge_dicts(
+            super().import_config(config),
+            {"window_size": config["sliding_window"]},
+        )
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
-        return safe_merge_dicts(
+        out = safe_merge_dicts(
             super().export_config(config),
             {"sliding_window": config.window_size},
         )
+        del out["attention_bias"]
+        return out
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:
@@ -32,8 +40,23 @@ class MistralAttentionConverter(LlamaAttentionConverter):
         assert not config.add_linear_biases
 
 
+class MistrallMLPConverter(LlamaMLPConverter):
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        config["mlp_bias"] = False
+        return super().import_config(config)
+
+    @classmethod
+    def export_config(cls, config: MLPConfig) -> dict:
+        assert not config.add_linear_biases
+        out = super().export_config(config)
+        del out["mlp_bias"]
+        return out
+
+
 class MistralBlockConverter(LlamaBlockConverter):
     mixer_converter_class: typing.ClassVar[type[MistralAttentionConverter]] = MistralAttentionConverter
+    mlp_converter_class: typing.ClassVar[type[MistrallMLPConverter]] = MistrallMLPConverter
 
 
 class MistralDecoderConverter(LlamaDecoderConverter):

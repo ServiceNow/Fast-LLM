@@ -4,26 +4,18 @@ import typing
 import numpy as np
 import torch
 
-from fast_llm.config import Field, FieldHint, NoAutoValidate, config_class
+from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import (
-    IndexedDatasetConfig,
-    SampledDatasetConfig,
-    SamplingConfig,
-    SamplingParameters,
-    ShufflingType,
-)
+from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfig, ShufflingType
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.dataset.sampled import SampledIndexedDataset
-from fast_llm.data.sample.abstract import Sample
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
-from tests.utils.global_variables import TEST_VOCAB_SIZE
 
 
 def get_sampling_data(
@@ -33,7 +25,7 @@ def get_sampling_data(
     cache_directory: pathlib.Path | None = None,
     phase=PhaseType.training,
     sequence_length: int = 512,
-    vocab_size=TEST_VOCAB_SIZE,
+    vocab_size: int | None = None,
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
@@ -73,7 +65,7 @@ def get_test_data_and_compare_samples(
     shuffle: ShufflingType = ShufflingType.epoch,
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
-    vocab_size=TEST_VOCAB_SIZE,
+    vocab_size: int | None = None,
     expected_samples: dict[str, list[list[int]]] | list[list[int]],
 ) -> GPTData:
     distributed_config = DistributedConfig(seed=87522)
@@ -115,34 +107,21 @@ def get_test_data_and_compare_samples(
     return data
 
 
-def compare_indexed_dataset(
+def compare_indexed_dataset_tokens(
     dataset: IndexedDataset,
     length: int,
     num_tokens: int,
     expected_samples: dict[int, list[int]],
-    loss_masking_spans: dict[int, list[int]] | None = None,
 ) -> None:
     Assert.eq(len(dataset), length)
     sizes = dataset.get_document_sizes()
-    # Assert.eq(sizes.sum(), num_tokens)
+    Assert.eq(sizes.sum(), num_tokens, dataset.num_tokens)
     Assert.all_equal(
         [len(dataset.get_document(i).tokens.tokens) for i in range(min(len(dataset), 100))],
         sizes[: min(len(dataset), 100)],
     )
     for i, expected_sample in expected_samples.items():
         Assert.all_equal(dataset.get_document(i).tokens.tokens, np.array(expected_sample))
-    if loss_masking_spans:
-        for i, loss_masking_span in loss_masking_spans.items():
-            print(i)
-            Assert.eq(
-                dataset.get_document(
-                    i,
-                    parameters=GPTSamplingParameters(
-                        num_samples=0, sequence_length=0, vocab_size=0, use_loss_masking_spans=True
-                    ),
-                ).loss_masking_spans.ranges,
-                loss_masking_spans[i],
-            )
 
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
@@ -183,61 +162,7 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
         for index in range(sampled._parameters.num_samples)
     ]
     token_ids = torch.stack([sampled[i].tokens.tokens for i in range(len(sampled))]).to(torch.int64)
-
     Assert.all_equal(token_ids, validate_samples)
     if expected_samples is not None:
         Assert.all_equal(token_ids, expected_samples)
     return token_ids
-
-
-@config_class(dynamic_type={SampledDatasetConfig: "mock_memmap"})
-class MockGPTMemmapDatasetConfig(IndexedDatasetConfig):
-    _abstract: typing.ClassVar[bool] = False
-    num_documents: int | None = Field(
-        default=None,
-        desc="Expected number of documents in the dataset.",
-        hint=FieldHint.core,
-    )
-    num_tokens_per_document: int | None = Field(
-        default=None,
-        desc="Expected number of tokens in the dataset.",
-        hint=FieldHint.optional,
-    )
-    path: pathlib.Path = Field(default=".")
-
-    def build(self) -> "IndexedDataset":
-        return MockMemmapDataset(self)
-
-    def __len__(self) -> int:
-        return self.num_documents
-
-    @property
-    def num_tokens(self) -> int:
-        return self.num_documents * self.num_tokens_per_document
-
-
-class MockMemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
-    def __init__(self, config: MockGPTMemmapDatasetConfig):
-        self._config = config
-
-    @property
-    def name(self) -> str:
-        return "mock_memmap"
-
-    def __len__(self) -> int:
-        return len(self._config)
-
-    @property
-    def num_tokens(self) -> int:
-        return self._config.num_tokens
-
-    def get_document_sizes(self) -> torch.Tensor:
-        return torch.full([self._config.num_documents], self._config.num_tokens_per_document, dtype=torch.int64)
-
-    def get_document_size(self, index: int) -> int:
-        return self._config.num_tokens_per_document
-
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
-        raise NotImplementedError()
