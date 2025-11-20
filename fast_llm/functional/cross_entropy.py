@@ -151,7 +151,7 @@ def _fused_cross_entropy_forward_backward(
 
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+        all_reduce(loss, op=ReduceOp.AVG, group=group)
 
     return loss, grad
 
@@ -277,7 +277,7 @@ def _torch_reverse_kl_forward_backward(
             loss = (loss_per_sample * loss_mask).mean()
 
         if group is not None and target_format != TargetFormat.labels:
-            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+            all_reduce(loss, op=ReduceOp.AVG, group=group)
 
         if grad_output is not None:
             loss.backward(torch.full_like(loss, grad_output))
