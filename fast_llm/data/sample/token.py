@@ -1,9 +1,36 @@
 import typing
 
+import numpy as np
 import torch
 
-from fast_llm.data.sample.abstract import Batch, Sample
+from fast_llm.config import Field, config_class
+from fast_llm.data.sample.abstract import (
+    Batch,
+    MemmapIndexedDatasetReader,
+    MemmapReaderBaseConfig,
+    MemmapReaderConfig,
+    MemmapWriter,
+    Sample,
+)
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
+
+
+def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
+    if len(lengths) == 1:
+        # Shortcut for the frequent case of a single document.
+        return [end - begin]
+    begin_ = 0
+    lengths = []
+    for length in lengths:
+        end_ = begin_ + length
+        cropped_length = min(end_, end) - max(begin_, begin)
+        if cropped_length > 0:
+            lengths.append(cropped_length)
+        if end_ > end:
+            break
+        begin_ = end_
+    return lengths
 
 
 class TokenSample(Sample):
@@ -24,22 +51,7 @@ class TokenSample(Sample):
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
-        sample_size = end - begin
-        if self.lengths == [len(self.tokens)]:
-            # Shortcut for the frequent case of a single document.
-            lengths = [sample_size]
-        else:
-            begin_ = 0
-            lengths = []
-            for length in self.lengths:
-                end_ = begin_ + length
-                cropped_length = min(end_, end) - max(begin_, begin)
-                if cropped_length > 0:
-                    lengths.append(cropped_length)
-                if end_ > end:
-                    break
-                begin_ = end_
-        return self.__class__(self.tokens[begin:end], lengths)
+        return self.__class__(self.tokens[begin:end], crop_lengths(self.lengths, begin, end))
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -62,14 +74,96 @@ class TokenBatch(Batch):
             [sample.lengths for sample in samples],
         )
 
-    def to_samples(self) -> list[TokenSample]:
-        return [TokenSample(tokens, lengths) for tokens, lengths in zip(self.tokens, self.lengths, strict=True)]
-
     def crop(self, begin: int, end: int) -> typing.Self:
         return self.__class__(
-            self.tokens[:, begin:end], [sample.crop(begin, end).lengths for sample in self.to_samples()]
+            self.tokens[:, begin:end],
+            [crop_lengths(lengths, begin, end) for lengths in self.lengths],
         )
 
     def to_device_(self, device: "torch.device | str"):
         # Also standardize the dtype while we're here.
         self.tokens = self.tokens.to(device, dtype=torch.int64, non_blocking=True)
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "token"})
+class TokenReaderConfig(MemmapReaderConfig):
+    _abstract = False
+    header: typing.ClassVar[bytes] = b"token begin"
+    footer: typing.ClassVar[bytes] = b"token end"
+    num_documents: int = Field()
+    num_tokens: int = Field()
+    data_type: DataType = Field()
+
+    def __len__(self) -> int:
+        return self.num_documents
+
+    @property
+    def reader_class(self) -> "type[TokenReader]":
+        return TokenReader
+
+    @property
+    def writer_class(self) -> "type[TokenWriter]":
+        return TokenWriter
+
+    @property
+    def _expected_buffer_size(self) -> int:
+        return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.int64.itemsize
+
+
+class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
+    def __init__(self, config: ConfigType, buffer: memoryview):
+        super().__init__(config, buffer)
+        self._tokens = torch.frombuffer(
+            self._buffer,
+            dtype=self._config.data_type.torch,
+            count=self._config.num_tokens,
+        )
+        self._size_cumsums = torch.frombuffer(
+            self._buffer, dtype=torch.int64, count=self._config.num_documents + 1, offset=self._tokens.nbytes
+        )
+
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        begin_ = self._size_cumsums[index].item()
+        # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
+        return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
+
+    def get_document_sizes(self) -> torch.Tensor:
+        return self._size_cumsums[1:] - self._size_cumsums[:-1]
+
+    def get_document_size(self, index: int) -> int:
+        return self._size_cumsums[index + 1].item() - self._size_cumsums[index].item()
+
+
+class TokenWriter(MemmapWriter):
+    def __enter__(self):
+        super().__enter__()
+        self._size_cumsum = [0]
+        self._data_type = None
+        return self
+
+    def write(self, document: TokenSample):
+        super().write(document)
+        if self._data_type is None:
+            self._data_type = document.tokens.dtype
+        else:
+            Assert.eq(self._data_type, document.tokens.dtype)
+        self._stream.write(document.tokens.numpy().tobytes())
+        self._size_cumsum.append(self._size_cumsum[-1] + len(document.tokens))
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._stream.write(np.array(self._size_cumsum, dtype=np.int64).tobytes(order="C"))
+        super().__exit__(exc_type, exc_val, exc_tb)
+
+    @classmethod
+    def _get_config_class(cls) -> type[TokenReaderConfig]:
+        return TokenReaderConfig
+
+    def _get_config(self, begin: int, end: int):
+        return TokenReaderConfig(
+            begin=begin,
+            end=end,
+            num_documents=len(self._size_cumsum) - 1,
+            num_tokens=self._size_cumsum[-1],
+            data_type=DataType.from_torch(self._data_type),
+        )

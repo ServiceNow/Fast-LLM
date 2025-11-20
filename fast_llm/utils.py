@@ -161,21 +161,22 @@ class Assert:
         assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
 
     @staticmethod
-    def all_equal(x, y):
+    def all_equal(x, *args):
         import torch
 
         # Make it work for lists and numpy arrays.
         x = torch.as_tensor(x)
-        y = torch.as_tensor(y)
+        for arg in args:
+            arg = torch.as_tensor(arg)
 
-        Assert.eq(x.shape, y.shape)
-        neq = x != y
-        if neq.any().item():  # noqa
-            index = None if x.numel() == 1 else torch.where(neq)  # noqa
-            raise AssertionError(
-                f"Tensors have {index[0].numel()} different entries out of "
-                f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
-            )
+            Assert.eq(x.shape, arg.shape)
+            neq = x != arg
+            if neq.any().item():  # noqa
+                index = None if x.numel() == 1 else torch.where(neq)  # noqa
+                raise AssertionError(
+                    f"Tensors have {index[0].numel()} different entries out of "
+                    f"{x.numel()}: {x[index]} != {arg[index]} at index {torch.stack(index, -1)}"
+                )
 
     @staticmethod
     def all_different(x, y):

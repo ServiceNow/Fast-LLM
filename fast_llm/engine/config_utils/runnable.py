@@ -106,7 +106,7 @@ class RunnableConfig(Config):
         return self.run
 
     def run(self) -> None:
-        raise NotImplementedError()
+        self._get_runnable()()
 
     def _show[
         T
