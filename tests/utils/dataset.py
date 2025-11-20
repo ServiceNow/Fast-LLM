@@ -172,7 +172,8 @@ def _get_test_dataset(
     image_patch_config: ImagePatchConfig | None = None,
     min_image_size: int = 4,
     max_image_size: int = 32,
-):
+    config_only: bool = False,
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]:
     config_paths = (
         [path / "fast_llm_config.yaml"]
         if splits is None
@@ -180,7 +181,7 @@ def _get_test_dataset(
     )
     hf_path = path / "hf"
 
-    if not all(config_path.is_file() for config_path in config_paths):
+    if not config_only and not all(config_path.is_file() for config_path in config_paths):
         dataset = _get_hf_test_dataset(
             seed=seed,
             num_documents=num_documents,
@@ -284,5 +285,30 @@ def get_test_dataset_with_image_patches(image_break_token: int | None = None, im
     )
 
 
-def get_model_test_dataset():
-    return _get_test_dataset(DATASET_CACHE / "model_dataset", seed=1234, vocab_size=MODEL_TEST_VOCAB_SIZE)
+def get_model_test_dataset(config_only: bool = False):
+    return _get_test_dataset(
+        DATASET_CACHE / "model_dataset",
+        seed=1234,
+        vocab_size=MODEL_TEST_VOCAB_SIZE,
+        splits={"training": 969, "validation": 30, "test": 1},
+        config_only=config_only,
+    )
+
+
+def get_multimodal_test_dataset(config_only: bool = False):
+    return _get_test_dataset(
+        DATASET_CACHE / "model_dataset_multimodal",
+        seed=1234,
+        vocab_size=MODEL_TEST_VOCAB_SIZE,
+        max_images=2,
+        image_patch_config=ImagePatchConfig(
+            height=4,
+            width=4,
+            max_image_height=16,
+            max_image_width=16,
+            image_break_token=None,
+            image_end_token=None,
+        ),
+        splits={"training": 969, "validation": 30, "test": 1},
+        config_only=config_only,
+    )

@@ -1,8 +1,6 @@
 import logging
 import typing
 
-import torch
-
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
@@ -58,11 +56,11 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
     def get_layers(self) -> list[Layer]:
         return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
-        self.embeddings.preprocess(batch, kwargs)
-        self.decoder.preprocess(batch, kwargs)
-        self.head.preprocess(batch, kwargs)
+        self.embeddings.preprocess(kwargs)
+        self.decoder.preprocess(kwargs)
+        self.head.preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?

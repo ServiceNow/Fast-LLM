@@ -12,10 +12,12 @@ from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
+    Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
 )
-from fast_llm.utils import div
+from fast_llm.layers.vision.config import VisionKwargs
+from fast_llm.utils import Assert, div
 
 
 def convert_rotary_complex_to_real(tensor: torch.Tensor, head_size: int, dim: int) -> torch.Tensor:
@@ -46,7 +48,7 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
         head_size_dim: TensorDim,
     ):
         super().__init__(config)
-        self._head_size_dim = head_size_dim
+        self._head_size = head_size_dim.global_size
 
     @abc.abstractmethod
     def forward(
@@ -54,7 +56,7 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         pass
 
 
@@ -69,8 +71,8 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[AttentionKwargs.sequence_length], batch.device)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(kwargs[AttentionKwargs.sequence_length], kwargs[AttentionKwargs.device])
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
             :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
@@ -92,7 +94,7 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
 
         self._rotary_embedding_frequencies = self._get_frequencies(
             sequence_length,
-            self._head_size_dim.global_size,
+            self._head_size,
             device=device,
         )
 
@@ -174,3 +176,43 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
             * math.log(self._config.original_context_length / (beta * 2 * math.pi))
             / (2 * math.log(self._config.theta))
         )
+
+
+class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
+    _frequencies: torch.Tensor
+    _config: ConfigType
+
+    def __init__(
+        self,
+        config: ConfigType,
+        head_size_dim: TensorDim,
+    ):
+        super().__init__(config, head_size_dim)
+        Assert.multiple(self._head_size, 4)
+
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        patch_positions = kwargs[VisionKwargs.patch_positions]
+        if not hasattr(self, "_frequencies"):
+            self._frequencies = self._config.theta ** -torch.arange(
+                0, 1, 4 / self._head_size, device=kwargs[AttentionKwargs.device], dtype=torch.float64
+            )
+        # TODO: Pre-compute 2d frequencies?
+        angles = torch.outer(patch_positions.flatten(), self._frequencies).view(
+            len(patch_positions), self._head_size // 2
+        )
+        frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+        if not self._config.complex_format:
+            frequencies = convert_rotary_complex_to_real(
+                torch.view_as_real(frequencies).flatten(-2), self._head_size, 3
+            ).contiguous()
+        # TODO: Support different q and k frequencies.
+        kwargs[AttentionKwargs.rotary_freq_q] = frequencies
+        kwargs[AttentionKwargs.rotary_freq_k] = frequencies
+
+    def forward(
+        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        rotary_fn = triton_rotary_autograd_ if self._config.triton else apply_rotary_embeddings
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
+        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
+        return query, key

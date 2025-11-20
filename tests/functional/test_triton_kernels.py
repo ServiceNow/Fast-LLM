@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import (
     MAX_DROPLESS_BLOCK_SIZE_ROW,
     ActivationType,
@@ -92,7 +93,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     y1 = apply_rotary_embeddings(
         x,
         DefaultRotaryConfig(triton=False)
-        .get_layer(None)
+        .get_layer(TensorDim("", head_size))
         ._get_frequencies(
             sequence_length,
             head_size,
@@ -104,7 +105,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
         triton_rotary_(
             convert_rotary_complex_to_real(x, head_size, 3),
             DefaultRotaryConfig(triton=True)
-            .get_layer(None)
+            .get_layer(TensorDim("", head_size))
             ._get_frequencies(sequence_length, head_size, device="cuda"),
         ),
         head_size,

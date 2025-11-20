@@ -21,16 +21,16 @@ def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
         # Shortcut for the frequent case of a single document.
         return [end - begin]
     begin_ = 0
-    lengths = []
+    lengths_ = []
     for length in lengths:
         end_ = begin_ + length
         cropped_length = min(end_, end) - max(begin_, begin)
         if cropped_length > 0:
-            lengths.append(cropped_length)
+            lengths_.append(cropped_length)
         if end_ > end:
             break
         begin_ = end_
-    return lengths
+    return lengths_
 
 
 class TokenSample(Sample):

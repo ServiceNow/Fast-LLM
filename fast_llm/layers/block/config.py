@@ -37,6 +37,7 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
+    device = "device"
 
 
 @config_class(registry=True)
@@ -71,6 +72,7 @@ class BlockConfig(ModuleConfig):
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
+        *,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "BlockBase":

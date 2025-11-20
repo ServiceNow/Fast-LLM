@@ -236,13 +236,23 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
             tp,
             rank,
         )
-        _check_dim(
-            tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
-            DistributedDimNames.tensor_and_sequence_data,
-            dp_rank % sdp * tp + tp_rank,
-            tp * sdp,
-            rank,
-        )
+        if not pipeline_first:
+            _check_dim(
+                tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
+                DistributedDimNames.tensor_and_sequence_data,
+                dp_rank % sdp * tp + tp_rank,
+                tp * sdp,
+                rank,
+            )
+            _check_dim(
+                tp_dp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_data),
+                DistributedDimNames.tensor_and_data,
+                dp_rank * tp + tp_rank,
+                tp * dp,
+                rank,
+            )
+            all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
+            all_global_ranks["tp_dp"].add(tuple(tp_dp_dim.global_ranks))
         _check_dim(
             sdp_dim := config.get_distributed_dim(DistributedDimNames.sequence_data),
             DistributedDimNames.sequence_data,
@@ -273,7 +283,6 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
         )
         all_global_ranks["world"].add(tuple(world_dim.global_ranks))
         all_global_ranks["tp"].add(tuple(tp_dim.global_ranks))
-        all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
         all_global_ranks["sdp"].add(tuple(sdp_dim.global_ranks))
         all_global_ranks["bdp"].add(tuple(bdp_dim.global_ranks))
         all_global_ranks["dp"].add(tuple(dp_dim.global_ranks))

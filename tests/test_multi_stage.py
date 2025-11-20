@@ -6,7 +6,6 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.utils import Assert
-from tests.utils.dataset import get_model_test_dataset
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
@@ -22,7 +21,7 @@ def _get_model(config_dict: dict, model_type: str = "gpt") -> FastLLMModel:
 @requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_frozen_weights(model_testing_config):
-    get_model_test_dataset()
+    model_testing_config.get_dataset()
     frozen_config_dict = copy.deepcopy(model_testing_config.config_dict)
     decoder_config = frozen_config_dict["model"]["base_model"]["decoder"]
     if (decoder_type := decoder_config.get("type", "fixed")) == "fixed":

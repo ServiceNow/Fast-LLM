@@ -86,7 +86,7 @@ class PatchSample(Sample):
         return PatchSample(
             self.patches.new_empty((0, *self.patches.shape[1:])),
             self.token_map.new_empty(0),
-            self.positions.new_empty(0),
+            self.positions.new_empty([0, self.patches.ndim - 2]),
             size,
             [],
         )
