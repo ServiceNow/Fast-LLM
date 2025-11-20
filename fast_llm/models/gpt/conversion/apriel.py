@@ -226,10 +226,12 @@ class AprielMamba2Converter:
 
 class AprielDiscreteMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielDiscreteMamba2Converter]] = AprielDiscreteMamba2Converter
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
 class AprielMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielMamba2Converter]] = AprielMamba2Converter
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
 class AprielBlockConverter:

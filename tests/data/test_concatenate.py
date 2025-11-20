@@ -1,5 +1,5 @@
 from fast_llm.data.dataset.config import ConcatenatedDatasetConfig
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
 from tests.data.common import (
     compare_indexed_dataset,
     compare_sampled_dataset,
@@ -28,7 +28,7 @@ def test_gpt_concatenate():
     get_test_dataset()
     dataset = get_dataset_config(
         {"type": "concatenated", "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)]},
-        ConcatenatedDatasetConfig[GPTSample],
+        ConcatenatedDatasetConfig[LanguageModelSample],
     ).build()
     compare_indexed_dataset(
         dataset,

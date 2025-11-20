@@ -27,8 +27,8 @@ def test_gpt_memmap(cache_directory):
 
 MEMMAP_DATASET_SPANS = {
     9: [],
-    10: [[0, 4], [6, 8]],
-    13: [[1, 2]],
+    10: [(0, 2), (2, 7), (7, 10)],
+    13: [(0, 2)],
     15: [],
 }
 

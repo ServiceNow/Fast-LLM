@@ -9,10 +9,9 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
+from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
-from fast_llm.data.sample.gpt import GPTSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -69,16 +68,14 @@ TOKEN_CUMSUM_RATE = 10
 
 class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     """
-    A sampled GPT dataset.
+    A sampled dataset.
     """
 
     def __init__(
         self,
         indexed_dataset: IndexedDataset[SampleType],
-        # TODO: ====== Remove gpt-specific stuff ======
-        sampling: GPTSamplingData,
+        sampling: SamplingData,
     ):
-        assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
@@ -108,22 +105,15 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
             self._yaml_path = base_path.with_suffix(".yaml")
 
-            # keep document sizes and len filtered docs for preference loss masking
-            if self._parameters.use_preference_loss_spans:
-                self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
-                self._doc_length_filtered_indicies = MemmapArray(
-                    base_path.with_name(base_path.name + "_doc_length_filtered_indices.npy")
-                )
-
             # Sample or validate the dataset of a given rank.
             if sampling.distributed.config.rank == sampling.get_next_rank():
                 self._sample()
             # No barrier yet to allow running in parallel.
-            # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
+            # There needs to be one before calling `__getitem__`, normally handled through `Data`.
 
     def _sample(self) -> None:
         """
-        Create a `GPTSampledDataset` with the requested parameters.
+        Create a `SampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
         document_sizes = self._indexed_dataset.get_document_sizes().to(self._device)
@@ -152,10 +142,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
         # but in case of truncations we also include those last labels in the following sample,
         # so we need `sequence_length * num_samples + extra_tokens` tokens in total.
-        if self._parameters.use_preference_loss_spans:
-            documents_per_epoch = (~long_docs_filter).sum().item()
-            num_epochs = math.ceil(self._parameters.num_samples / documents_per_epoch)
-        elif self._truncate_documents:
+        if self._truncate_documents:
             num_epochs = math.ceil(
                 (self._parameters.sequence_length * self._parameters.num_samples + self._parameters.extra_tokens)
                 / tokens_per_epoch
@@ -259,24 +246,6 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         else:
             raise NotImplementedError(f"Unknown shuffling type: {self._config.shuffle}")
 
-        if self._parameters.use_preference_loss_spans:
-            yaml_data["unshuffled_tokens"] = 0  # not used, ignore
-
-            # index of all documents less than seq length long
-            doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
-            self._doc_length_filtered_indicies.save(doc_length_filtered_indicies.numpy(force=self._config.gpu))
-
-            # apply shuffling on doc_length_filtered_indicies
-            if shuffled_epochs > 0:
-                self._document_shuffling.save(
-                    document_shuffling[: self._parameters.num_samples].numpy(force=self._config.gpu)
-                )
-            self._document_sizes.save(document_sizes.numpy(force=self._config.gpu))
-            if self._yaml_path is not None:
-                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
-                yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
-            return
-
         # To get a sample on the fly we need to know where it begins,
         # and this is a non-trivial information because the documents have variable length.
         # The starting point `(document[idx], token[idx])` corresponds to the `(idx * sequence_length)` th token, i.e.
@@ -372,41 +341,9 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
-        The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
+        The returned sample is ready to be concatenated, then fed to a `Model`.
         """
         self._lazy_load()
-
-        if self._parameters.use_preference_loss_spans:
-            if index < self._unshuffled_documents:
-                document_index = self._doc_length_filtered_indicies[index % self._documents_per_epoch]
-            else:
-                document_index = self._doc_length_filtered_indicies[
-                    self._document_shuffling[index - self._unshuffled_documents].item()
-                ]
-
-            sample = self._indexed_dataset.get_document(
-                document_index.item(),
-                begin=0,
-                end=self._document_sizes[document_index].item(),
-                parameters=self._parameters,
-            )
-
-            chosen_span_end = sample.chosen_span[1] + 1
-            sequence_lengths = [
-                chosen_span_end,
-                len(sample.token_ids) - chosen_span_end,
-            ]
-
-            # compute padding size
-            padding = np.full((self._parameters.sequence_length + 1,), 0)
-            padding[: len(sample.token_ids)] = sample.token_ids
-            sequence_lengths.append(self._parameters.sequence_length - len(sample.token_ids))
-            sample.token_ids = padding
-
-            if not self._parameters.cross_document_attention:
-                sample.sequence_lengths = torch.tensor(sequence_lengths)
-
-            return sample
 
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
@@ -432,8 +369,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         token_count = token_start_array[token_start_cumsum_index]
 
-        token_ids = []
-        loss_masking_spans = []
+        documents: list[SampleType] = []
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -453,8 +389,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
-                        # Add padding tokens to current sample
-                        token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
+                        documents.append(documents[-1].get_padding(padding_size))
                         Assert.eq(token_count + padding_size, token_end)
                         break
                     else:
@@ -466,45 +401,21 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                sample = self._indexed_dataset.get_document(
-                    document_index,
-                    begin=token_start_index_in_document,
-                    end=token_end_index_in_document,
-                    parameters=self._parameters,
+                documents.append(
+                    self._indexed_dataset.get_document(
+                        document_index,
+                        begin=token_start_index_in_document,
+                        end=token_end_index_in_document,
+                        parameters=self._parameters,
+                    )
                 )
-                token_ids.append(sample.token_ids)
-                if self._parameters.use_loss_masking_spans:
-                    for loss_masking_span in sample.loss_masking_spans:
-                        span = np.clip(
-                            loss_masking_span + token_count - token_start,
-                            0,
-                            self._parameters.sequence_length + self._parameters.extra_tokens,
-                        )
-                        if span[1] >= span[0]:
-                            loss_masking_spans.append(span)
 
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
 
-        sequence_lengths = (
-            torch.tensor([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
-            if not self._parameters.cross_document_attention
-            else None
-        )
-        token_ids = np.concatenate(token_ids, dtype=np.int64)
-        loss_masking_spans = (
-            torch.from_numpy(np.stack(loss_masking_spans, dtype=np.int32) if loss_masking_spans else np.array([]))
-            if self._parameters.use_loss_masking_spans
-            else None
-        )
-        Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
-
-        return GPTSample(
-            token_ids=torch.from_numpy(token_ids),
-            loss_masking_spans=loss_masking_spans,
-            sequence_lengths=sequence_lengths,
-        )
+        # TODO: ====== Better way to get the class method? ======
+        return documents[0].from_documents(documents)
 
     @property
     def name(self) -> str:
@@ -516,14 +427,6 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-
-        if self._parameters.use_preference_loss_spans:
-            data["unshuffled_tokens"] = 0  # not used, ignore
-        elif "unshuffled_tokens" not in data:
-            # Backward compatibility
-            # TODO v0.x: Remove
-            assert self._truncate_documents
-            data["unshuffled_tokens"] = data["tokens_per_epoch"] * data["unshuffled_epochs"]
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
