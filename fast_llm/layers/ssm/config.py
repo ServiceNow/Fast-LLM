@@ -6,7 +6,7 @@ from fast_llm.engine.config_utils.initialization import InitializationConfig, In
 from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
-from fast_llm.layers.common.normalization.config import NormalizationConfig
+from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig, NormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
@@ -84,11 +84,6 @@ class GatedDeltaNetConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    use_qk_l2norm: bool = Field(
-        default=True,
-        desc="Apply L2 normalization on query/key vectors inside the Delta rule kernel.",
-        hint=FieldHint.architecture,
-    )
     activation: ActivationType = Field(
         default=ActivationType.silu,
         desc="Activation used after the convolution.",
@@ -113,7 +108,7 @@ class KimiDeltaAttentionConfig(MixerConfig):
     """
 
     _abstract = False
-    normalization: NormalizationConfig = Field(
+    normalization: GatedRMSNormalizationConfig = Field(
         desc="Configuration for the gated normalization applied to the KDA output.",
         hint=FieldHint.architecture,
     )
@@ -178,23 +173,23 @@ class KimiDeltaAttentionConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    recurrent_threshold: int = Field(
-        default=64,
-        desc="Switch to the fused recurrent kernel below this sequence length.",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0),
-    )
-    use_qk_l2norm: bool = Field(
-        default=True,
-        desc="Apply L2 normalization to query/key vectors inside the Delta kernel.",
-        hint=FieldHint.architecture,
-    )
 
     @property
     def layer_class(self) -> "type":
         from fast_llm.layers.ssm.kda import KimiDeltaAttention
 
         return KimiDeltaAttention
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            if "epsilon" not in self.normalization._explicit_fields:
+                self.normalization.epsilon = 1.0e-5
+            if "activation" not in self.convolution_layer._explicit_fields:
+                self.convolution_layer.activation = "silu"
+            if "kernel_size" not in self.convolution_layer._explicit_fields:
+                self.convolution_layer.kernel_size = 4
+
+        super()._validate()
 
 
 @config_class()

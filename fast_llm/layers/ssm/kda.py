@@ -172,7 +172,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        self.a_log: ParameterMeta = self._config.a_log_weight.get_parameter(
+        self.A_log: ParameterMeta = self._config.a_log_weight.get_parameter(
             (self._heads_dim,),
             default_initialization=LambdaInitializer(
                 lambda _, tensor, generator: tensor.uniform_(1, 16, generator=generator).log_()
@@ -210,8 +210,8 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # TODO: make sure varlen is supported
-        # TODO: make sure we dont need to mask padding tokens in training
         # TODO: make sure sequence first is handdled correctly
+        # TODO: make sure we dont need to mask padding tokens in training
         sequence_first = kwargs[BlockKwargs.sequence_first]
         hidden_states = input_.transpose(0, 1) if sequence_first else input_
         batch_size, sequence_length, _ = hidden_states.shape
@@ -222,7 +222,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         v = self._apply_conv(self.v_proj(hidden_states), self.v_conv)
 
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
-        g_kernel = fused_kda_gate(g_kernel, self.a_log, self._config.head_dim, g_bias=self.dt_bias)
+        g_kernel = fused_kda_gate(g_kernel, self.A_log, self._config.head_dim, g_bias=self.dt_bias)
 
         beta = torch.sigmoid(self.beta_proj(hidden_states).float())
 
