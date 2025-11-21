@@ -1,6 +1,6 @@
-import pathlib
-import re
 import sys
+import re
+import pathlib
 
 try:
     import pybind11
@@ -18,7 +18,6 @@ if setuptools.__version__ < _SETUPTOOLS_MIN_VERSION:
     print(f"Error: setuptools version {_SETUPTOOLS_MIN_VERSION} " "or greater is required")
     sys.exit(1)
 
-
 def get_version():
     """Read version from fast_llm/__init__.py"""
     init_file = pathlib.Path(__file__).parent.joinpath("fast_llm", "__init__.py").read_text()
@@ -26,7 +25,6 @@ def get_version():
     if version_match:
         return version_match.group(1)
     raise RuntimeError("Unable to find version string in fast_llm/__init__.py")
-
 
 cpp_extension = setuptools.Extension(
     "fast_llm.csrc.data",
