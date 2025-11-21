@@ -140,7 +140,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
 
-        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
+        # hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
 
         if self._debug.enabled:
             self._debug(
@@ -156,6 +156,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         hidden_states = self.norm_2(input_)
         if self._debug.enabled:
             self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
+        hidden_states, _ = self.activation_distillation_loss(hidden_states, None, kwargs, losses)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
         if self._debug.enabled:
             self._debug(
