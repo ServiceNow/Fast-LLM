@@ -8,7 +8,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.decoder.block import BlockWithBias, DecoderBlock
@@ -111,7 +111,7 @@ class StochasticMixerConfig(MixerConfig):
 
     sampling_weights: dict[str, float] | None = Field(
         default=None,
-        desc="Sampling probability for each mixer by name (must sum to 1.0). "
+        desc="Sampling probability for each mixer by name (will be normalized to sum to 1.0). "
         "Only used when sampling_strategy='weighted'. "
         "If None with uniform strategy, all mixers have equal probability.",
         hint=FieldHint.feature,
@@ -141,16 +141,12 @@ class StochasticMixerConfig(MixerConfig):
         if self.main_mixer_name not in self.mixers:
             raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
 
-        # Validate sampling weights
+        # Validate and normalize sampling weights
         if self.sampling_weights is not None:
             Assert.eq(set(self.sampling_weights.keys()), set(self.mixers.keys()))
-            # Check sum is close to 1.0
-            weight_sum = sum(self.sampling_weights.values())
-            if abs(weight_sum - 1.0) > 1e-5:
-                raise ValueError(f"Sampling weights must sum to 1.0, got {weight_sum}")
-            # Check all weights are non-negative
-            if any(w < 0 for w in self.sampling_weights.values()):
-                raise ValueError("All sampling weights must be non-negative")
+            # Normalize weights to sum to 1.0 (also validates non-negative and positive sum)
+            normalized_values = normalize_probabilities(list(self.sampling_weights.values()))
+            self.sampling_weights = dict(zip(self.sampling_weights.keys(), normalized_values))
 
     @property
     def layer_class(self) -> "type[StochasticMixer]":
