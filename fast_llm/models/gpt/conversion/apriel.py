@@ -374,30 +374,77 @@ class GatedDeltaNetConverter:
     def import_config(cls, config: dict) -> dict:
         return {
             "type": "gated_delta_net",
-            "state_size": config["ssm_cfg"]["d_state"],
-            "d_inner": config["ssm_cfg"].get("d_inner") or config["hidden_size"] * config["ssm_cfg"].get("expand", 1),
-            "add_linear_biases": config["ssm_cfg"]["bias"],
-            "convolution_layer": {"bias": {"enabled": config["ssm_cfg"].get("conv_bias", True)}},
-            "n_heads": config["ssm_cfg"]["n_heads"],
-            "chunk_size": config["ssm_cfg"]["chunk_size"],
+            "value_heads": config["linear_attn_config"]["gdn_value_head_dim"],
+            "key_heads": config["linear_attn_config"]["gdn_num_key_heads"],
+            "key_head_dim": config["linear_attn_config"]["gdn_key_head_dim"],
+            "value_head_dim": config["linear_attn_config"]["value_head_dim"],
+            "convolution_layer": {
+                "kernel_size": config["linear_attn_config"]["gdn_linear_conv_kernel_size"],
+            },
         }
 
     @classmethod
     def export_config(cls, config: GatedDeltaNetConfig) -> dict:
         return {
-            "ssm_cfg": {
-                "d_state": config.state_size,
-                "d_inner": config.d_inner,
-                "bias": config.add_linear_biases,
-                "conv_bias": (
-                    config.add_linear_biases
-                    if config.convolution_layer.bias.enabled is None
-                    else config.convolution_layer.bias.enabled
-                ),
-                "n_heads": config.n_heads,
-                "chunk_size": config.chunk_size,
-            }
+            "linear_attn_config": {
+                "gdn_num_value_heads": config.value_heads,
+                "gdn_num_key_heads": config.key_heads,
+                "gdn_key_head_dim": config.key_head_dim,
+                "gdn_value_head_dim": config.value_head_dim,
+                "gdn_linear_conv_kernel_size": config.convolution_layer.kernel_size,
+            },
         }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: KimiDeltaAttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_qkvz",
+                f"{hf_prefix}.in_proj_qkvz",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_ba",
+                f"{hf_prefix}.in_proj_ba",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.convolution",
+                f"{hf_prefix}.convolution",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.out_proj",
+                f"{hf_prefix}.out_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.A_log",
+                f"{hf_prefix}.A_log",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.dt_bias",
+                f"{hf_prefix}.dt_bias",
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.norm",
+                f"{hf_prefix}.norm",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+        ]
 
 
 class AprielBlockConverterBase(MistralBlockConverter):
@@ -437,7 +484,7 @@ class AprielBlockConverter:
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
         KimiDeltaAttentionConfig: AprielKimiDeltaAttentionBlockConverter,
-        # GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
+        GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
     _config_classes = {value: key for key, value in layout_names.items()}
 

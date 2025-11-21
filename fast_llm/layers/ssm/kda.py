@@ -115,7 +115,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             self._head_dim,
             default_weight_initialization=init,
             default_add_bias=False,
-            sequence_parallel=self._sequence_parallel,
+            sequence_parallel=False,  # self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -133,7 +133,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             self._head_dim,
             default_weight_initialization=init,
             default_add_bias=False,
-            sequence_parallel=self._sequence_parallel,
+            sequence_parallel=False,  # self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -210,25 +210,46 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # TODO: make sure varlen is supported
-        # TODO: make sure sequence first is handdled correctly
         # TODO: make sure we dont need to mask padding tokens in training
         sequence_first = kwargs[BlockKwargs.sequence_first]
-        hidden_states = input_.transpose(0, 1) if sequence_first else input_
-        batch_size, sequence_length, _ = hidden_states.shape
+        hidden_states = input_
+
         residual_dtype = hidden_states.dtype
 
-        q = self._apply_conv(self.q_proj(hidden_states), self.q_conv)
-        k = self._apply_conv(self.k_proj(hidden_states), self.k_conv)
-        v = self._apply_conv(self.v_proj(hidden_states), self.v_conv)
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+        if sequence_first:
+            q = q.transpose(0, 1)
+            k = k.transpose(0, 1)
+            v = v.transpose(0, 1)
+
+        q = self._apply_conv(q, self.q_conv)
+        k = self._apply_conv(k, self.k_conv)
+        v = self._apply_conv(v, self.v_conv)
+
+        if sequence_first:
+            _, batch_size, _ = hidden_states.shape
+            sequence_length = q.size(1)
+            # hidden_states = gather_op(hidden_states, self._distributed.tensor_group, dim=0, async_op=False).transpose(
+            #     0, 1
+            # )
+            # hidden_states = hidden_states.transpose(0, 1)
+        else:
+            batch_size, sequence_length, _ = hidden_states.shape
 
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
+        if sequence_first:
+            g_kernel = g_kernel.transpose(0, 1)
         g_kernel = fused_kda_gate(g_kernel, self.A_log, self._config.head_dim, g_bias=self.dt_bias)
 
         beta = torch.sigmoid(self.beta_proj(hidden_states).float())
-
         q = self._reshape_heads(q)
         k = self._reshape_heads(k)
         v = self._reshape_heads(v)
+        if sequence_first:
+            beta = beta.transpose(0, 1)
+
         # need to install nightly triton for now
         attn_out, _ = chunk_kda(
             q=q,
@@ -245,16 +266,15 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         attn_out = attn_out.to(residual_dtype)
         attn_out = self._reshape_heads(attn_out)
 
-        g_out = self._reshape_heads(self.g_b_proj(self.g_a_proj(hidden_states)))
+        g_out = self._reshape_heads(self.g_b_proj(self.g_a_proj(hidden_states)))  # bs x seq x n_local_heads x head dim
 
         attn_out = attn_out.reshape(-1, self._config.head_dim)
         g_out = g_out.reshape(-1, self._config.head_dim)
         attn_out = self.norm(attn_out, g_out)
         attn_out = attn_out.view(batch_size, sequence_length, self._projection_size)
-        attn_out = self.o_proj(attn_out)
-
         if sequence_first:
             attn_out = attn_out.transpose(0, 1)
+        attn_out = self.o_proj(attn_out)
 
         return attn_out
 

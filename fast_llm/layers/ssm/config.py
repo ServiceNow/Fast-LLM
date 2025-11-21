@@ -6,7 +6,7 @@ from fast_llm.engine.config_utils.initialization import InitializationConfig, In
 from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
-from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig, NormalizationConfig
+from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
@@ -25,7 +25,7 @@ class GatedDeltaNetConfig(MixerConfig):
     """
 
     _abstract = False
-    normalization: NormalizationConfig = Field(
+    normalization: GatedRMSNormalizationConfig = Field(
         desc="Configuration for the block normalization layers.",
         hint=FieldHint.architecture,
     )
@@ -99,6 +99,17 @@ class GatedDeltaNetConfig(MixerConfig):
         from fast_llm.layers.ssm.gdn import GatedDeltaNet
 
         return GatedDeltaNet
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            if "epsilon" not in self.normalization._explicit_fields:
+                self.normalization.epsilon = 1.0e-5
+            if "activation" not in self.convolution_layer._explicit_fields:
+                self.convolution_layer.activation = "silu"
+            if "kernel_size" not in self.convolution_layer._explicit_fields:
+                self.convolution_layer.kernel_size = 4
+
+        super()._validate()
 
 
 @config_class(dynamic_type={MixerConfig: "kda"})

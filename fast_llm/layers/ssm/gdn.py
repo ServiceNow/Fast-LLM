@@ -113,6 +113,9 @@ def torch_chunk_gated_delta_rule(
 class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
     """
     Follows implementation here: https://github.com/huggingface/transformers/blob/a5c903f877fda21e739027eed133e03162eb7712/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L593
+    - For tensor parallel implementtion (no sequnece prallel): we scatter teh heads accross ranks.
+    - Sequence Tensor parallel: in_proj_qkvz all reduces across sequence dim. --> each rank performs work on full sequence but only a subset of heads (standrd TP).
+
     """
 
     _config: ConfigType
@@ -261,16 +264,18 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[BlockKwargs.sequence_first]
-
-        # TODO: do we need maksing of padding tokens?
-        if sequence_first:
-            hidden_states = input_.transpose(0, 1)
-        else:
-            hidden_states = input_
+        # in sequence parallel TP the input here is already scattered across sequence dimension
+        # TODO: do we need masking of padding tokens?
+        # TODO: make sure varlen is supported
+        hidden_states = input_
 
         # batch_size, sequence_length, _ = hidden_states.shape
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs x seq_len x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs x seq_len x (b a)
+        if sequence_first:
+            projected_states_qkvz = projected_states_qkvz.transpose(0, 1)
+            projected_states_ba = projected_states_ba.transpose(0, 1)
+
         query, key, value, z, beta, alpha = self.fix_query_key_value_ordering(
             projected_states_qkvz, projected_states_ba
         )
@@ -317,10 +322,10 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         core_attn_out = self.norm(core_attn_out, z)
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+        if sequence_first:
+            core_attn_out = core_attn_out.transpose(0, 1)
         output = self.out_proj(core_attn_out)
 
-        if sequence_first:
-            output = output.transpose(0, 1)
         return output
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
