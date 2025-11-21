@@ -63,7 +63,7 @@ class MLPBaseConfig(BlockWithBiasConfig):
         return super()._from_dict(default, strict=strict)
 
 
-class SamplingStrategy(str, enum.Enum):
+class StochasticMixerSamplingStrategy(str, enum.Enum):
     """Strategy for sampling mixers in a stochastic mixer."""
 
     uniform = "uniform"
@@ -103,8 +103,8 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.architecture,
     )
 
-    sampling_strategy: SamplingStrategy = Field(
-        default=SamplingStrategy.uniform,
+    sampling_strategy: StochasticMixerSamplingStrategy = Field(
+        default=StochasticMixerSamplingStrategy.uniform,
         desc="Strategy for sampling mixers during training.",
         hint=FieldHint.feature,
     )

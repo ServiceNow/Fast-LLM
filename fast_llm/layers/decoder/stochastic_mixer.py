@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.decoder.config import SamplingStrategy, StochasticMixerConfig, StochasticMixerKwargs
+from fast_llm.layers.decoder.config import StochasticMixerConfig, StochasticMixerKwargs, StochasticMixerSamplingStrategy
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -63,9 +63,9 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         )
 
         # Precompute sampling probabilities as a tensor (ordered by mixers.keys())
-        if self._config.sampling_strategy == SamplingStrategy.uniform:
+        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.uniform:
             self._sampling_probs = torch.ones(len(self.mixers)) / len(self.mixers)
-        elif self._config.sampling_strategy == SamplingStrategy.weighted:
+        elif self._config.sampling_strategy == StochasticMixerSamplingStrategy.weighted:
             if self._config.sampling_weights is None:
                 raise ValueError("sampling_weights must be provided when using weighted sampling strategy")
             self._sampling_probs = torch.tensor(
