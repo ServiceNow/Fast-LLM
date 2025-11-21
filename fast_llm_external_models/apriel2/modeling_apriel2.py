@@ -148,9 +148,9 @@ def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, a
     if mixer_type == "attention":
         return Apriel2Attention(hidden_size, mixer_config, layer_idx, config)
     elif mixer_type == "mamba":
-        return Mamba(hidden_size, mixer_config, layer_idx=layer_idx)
+        return Apriel2Mamba(hidden_size, mixer_config, layer_idx=layer_idx)
     elif mixer_type == "gated_delta_net":
-        return GatedDeltaNet(hidden_size, mixer_config, layer_idx=layer_idx)
+        return Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=layer_idx)
     elif mixer_type == "kimi_linear_attention":
         return KimiLinearAttention(hidden_size, mixer_config, layer_idx=layer_idx)
     elif mixer_type == "stochastic":
@@ -161,7 +161,7 @@ def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, a
         raise ValueError(f"Unknown mixer type: {mixer_type}")
 
 
-class Mamba(nn.Module):
+class Apriel2Mamba(nn.Module):
     """Mamba mixer."""
 
     def __init__(
@@ -293,7 +293,7 @@ class Mamba(nn.Module):
             and past_key_value.conv_states[self.layer_idx] is not None
             and seqlen == 1
             and past_key_value.conv_states[self.layer_idx].shape[0]
-            == past_key_value.ssm_states[self.layer_idx].shape[0]
+            == past_key_value.recurrent_states[self.layer_idx].shape[0]
             == batch
             and cache_position is not None
             and seqlen_offset > 0
@@ -455,9 +455,9 @@ class Mamba(nn.Module):
         if inference_params.conv_states[self.layer_idx] is None:
             conv_state, ssm_state = self.allocate_inference_cache(batch_size, max_seqlen=0)
             inference_params.conv_states[self.layer_idx] = conv_state
-            inference_params.ssm_states[self.layer_idx] = ssm_state
+            inference_params.recurrent_states[self.layer_idx] = ssm_state
 
-        ssm_state = inference_params.ssm_states[self.layer_idx]
+        ssm_state = inference_params.recurrent_states[self.layer_idx]
         conv_state = inference_params.conv_states[self.layer_idx]
 
         if initialize_states:
@@ -467,7 +467,7 @@ class Mamba(nn.Module):
         return ssm_state, conv_state
 
 
-class GatedDeltaNet(nn.Module):
+class Apriel2GatedDeltaNet(nn.Module):
     """Wrapper around Qwen3NextGatedDeltaNet to match apriel2 interface."""
 
     def __init__(
@@ -650,7 +650,7 @@ class Apriel2StochasticMixer(nn.Module):
 class Apriel2DynamicCache:
     """
     A dynamic cache for Apriel2 that handles both attention layers (key/value cache) and
-    linear attention layers like Mamba (conv_states, ssm_states).
+    linear attention layers like Mamba (conv_states, recurrent_states).
 
     Each layer can have a different mixer type (attention, mamba, gated_delta_net, kimi_linear_attention, stochastic).
     For stochastic mixers, we use the main_mixer type.
@@ -679,7 +679,7 @@ class Apriel2DynamicCache:
         self.key_cache = [None] * config.num_hidden_layers
         self.value_cache = [None] * config.num_hidden_layers
         self.conv_states = [None] * config.num_hidden_layers
-        self.ssm_states = [None] * config.num_hidden_layers
+        self.recurrent_states = [None] * config.num_hidden_layers
 
     def __len__(self):
         return len(self.mixer_types)
@@ -730,7 +730,7 @@ class Apriel2DynamicCache:
                 device = self.conv_states[layer_idx].device
                 beam_idx = beam_idx.to(device)
                 self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx)
-                self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx)
+                self.recurrent_states[layer_idx] = self.recurrent_states[layer_idx].index_select(0, beam_idx)
 
     def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int) -> tuple[int, int]:
         """
@@ -751,11 +751,6 @@ class Apriel2DynamicCache:
             return False
         last_ssm_layer = ssm_layers[-1]
         return self.conv_states[last_ssm_layer] is not None
-
-    @property
-    def recurrent_states(self):
-        """Alias for ssm_states to match Qwen3Next interface."""
-        return self.ssm_states
 
 
 class Apriel2PreTrainedModel(PreTrainedModel):
