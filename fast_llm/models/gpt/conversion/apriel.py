@@ -7,7 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import DiscreteMamba2Config, Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
@@ -234,84 +234,16 @@ class AprielMamba2BlockConverter(MistralBlockConverter):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
-class AprielStochasticMixerConverter:
-    _mixer_block_converters = {
-        AttentionConfig: MistralBlockConverter,
-        Mamba2Config: AprielMamba2BlockConverter,
-        DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
-    }
-
-    @classmethod
-    def import_config(cls, config: dict, layout_name: str = "t") -> dict:
-        layout_to_config = {
-            "t": AttentionConfig,
-            "m2": Mamba2Config,
-            "m2d": DiscreteMamba2Config,
-        }
-        config_class = layout_to_config.get(layout_name, AttentionConfig)
-        converter_class = cls._mixer_block_converters[config_class]
-        # Import the block config and extract only the mixer part for the stochastic mixer
-        block_config = converter_class.import_config(config)
-        return block_config["mixer"]
-
-    @classmethod
-    def export_config(cls, config: StochasticMixerConfig) -> dict:
-        Assert.custom(isinstance, config, StochasticMixerConfig)
-        inference_mixer = config.mixers[config.main_mixer_name]
-        mixer_type = type(inference_mixer)
-        converter_class = cls._mixer_block_converters.get(mixer_type)
-        if converter_class is None:
-            raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
-        return converter_class.mixer_converter_class.export_config(inference_mixer)
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: StochasticMixerConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        Assert.custom(isinstance, config, StochasticMixerConfig)
-        converters = []
-        for mixer_name, mixer in config.mixers.items():
-            mixer_type = type(mixer)
-            converter_class = cls._mixer_block_converters.get(mixer_type)
-            if converter_class is None:
-                raise NotImplementedError(f"No converter for mixer type: {mixer_type.__name__}")
-            mixer_converter_class = converter_class.mixer_converter_class
-            # Map mixer types to HF prefixes: attention -> self_attn, others -> mixer
-            if mixer_type is AttentionConfig:
-                hf_mixer_prefix = f"{hf_prefix}.self_attn"
-            else:
-                hf_mixer_prefix = f"{hf_prefix}.mixer"
-            converters.extend(
-                mixer_converter_class.get_converters(
-                    mixer,
-                    f"{fast_llm_prefix}.mixers.{mixer_name}",
-                    hf_mixer_prefix,
-                    drop_on_export=drop_on_export,
-                )
-            )
-        return converters
-
-
-class AprielStochasticMixerBlockConverter(MistralBlockConverter):
-    mixer_converter_class: typing.ClassVar[type[AprielStochasticMixerConverter]] = AprielStochasticMixerConverter
-
-
 class AprielBlockConverter:
     layout_names = {
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
-        StochasticMixerConfig: "stochastic",
     }
     _converter_classes = {
         AttentionConfig: MistralBlockConverter,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
-        StochasticMixerConfig: AprielStochasticMixerBlockConverter,
     }
     _config_classes = {value: key for key, value in layout_names.items()}
 
@@ -342,138 +274,61 @@ class AprielDecoderConverter(MistralDecoderConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
         layout = config["hybrid_block_layout"]
-        # Normalize layout items for comparison (convert lists to tuples for hashability)
-        normalized_layout = [tuple(item) if isinstance(item, list) else item for item in layout]
-        unique_layouts = set(normalized_layout)
-
-        # If all blocks are the same type, import as FixedBlockSequenceConfig
-        if len(unique_layouts) == 1:
-            layout_item = layout[0]
-            if isinstance(layout_item, list):
-                # Stochastic mixer block
-                block_config = cls._import_stochastic_block_config(config, layout_item)
-            else:
-                block_config = cls.block_converter_class.import_config(config, layout_item)
+        if len(layout) == 1:
             return {
-                "block": block_config,
+                "block": cls.block_converter_class.import_config(config, layout[0]),
                 "num_blocks": config["num_hidden_layers"],
             }
         else:
-            # Pattern config with potentially mixed blocks
-            blocks = {}
-            pattern = []
-            for layout_item in layout:
-                if isinstance(layout_item, list):
-                    # Use tuple as dict key for stochastic blocks
-                    key = tuple(layout_item)
-                    if key not in blocks:
-                        blocks[key] = cls._import_stochastic_block_config(config, layout_item)
-                    pattern.append(key)
-                else:
-                    if layout_item not in blocks:
-                        blocks[layout_item] = cls.block_converter_class.import_config(config, layout_item)
-                    pattern.append(layout_item)
-
             return {
                 "type": "pattern",
-                "blocks": blocks,
-                "pattern": pattern,
+                "blocks": {
+                    layout_name: cls.block_converter_class.import_config(config, layout_name)
+                    for layout_name in set(layout)
+                },
+                "pattern": layout,
                 "num_blocks": config["num_hidden_layers"],
             }
-
-    @classmethod
-    def _import_stochastic_block_config(cls, config: dict, mixer_types: list[str]) -> dict:
-        """Import a stochastic mixer block config from a list of mixer type names."""
-        # Import each mixer's config, using layout names (t, m2, etc.) as mixer names
-        mixer_configs = {}
-        for mixer_type in mixer_types:
-            mixer_config = cls.block_converter_class.import_config(config, mixer_type)["mixer"]
-            mixer_configs[mixer_type] = mixer_config
-
-        # Create stochastic mixer block config
-        return {
-            "mixer": {
-                "type": "stochastic",
-                "mixers": mixer_configs,
-                "main_mixer_name": config.get("stochastic_main_mixer", mixer_types[0]),
-                "sampling_strategy": config.get("stochastic_sampling", "uniform"),
-            },
-            # MLP and other components same as any block
-            "mlp": cls.block_converter_class.import_config(config, mixer_types[0])["mlp"],
-        }
 
     @classmethod
     def export_config(cls, config: BlockSequenceConfig) -> dict:
         if type(config) is FixedBlockSequenceConfig:
             block_configs = [config.block]
-            pattern_block_configs = [config.block] * config.num_blocks
+            pattern_block_configs = [config.block]
         elif type(config) is PatternBlockSequenceConfig:
             block_configs = config.blocks.values()
             pattern_block_configs = [config.blocks[block_name] for block_name in config.pattern]
         else:
-            raise NotImplementedError(f"Unsupported config type: {type(config).__name__}")
+            raise NotImplementedError()
         # There may be all sorts of blocks, but `safe_merge_dicts` ensures they are compatible.
-        # Generate hybrid_block_layout with nested lists for stochastic mixers
-        hybrid_block_layout = []
-        for block_config in pattern_block_configs:
-            if isinstance(block_config.mixer, StochasticMixerConfig):
-                # Export as list of mixer type names
-                mixer_names = [
-                    cls.block_converter_class.layout_names[type(mixer)]
-                    for mixer in block_config.mixer.mixers.values()
-                ]
-                hybrid_block_layout.append(mixer_names)
-            else:
-                # Single mixer - export as string
-                mixer_name = cls.block_converter_class.layout_names[type(block_config.mixer)]
-                hybrid_block_layout.append(mixer_name)
-
         return safe_merge_dicts(
             *[cls.block_converter_class.export_config(block_config) for block_config in block_configs],
             {
                 "num_hidden_layers": config.num_blocks,
-                "hybrid_block_layout": hybrid_block_layout,
-                "stochastic_main_mixer": (
-                    pattern_block_configs[0].mixer.main_mixer_name
-                    if isinstance(pattern_block_configs[0].mixer, StochasticMixerConfig)
-                    else "t"
-                ),
-                "stochastic_sampling": (
-                    pattern_block_configs[0].mixer.sampling_strategy.value
-                    if isinstance(pattern_block_configs[0].mixer, StochasticMixerConfig)
-                    else "uniform"
-                ),
+                "hybrid_block_layout": [
+                    cls.block_converter_class.layout_names[type(block_config.mixer)]
+                    for block_config in pattern_block_configs
+                ],
             },
         )
 
     @classmethod
     def get_converters(
         cls,
-        config: BlockSequenceConfig,
+        config: PatternBlockSequenceConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
         converters = []
-        if type(config) is FixedBlockSequenceConfig:
-            for block_index in range(config.num_blocks):
-                converters += cls.block_converter_class.get_converters(
-                    config.block,
-                    f"{fast_llm_prefix}.{block_index}",
-                    f"{hf_prefix}.{block_index}",
-                    drop_on_export,
-                )
-        elif type(config) is PatternBlockSequenceConfig:
-            for block_index in range(config.num_blocks):
-                block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
-                converters += cls.block_converter_class.get_converters(
-                    block_config,
-                    f"{fast_llm_prefix}.{block_index}",
-                    f"{hf_prefix}.{block_index}",
-                    drop_on_export,
-                )
-        else:
-            raise NotImplementedError(f"Unsupported config type: {type(config).__name__}")
+        for block_index in range(config.num_blocks):
+            block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
+            converters += cls.block_converter_class.get_converters(
+                block_config,
+                f"{fast_llm_prefix}.{block_index}",
+                f"{hf_prefix}.{block_index}",
+                drop_on_export,
+            )
         return converters
 
 
