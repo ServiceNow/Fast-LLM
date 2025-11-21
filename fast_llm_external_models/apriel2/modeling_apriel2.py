@@ -279,8 +279,29 @@ class Mamba(nn.Module):
     ):
         """Forward pass for Mamba."""
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
-
+        cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
+
+        ssm_state, conv_state = None, None
+        use_precomputed_states = False
+
+        seqlen_offset = kwargs.get("seqlen_offset", cache_position[0]) if cache_position is not None else 0
+        use_precomputed_states = (
+            past_key_value is not None
+            and isinstance(past_key_value, Apriel2DynamicCache)
+            and past_key_value.conv_states[self.layer_idx] is not None
+            and seqlen == 1
+            and past_key_value.conv_states[self.layer_idx].shape[0]
+            == past_key_value.ssm_states[self.layer_idx].shape[0]
+            == batch
+            and cache_position is not None
+            and seqlen_offset > 0
+        )
+
+        ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+        if use_precomputed_states:
+            out, _, _ = self.step(hidden_states, conv_state, ssm_state)
+            return (out,)
 
         A = -torch.exp(self.A_log.float())
 
@@ -306,6 +327,9 @@ class Mamba(nn.Module):
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
             x = repeat_kv(x, self.repeat_group)
             x = rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
+
+        if conv_state is not None:
+            conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
 
         # Compute short convolution
         if causal_conv1d_fn is None:
@@ -334,13 +358,112 @@ class Mamba(nn.Module):
             z=z,
             delta_bias=self.dt_proj.bias.float() if self.dt_proj.bias is not None else None,
             delta_softplus=True,
-            return_last_state=False,
+            return_last_state=(ssm_state is not None),
         )
+
+        if ssm_state is not None:
+            y, last_state = y
+            ssm_state.copy_(rearrange(last_state, "b (h d) n -> b h d n", h=self.num_C_head))
 
         y = rearrange(y, "b d l -> b l d")
         out = self.out_proj(y)
 
         return (out[:, :seqlen, :],)
+
+    def step(self, hidden_states, conv_state, ssm_state):
+        dtype = hidden_states.dtype
+        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+
+        hidden_states_input = hidden_states.squeeze(1)
+
+        A = -torch.exp(self.A_log.float())
+
+        zxbc = self.in_proj(hidden_states_input)
+        z, x, B, C = torch.split(
+            zxbc,
+            [self.d_inner, self.d_xb, self.d_xb, self.d_inner],
+            dim=-1,
+        )
+
+        B = rearrange(B, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
+        B = torch.repeat_interleave(B, dim=1, repeats=self.repeat_group)
+        C = rearrange(C, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state).contiguous()
+
+        dt = self.dt_proj(self.dt_in_proj(hidden_states_input))
+
+        if self.repeat_kv_before_conv:
+            x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
+            x = torch.repeat_interleave(x, dim=1, repeats=self.repeat_group)
+            x = rearrange(x, "b n_group dstate -> b (n_group dstate)")
+
+        # Conv step
+        if causal_conv1d_update is None:
+            conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))
+            conv_state[:, :, -1] = x
+            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)
+            if self.conv1d.bias is not None:
+                x = x + self.conv1d.bias
+            x = self.act(x).to(dtype=dtype)
+        else:
+            x = causal_conv1d_update(
+                x,
+                conv_state,
+                rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                self.conv1d.bias,
+                self.activation,
+            )
+
+        if not self.repeat_kv_before_conv:
+            x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
+            x = torch.repeat_interleave(x, dim=1, repeats=self.repeat_group)
+            x = rearrange(x, "b n_group dstate -> b (n_group dstate)")
+
+        x = rearrange(x, "b (h d) -> b h d", h=self.num_C_head)
+        dt = rearrange(dt, "b (h d) -> b h d", h=self.num_C_head)
+        A = rearrange(A, "(h d) n -> h d n", h=self.num_C_head)
+        D = rearrange(self.D, "(h d) -> h d", h=self.num_C_head)
+        z = rearrange(z, "b (h d) -> b h d", h=self.num_C_head)
+        dt_bias = rearrange(self.dt_proj.bias, "(h d) -> h d", h=self.num_C_head) if self.dt_proj.bias is not None else None
+
+        # SSM step
+        assert selective_state_update is not None
+        y = selective_state_update(ssm_state, x, dt, A, B, C, D, z=z, dt_bias=dt_bias, dt_softplus=True)
+        y = rearrange(y, "b h d -> b (h d)")
+        out = self.out_proj(y)
+
+        return out.unsqueeze(1), conv_state, ssm_state
+
+    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        device = self.out_proj.weight.device
+        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
+        if self.repeat_kv_before_conv:
+            conv_state = torch.zeros(batch_size, self.d_inner, self.d_conv, device=device, dtype=conv_dtype)
+        else:
+            conv_state = torch.zeros(batch_size, self.d_xb, self.d_conv, device=device, dtype=conv_dtype)
+        ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
+        ssm_state = torch.zeros(
+            batch_size, self.num_C_head, self.d_inner // self.num_C_head, self.d_state, device=device, dtype=ssm_dtype
+        )
+        return conv_state, ssm_state
+
+    def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
+        assert self.layer_idx is not None
+        if inference_params is None or not isinstance(inference_params, Apriel2DynamicCache):
+            return None, None
+
+        if inference_params.conv_states[self.layer_idx] is None:
+            conv_state, ssm_state = self.allocate_inference_cache(batch_size, max_seqlen=0)
+            inference_params.conv_states[self.layer_idx] = conv_state
+            inference_params.ssm_states[self.layer_idx] = ssm_state
+
+        ssm_state = inference_params.ssm_states[self.layer_idx]
+        conv_state = inference_params.conv_states[self.layer_idx]
+
+        if initialize_states:
+            ssm_state.zero_()
+            conv_state.zero_()
+
+        return ssm_state, conv_state
 
 
 class GatedDeltaNet(nn.Module):
@@ -505,7 +628,7 @@ class Apriel2StochasticMixer(nn.Module):
         )
 
 
-class Apriel2DynamicCache(Cache):
+class Apriel2DynamicCache:
     """
     A dynamic cache for Apriel2 that handles both attention layers (key/value cache) and
     linear attention layers like Mamba (conv_states, ssm_states).
@@ -514,12 +637,10 @@ class Apriel2DynamicCache(Cache):
     For stochastic mixers, we use the main_mixer type.
     """
 
-    def __init__(self, config: Apriel2Config, batch_size: int, dtype=torch.float16, device=None):
-        super().__init__()
+    is_compileable = False
+
+    def __init__(self, config: Apriel2Config):
         self.config = config
-        self.batch_size = batch_size
-        self.dtype = dtype
-        self.device = device
 
         # Determine mixer type for each layer
         self.mixer_types = []
@@ -535,7 +656,7 @@ class Apriel2DynamicCache(Cache):
 
             self.mixer_types.append(mixer_type)
 
-        # Initialize cache storage
+        # Initialize cache storage - lazy initialization to allow multi-gpu inference
         self.key_cache = [None] * config.num_hidden_layers
         self.value_cache = [None] * config.num_hidden_layers
         self.conv_states = [None] * config.num_hidden_layers
@@ -591,6 +712,26 @@ class Apriel2DynamicCache(Cache):
                 beam_idx = beam_idx.to(device)
                 self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx)
                 self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx)
+
+    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int) -> tuple[int, int]:
+        """
+        Return a tuple (kv_length, kv_offset) corresponding to the length and offset for the layer.
+        The masks are prepared according to these lengths and patterns for each layer.
+        """
+        kv_offset = 0
+        query_length = cache_position.shape[0]
+        past_seen_tokens = self.get_seq_length(layer_idx)
+        kv_length = query_length + past_seen_tokens
+        return kv_length, kv_offset
+
+    @property
+    def has_previous_state(self):
+        """Check if we have previous state by finding the last SSM layer."""
+        ssm_layers = [i for i, t in enumerate(self.mixer_types) if t in ("mamba", "gated_delta_net", "kimi_linear_attention")]
+        if not ssm_layers:
+            return False
+        last_ssm_layer = ssm_layers[-1]
+        return self.conv_states[last_ssm_layer] is not None
 
 
 class Apriel2PreTrainedModel(PreTrainedModel):
@@ -859,7 +1000,7 @@ class Apriel2Model(Apriel2PreTrainedModel):
 
         # Auto-initialize custom cache for hybrid attention/SSM layers
         if use_cache and past_key_values is None:
-            past_key_values = Apriel2DynamicCache(config=self.config, batch_size=batch_size, dtype=self.dtype, device=self.device)
+            past_key_values = Apriel2DynamicCache(config=self.config)
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
