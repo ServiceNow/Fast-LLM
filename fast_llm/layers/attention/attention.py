@@ -207,10 +207,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         attn_weights = attn_weights.to(torch.float32)
         attn_weights = torch.where(mask, attn_weights, mask_value)
-        print(f"[FastLLM Attention] Pre-softmax attn_weights: shape={attn_weights.shape}, mean={attn_weights.mean().item():.6f}, max={attn_weights.max().item():.6f}")
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
-        print(f"[FastLLM Attention] Post-softmax attn_weights: shape={attn_weights.shape}, mean={attn_weights.mean().item():.6f}, max={attn_weights.max().item():.6f}")
-        print(f"[FastLLM Attention] Attn weight sample [0,0,0,0,:5]: {attn_weights[0,0,0,0,:5].tolist()}")
 
         with set_generator(self._distributed.tp_generator):
             attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
@@ -290,8 +287,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        print(f"[FastLLM Attention] Input: shape={input_.shape}, mean={input_.mean().item():.6f}, std={input_.std().item():.6f}")
-        print(f"[FastLLM Attention] Softmax scale: {self._softmax_scale:.6f}, Use flash: {self._use_flash_attention}")
         sequence_first = kwargs[AttentionKwargs.sequence_first]
         query, key_value = self._query_key_value(input_, sequence_first)
 
@@ -330,11 +325,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         if self._debug.enabled:
             self._debug(query, "query_rotary_input", self._query_dims, kwargs)
             self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
-        print(f"[FastLLM Attention] Before RoPE - query: shape={query.shape}, mean={query.mean().item():.6f}")
-        print(f"[FastLLM Attention] Before RoPE - key: shape={key.shape}, mean={key.mean().item():.6f}")
         query, key = self._rotary(query, key, kwargs)
-        print(f"[FastLLM Attention] After RoPE - query: shape={query.shape}, mean={query.mean().item():.6f}")
-        print(f"[FastLLM Attention] After RoPE - key: shape={key.shape}, mean={key.mean().item():.6f}")
 
         window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
 
@@ -389,11 +380,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
             input_ = input_.transpose(0, 1).contiguous()
-        print(f"[FastLLM Attention] After attention (before dense): shape={input_.shape}, mean={input_.mean().item():.6f}, std={input_.std().item():.6f}")
-        output = self.dense(input_)
-        output_tensor = output[0] if isinstance(output, tuple) else output
-        print(f"[FastLLM Attention] Output (after dense): shape={output_tensor.shape}, mean={output_tensor.mean().item():.6f}, std={output_tensor.std().item():.6f}")
-        return output
+        return self.dense(input_)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         batch_dim: TensorDim = kwargs[AttentionKwargs.hidden_dims][1 if kwargs[AttentionKwargs.sequence_first] else 0]
