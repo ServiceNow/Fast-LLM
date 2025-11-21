@@ -13,9 +13,11 @@ from einops import rearrange, repeat
 from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from torch import nn
-from transformers import PreTrainedModel
+from transformers import GenerationMixin, PreTrainedModel
 from transformers.cache_utils import Cache
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.processing_utils import Unpack
 from transformers.utils import logging
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
@@ -503,9 +505,33 @@ class Apriel2StochasticMixer(nn.Module):
         )
 
 
-class Apriel2Model(PreTrainedModel):
+class Apriel2PreTrainedModel(PreTrainedModel):
     config_class = Apriel2Config
+    base_model_prefix = "model"
+    _no_split_modules = ["Apriel2DecoderBlock"]
+    _skip_keys_device_placement = ["past_key_values"]
+    _supports_flash_attn_2 = True
+    _supports_sdpa = True
+    _supports_flex_attn = True
+    _supports_cache_class = True
+    _supports_quantized_cache = True
+    _supports_static_cache = True
 
+    def _init_weights(self, module):
+        std = self.config.initializer_range if hasattr(self.config, "initializer_range") else 0.02
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, MistralRMSNorm):
+            module.weight.data.fill_(1.0)
+
+
+class Apriel2Model(Apriel2PreTrainedModel):
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
         self.config = config
@@ -573,10 +599,12 @@ class Apriel2Model(PreTrainedModel):
         if decoder_type == "fixed":
             block_config = self.config.decoder.get("block", {})
             self._build_rotary_embs_for_block("block", block_config)
-        else:  # pattern
+        elif decoder_type == "pattern":
             blocks = self.config.decoder.get("blocks", {})
             for block_name, block_config in blocks.items():
                 self._build_rotary_embs_for_block(block_name, block_config)
+        else:
+            raise ValueError(f"Unknown decoder type: {decoder_type}")
 
     def _build_rotary_embs_for_block(self, block_name: str, block_config: dict):
         """Build rotary embeddings for a single block and its mixers."""
@@ -641,7 +669,7 @@ class Apriel2Model(PreTrainedModel):
                 position_embeddings,
                 attention_masks,
             )
-        else:
+        elif decoder_type == "pattern":
             blocks = self.config.decoder.get("blocks", {})
             for block_name, block_config in blocks.items():
                 self._compute_for_block(
@@ -655,6 +683,8 @@ class Apriel2Model(PreTrainedModel):
                     position_embeddings,
                     attention_masks,
                 )
+        else:
+            raise ValueError(f"Unknown decoder type: {decoder_type}")
 
         return position_embeddings, attention_masks
 
@@ -717,7 +747,8 @@ class Apriel2Model(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        **kwargs,
+        cache_position: Optional[torch.LongTensor] = None,
+        **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -738,10 +769,11 @@ class Apriel2Model(PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        cache_position = torch.arange(
-            past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-        )
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
@@ -772,7 +804,7 @@ class Apriel2Model(PreTrainedModel):
                 output_attentions=output_attentions,
                 use_cache=use_cache,
                 position_embeddings=layer_position_embeddings,
-                **kwargs,
+                **flash_attn_kwargs,
             )
 
             hidden_states = layer_outputs[0]
@@ -798,10 +830,8 @@ class Apriel2Model(PreTrainedModel):
         )
 
 
-class Apriel2ForCausalLM(PreTrainedModel):
+class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
     """Apriel2 model with a language modeling head."""
-
-    config_class = Apriel2Config
 
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
@@ -836,6 +866,8 @@ class Apriel2ForCausalLM(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
         **kwargs,
     ) -> Union[tuple, CausalLMOutputWithPast]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
@@ -851,15 +883,20 @@ class Apriel2ForCausalLM(PreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            cache_position=cache_position,
             **kwargs,
         )
 
-        hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
-        logits = logits.float()
+        hidden_states = outputs.last_hidden_state
+
+        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
         if labels is not None:
+            # Upcast to float if we need to compute the loss to avoid potential precision issues
+            logits = logits.float()
             # Shift for next-token prediction
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
