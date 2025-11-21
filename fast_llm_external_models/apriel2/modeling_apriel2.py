@@ -26,6 +26,7 @@ from transformers.models.mistral.modeling_mistral import (
     MistralMLP,
     MistralRMSNorm,
 )
+from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
 
 from transformers.utils.import_utils import is_torch_flex_attn_available
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
@@ -467,7 +468,7 @@ class Mamba(nn.Module):
 
 
 class GatedDeltaNet(nn.Module):
-    """GatedDeltaNet mixer - stub for future implementation."""
+    """Wrapper around Qwen3NextGatedDeltaNet to match apriel2 interface."""
 
     def __init__(
         self,
@@ -478,10 +479,28 @@ class GatedDeltaNet(nn.Module):
         dtype=None,
     ):
         super().__init__()
-        raise NotImplementedError("GatedDeltaNet not yet implemented in apriel2")
 
-    def forward(self, hidden_states: torch.Tensor, **kwargs):
-        raise NotImplementedError("GatedDeltaNet not yet implemented in apriel2")
+        # Map config_dict to Qwen3NextConfig format
+        config = SimpleNamespace(
+            hidden_size=d_model,
+            linear_num_value_heads=config_dict.get("num_value_heads", 32),
+            linear_num_key_heads=config_dict.get("num_key_heads", 8),
+            linear_key_head_dim=config_dict.get("key_head_dim", 64),
+            linear_value_head_dim=config_dict.get("value_head_dim", 64),
+            linear_conv_kernel_dim=config_dict.get("conv_kernel_size", 4),
+            hidden_act=config_dict.get("activation", "silu"),
+            rms_norm_eps=config_dict.get("norm_eps", 1e-5),
+            dtype=dtype,
+        )
+
+        self.gdn = Qwen3NextGatedDeltaNet(config, layer_idx)
+
+    def forward(self, hidden_states: torch.Tensor, past_key_value=None, attention_mask=None, **kwargs):
+        cache_position = kwargs.get("cache_position", None)
+        output = self.gdn(
+            hidden_states, cache_params=past_key_value, cache_position=cache_position, attention_mask=attention_mask
+        )
+        return (output,)
 
 
 class KimiLinearAttention(nn.Module):
@@ -732,6 +751,11 @@ class Apriel2DynamicCache:
             return False
         last_ssm_layer = ssm_layers[-1]
         return self.conv_states[last_ssm_layer] is not None
+
+    @property
+    def recurrent_states(self):
+        """Alias for ssm_states to match Qwen3Next interface."""
+        return self.ssm_states
 
 
 class Apriel2PreTrainedModel(PreTrainedModel):
