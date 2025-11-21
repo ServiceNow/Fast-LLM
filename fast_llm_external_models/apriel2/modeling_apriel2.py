@@ -505,6 +505,94 @@ class Apriel2StochasticMixer(nn.Module):
         )
 
 
+class Apriel2DynamicCache(Cache):
+    """
+    A dynamic cache for Apriel2 that handles both attention layers (key/value cache) and
+    linear attention layers like Mamba (conv_states, ssm_states).
+
+    Each layer can have a different mixer type (attention, mamba, gated_delta_net, kimi_linear_attention, stochastic).
+    For stochastic mixers, we use the main_mixer type.
+    """
+
+    def __init__(self, config: Apriel2Config, batch_size: int, dtype=torch.float16, device=None):
+        super().__init__()
+        self.config = config
+        self.batch_size = batch_size
+        self.dtype = dtype
+        self.device = device
+
+        # Determine mixer type for each layer
+        self.mixer_types = []
+        for layer_idx in range(config.num_hidden_layers):
+            block_config = config.get_block_config(layer_idx)
+            mixer_config = block_config.get("mixer", {})
+            mixer_type = mixer_config.get("type", "attention")
+
+            if mixer_type == "stochastic":
+                # For stochastic, use main_mixer type
+                main_mixer_name = mixer_config.get("main_mixer_name", list(mixer_config.get("mixers", {}).keys())[0])
+                mixer_type = mixer_config["mixers"][main_mixer_name].get("type", "attention")
+
+            self.mixer_types.append(mixer_type)
+
+        # Initialize cache storage
+        self.key_cache = [None] * config.num_hidden_layers
+        self.value_cache = [None] * config.num_hidden_layers
+        self.conv_states = [None] * config.num_hidden_layers
+        self.ssm_states = [None] * config.num_hidden_layers
+
+    def __len__(self):
+        return len(self.mixer_types)
+
+    def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """For compatibility with standard cache interface."""
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update cache for attention layers."""
+        if self.key_cache[layer_idx] is None:
+            self.key_cache[layer_idx] = key_states
+            self.value_cache[layer_idx] = value_states
+        else:
+            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        """Returns the sequence length of cached states for attention layers."""
+        # Find first attention layer
+        attention_layers = [i for i, t in enumerate(self.mixer_types) if t == "attention"]
+        if not attention_layers:
+            return 0
+
+        layer_idx = attention_layers[0] if layer_idx not in attention_layers else layer_idx
+        if self.key_cache[layer_idx] is None:
+            return 0
+        return self.key_cache[layer_idx].shape[-2]
+
+    def reorder_cache(self, beam_idx: torch.LongTensor):
+        """Reorders the cache for beam search."""
+        for layer_idx in range(len(self.key_cache)):
+            if self.key_cache[layer_idx] is not None:
+                device = self.key_cache[layer_idx].device
+                beam_idx = beam_idx.to(device)
+                self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx)
+                self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx)
+
+            if self.conv_states[layer_idx] is not None:
+                device = self.conv_states[layer_idx].device
+                beam_idx = beam_idx.to(device)
+                self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx)
+                self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx)
+
+
 class Apriel2PreTrainedModel(PreTrainedModel):
     config_class = Apriel2Config
     base_model_prefix = "model"
@@ -768,6 +856,10 @@ class Apriel2Model(Apriel2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+
+        # Auto-initialize custom cache for hybrid attention/SSM layers
+        if use_cache and past_key_values is None:
+            past_key_values = Apriel2DynamicCache(config=self.config, batch_size=batch_size, dtype=self.dtype, device=self.device)
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
