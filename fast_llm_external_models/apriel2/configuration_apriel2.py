@@ -1,11 +1,5 @@
 """
 Apriel2 configuration - HuggingFace format that mirrors Fast-LLM's config structure.
-
-This format supports:
-- Declarative mixer/block hierarchy like Fast-LLM
-- Each mixer type with its own hyperparameters
-- Native stochastic mixer support with nested mixer definitions
-- Different attention configs (SWA, full attention) in same stochastic mixer
 """
 
 from typing import Any, Optional, Union
@@ -102,6 +96,20 @@ class Apriel2Config(PretrainedConfig):
     def get_text_config(self, decoder: bool = False):
         """Return self to ensure tie_word_embeddings is accessible."""
         return self
+
+    def get_block_name(self, layer_idx: int) -> str:
+        """Get the block name for a specific layer."""
+        decoder_type = self.decoder.get("type", "fixed")
+
+        if decoder_type == "fixed":
+            return "block"
+        elif decoder_type == "pattern":
+            pattern = self.decoder.get("pattern", [])
+            if not pattern:
+                raise ValueError("Pattern decoder requires 'pattern' field")
+            return pattern[layer_idx % len(pattern)]
+        else:
+            raise ValueError(f"Unknown decoder type: {decoder_type}")
 
     def get_block_config(self, layer_idx: int) -> dict:
         """Get the block configuration for a specific layer."""
