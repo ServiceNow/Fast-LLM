@@ -12,6 +12,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
+    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -695,43 +696,89 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests stochastic mixer (supernet training) with attention and Mamba options.
+    # Tests apriel2 format with pattern decoder mixing all mixer types.
+    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
     "llama",
-    "stochastic_mixer",
+    "apriel2",
     updates={
-        ("model", "base_model", "decoder", "block", "mixer"): {
-            "type": "stochastic",
-            "mixers": {
-                "t": {
-                    "type": "attention",
-                    "rotary": {"type": "default", "theta": 10000},
-                    "heads": 8,
-                    "head_groups": 4,
-                    "head_size": 32,
-                    "add_linear_biases": False,
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "attn_full": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "add_linear_biases": False,
+                    },
                 },
-                "m2": {
-                    "type": "mamba_2",
-                    "d_inner": 512,
-                    "state_size": 16,
-                    "dt_rank": 16,
-                    "d_xb": 256,
-                    "add_linear_biases": False,
+                "mamba": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba_2",
+                        "d_inner": 512,
+                        "state_size": 16,
+                        "dt_rank": 16,
+                        "d_xb": 256,
+                        "add_linear_biases": False,
+                    },
+                },
+                "stochastic": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "stochastic",
+                        "mixers": {
+                            "attn": {
+                                "type": "attention",
+                                "rotary": {"type": "default", "theta": 10000},
+                                "heads": 8,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "add_linear_biases": False,
+                            },
+                            "mamba": {
+                                "type": "mamba_2",
+                                "d_inner": 512,
+                                "state_size": 16,
+                                "dt_rank": 16,
+                                "d_xb": 256,
+                                "add_linear_biases": False,
+                            },
+                        },
+                        "sampling_strategy": "uniform",
+                        "main_mixer_name": "attn",
+                    },
+                },
+                "attn_swa": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "window_size": 128,
+                        "add_linear_biases": False,
+                    },
                 },
             },
-            "sampling_strategy": "uniform",
-            "main_mixer_name": "t",
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa"],
+            "num_blocks": 4,
         },
     },
     megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    checkpoint_format=Apriel2CheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
     compare_factor=2.0,
     # Micro-sequence split not supported for Mamba.

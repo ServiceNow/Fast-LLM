@@ -80,9 +80,24 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        rotary_freq_q = kwargs[AttentionKwargs.rotary_freq_q]
+        rotary_freq_k = kwargs[AttentionKwargs.rotary_freq_k]
+        print(f"[FastLLM Rotary] rotary_freq_q: shape={rotary_freq_q.shape}, dtype={rotary_freq_q.dtype}")
+
+        # If it's complex, show cos/sin equivalent for comparison with HF
+        if rotary_freq_q.is_complex():
+            print(f"[FastLLM Rotary] As complex - cos(real): mean={rotary_freq_q.real.mean().item():.6f}, sin(imag): mean={rotary_freq_q.imag.mean().item():.6f}")
+            print(f"[FastLLM Rotary] First 5 real values: {rotary_freq_q[0,0,0,:10:2].real.tolist()}")
+        else:
+            # It's stored as float pairs, convert to complex to show cos/sin
+            complex_freq = torch.view_as_complex(rotary_freq_q.float().view(*rotary_freq_q.shape[:-1], -1, 2))
+            print(f"[FastLLM Rotary] As complex - cos(real): mean={complex_freq.real.mean().item():.6f}, sin(imag): mean={complex_freq.imag.mean().item():.6f}")
+            # Print cos/sin at position 50 (even/odd indices in interleaved format)
+            print(f"[FastLLM Rotary] At pos 50: cos[:5]={rotary_freq_q[0,50,0,:10:2].tolist()}, sin[:5]={rotary_freq_q[0,50,0,1:10:2].tolist()}")
+
         rotary_fn = triton_rotary_autograd_ if self._config.triton else apply_rotary_embeddings
-        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
-        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
+        query = rotary_fn(query, rotary_freq_q)
+        key = rotary_fn(key, rotary_freq_k)
         return query, key
 
     def _create_tensors(self, sequence_length: int, device: torch.device) -> None:
@@ -112,7 +127,9 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
         return frequencies
 
     def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
-        return self._config.theta ** -torch.arange(0, 1, 2 / head_size, device=device, dtype=torch.float64)
+        angle_scales = self._config.theta ** -torch.arange(0, 1, 2 / head_size, device=device, dtype=torch.float64)
+        print(f"[FastLLM Rotary Init] angle_scales (inv_freq): shape={angle_scales.shape}, mean={angle_scales.mean().item():.6f}, theta={self._config.theta}, head_size={head_size}")
+        return angle_scales
 
 
 class Llama3Rotary[ConfigType: Llama3RotaryConfig](DefaultRotary[ConfigType]):

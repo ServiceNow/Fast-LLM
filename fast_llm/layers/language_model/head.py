@@ -164,8 +164,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         targets = self._get_targets(kwargs)
         input_ = input_.detach().requires_grad_(do_grad := targets is not None and self.training)
+        print(f"[FastLLM Head] Before final_norm: mean={input_.mean().item():.6f}, std={input_.std().item():.6f}")
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
+            print(f"[FastLLM Head] After final_norm: mean={ln_output.mean().item():.6f}, std={ln_output.std().item():.6f}")
 
             if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
                 # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
@@ -326,6 +328,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         group = self._parallel_dim.group if self._vocab_parallel else None
+        print(f"[FastLLM Head] output_weights (weight): shape={weight.shape}, mean={weight.mean().item():.6f}, std={weight.std().item():.6f}")
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
@@ -333,6 +336,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             group=group,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
+        print(f"[FastLLM Head] After lm_head: mean={logits.mean().item():.6f}, std={logits.std().item():.6f}")
 
         if self._config.logit_z_loss > 0.0:
             logits = z_loss(

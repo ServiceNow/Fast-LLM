@@ -131,35 +131,36 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         if self._debug.enabled:
             self._debug(None, "begin", kwargs[BlockKwargs.hidden_dims], kwargs)
+
+        print(f"[FastLLM DecoderBlock] Input: mean={input_.mean().item():.6f}, std={input_.std().item():.6f}")
         fw_input = input_
         hidden_states = self.norm_1(input_)
+        print(f"[FastLLM DecoderBlock] After norm_1: mean={hidden_states.mean().item():.6f}, std={hidden_states.std().item():.6f}")
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
+        mixer_out = hidden_states if bias is None else hidden_states + bias
+        print(f"[FastLLM DecoderBlock] After mixer: mean={mixer_out.mean().item():.6f}, std={mixer_out.std().item():.6f}")
         if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "mixer output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
-            )
+            self._debug(mixer_out, "mixer output", kwargs[BlockKwargs.hidden_dims], kwargs)
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
+        print(f"[FastLLM DecoderBlock] After mixer residual: mean={input_.mean().item():.6f}, std={input_.std().item():.6f}")
         if self._debug.enabled:
             self._debug(input_, "mixer residual", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states = self.norm_2(input_)
+        print(f"[FastLLM DecoderBlock] After norm_2: mean={hidden_states.mean().item():.6f}, std={hidden_states.std().item():.6f}")
         if self._debug.enabled:
             self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        mlp_out = hidden_states if bias is None else hidden_states + bias
+        print(f"[FastLLM DecoderBlock] After MLP: mean={mlp_out.mean().item():.6f}, std={mlp_out.std().item():.6f}")
         if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "MLP output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
+            self._debug(mlp_out, "MLP output", kwargs[BlockKwargs.hidden_dims], kwargs,
             )
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
+        print(f"[FastLLM DecoderBlock] Block output: mean={hidden_states.mean().item():.6f}, std={hidden_states.std().item():.6f}")
         if self._debug.enabled:
             self._debug(None, "MLP residual", kwargs[BlockKwargs.hidden_dims], kwargs)
         if self._return_input:
