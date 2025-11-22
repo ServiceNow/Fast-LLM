@@ -3,7 +3,8 @@ import math
 import numpy as np
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTBlendedDatasetConfig
+from fast_llm.data.dataset.config import BlendedDatasetConfig
+from fast_llm.data.sample.gpt import GPTSample
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.data.common import (
     compare_sampled_dataset,
@@ -122,7 +123,7 @@ def test_gpt_blended():
             ],
             "weights": [0.75, 0.25],
         },
-        GPTBlendedDatasetConfig,
+        BlendedDatasetConfig[GPTSample],
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
@@ -161,7 +162,7 @@ def test_gpt_blended_mixed():
             ],
             "weights": [0.6, 0.4],
         },
-        GPTBlendedDatasetConfig,
+        BlendedDatasetConfig[GPTSample],
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 

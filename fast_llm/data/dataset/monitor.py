@@ -1,8 +1,8 @@
 import logging
 import time
-import typing
 
 from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.sample.abstract import Sample
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -14,7 +14,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class DatasetMonitor(SampledDataset):
+class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
     """
     A blended sampling of multiple sampled datasets, where each dataset is sampled with the provided probability.
     The sampling order of each dataset is respected, but there is no strict guarantee
@@ -24,7 +24,7 @@ class DatasetMonitor(SampledDataset):
 
     def __init__(
         self,
-        dataset: SampledDataset,
+        dataset: SampledDataset[SampleType],
         data_sample_warn_time_ms: float,
     ):
         self._dataset = dataset
@@ -33,19 +33,19 @@ class DatasetMonitor(SampledDataset):
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, idx) -> typing.Any:
+    def __getitem__(self, index: int) -> SampleType:
         start_time = time.perf_counter()
         try:
-            sample = self._dataset[idx]
+            sample = self._dataset[index]
             sample_time = (time.perf_counter() - start_time) * 1000
             if sample_time > self._data_sample_warn_time_ms:
                 logger.warning(
-                    f"Sample {idx} from dataset {self._dataset.name})" f" took {sample_time:,.2f} ms to load"
+                    f"Sample {index} from dataset {self._dataset.name})" f" took {sample_time:,.2f} ms to load"
                 )
             return sample
 
         except Exception:
-            logger.error(f"Failed to get sample {idx} from dataset {self._dataset.name}")
+            logger.error(f"Failed to get sample {index} from dataset {self._dataset.name}")
             raise
 
     @property
