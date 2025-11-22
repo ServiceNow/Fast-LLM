@@ -692,10 +692,13 @@ _update_and_add_testing_config(
         ("model", "base_model", "vision_encoder"): {
             "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
             "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
-            "adapter": {"intermediate_size": 512},
+            "adapter": {"intermediate_size": 256},
             "hidden_size": 256,
         },
         ("model", "base_model", "decoder", "num_blocks"): 1,
+        # Extend the vocab size to ensure the token id is not in the mock dataset.
+        ("model", "base_model", "embeddings", "vocab_size"): 386,
+        ("model", "base_model", "image_token_index"): 384,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
         ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,

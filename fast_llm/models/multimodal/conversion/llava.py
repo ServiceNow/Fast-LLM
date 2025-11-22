@@ -9,6 +9,7 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
+from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
@@ -16,9 +17,10 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaDecoderConverter,
     LlamaNormalizationConverter,
     MLPLayer2Converter,
+    get_parameter_converter,
     get_weight_and_bias_converters,
 )
-from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralMLPConverter
+from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralHeadConverter, MistralMLPConverter
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
@@ -130,7 +132,7 @@ class LlavaVisionAdapterConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "intermediate_size": config["projector_intermediate_size"],
+            "intermediate_size": config["vision_config"]["hidden_size"],
             "add_linear_biases": config["multimodal_projector_bias"],
             "gated": False,
             "activation": ActivationType.from_hf_name(config["projector_hidden_act"]),
@@ -145,8 +147,9 @@ class LlavaVisionAdapterConverter:
 
         return {
             "projector_hidden_act": config.activation.hf_name,
-            "projector_intermediate_size": config.intermediate_size,
             "multimodal_projector_bias": config.add_linear_biases,
+            # Not in LlavaConfig, but needed for consistency check in LlavaBaseModelConverter.
+            "projector_intermediate_size": config.intermediate_size,
         }
 
     @classmethod
@@ -173,9 +176,11 @@ class LlavaVisionModelConverter:
         PixtralPatchConvolutionConverter
     )
     encoder_converter_class: typing.ClassVar[type[PixtralEncoderConverter]] = PixtralEncoderConverter
+    model_type: typing.ClassVar[str] = "pixtral"
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
+        Assert.eq(config["vision_config"]["model_type"], cls.model_type)
         return {
             "patch_convolution": cls.patch_convolution_converter_class.import_config(config["vision_config"]),
             "encoder": cls.encoder_converter_class.import_config(config["vision_config"]),
@@ -190,7 +195,7 @@ class LlavaVisionModelConverter:
         vision_config = safe_merge_dicts(
             cls.patch_convolution_converter_class.export_config(config.patch_convolution),
             cls.encoder_converter_class.export_config(config.encoder),
-            {"hidden_size": config.hidden_size},
+            {"hidden_size": config.hidden_size, "model_type": cls.model_type},
         )
 
         Assert.eq(
@@ -200,57 +205,85 @@ class LlavaVisionModelConverter:
         return safe_merge_dicts(
             {"vision_config": vision_config},
             cls.vision_adapter_converter_class.export_config(config.adapter),
-            # TODO: ====== What about these? ======
-            # {
-            #     "image_token_index":32000,
-            #     "vision_feature_select_strategy":"default",
-            #     "vision_feature_layer":-2,
-            #     "image_seq_length":576,
-            # }
         )
 
     @classmethod
-    def get_converters(
-        cls, config: VisionEncoderConfig, fast_llm_prefix: str, hf_prefix: str
-    ) -> list[WeightConverter]:
+    def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
             *cls.patch_convolution_converter_class.get_converters(
-                config.patch_convolution, f"{fast_llm_prefix}.patch_convolution", hf_prefix
+                config.patch_convolution, "vision_encoder.patch_convolution", "model.vision_tower"
             ),
             *cls.encoder_converter_class.get_converters(
-                config.encoder, f"{fast_llm_prefix}.encoder", f"{hf_prefix}.transformer"
+                config.encoder, "vision_encoder.encoder", "model.vision_tower.transformer.layers"
             ),
             *cls.vision_adapter_converter_class.get_converters(
-                config.adapter, f"{fast_llm_prefix}.adapter", f"{hf_prefix}.multi_modal_projector"
+                config.adapter, "vision_encoder.adapter", "model.multi_modal_projector"
             ),
         ]
+
+
+class LlavaHeadConverter(MistralHeadConverter):
+    @classmethod
+    def get_converters(
+        cls,
+        config: LanguageModelHeadConfig,
+        exported_config: dict,
+        fast_llm_prefix: str,
+    ) -> list[WeightConverter]:
+        return [
+            *cls.normalization_converter_class.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.final_norm",
+                f"model.language_model.norm",
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.output_weights",
+                "lm_head.weight",
+                drop_on_import=exported_config["tie_word_embeddings"],
+            ),
+        ]
+
+
+class LlavaLanguageModelConverter(MistralBaseModelConverter):
+    head_converter_class: typing.ClassVar[type[LlavaHeadConverter]] = LlavaHeadConverter
 
 
 class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
     vision_model_converter_class: typing.ClassVar[type[LlavaVisionModelConverter]] = LlavaVisionModelConverter
     # TODO: Make it flexible?
-    language_model_converter_class: typing.ClassVar[type[MistralBaseModelConverter]] = MistralBaseModelConverter
+    language_model_converter_class: typing.ClassVar[type[LlavaLanguageModelConverter]] = LlavaLanguageModelConverter
     # TODO: ====== Is tie_word_embeddings supported? ======
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return safe_merge_dicts(
-            {"vision_encoder": cls.vision_model_converter_class.import_config(config)},
+            {
+                "vision_encoder": cls.vision_model_converter_class.import_config(config),
+                "image_token_index": config["image_token_index"],
+            },
             cls.language_model_converter_class.import_config(config["text_config"]),
         )
 
     @classmethod
     def export_config(cls, config: MultiModalBaseModelConfig) -> dict:
         Assert.custom(isinstance, config, MultiModalBaseModelConfig)
-        return safe_merge_dicts(
+        assert config.image_token_index is not None
+        out = safe_merge_dicts(
             cls.vision_model_converter_class.export_config(config.vision_encoder),
-            {"text_config": cls.language_model_converter_class.export_config(config)},
+            {
+                "text_config": cls.language_model_converter_class.export_config(config),
+                "image_token_index": config.image_token_index,
+                "vision_feature_select_strategy": "full",
+                "vision_feature_layer": -1,
+            },
         )
+        Assert.eq(out.pop("projector_intermediate_size"), out["text_config"]["hidden_size"])
+        return out
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         return [
-            *cls.vision_model_converter_class.get_converters(config.vision_encoder, "vision_encoder", "model"),
+            *cls.vision_model_converter_class.get_converters(config.vision_encoder),
             *cls.language_model_converter_class.embeddings_converter_class.get_converters(
                 config.embeddings, "embeddings", "model.language_model"
             ),

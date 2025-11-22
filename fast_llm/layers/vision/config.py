@@ -133,6 +133,11 @@ class VisionMultiModalModelConfig(LanguageModelConfig):
         hint=FieldHint.architecture,
         desc="Configuration for the vision encoder.",
     )
+    image_token_index: int | None = Field(
+        default=None,
+        hint=FieldHint.optional,
+        desc="Index of the image token. Unused, but required for Hugging Face conversion.",
+    )
 
     @property
     def layer_class(self) -> "type[VisionMultiModalModel]":
