@@ -14,6 +14,7 @@ from fast_llm.models.gpt.config import (
     GPTTrainerConfig,
     PretrainedGPTModelConfig,
 )
+from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat, LlavaHybridSSMCheckpointFormat
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel
@@ -41,8 +42,10 @@ class MultiModalModelConfig(GPTModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "multimodal"
     base_model: MultiModalBaseModelConfig = FieldUpdate()
-    # TODO: ====== Conversion ======
-    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
+        LlavaCheckpointFormat,
+        LlavaHybridSSMCheckpointFormat,
+    )
 
     @classmethod
     def get_model_class(cls) -> type["MultiModalModel"]:

@@ -45,6 +45,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        pixel_values: torch.Tensor | None = None,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         # TODO: Most of this is generalizable.
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
