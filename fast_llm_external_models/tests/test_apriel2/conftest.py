@@ -40,7 +40,11 @@ def apriel2_config_stochastic():
                         "main_mixer_name": "attention",
                         "mixers": {
                             "attention": {"type": "attention", "sliding_window": 4096},
-                            "mamba": {"type": "mamba"}
+                            "mamba": {
+                                "type": "mamba",
+                                "conv_bias": True,
+                                "dt_proj_bias": True
+                            }
                         }
                     }
                 }
@@ -71,8 +75,16 @@ def apriel2_config_multi_mixer():
                         "mixers": {
                             "attn_small": {"type": "attention", "sliding_window": 2048},
                             "attn_large": {"type": "attention", "sliding_window": 8192},
-                            "mamba_v1": {"type": "mamba"},
-                            "mamba_v2": {"type": "mamba"}
+                            "mamba_v1": {
+                                "type": "mamba",
+                                "conv_bias": True,
+                                "dt_proj_bias": True
+                            },
+                            "mamba_v2": {
+                                "type": "mamba",
+                                "conv_bias": True,
+                                "dt_proj_bias": True
+                            }
                         }
                     }
                 }
