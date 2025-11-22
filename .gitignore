@@ -28,6 +28,7 @@ venv.bak/
 # Project specifics
 /.idea/
 /.vscode/
+/.devcontainer/
 
 # Devenv
 .devenv*

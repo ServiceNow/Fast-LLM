@@ -123,13 +123,13 @@ class Apriel2Cache(Cache):
 
     @property
     def has_previous_state(self):
-        for i, t in enumerate(self.mixer_types):
-            if t in ("mamba", "gated_delta_net", "discrete_mamba_2"):
-                layer = self.layers[i]
-                if isinstance(layer, dict):
-                    mixer = self.active_mixers[i]
-                    return layer[mixer].conv is not None if mixer else False
-                return layer.conv is not None
+        for layer in self.layers:
+            if isinstance(layer, dict):
+                for cache in layer.values():
+                    if isinstance(cache, _SSMCache) and cache.conv is not None:
+                        return True
+            elif isinstance(layer, _SSMCache) and layer.conv is not None:
+                return True
         return False
 
     @property
@@ -334,14 +334,23 @@ class _LayerListAccessor:
         layer = self.cache.layers[idx]
         if isinstance(layer, dict):
             mixer = self.cache.active_mixers[idx]
-            return getattr(layer[mixer], self.attr) if mixer else None
+            if mixer is None:
+                raise RuntimeError(
+                    f"Stochastic layer {idx} requires set_active_mixer() to be called before accessing cache. "
+                    f"Available mixers: {list(layer.keys())}"
+                )
+            return getattr(layer[mixer], self.attr)
         return getattr(layer, self.attr, None)
 
     def __setitem__(self, idx, value):
         layer = self.cache.layers[idx]
         if isinstance(layer, dict):
             mixer = self.cache.active_mixers[idx]
-            if mixer:
-                setattr(layer[mixer], self.attr, value)
+            if mixer is None:
+                raise RuntimeError(
+                    f"Stochastic layer {idx} requires set_active_mixer() to be called before accessing cache. "
+                    f"Available mixers: {list(layer.keys())}"
+                )
+            setattr(layer[mixer], self.attr, value)
         elif hasattr(layer, self.attr):
             setattr(layer, self.attr, value)
