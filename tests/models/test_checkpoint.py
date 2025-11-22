@@ -325,7 +325,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
             format=DistributedCheckpointFormat,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     test_input = torch.randint(
         0,
         model_ref.config.fast_llm_config.base_model.embeddings.vocab_size,
@@ -334,21 +334,21 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         device="cuda",
     )
     output_ref = model_ref(test_input)
-    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path)
+    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=hf_path,
             format=model_testing_config.checkpoint_format,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     errors = []
     auto_model = (
         transformers.AutoModel
         if model_testing_config.name in ("diffusion_llama", "dream")
         else transformers.AutoModelForCausalLM
     )
-    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda()
+    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),

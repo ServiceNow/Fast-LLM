@@ -47,3 +47,7 @@ class DiffusionLlamaCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class AprielHybridSSMCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_hybrid_ssm"
+
+
+class Apriel2CheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "apriel2"

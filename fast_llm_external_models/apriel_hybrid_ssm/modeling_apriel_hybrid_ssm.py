@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, logging
+from transformers.utils import TransformersKwargs, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
@@ -1199,18 +1199,18 @@ class AprielHybridSSMModel(MistralModel):
         super().__init__(config_copy, **kwargs)
         self.config = config
         blocks = []
-        logger.info(f"Loading hyubrid model with the following layout: {config.hybrid_block_layout}")
-        for layer_idx, type in enumerate(config.hybrid_block_layout):
-            if type == "m2d":
+        logger.info(f"Loading hybrid model with the following layout: {config.hybrid_block_layout}")
+        for layer_idx, block_type in enumerate(config.hybrid_block_layout):
+            if block_type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx))
-            elif type == "m2":
+            elif block_type == "m2":
                 blocks.append(AprielSSMM2DecoderLayer(config, layer_idx))
-            elif type == "t":
+            elif block_type == "t":
                 blocks.append(MistralDecoderLayer(config, layer_idx))
-            elif type == "i":
+            elif block_type == "i":
                 blocks.append(AprielHybridIdentity(config))
             else:
-                raise ValueError(f"Invalid block type: {type}")
+                raise ValueError(f"Invalid block type: {block_type}")
         self.layers = nn.ModuleList(blocks)
 
         # Initialize weights and apply final processing
@@ -1250,9 +1250,6 @@ class AprielHybridSSMModel(MistralModel):
         if past_key_values and not past_key_values.has_previous_state:
             past_key_values.has_previous_state = True
         return output
-
-
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
 
 class AprielHybridSSMPreTrainedModel(PreTrainedModel):
@@ -1383,7 +1380,7 @@ class AprielHybridSSMForCausalLM(AprielHybridSSMPreTrainedModel, GenerationMixin
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        **kwargs: Unpack[KwargsForCausalLM],
+        **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, CausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):

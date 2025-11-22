@@ -494,6 +494,7 @@ class LlamaHeadConverter:
                 f"{fast_llm_prefix}.output_weights",
                 "lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
+                drop_on_export=exported_config["tie_word_embeddings"],
             ),
         ]
 

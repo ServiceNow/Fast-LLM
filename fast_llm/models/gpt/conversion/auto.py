@@ -3,7 +3,9 @@ import abc
 from fast_llm.engine.checkpoint.external import AutoStateDictCheckpointHandler
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.models.gpt.conversion.apriel import AprielHuggingfaceCheckpointHandler
+from fast_llm.models.gpt.conversion.apriel2 import Apriel2HuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.config import (
+    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -35,4 +37,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         DiffusionDreamCheckpointFormat.name: DiffusionDreamHuggingfaceCheckpointHandler,
         DiffusionLlamaCheckpointFormat.name: DiffusionLlamaHuggingfaceCheckpointHandler,
         AprielHybridSSMCheckpointFormat.name: AprielHuggingfaceCheckpointHandler,
+        Apriel2CheckpointFormat.name: Apriel2HuggingfaceCheckpointHandler,
     }
