@@ -74,6 +74,153 @@ class TestPropertyAccessorGuards:
         assert retrieved is not None
 
 
+class TestMixerSwitching:
+    """Test cache behavior when switching between different mixers."""
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="SSM mixers require CUDA")
+    def test_cache_preserves_state_across_mixer_switches(self, apriel2_config_all_mixers, device):
+        """Verify cache maintains independent state for each mixer when switching.
+
+        This is the critical test for stochastic mixers: when we switch which mixer
+        is active, the cache must preserve previous mixer states while updating the
+        current mixer's state.
+        """
+        if device.type != "cuda":
+            pytest.skip("SSM mixers require CUDA device")
+
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+
+        model = Apriel2ForCausalLM(apriel2_config_all_mixers).to(device)
+        model.eval()
+
+        stochastic_layer_idx = 1  # Layer 1 is the stochastic layer
+        stochastic_layer = model.model.layers[stochastic_layer_idx]
+        input_ids = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10), device=device)
+
+        # Forward 1: Use attention (default main mixer)
+        stochastic_layer.mixer.main_mixer_name = "attention"
+        outputs1 = model(input_ids, use_cache=True)
+        cache = outputs1.past_key_values
+
+        # Verify: only attention has data
+        layer_cache = cache.layers[stochastic_layer_idx]
+        assert layer_cache['attention'].key is not None, "Attention cache should have KV states"
+        assert layer_cache['swa'].key is None, "SWA cache should be empty"
+        assert layer_cache['mamba'].conv is None, "Mamba cache should be empty"
+        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should be empty"
+        attn_seq_len_1 = layer_cache['attention'].key.shape[-2]
+
+        # Forward 2: Switch to mamba (new token)
+        stochastic_layer.mixer.main_mixer_name = "mamba"
+        new_token = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 1), device=device)
+        outputs2 = model(new_token, past_key_values=cache, use_cache=True)
+        cache = outputs2.past_key_values
+
+        # Verify: attention preserved, mamba added
+        assert layer_cache['attention'].key is not None, "Attention cache should be preserved"
+        assert layer_cache['attention'].key.shape[-2] == attn_seq_len_1, "Attention seq_len should not change"
+        assert layer_cache['mamba'].conv is not None, "Mamba cache should now have SSM states"
+        assert layer_cache['swa'].key is None, "SWA cache should still be empty"
+        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should still be empty"
+
+        # Forward 3: Switch to swa
+        stochastic_layer.mixer.main_mixer_name = "swa"
+        outputs3 = model(new_token, past_key_values=cache, use_cache=True)
+        cache = outputs3.past_key_values
+
+        # Verify: attention + mamba preserved, swa added
+        assert layer_cache['attention'].key is not None, "Attention cache should be preserved"
+        assert layer_cache['mamba'].conv is not None, "Mamba cache should be preserved"
+        assert layer_cache['swa'].key is not None, "SWA cache should now have KV states"
+        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should still be empty"
+
+        # Forward 4: Switch to gated_delta_net
+        stochastic_layer.mixer.main_mixer_name = "gated_delta_net"
+        outputs4 = model(new_token, past_key_values=cache, use_cache=True)
+        cache = outputs4.past_key_values
+
+        # Verify: ALL mixers now have independent state
+        assert layer_cache['attention'].key is not None, "Attention cache should be preserved"
+        assert layer_cache['mamba'].conv is not None, "Mamba cache should be preserved"
+        assert layer_cache['swa'].key is not None, "SWA cache should be preserved"
+        assert layer_cache['gated_delta_net'].conv is not None, "GatedDeltaNet cache should now have SSM states"
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="SSM mixers require CUDA")
+    def test_cache_isolation_between_attention_and_ssm(self, apriel2_config_all_mixers, device):
+        """Verify attention caches (KV) and SSM caches (conv/recurrent) don't interfere."""
+        if device.type != "cuda":
+            pytest.skip("SSM mixers require CUDA device")
+
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+
+        model = Apriel2ForCausalLM(apriel2_config_all_mixers).to(device)
+        model.eval()
+
+        stochastic_layer_idx = 1
+        stochastic_layer = model.model.layers[stochastic_layer_idx]
+        input_ids = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10), device=device)
+
+        # Forward with attention
+        stochastic_layer.mixer.main_mixer_name = "attention"
+        outputs1 = model(input_ids, use_cache=True)
+        cache = outputs1.past_key_values
+
+        # Get attention cache state
+        attn_cache = cache.layers[stochastic_layer_idx]['attention']
+        attn_key = attn_cache.key.clone()
+        attn_value = attn_cache.value.clone()
+
+        # Forward with mamba (using same cache)
+        stochastic_layer.mixer.main_mixer_name = "mamba"
+        new_token = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 1), device=device)
+        outputs2 = model(new_token, past_key_values=cache, use_cache=True)
+        cache = outputs2.past_key_values
+
+        # Verify attention cache unchanged
+        assert torch.allclose(cache.layers[stochastic_layer_idx]['attention'].key, attn_key), \
+            "Attention KV cache should not be modified when mamba is active"
+        assert torch.allclose(cache.layers[stochastic_layer_idx]['attention'].value, attn_value), \
+            "Attention KV cache should not be modified when mamba is active"
+
+        # Verify mamba cache is populated
+        assert cache.layers[stochastic_layer_idx]['mamba'].conv is not None, \
+            "Mamba SSM cache should be populated"
+
+    def test_seq_len_tracking_per_mixer(self, apriel2_config_all_mixers):
+        """Verify seq_len is tracked independently for each mixer."""
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+
+        model = Apriel2ForCausalLM(apriel2_config_all_mixers)
+        model.eval()
+
+        stochastic_layer_idx = 1
+        stochastic_layer = model.model.layers[stochastic_layer_idx]
+
+        # Forward with attention (10 tokens)
+        input_ids1 = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10))
+        stochastic_layer.mixer.main_mixer_name = "attention"
+        outputs1 = model(input_ids1, use_cache=True)
+        cache = outputs1.past_key_values
+
+        cache.set_active_mixer(stochastic_layer_idx, "attention")
+        assert cache.get_seq_length(stochastic_layer_idx) == 10
+
+        # Forward with swa (5 tokens) - independent from attention
+        input_ids2 = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 5))
+        stochastic_layer.mixer.main_mixer_name = "swa"
+        outputs2 = model(input_ids2, use_cache=True)
+        cache2 = Apriel2Cache(apriel2_config_all_mixers)  # Fresh cache for swa
+        outputs2 = model(input_ids2, past_key_values=cache2, use_cache=True)
+        cache2 = outputs2.past_key_values
+
+        cache2.set_active_mixer(stochastic_layer_idx, "swa")
+        assert cache2.get_seq_length(stochastic_layer_idx) == 5
+
+        # Original cache should still have attention with seq_len=10
+        cache.set_active_mixer(stochastic_layer_idx, "attention")
+        assert cache.get_seq_length(stochastic_layer_idx) == 10
+
+
 class TestMultipleMixersSameType:
     """Test multiple mixers of the same type with independent caches."""
 

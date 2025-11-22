@@ -94,6 +94,56 @@ def apriel2_config_multi_mixer():
 
 
 @pytest.fixture
+def apriel2_config_all_mixers():
+    """Apriel2 config with all 4 mixer types in one stochastic mixer.
+
+    This config is critical for testing:
+    - All mixer types work (attention, swa, mamba, gated_delta_net)
+    - Cache correctly isolates different mixer types
+    - Switching between mixers preserves independent state
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        decoder={
+            "type": "pattern",
+            "pattern": ["attn", "all_mixers"],
+            "blocks": {
+                "attn": {"mixer": {"type": "attention"}},
+                "all_mixers": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {
+                                "type": "attention"
+                            },
+                            "swa": {
+                                "type": "attention",
+                                "sliding_window": 2048
+                            },
+                            "mamba": {
+                                "type": "mamba",
+                                "conv_bias": True,
+                                "dt_proj_bias": True
+                            },
+                            "gated_delta_net": {
+                                "type": "gated_delta_net"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+
+@pytest.fixture
 def apriel2_cache(apriel2_config_tiny):
     """Create empty Apriel2Cache from tiny config."""
     from fast_llm_external_models.apriel2.cache import Apriel2Cache
