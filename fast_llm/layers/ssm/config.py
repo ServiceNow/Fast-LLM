@@ -5,6 +5,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
@@ -16,6 +17,11 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
+
+
+class LinearAttentionKwargs(BlockKwargs):
+    cu_seqlens = "cu_seqlens"
+    seq_idx = "seq_idx"
 
 
 @config_class(dynamic_type={MixerConfig: "gdn"})
