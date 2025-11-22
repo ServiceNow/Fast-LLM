@@ -3,7 +3,6 @@ import typing
 
 import torch
 
-from fast_llm.core.distributed import check_parallel_match
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -62,14 +61,15 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
             }
         )
 
-        # Precompute sampling probabilities as a tensor (ordered by mixers.keys())
         if self._config.sampling_strategy == StochasticMixerSamplingStrategy.uniform:
-            self._sampling_probs = torch.ones(len(self.mixers)) / len(self.mixers)
+            self._sampling_probs = torch.ones(len(self.mixers), device="cpu") / len(self.mixers)
         elif self._config.sampling_strategy == StochasticMixerSamplingStrategy.weighted:
             if self._config.sampling_weights is None:
                 raise ValueError("sampling_weights must be provided when using weighted sampling strategy")
             self._sampling_probs = torch.tensor(
-                [self._config.sampling_weights[name] for name in self.mixers.keys()], dtype=torch.float32
+                [self._config.sampling_weights[name] for name in self.mixers.keys()],
+                dtype=torch.float32,
+                device="cpu",
             )
         else:
             raise NotImplementedError(f"Sampling strategy {self._config.sampling_strategy} not implemented")
@@ -95,32 +95,12 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         for mixer in self.mixers.values():
             mixer.setup(distributed)
 
-    def _sample_mixer_name(self) -> str:
-        """
-        Sample a mixer name according to the configured strategy.
-        In debug mode, verifies all ranks in the TP/PP group sample the same index.
-
-        Returns:
-            Name of the mixer to use for this forward pass.
-        """
+    def _sample_mixer_name(self, kwargs: dict[str, typing.Any]) -> str:
         if not self.training:
-            # Use main mixer for inference
             return self._config.main_mixer_name
 
-        # Sample index in training mode
-        generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
-        # Move sampling_probs to the same device as the generator for multinomial
-        sampling_probs_device = self._sampling_probs.to(generator.device)
-        mixer_idx_tensor = torch.multinomial(sampling_probs_device, num_samples=1, generator=generator)
-
-        # Verify all ranks in the TP/PP group sampled the same index (debug only)
-        if self._debug.enabled:
-            group = self._distributed.tensor_group if self._sequence_parallel else self._distributed.pipeline_group
-            if group is not None:
-                check_parallel_match(mixer_idx_tensor, group, "stochastic_mixer_idx")
-
-        # Convert index to name
-        mixer_idx = mixer_idx_tensor.item()
+        generator = kwargs[StochasticMixerKwargs.generator]
+        mixer_idx = torch.multinomial(self._sampling_probs, num_samples=1, generator=generator).item()
         return list(self.mixers.keys())[mixer_idx]
 
     def _forward(
@@ -130,25 +110,23 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        mixer_name = kwargs.get(StochasticMixerKwargs.mixer_name)
-        if mixer_name is None:
-            logger.warning(
-                "StochasticMixer: mixer name not found in kwargs. "
-                "This causes a costly CUDA sync. Ensure preprocess() is called before forward()."
-            )
-            mixer_name = self._sample_mixer_name()
+        mixer_name = self._sample_mixer_name(kwargs)
 
         if self._debug.enabled:
             logger.debug(f"StochasticMixer selecting mixer {mixer_name}: {type(self.mixers[mixer_name]).__name__}")
 
-        # Forward through selected mixer
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        """Sample mixer and preprocess only the selected one."""
-        mixer_name = self._sample_mixer_name()
-        kwargs[StochasticMixerKwargs.mixer_name] = mixer_name
-        self.mixers[mixer_name].preprocess(batch, kwargs)
+        from fast_llm.layers.block.config import BlockKwargs
+
+        iteration = kwargs[BlockKwargs.iteration]
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(iteration)
+        kwargs[StochasticMixerKwargs.generator] = generator
+
+        for mixer in self.mixers.values():
+            mixer.preprocess(batch, kwargs)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         """

@@ -19,6 +19,7 @@ class StochasticMixerKwargs(BlockKwargs):
     """Kwargs keys for stochastic mixer."""
 
     mixer_name = "stochastic_mixer_name"
+    generator = "stochastic_mixer_generator"
 
 
 @config_class()
