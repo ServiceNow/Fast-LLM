@@ -3,15 +3,13 @@ Apriel2 modeling - HuggingFace format that mirrors Fast-LLM's architecture.
 """
 
 import math
+import random
 from typing import Any, Optional, Union
 from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
-from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 from einops import rearrange, repeat
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
 from transformers.cache_utils import Cache
@@ -21,6 +19,7 @@ from transformers.processing_utils import Unpack
 from transformers.utils import logging
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+from fast_llm_external_models.apriel2.cache import Apriel2Cache
 from transformers.models.mistral.modeling_mistral import (
     MistralAttention,
     MistralMLP,
@@ -31,6 +30,30 @@ from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDel
 from transformers.utils.import_utils import is_torch_flex_attn_available
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
+# Try to import optimized kernels from mamba_ssm
+try:
+    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+    _mamba_ssm_available = True
+except ImportError:
+    causal_conv1d_fn = None
+    causal_conv1d_update = None
+    selective_scan_fn = None
+    selective_state_update = None
+    _mamba_ssm_available = False
+
+# Try to import FLA (Fused Linear Attention) library for optimizations
+try:
+    from fla.modules import FusedRMSNormGated
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+    _fla_available = True
+except ImportError:
+    FusedRMSNormGated = None
+    chunk_gated_delta_rule = None
+    fused_recurrent_gated_delta_rule = None
+    _fla_available = False
+
 if is_torch_flex_attn_available():
     from torch.nn.attention.flex_attention import BlockMask
 else:
@@ -38,7 +61,15 @@ else:
 
 logger = logging.get_logger(__name__)
 
-is_fast_path_available = all((selective_state_update, causal_conv1d_fn, causal_conv1d_update))
+is_fast_path_available = _mamba_ssm_available and all((selective_state_update, causal_conv1d_fn, causal_conv1d_update))
+
+# Log availability of optimized kernels
+if not _mamba_ssm_available:
+    logger.warning("mamba_ssm library not available. Mamba layers will not work without it.")
+if not _fla_available:
+    logger.info("FLA (Fused Linear Attention) library not available. Using fallback implementations for GatedDeltaNet.")
+if not is_fast_path_available:
+    logger.warning("Fast path for Mamba is not available. Some kernels are missing.")
 
 
 # Helper functions for Mamba
@@ -54,6 +85,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
+@torch.compile
 def segsum(x):
     """More stable segment sum calculation."""
     T = x.size(-1)
@@ -66,6 +98,7 @@ def segsum(x):
     return x_segsum
 
 
+@torch.compile
 def materialize_mixer(A_log, B, C, D):
     """
     Since the transfer matrix will be equated to the attention matrix,
@@ -279,7 +312,14 @@ class Apriel2Mamba(nn.Module):
         **kwargs,
     ):
         """Forward pass for Mamba."""
-        assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
+        if not is_fast_path_available:
+            raise RuntimeError(
+                "Mamba requires mamba_ssm library with causal_conv1d and selective_scan kernels. "
+                "Install with: pip install mamba-ssm causal-conv1d"
+            )
+        if "cuda" not in self.in_proj.weight.device.type:
+            raise RuntimeError("Mamba only supports CUDA devices. Current device: " + str(self.in_proj.weight.device))
+
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
 
@@ -289,7 +329,7 @@ class Apriel2Mamba(nn.Module):
         seqlen_offset = kwargs.get("seqlen_offset", cache_position[0]) if cache_position is not None else 0
         use_precomputed_states = (
             past_key_value is not None
-            and isinstance(past_key_value, Apriel2DynamicCache)
+            and isinstance(past_key_value, Apriel2Cache)
             and past_key_value.conv_states[self.layer_idx] is not None
             and seqlen == 1
             and past_key_value.conv_states[self.layer_idx].shape[0]
@@ -300,6 +340,8 @@ class Apriel2Mamba(nn.Module):
         )
 
         ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+        # Adaptive mode selection: use step() for single-token generation
+        # This provides significant speedup during autoregressive decoding
         if use_precomputed_states:
             out, _, _ = self.step(hidden_states, conv_state, ssm_state)
             return (out,)
@@ -449,7 +491,7 @@ class Apriel2Mamba(nn.Module):
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
         assert self.layer_idx is not None
-        if inference_params is None or not isinstance(inference_params, Apriel2DynamicCache):
+        if inference_params is None or not isinstance(inference_params, Apriel2Cache):
             return None, None
 
         if inference_params.conv_states[self.layer_idx] is None:
@@ -574,7 +616,7 @@ class Apriel2DecoderBlock(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
+        past_key_value: Optional[Apriel2Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
         position_embeddings=None,
@@ -627,6 +669,10 @@ class Apriel2StochasticMixer(nn.Module):
         mixers_config = mixer_config.get("mixers", {})
         self.main_mixer_name = mixer_config.get("main_mixer_name", list(mixers_config.keys())[0])
 
+        # Sampling strategy
+        self.sampling_strategy = mixer_config.get("sampling_strategy", "uniform")
+        sampling_weights = mixer_config.get("sampling_weights", None)
+
         # Create each sub-mixer
         self.mixers = nn.ModuleDict()
         for name, sub_mixer_config in mixers_config.items():
@@ -634,123 +680,47 @@ class Apriel2StochasticMixer(nn.Module):
                 sub_mixer_config, config.hidden_size, layer_idx, config, allow_stochastic=False
             )
 
+        # Set up sampling probabilities
+        mixer_names = list(self.mixers.keys())
+        if self.sampling_strategy == "uniform":
+            self._sampling_probs = [1.0 / len(self.mixers)] * len(self.mixers)
+        elif self.sampling_strategy == "weighted":
+            if sampling_weights is None:
+                raise ValueError("sampling_weights must be provided when using weighted sampling strategy")
+            # Normalize weights to sum to 1.0
+            total = sum(sampling_weights.get(name, 1.0) for name in mixer_names)
+            self._sampling_probs = [sampling_weights.get(name, 1.0) / total for name in mixer_names]
+        else:
+            raise ValueError(f"Unknown sampling_strategy: {self.sampling_strategy}")
+
+        self._mixer_names = mixer_names
+        logger.info(
+            f"Initialized Apriel2StochasticMixer at layer {layer_idx} with {len(self.mixers)} mixers: "
+            f"{', '.join(mixer_names)} (main={self.main_mixer_name}, strategy={self.sampling_strategy})"
+        )
+
     def forward(
         self, hidden_states: torch.Tensor, attention_mask=None, position_embeddings: Optional[dict] = None, **kwargs
     ):
-        mixer = self.mixers[self.main_mixer_name]
-        mixer_position_embeddings = position_embeddings.get(self.main_mixer_name) if position_embeddings else None
+        # Sample mixer during training, use main_mixer during inference
+        if self.training:
+            mixer_name = random.choices(self._mixer_names, weights=self._sampling_probs)[0]
+        else:
+            mixer_name = self.main_mixer_name
+
+        # Set active mixer in cache for proper state routing
+        past_key_value = kwargs.get("past_key_value")
+        if past_key_value is not None and hasattr(past_key_value, "set_active_mixer"):
+            past_key_value.set_active_mixer(self.layer_idx, mixer_name)
+
+        mixer = self.mixers[mixer_name]
+        mixer_position_embeddings = position_embeddings.get(mixer_name) if position_embeddings else None
         mixer_attention_mask = (
-            attention_mask.get(self.main_mixer_name) if isinstance(attention_mask, dict) else attention_mask
+            attention_mask.get(mixer_name) if isinstance(attention_mask, dict) else attention_mask
         )
         return mixer(
             hidden_states, attention_mask=mixer_attention_mask, position_embeddings=mixer_position_embeddings, **kwargs
         )
-
-
-class Apriel2DynamicCache:
-    """
-    A dynamic cache for Apriel2 that handles both attention layers (key/value cache) and
-    linear attention layers like Mamba (conv_states, recurrent_states).
-
-    Each layer can have a different mixer type (attention, mamba, gated_delta_net, kimi_linear_attention, stochastic).
-    For stochastic mixers, we use the main_mixer type.
-    """
-
-    is_compileable = False
-
-    def __init__(self, config: Apriel2Config):
-        self.config = config
-
-        # Determine mixer type for each layer
-        self.mixer_types = []
-        for layer_idx in range(config.num_hidden_layers):
-            block_config = config.get_block_config(layer_idx)
-            mixer_config = block_config.get("mixer", {})
-            mixer_type = mixer_config.get("type", "attention")
-
-            if mixer_type == "stochastic":
-                # For stochastic, use main_mixer type
-                main_mixer_name = mixer_config.get("main_mixer_name", list(mixer_config.get("mixers", {}).keys())[0])
-                mixer_type = mixer_config["mixers"][main_mixer_name].get("type", "attention")
-
-            self.mixer_types.append(mixer_type)
-
-        # Initialize cache storage - lazy initialization to allow multi-gpu inference
-        self.key_cache = [None] * config.num_hidden_layers
-        self.value_cache = [None] * config.num_hidden_layers
-        self.conv_states = [None] * config.num_hidden_layers
-        self.recurrent_states = [None] * config.num_hidden_layers
-
-    def __len__(self):
-        return len(self.mixer_types)
-
-    def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """For compatibility with standard cache interface."""
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[dict[str, Any]] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Update cache for attention layers."""
-        if self.key_cache[layer_idx] is None:
-            self.key_cache[layer_idx] = key_states
-            self.value_cache[layer_idx] = value_states
-        else:
-            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
-            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
-
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        """Returns the sequence length of cached states for attention layers."""
-        # Find first attention layer
-        attention_layers = [i for i, t in enumerate(self.mixer_types) if t == "attention"]
-        if not attention_layers:
-            return 0
-
-        layer_idx = attention_layers[0] if layer_idx not in attention_layers else layer_idx
-        if self.key_cache[layer_idx] is None:
-            return 0
-        return self.key_cache[layer_idx].shape[-2]
-
-    def reorder_cache(self, beam_idx: torch.LongTensor):
-        """Reorders the cache for beam search."""
-        for layer_idx in range(len(self.key_cache)):
-            if self.key_cache[layer_idx] is not None:
-                device = self.key_cache[layer_idx].device
-                beam_idx = beam_idx.to(device)
-                self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx)
-                self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx)
-
-            if self.conv_states[layer_idx] is not None:
-                device = self.conv_states[layer_idx].device
-                beam_idx = beam_idx.to(device)
-                self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx)
-                self.recurrent_states[layer_idx] = self.recurrent_states[layer_idx].index_select(0, beam_idx)
-
-    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int) -> tuple[int, int]:
-        """
-        Return a tuple (kv_length, kv_offset) corresponding to the length and offset for the layer.
-        The masks are prepared according to these lengths and patterns for each layer.
-        """
-        kv_offset = 0
-        query_length = cache_position.shape[0]
-        past_seen_tokens = self.get_seq_length(layer_idx)
-        kv_length = query_length + past_seen_tokens
-        return kv_length, kv_offset
-
-    @property
-    def has_previous_state(self):
-        """Check if we have previous state by finding the last SSM layer."""
-        ssm_layers = [i for i, t in enumerate(self.mixer_types) if t in ("mamba", "gated_delta_net", "kimi_linear_attention")]
-        if not ssm_layers:
-            return False
-        last_ssm_layer = ssm_layers[-1]
-        return self.conv_states[last_ssm_layer] is not None
 
 
 class Apriel2PreTrainedModel(PreTrainedModel):
@@ -762,8 +732,16 @@ class Apriel2PreTrainedModel(PreTrainedModel):
     _supports_sdpa = True
     _supports_flex_attn = True
     _supports_cache_class = True
-    _supports_quantized_cache = True
-    _supports_static_cache = True
+    _supports_quantized_cache = False
+    _supports_static_cache = False
+    _supports_attention_backend = True
+
+    def _prepare_cache_for_generation(
+        self, generation_config, model_kwargs, assistant_model, batch_size, max_cache_length, *args
+    ):
+        if generation_config.use_cache is False:
+            return
+        model_kwargs["past_key_values"] = Apriel2Cache(config=self.config)
 
     def _init_weights(self, module):
         std = self.config.initializer_range if hasattr(self.config, "initializer_range") else 0.02
@@ -876,7 +854,7 @@ class Apriel2Model(Apriel2PreTrainedModel):
         input_embeds: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
         position_ids: torch.LongTensor,
-        past_key_values: Optional[Cache],
+        past_key_values: Optional[Apriel2Cache],
         cache_position: torch.Tensor,
     ) -> Optional[Union[torch.Tensor, BlockMask]]:
         """Create causal mask for an attention config."""
@@ -896,7 +874,7 @@ class Apriel2Model(Apriel2PreTrainedModel):
         input_embeds: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
         position_ids: torch.LongTensor,
-        past_key_values: Optional[Cache],
+        past_key_values: Optional[Apriel2Cache],
         cache_position: torch.Tensor,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Compute position embeddings and attention masks for all unique attention blocks."""
@@ -943,7 +921,7 @@ class Apriel2Model(Apriel2PreTrainedModel):
         input_embeds: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
         position_ids: torch.LongTensor,
-        past_key_values: Optional[Cache],
+        past_key_values: Optional[Apriel2Cache],
         cache_position: torch.Tensor,
         position_embeddings: dict[str, Any],
         attention_masks: dict[str, Any],
@@ -989,7 +967,7 @@ class Apriel2Model(Apriel2PreTrainedModel):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        past_key_values: Optional[Apriel2Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -1017,9 +995,8 @@ class Apriel2Model(Apriel2PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        # Auto-initialize custom cache for hybrid attention/SSM layers
         if use_cache and past_key_values is None:
-            past_key_values = Apriel2DynamicCache(config=self.config)
+            past_key_values = Apriel2Cache(config=self.config)
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
@@ -1063,6 +1040,9 @@ class Apriel2Model(Apriel2PreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+
+        if use_cache:
+            next_decoder_cache = past_key_values
 
         hidden_states = self.norm(hidden_states)
 
@@ -1111,7 +1091,7 @@ class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        past_key_values: Optional[Apriel2Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
