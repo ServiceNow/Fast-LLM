@@ -174,6 +174,9 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self.tensor_and_sequence_data_group = self.add_group(
             self._config.distributed_dims[DistributedDimNames.tensor_and_sequence_data]
         )
+        self.model_and_sequence_data_group = self.add_group(
+            self._config.distributed_dims[DistributedDimNames.model_and_sequence_data]
+        )
 
         self._config.log_first_rank(f"Setting random seeds...")
 

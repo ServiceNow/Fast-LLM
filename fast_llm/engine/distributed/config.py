@@ -1,3 +1,5 @@
+import collections
+import copy
 import dataclasses
 import enum
 import logging
@@ -97,6 +99,7 @@ class DistributedDimNames:
     sequence_data = "sequence_data"
     batch_data = "batch_data"
     tensor_and_sequence_data = "tensor_and_sequence_data"
+    model_and_sequence_data = "model_and_sequence_data"
 
 
 @config_class()
@@ -242,6 +245,17 @@ class DistributedConfig(Config):
     )
 
     def _validate(self) -> None:
+        self._init_ranks_and_sizes()
+        self._init_distributed_dims()
+
+        super()._validate()
+
+        if self.reference_config is not None:
+            self.compare(self.reference_config, ValueError)
+        Assert.in_range(self.rank, 0, self.world_size)
+        Assert.in_range(self.local_rank, 0, self.local_world_size)
+
+    def _init_ranks_and_sizes(self):
         if self.world_size is None:
             self.world_size = self.default_world_size
         if self.rank is None:
@@ -272,6 +286,7 @@ class DistributedConfig(Config):
         if self.tensor_parallel == 1 and self.sequence_tensor_parallel:
             self.sequence_tensor_parallel = False
 
+    def _init_distributed_dims(self):
         if self.reference_config is not None:
             self.reference_config.validate()
             if self.reference_config.reference_config is not None:
@@ -343,12 +358,33 @@ class DistributedConfig(Config):
                 )
             )
 
-        super()._validate()
+            rank, global_ranks = self._get_model_and_sequence_data_rank_and_global_ranks()
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.model_and_sequence_data,
+                    size=self.sequence_data_parallel * self.model_parallel,
+                    rank=rank,
+                    global_ranks=global_ranks,
+                )
+            )
 
-        if self.reference_config is not None:
-            self.compare(self.reference_config, ValueError)
-        Assert.in_range(self.rank, 0, self.world_size)
-        Assert.in_range(self.local_rank, 0, self.local_world_size)
+    def _get_model_and_sequence_data_rank_and_global_ranks(self) -> tuple[int, tuple[int]]:
+        # NOTE: The mapping from global ranks to batch-data-parallel groups is not easily
+        # expressible with a simple arithmetic pattern (e.g., fixed striding). To determine
+        # the grouping, we simulate rank initialization for every possible rank and record
+        # how ranks are assigned. This lets us compute:
+        #   - `rank`: the index of the current rank within its batch-data-parallel group
+        #   - the full list of global ranks that belong to this batch-data-parallel group.
+
+        cfg = copy.copy(self)
+        batch_data_groups = collections.defaultdict(list)
+        for i in range(self.world_size):
+            cfg.rank = i
+            cfg._init_ranks_and_sizes()
+            if i == self.rank:
+                rank = len(batch_data_groups[cfg.batch_data_rank])
+            batch_data_groups[cfg.batch_data_rank].append(i)
+        return rank, tuple(batch_data_groups[self.batch_data_rank])
 
     def _get_global_ranks(self, size: int, stride: int) -> range:
         start = self.rank // (size * stride) * size * stride + self.rank % stride
