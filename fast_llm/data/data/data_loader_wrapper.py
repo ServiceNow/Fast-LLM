@@ -31,10 +31,12 @@ class DistributedDataLoaderWrapper:
 
     def __next__(self):
         # TODO:
-        # Instead of broadcasting a general object, make this iterator yield actual batches.
-        # Add batch data to a state dict or a dedicated Batch class, so we can efficiently
-        # broadcast tensors directly. This avoids using `broadcast_object` on entire objects,
-        # which is inefficient for tensors since it serializes them (pickles) before sending.
+        # Instead of broadcasting a general object, make this iterator yield an actual Batch class.
+        # Implement `get_state_dict` and `from_state_dict` in the Batch class so that we can
+        # efficiently broadcast tensors directly. This avoids using `broadcast_object` on the
+        # entire Batch object, which is inefficient for tensors because it serializes
+        # (pickles) them before sending.
+
         if self.rank == 0:
             try:
                 data = next(self.iterator)  # may raise StopIteration
