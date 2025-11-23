@@ -2,7 +2,7 @@
 Apriel2 configuration - HuggingFace format that mirrors Fast-LLM's config structure.
 """
 
-from typing import Any, Optional, Union
+from typing import Optional
 
 from transformers import PretrainedConfig
 

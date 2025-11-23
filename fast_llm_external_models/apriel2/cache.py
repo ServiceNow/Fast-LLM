@@ -1,11 +1,10 @@
 from __future__ import annotations
-from typing import Optional, Any
 import torch
 from transformers.cache_utils import Cache
 
 
 class _AttentionCache:
-    __slots__ = ['key', 'value', 'window']
+    __slots__ = ["key", "value", "window"]
 
     def __init__(self, window=None):
         self.key = None
@@ -15,8 +14,8 @@ class _AttentionCache:
     def update(self, key, value):
         if self.key is None:
             if self.window and key.shape[-2] > self.window:
-                self.key = key[..., -self.window:, :].contiguous()
-                self.value = value[..., -self.window:, :].contiguous()
+                self.key = key[..., -self.window :, :].contiguous()
+                self.value = value[..., -self.window :, :].contiguous()
             else:
                 self.key = key.contiguous()
                 self.value = value.contiguous()
@@ -34,11 +33,11 @@ class _AttentionCache:
             cache = cache.roll(-1, -2)
             cache[..., -1:, :] = new
             return cache
-        return torch.cat([cache, new], -2)[..., -self.window:, :].contiguous()
+        return torch.cat([cache, new], -2)[..., -self.window :, :].contiguous()
 
 
 class _SSMCache:
-    __slots__ = ['conv', 'recurrent']
+    __slots__ = ["conv", "recurrent"]
 
     def __init__(self):
         self.conv = None
@@ -134,19 +133,19 @@ class Apriel2Cache(Cache):
 
     @property
     def key_cache(self):
-        return _LayerListAccessor(self, 'key')
+        return _LayerListAccessor(self, "key")
 
     @property
     def value_cache(self):
-        return _LayerListAccessor(self, 'value')
+        return _LayerListAccessor(self, "value")
 
     @property
     def conv_states(self):
-        return _LayerListAccessor(self, 'conv')
+        return _LayerListAccessor(self, "conv")
 
     @property
     def recurrent_states(self):
-        return _LayerListAccessor(self, 'recurrent')
+        return _LayerListAccessor(self, "recurrent")
 
     def reorder_cache(self, beam_idx):
         for i, layer in enumerate(self.layers):
@@ -258,8 +257,7 @@ class Apriel2Cache(Cache):
         for layer in self.layers:
             if isinstance(layer, dict):
                 has_sliding = any(
-                    isinstance(cache, _AttentionCache) and cache.window is not None
-                    for cache in layer.values()
+                    isinstance(cache, _AttentionCache) and cache.window is not None for cache in layer.values()
                 )
                 result.append(has_sliding)
             elif isinstance(layer, _AttentionCache):
@@ -315,16 +313,20 @@ class Apriel2Cache(Cache):
 
         for i, l in enumerate(self.layers):
             if isinstance(l, _AttentionCache) and l.key is not None:
-                return torch.empty((0,), device=l.key.device, dtype=l.key.dtype), torch.empty((0,), device=l.key.device, dtype=l.key.dtype)
+                return torch.empty((0,), device=l.key.device, dtype=l.key.dtype), torch.empty(
+                    (0,), device=l.key.device, dtype=l.key.dtype
+                )
             elif isinstance(l, dict):
                 for c in l.values():
                     if isinstance(c, _AttentionCache) and c.key is not None:
-                        return torch.empty((0,), device=c.key.device, dtype=c.key.dtype), torch.empty((0,), device=c.key.device, dtype=c.key.dtype)
+                        return torch.empty((0,), device=c.key.device, dtype=c.key.dtype), torch.empty(
+                            (0,), device=c.key.device, dtype=c.key.dtype
+                        )
         return torch.empty((0,)), torch.empty((0,))
 
 
 class _LayerListAccessor:
-    __slots__ = ['cache', 'attr']
+    __slots__ = ["cache", "attr"]
 
     def __init__(self, cache, attr):
         self.cache = cache
