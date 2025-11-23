@@ -4,11 +4,12 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.config import SampledDatasetConfig
+from fast_llm.data.dataset.config import SampledDatasetConfig, SampledIterableDatasetConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.sample.language_model import LanguageModelSample
+    from fast_llm.data.sample.pipeline_rl import PipelineRLSample
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +24,9 @@ class GPTDataConfig(DataConfig):
     _abstract = False
 
     # TODO: Review field. Move closer to phase definition in training config?
-    datasets: dict[str, SampledDatasetConfig["LanguageModelSample"]] = Field(
+    datasets: dict[
+        str, SampledDatasetConfig["LanguageModelSample"] | SampledIterableDatasetConfig["PipelineRLSample"]
+    ] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,

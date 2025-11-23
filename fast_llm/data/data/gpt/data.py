@@ -8,8 +8,9 @@ import torch.utils.data
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.data.data_loader_wrapper import DistributedDataLoaderWrapper
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SampledDataset, SampledIterableDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
@@ -86,7 +87,12 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     dataset_name=dataset_name,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
-                self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                if isinstance(dataset, SampledDataset):
+                    self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                else:
+                    # Do not set monitor for iterable dataset as monitor only works with map style datasets
+                    assert isinstance(dataset, SampledIterableDataset)
+                    self._datasets[dataset_name] = dataset
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
         self._is_setup = True
@@ -112,9 +118,11 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
-        return iter(
-            torch.utils.data.DataLoader(
-                self._datasets[dataset_name],  # noqa
+        dataset = self._datasets[dataset_name]
+
+        if isinstance(dataset, SampledDataset):
+            data_loader = torch.utils.data.DataLoader(
+                dataset,  # noqa
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,
@@ -128,4 +136,27 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 collate_fn=LanguageModelBatch.from_samples,
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
-        )
+
+        elif isinstance(dataset, SampledIterableDataset):
+            if (
+                self.distributed.model_and_sequence_data_group is None
+                or self.distributed.model_and_sequence_data_group.rank() == 0
+            ):
+                rank = 0
+                data_loader = torch.utils.data.DataLoader(
+                    dataset,  # noqa
+                    batch_size=batch_config.micro_batch_size,
+                    num_workers=0 if num_workers == 0 else 1,
+                    prefetch_factor=prefetch_factor,
+                    pin_memory=True,
+                    collate_fn=LanguageModelBatch.from_samples,
+                    multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
+                )
+            else:
+                rank = self.distributed.model_and_sequence_data_group.rank()
+                data_loader = None
+            data_loader = DistributedDataLoaderWrapper(
+                data_loader, rank, self.distributed.model_and_sequence_data_group
+            )
+
+        return iter(data_loader)
