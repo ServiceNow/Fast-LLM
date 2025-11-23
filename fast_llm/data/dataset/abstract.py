@@ -43,8 +43,30 @@ class SampledDataset[SampleType: Sample](Dataset[SampleType]):
         pass
 
 
+class SampledIterableDataset[SampleType: Sample](Dataset[SampleType], typing.Iterable[SampleType]):
+    """
+    A sampled dataset class that provides an iterator over samples.
+    (See the `Sampler` class below.)
+    """
+
+    @abc.abstractmethod
+    def __iter__(self) -> typing.Iterator[SampleType]:
+        """Return an iterator over samples."""
+
+
 class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
 
     @abc.abstractmethod
     def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
         pass
+
+
+class SamplableIterableDataset[SampleType: Sample](Dataset[SampleType]):
+
+    @abc.abstractmethod
+    def sample(self, config: "SamplingData") -> SampledIterableDataset[SampleType]:
+        pass
+
+    @abc.abstractmethod
+    def __iter__(self) -> typing.Iterator[SampleType]:
+        """Return an iterator over documents or samples."""
