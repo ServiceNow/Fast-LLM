@@ -12,7 +12,6 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
-from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.processing_utils import Unpack
@@ -30,29 +29,9 @@ from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDel
 from transformers.utils.import_utils import is_torch_flex_attn_available
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
-# Try to import optimized kernels from mamba_ssm
-try:
-    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
-    _mamba_ssm_available = True
-except ImportError:
-    causal_conv1d_fn = None
-    causal_conv1d_update = None
-    selective_scan_fn = None
-    selective_state_update = None
-    _mamba_ssm_available = False
+from transformers.utils.import_utils import is_mamba_ssm_available, is_causal_conv1d_available
 
-# Try to import FLA (Fused Linear Attention) library for optimizations
-try:
-    from fla.modules import FusedRMSNormGated
-    from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
-    _fla_available = True
-except ImportError:
-    FusedRMSNormGated = None
-    chunk_gated_delta_rule = None
-    fused_recurrent_gated_delta_rule = None
-    _fla_available = False
+is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
 if is_torch_flex_attn_available():
     from torch.nn.attention.flex_attention import BlockMask
@@ -61,18 +40,66 @@ else:
 
 logger = logging.get_logger(__name__)
 
-is_fast_path_available = _mamba_ssm_available and all((selective_state_update, causal_conv1d_fn, causal_conv1d_update))
-
-# Log availability of optimized kernels
-if not _mamba_ssm_available:
-    logger.warning("mamba_ssm library not available. Mamba layers will not work without it.")
-if not _fla_available:
-    logger.info("FLA (Fused Linear Attention) library not available. Using fallback implementations for GatedDeltaNet.")
 if not is_fast_path_available:
-    logger.warning("Fast path for Mamba is not available. Some kernels are missing.")
+    logger.warning(
+        "Mamba fast path not available. Requires CUDA, mamba_ssm, and causal_conv1d packages. "
+        "Falling back to PyTorch implementation (slower, CPU-compatible)."
+    )
 
 
-# Helper functions for Mamba
+@torch.compile
+def torch_causal_conv1d_fn(x, weight, bias=None, activation="silu"):
+    """Causal conv1d fallback. Slower than CUDA kernels but CPU-compatible."""
+    assert activation == "silu", f"Only silu activation is supported, got {activation}"
+
+    seqlen = x.shape[-1]
+    kernel_size = weight.shape[-1]
+
+    # Causal padding and depthwise conv
+    x = F.pad(x, (kernel_size - 1, 0))
+    x = F.conv1d(x, weight.unsqueeze(1), bias=bias, groups=x.shape[1])
+    x = x[..., :seqlen]
+
+    return F.silu(x)
+
+
+@torch.compile
+def torch_causal_conv1d_update(x, conv_state, weight, bias=None, activation="silu"):
+    """Causal conv1d update fallback. Modifies conv_state in-place."""
+    assert activation == "silu", f"Only silu activation is supported, got {activation}"
+
+    dtype = x.dtype
+    conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))
+    conv_state[:, :, -1] = x
+    x = torch.sum(conv_state * weight.unsqueeze(0), dim=-1)
+    if bias is not None:
+        x = x + bias
+    return F.silu(x).to(dtype=dtype)
+
+
+def torch_selective_scan_fn(
+    u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=True, return_last_state=False
+):
+    """Selective scan fallback. TODO: Implement SSM recurrence."""
+    raise NotImplementedError("torch_selective_scan_fn not yet implemented. Install mamba_ssm for CUDA kernels.")
+
+
+def torch_selective_state_update(state, x, dt, A, B, C, D=None, z=None, dt_bias=None, dt_softplus=True):
+    """Selective state update fallback. TODO: Implement single-step SSM update."""
+    raise NotImplementedError("torch_selective_state_update not yet implemented. Install mamba_ssm for CUDA kernels.")
+
+
+if is_fast_path_available:
+    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+else:
+    causal_conv1d_fn = torch_causal_conv1d_fn
+    causal_conv1d_update = torch_causal_conv1d_update
+    selective_scan_fn = torch_selective_scan_fn
+    selective_state_update = torch_selective_state_update
+
+
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -258,8 +285,7 @@ class Apriel2Mamba(nn.Module):
                 **factory_kwargs,
             )
 
-        self.activation = "silu"
-        self.act = nn.SiLU()
+        self.activation = "silu"  # Hardcoded for Mamba
 
         self.num_xb_head = self.d_xb // self.d_state
         self.num_C_head = self.d_inner // self.d_state
@@ -312,13 +338,11 @@ class Apriel2Mamba(nn.Module):
         **kwargs,
     ):
         """Forward pass for Mamba."""
-        if not is_fast_path_available:
+        # Check for CUDA when using fast path
+        if is_fast_path_available and "cuda" not in self.in_proj.weight.device.type:
             raise RuntimeError(
-                "Mamba requires mamba_ssm library with causal_conv1d and selective_scan kernels. "
-                "Install with: pip install mamba-ssm causal-conv1d"
+                "Mamba with CUDA kernels requires CUDA device. Current device: " + str(self.in_proj.weight.device)
             )
-        if "cuda" not in self.in_proj.weight.device.type:
-            raise RuntimeError("Mamba only supports CUDA devices. Current device: " + str(self.in_proj.weight.device))
 
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
@@ -375,16 +399,12 @@ class Apriel2Mamba(nn.Module):
             conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
 
         # Compute short convolution
-        if causal_conv1d_fn is None:
-            x = self.act(self.conv1d(x)[..., :seqlen])
-        else:
-            assert self.activation in ["silu", "swish"]
-            x = causal_conv1d_fn(
-                x=x,
-                weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                bias=self.conv1d.bias,
-                activation=self.activation,
-            )
+        x = causal_conv1d_fn(
+            x=x,
+            weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+            bias=self.conv1d.bias,
+            activation=self.activation,
+        )
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -440,21 +460,13 @@ class Apriel2Mamba(nn.Module):
             x = rearrange(x, "b n_group dstate -> b (n_group dstate)")
 
         # Conv step
-        if causal_conv1d_update is None:
-            conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))
-            conv_state[:, :, -1] = x
-            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)
-            if self.conv1d.bias is not None:
-                x = x + self.conv1d.bias
-            x = self.act(x).to(dtype=dtype)
-        else:
-            x = causal_conv1d_update(
-                x,
-                conv_state,
-                rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                self.conv1d.bias,
-                self.activation,
-            )
+        x = causal_conv1d_update(
+            x,
+            conv_state,
+            rearrange(self.conv1d.weight, "d 1 w -> d w"),
+            self.conv1d.bias,
+            self.activation,
+        )
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
@@ -466,10 +478,11 @@ class Apriel2Mamba(nn.Module):
         A = rearrange(A, "(h d) n -> h d n", h=self.num_C_head)
         D = rearrange(self.D, "(h d) -> h d", h=self.num_C_head)
         z = rearrange(z, "b (h d) -> b h d", h=self.num_C_head)
-        dt_bias = rearrange(self.dt_proj.bias, "(h d) -> h d", h=self.num_C_head) if self.dt_proj.bias is not None else None
+        dt_bias = (
+            rearrange(self.dt_proj.bias, "(h d) -> h d", h=self.num_C_head) if self.dt_proj.bias is not None else None
+        )
 
         # SSM step
-        assert selective_state_update is not None
         y = selective_state_update(ssm_state, x, dt, A, B, C, D, z=z, dt_bias=dt_bias, dt_softplus=True)
         y = rearrange(y, "b h d -> b (h d)")
         out = self.out_proj(y)
@@ -715,9 +728,7 @@ class Apriel2StochasticMixer(nn.Module):
 
         mixer = self.mixers[mixer_name]
         mixer_position_embeddings = position_embeddings.get(mixer_name) if position_embeddings else None
-        mixer_attention_mask = (
-            attention_mask.get(mixer_name) if isinstance(attention_mask, dict) else attention_mask
-        )
+        mixer_attention_mask = attention_mask.get(mixer_name) if isinstance(attention_mask, dict) else attention_mask
         return mixer(
             hidden_states, attention_mask=mixer_attention_mask, position_embeddings=mixer_position_embeddings, **kwargs
         )
