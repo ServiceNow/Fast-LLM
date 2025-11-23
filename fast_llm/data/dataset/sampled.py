@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import yaml
 
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledDataset, SampledIterableDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
@@ -429,3 +429,59 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
+
+
+class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[SampleType]):
+    def __init__(
+        self,
+        iterable_dataset: SamplableIterableDataset[SampleType],
+        sampling: SamplingData,
+    ):
+        self._dataset = iterable_dataset
+        self._config = sampling
+        assert self._config.parameters.truncate_documents == False
+        assert self._config.config.shuffle == ShufflingType.disabled
+
+    def __iter__(self) -> typing.Iterator[SampleType]:
+        sample_length = self._config.parameters.sequence_length + self._config.parameters.extra_tokens
+        max_samples = self._config.parameters.num_samples
+        current_sample_length = 0
+        documents: list[SampleType] = []
+        num_samples = 0
+        for doc in self._dataset:
+            if len(doc) > sample_length:
+                logging.warning(f"Dropping doc with length {len(doc)} higher then sample_length {sample_length}")
+                continue
+            if current_sample_length + len(doc) > sample_length:
+                padding_length = sample_length - current_sample_length
+                assert padding_length > 0
+                documents.append(documents[-1].get_padding(padding_length))
+
+                yield documents[0].from_documents(documents)
+
+                num_samples += 1
+                if num_samples >= max_samples:
+                    break
+
+                documents = [doc]
+                current_sample_length = len(doc)
+            else:
+                documents.append(doc)
+                current_sample_length += len(doc)
+
+            if current_sample_length == sample_length:
+                yield documents[0].from_documents(documents)
+
+                num_samples += 1
+                if num_samples >= max_samples:
+                    break
+
+                documents = []
+                current_sample_length = 0
+
+        if num_samples < max_samples and current_sample_length > 0:
+            padding_length = sample_length - current_sample_length
+            assert padding_length > 0
+            documents.append(documents[-1].get_padding(padding_length))
+
+            yield documents[0].from_documents(documents)
