@@ -132,6 +132,9 @@ class AttentionConfig(MixerConfig):
 
         Assert.multiple(self.heads, self.head_groups)
 
+        if not self.causal:
+            assert self.window_size is None, "Non-causal windowed attention is not supported."
+
     @property
     def layer_class(self) -> "type[Attention]":
         from fast_llm.layers.attention.attention import Attention

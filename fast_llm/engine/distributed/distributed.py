@@ -171,9 +171,16 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self.tensor_group = self.add_group(self._config.distributed_dims[DistributedDimNames.tensor])
         self.sequence_data_group = self.add_group(self._config.distributed_dims[DistributedDimNames.sequence_data])
         self.batch_data_group = self.add_group(self._config.distributed_dims[DistributedDimNames.batch_data])
-        self.tensor_and_sequence_data_group = self.add_group(
-            self._config.distributed_dims[DistributedDimNames.tensor_and_sequence_data]
-        )
+
+        # Global ranks wrong with pipeline first, so we hide the dims as a safety check.
+        if not self._config.pipeline_first:
+            self.tensor_and_sequence_data_group = self.add_group(
+                self._config.distributed_dims[DistributedDimNames.tensor_and_sequence_data]
+            )
+            self.tensor_and_data_group = self.add_group(
+                self._config.distributed_dims[DistributedDimNames.tensor_and_data]
+            )
+
         self.model_and_sequence_data_group = self.add_group(
             self._config.distributed_dims[DistributedDimNames.model_and_sequence_data]
         )

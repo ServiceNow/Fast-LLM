@@ -55,8 +55,8 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
     def get_layers(self) -> list["Layer"]:
         return self._layers_with_namespace
 
-    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
-        self._layers_with_namespace[0].preprocess(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._layers_with_namespace[0].preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return (
@@ -109,9 +109,9 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
     def get_layers(self) -> list[Layer]:
         return self._layers_with_namespace
 
-    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         for _, index in self._config.preprocessing_layers.items():
-            self._layers_with_namespace[index].preprocess(batch, kwargs)
+            self._layers_with_namespace[index].preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         # TODO: Prevent name conflicts.

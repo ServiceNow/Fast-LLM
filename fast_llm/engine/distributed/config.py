@@ -100,6 +100,7 @@ class DistributedDimNames:
     batch_data = "batch_data"
     tensor_and_sequence_data = "tensor_and_sequence_data"
     model_and_sequence_data = "model_and_sequence_data"
+    tensor_and_data = "tensor_and_data"
 
 
 @config_class()
@@ -269,8 +270,6 @@ class DistributedConfig(Config):
         Assert.multiple(self.local_world_size, self.tensor_parallel)
 
         if self.pipeline_first:
-            # Case is useless and would cause too many complications.
-            Assert.eq(self.sequence_data_parallel, 1)
             # Smaller models can be more demanding on pipeline parallel.
             self.data_rank = (self.rank // self.tensor_parallel) // self.pipeline_parallel
             self.pipeline_rank = (self.rank // self.tensor_parallel) % self.pipeline_parallel
@@ -349,14 +348,24 @@ class DistributedConfig(Config):
                     ),
                 )
             )
-            self._add_distributed_dim(
-                DistributedDim(
-                    name=DistributedDimNames.tensor_and_sequence_data,
-                    size=self.sequence_data_parallel * self.tensor_parallel,
-                    rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
-                    global_ranks=self._get_global_ranks(self.sequence_data_parallel * self.tensor_parallel, 1),
+            # Global ranks wrong with pipeline first, so we hide the dims as a safety check.
+            if not self.pipeline_first:
+                self._add_distributed_dim(
+                    DistributedDim(
+                        name=DistributedDimNames.tensor_and_sequence_data,
+                        size=self.sequence_data_parallel * self.tensor_parallel,
+                        rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
+                        global_ranks=self._get_global_ranks(self.sequence_data_parallel * self.tensor_parallel, 1),
+                    )
                 )
-            )
+                self._add_distributed_dim(
+                    DistributedDim(
+                        name=DistributedDimNames.tensor_and_data,
+                        size=self.data_parallel * self.tensor_parallel,
+                        rank=self.tensor_rank + self.data_rank * self.tensor_parallel,
+                        global_ranks=self._get_global_ranks(self.data_parallel * self.tensor_parallel, 1),
+                    )
+                )
 
             rank, global_ranks = self._get_model_and_sequence_data_rank_and_global_ranks()
             self._add_distributed_dim(

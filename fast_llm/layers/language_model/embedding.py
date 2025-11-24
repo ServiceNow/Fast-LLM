@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import set_generator
-from fast_llm.core.ops import reduce_forward, split
+from fast_llm.core.ops import gather, reduce_forward, split
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
@@ -13,6 +13,8 @@ from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
+
+WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
 
 class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[ConfigType]):
@@ -26,7 +28,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     layer_count: float = 1000.0
     _config: ConfigType
 
-    # Position embedding preprocessing
+    # Preprocessing
+    _rotary_embedding_frequencies: torch.Tensor
     _position_ids: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
@@ -75,34 +78,64 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         )
 
     @torch.compile
-    def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None, mask_inputs: bool) -> torch.Tensor:
+    def _forward(
+        self,
+        input_: torch.Tensor | None,
+        token_ids: torch.Tensor,
+        position_ids: torch.Tensor | None,
+        mask_inputs: bool,
+        embedding_map: tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> torch.Tensor:
         Assert.eq(position_ids is None, self.position_embeddings_weight is None)
         group = self._parallel_dim.group
         if self._vocab_parallel:
-            input_mask = (input_ >= self._vocab_start_index) * (input_ < self._vocab_end_index)
-            masked_input = (input_ - self._vocab_start_index) * input_mask
-            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * input_mask.unsqueeze(2)  # noqa
+            token_mask = (token_ids >= self._vocab_start_index) * (token_ids < self._vocab_end_index)
+            masked_input = (token_ids - self._vocab_start_index) * token_mask
+            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * token_mask.unsqueeze(2)  # noqa
             embeddings = reduce_forward(embeddings, group)
+            # TODO: Input masking of position embeddings inconsistant with non-vocab-parallel
             if self.position_embeddings_weight is not None:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
+
+            if input_ is not None:
+                # TODO: Accumulate redundant with masking?
+                if self._sequence_parallel:
+                    input_ = gather(input_, group=group, dim=0)
+                # Out-of-place equivalent of `embeddings[embedding_map] += input_`
+                embeddings = embeddings.index_put(embedding_map, input_[: embedding_map[0].size(0)], accumulate=True)
+
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
         else:
             if self._sequence_parallel:
-                input_ = split(input_, group=group, dim=0)
+                token_ids = split(token_ids, group=group, dim=0)
                 if self.position_embeddings_weight is not None:
                     position_ids = split(position_ids, group=group, dim=0)
             # handle masked tokens
             if mask_inputs:
-                input_mask = input_ >= 0
-                masked_input = input_ * input_mask
-                embeddings = torch.embedding(self.word_embeddings_weight, masked_input)
-            else:
-                embeddings = torch.embedding(self.word_embeddings_weight, input_)
+                token_mask = token_ids >= 0
+                token_ids = token_ids * token_mask
+            embeddings = torch.embedding(self.word_embeddings_weight, token_ids)
             if self.position_embeddings_weight is not None:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             if mask_inputs:
-                embeddings = embeddings * input_mask.unsqueeze(2)
+                embeddings = embeddings * token_mask.unsqueeze(2)
+
+            if input_ is not None:
+                # TODO: Accumulate redundant with masking?
+                if self._sequence_parallel:
+                    #  TODO:: Filter and shift embedding map instead? (needs cuda sync)
+                    input_ = gather(input_, group=group, dim=0)
+                    embeddings_ = embeddings.new_zeros(embeddings.shape[0] * group.size(), *embeddings.shape[1:])
+                    embeddings_ = embeddings_.index_put(
+                        embedding_map, input_[: embedding_map[0].size(0)], accumulate=True
+                    )
+                    embeddings = embeddings + split(embeddings_, group=group, dim=0)
+                else:
+                    embeddings = embeddings.index_put(
+                        embedding_map, input_[: embedding_map[0].size(0)], accumulate=True
+                    )
+
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         ):
@@ -122,18 +155,35 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 tensor_name=f"{self.module_name} output",
                 dtype=self._residual_dtype,
             )
+        if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
+            # Language model: input_ contains token ids.
+            token_ids = input_
+            input_ = None
+        else:
+            # Multimodal case: input_ contains encoder output, token ids stores in kwargs.
+            # TODO: Support multiple encoders.
+            # TODO: Support pipeline-parallel.
+            token_ids = kwargs.get(LanguageModelKwargs.token_ids)
+            # Drop the placeholder batch dimension, remove patch padding.
+            input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))
+
         return self._forward(
-            input_, kwargs.get(LanguageModelKwargs.position_ids), kwargs.get(LanguageModelKwargs.mask_inputs)
+            input_,
+            token_ids,
+            kwargs.get(LanguageModelKwargs.position_ids),
+            # TODO ====== Vision ====== Review input masking.
+            kwargs.get(LanguageModelKwargs.mask_inputs),
+            embedding_map,
         )
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (embeddings)
         return 0
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if not self._config.position_embeddings.enabled:
             return
-        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], batch.device)
+        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], self._distributed.device)
         sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
         sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
         if not self._config.cross_document_position_embeddings:
@@ -142,7 +192,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                     torch.cat([torch.arange(x) for x in sample_lens])
                     for sample_lens in kwargs[LanguageModelKwargs.sequence_lengths]
                 ]
-            ).to(batch.device, dtype=torch.int64)
+            ).to(self._distributed.device, dtype=torch.int64)
             position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
             if kwargs[LanguageModelKwargs.sequence_first]:
                 position_ids = position_ids.transpose(0, 1)
