@@ -198,7 +198,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
-                AttentionKwargs.sequence_lengths: batch.tokens.lengths,
+                AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                AttentionKwargs.device: self._distributed.device,
                 **reference_logits[i],
             }
 
@@ -235,7 +236,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 if kwargs[AttentionKwargs.sequence_first]
                 else cropped_tokens.tokens
             ).contiguous()
-            self.preprocess(tokens, kwargs)
+            self.preprocess(kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed
