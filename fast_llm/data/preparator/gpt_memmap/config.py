@@ -5,6 +5,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
+from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
@@ -35,6 +36,10 @@ class LanguageModelSourceConfig(Config):
     rejected_span: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
+    images: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
+    image_positions: None | str = Field(
+        default=None, desc="Field containing image positions in the text.", hint=FieldHint.optional
+    )
 
     @functools.cached_property
     def columns(self) -> list[str]:
@@ -53,6 +58,11 @@ class LanguageModelSourceConfig(Config):
     def has_preference_spans(self) -> bool:
         Assert.eq(self.chosen_span is None, self.rejected_span is None)
         return self.chosen_span is not None
+
+    @functools.cached_property
+    def has_images(self) -> bool:
+        Assert.eq(self.images is None, self.image_positions is None)
+        return self.images is not None
 
     def _validate(self):
         super()._validate()
@@ -175,6 +185,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     tokenizer: TokenizerConfig = Field(
         desc="Configuration for the tokenizer.",
+        hint=FieldHint.feature,
+    )
+    image_patches: ImagePatchConfig = Field(
+        desc="Configuration for the image patches, if enabled.",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(
