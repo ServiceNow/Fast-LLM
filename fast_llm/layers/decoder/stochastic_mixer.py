@@ -9,7 +9,11 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.decoder.config import StochasticMixerConfig, StochasticMixerKwargs, StochasticMixerSamplingStrategy
+from fast_llm.layers.decoder.config import (
+    StochasticMixerConfig,
+    StochasticMixerKwargs,
+    StochasticMixerSamplingStrategy,
+)
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -118,11 +122,13 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        from fast_llm.engine.distributed.config import MAX_SEED
         from fast_llm.layers.block.config import BlockKwargs
 
         iteration = kwargs[BlockKwargs.iteration]
         generator = torch.Generator(device="cpu")
-        generator.manual_seed(iteration)
+        seed = (self._distributed_config.seed + self._config.seed_shift + iteration) % MAX_SEED
+        generator.manual_seed(seed)
         kwargs[StochasticMixerKwargs.generator] = generator
 
         for mixer in self.mixers.values():

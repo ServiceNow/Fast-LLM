@@ -4,7 +4,7 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import _BIG_PRIMES, DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -146,6 +146,12 @@ class StochasticMixerConfig(MixerConfig):
         "and checkpoint saving (only this mixer is exported). "
         "If None, uses the first mixer in the dict.",
         hint=FieldHint.feature,
+    )
+
+    seed_shift: int = Field(
+        default=_BIG_PRIMES[11],
+        desc="Seed shift for mixer sampling reproducibility.",
+        hint=FieldHint.optional,
     )
 
     def _validate(self) -> None:
