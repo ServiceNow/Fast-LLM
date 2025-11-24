@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -157,6 +157,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
+        setup_activation_storage: bool = False,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
@@ -175,6 +176,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             non_blocking=True,
         )
 
+        # TODO: decoder doesn't necessarily have a `block` attribute
+        distillation_model = self._config.decoder.block.distillation_model
+        activation_factor = self._config.decoder.block.activation_distillation_factor
+        reference_logits: list[dict[str, typing.Any]] | None = None
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_meta = [
@@ -182,7 +187,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             ]
 
             reference_batch = reference_model.fast_llm_model.base_model.preprocess_batch(
-                batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
+                batch,
+                reference_preprocessed_meta,
+                phase=PhaseType.inference,
+                iteration=iteration,
+                setup_activation_storage=activation_factor > 0.0 and distillation_model == name,
             )
 
             # TODO: Do things work with >1?
@@ -190,6 +199,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
+                if BlockKwargs.activation_distillation_storage in reference_kwargs:
+                    reference_logits[i][f"{name}_activations"] = reference_kwargs[
+                        BlockKwargs.activation_distillation_storage
+                    ]
+                    del reference_kwargs[BlockKwargs.activation_distillation_storage]
 
         token_ids = batch.token_ids
         if sequence_first:
@@ -255,7 +269,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
-                kwargs.update(reference_logits[i])
+                if reference_logits is not None:
+                    reference_payload = reference_logits[i]
+                    kwargs.update(reference_payload)
+                    if distillation_model is not None and activation_factor > 0.0:
+                        teacher_key = f"{distillation_model}_activations"
+                        if teacher_key in reference_payload:
+                            kwargs[BlockKwargs.activation_distillation_targets] = reference_payload.pop(teacher_key)
 
                 if batch.chosen_spans is not None:
                     chosen_valid_spans = []
@@ -288,6 +308,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                             rejected_valid_spans.append(valid_spans)
                     kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
 
+            if setup_activation_storage:
+                kwargs.setdefault(BlockKwargs.activation_distillation_storage, {})
             self.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 

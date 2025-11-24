@@ -88,6 +88,22 @@ class DecoderBlockConfig(BlockConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    distillation_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for activation-level distillation.",
+        hint=FieldHint.feature,
+    )
+    activation_distillation_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the activation-level distillation loss by.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        if self.activation_distillation_factor > 0.0 and self.distillation_model is None:
+            raise ValueError("Activation distillation requires a distillation_model.")
 
     @property
     def layer_class(self) -> "type[DecoderBlock]":
