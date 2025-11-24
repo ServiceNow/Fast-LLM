@@ -30,6 +30,7 @@ from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparato
 from fast_llm.data.preprocessing.tokenizer import Tokenizer
 from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
+from fast_llm.data.sample.patch import PatchSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
@@ -43,6 +44,7 @@ class SpanType(enum.StrEnum):
     loss_masking = "loss_masking"
     chosen = "chosen"
     rejected = "rejected"
+    image = "image"
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
@@ -231,6 +233,30 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             text = full_chosen_text + full_rejected_text
             all_spans.extend(chosen_spans + rejected_span)
 
+        if self._source_schema.has_images:
+            # Get the images and positions, sorted by position.
+            images, image_positions = (
+                zip(
+                    *sorted(
+                        zip(
+                            sample[self._source_schema.images],
+                            sample[self._source_schema.image_positions],
+                            strict=True,
+                        ),
+                        key=lambda x: x[1],
+                    )
+                )
+                if len(sample[self._source_schema.images]) > 0
+                else ([], [])
+            )
+            # Get the image patches and associated data.
+            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
+                self._config.image_patches.get_patches(images, self._data_type)
+            )
+            patch_count_cumsum = padded_cumsum(patch_counts).tolist()
+            # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
+            all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
+
         # Sort the spans by location (begin), keeping track of their type.
         # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
         span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
@@ -241,8 +267,26 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Gather token spans by type.
         token_spans_by_type = collections.defaultdict(list)
-        for span_type, token_span in zip(span_types, token_spans, strict=True):
-            token_spans_by_type[span_type].append(token_span)
+        if self._source_schema.has_images:
+            # Insert the image token ids in the token sequence and shift the spans accordingly.
+            tokens_shift = 0
+            image_index = 0
+            for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
+                # Account for the tokens already inserted.
+                begin = begin + tokens_shift
+                end = end + tokens_shift
+                if span_type == SpanType.image:
+                    # Shift the token map to the image location.
+                    image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
+                    # Insert the placeholder and image break tokens.
+                    tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
+                    tokens_shift += len(image_token_ids[image_index])
+                    image_index += 1
+                else:
+                    token_spans_by_type[span_type].append((begin, end))
+        else:
+            for span_type, token_span in zip(span_types, token_spans, strict=True):
+                token_spans_by_type[span_type].append(token_span)
 
         sample_size = len(tokens)
 
@@ -262,6 +306,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
                 RangeSample([(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]], sample_size)
                 if self._source_schema.has_preference_spans
+                else None
+            ),
+            (
+                PatchSample(image_patches, image_token_maps, image_position_ids, sample_size, patch_counts)
+                if self._source_schema.has_images
                 else None
             ),
         )
