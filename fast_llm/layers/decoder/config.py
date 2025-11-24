@@ -127,3 +127,8 @@ class DecoderBlockConfig(BlockConfig):
             peft=peft,
             return_input=return_input,
         )
+
+    def get_distillation_models(self) -> set[str]:
+        if self.distillation_model is not None and self.activation_distillation_factor > 0.0:
+            return {self.distillation_model}
+        return set()

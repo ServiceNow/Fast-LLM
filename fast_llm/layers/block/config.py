@@ -85,6 +85,9 @@ class BlockConfig(ModuleConfig):
             peft=peft,
         )
 
+    def get_distillation_models(self) -> set[str]:
+        return set()
+
 
 @config_class(registry=True)
 class BlockSequenceConfig(BlockConfig):
@@ -115,6 +118,9 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
         from fast_llm.layers.block.sequence import FixedBlockSequence
 
         return FixedBlockSequence
+
+    def get_distillation_models(self) -> set[str]:
+        return self.block.get_distillation_models()
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
@@ -162,3 +168,9 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
     def preprocessing_layers(self) -> dict[str, int]:
         # The index at which each block first appears. These blocks are used for preprocessing.
         return {name: self.expanded_pattern.index(name) for name in set(self.expanded_pattern)}
+
+    def get_distillation_models(self) -> set[str]:
+        models = set()
+        for block in self.blocks.values():
+            models.update(block.get_distillation_models())
+        return models

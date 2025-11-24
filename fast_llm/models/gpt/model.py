@@ -176,9 +176,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             non_blocking=True,
         )
 
-        # TODO: decoder doesn't necessarily have a `block` attribute
-        distillation_model = self._config.decoder.block.distillation_model
-        activation_factor = self._config.decoder.block.activation_distillation_factor
+        distillation_models = self._config.decoder.get_distillation_models()
+        # TODO: Support multiple distillation models?
+        assert len(distillation_models) <= 1
         reference_logits: list[dict[str, typing.Any]] | None = None
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
@@ -191,7 +191,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 reference_preprocessed_meta,
                 phase=PhaseType.inference,
                 iteration=iteration,
-                setup_activation_storage=activation_factor > 0.0 and distillation_model == name,
+                setup_activation_storage=name in distillation_models,
             )
 
             # TODO: Do things work with >1?
@@ -272,7 +272,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 if reference_logits is not None:
                     reference_payload = reference_logits[i]
                     kwargs.update(reference_payload)
-                    if distillation_model is not None and activation_factor > 0.0:
+                    # TODO: Support multiple distillation models?
+                    assert len(distillation_models) <= 1
+                    for distillation_model in distillation_models:
                         teacher_key = f"{distillation_model}_activations"
                         if teacher_key in reference_payload:
                             kwargs[BlockKwargs.activation_distillation_targets] = reference_payload.pop(teacher_key)
