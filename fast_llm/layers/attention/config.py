@@ -4,6 +4,7 @@ import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
@@ -99,6 +100,10 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    sinks: OptionalParameterConfig = Field(
+        desc="Configuration for attention sinks parameter. Sinks are learnable embeddings (one per head) prepended to keys/values for streaming attention.",
+        hint=FieldHint.architecture,
+    )
     softmax_scale_power: float = Field(
         default=0.5,
         desc="The scaling power to apply to head_size in the attention calculation. "
@@ -123,4 +128,8 @@ class AttentionConfig(MixerConfig):
         return Attention
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
+        return (
+            self.use_flash_attention
+            and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
+            and not self.sinks.enabled
+        )

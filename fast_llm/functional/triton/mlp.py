@@ -25,6 +25,9 @@ from fast_llm.functional.triton.sparse_copy import (
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
 
+# Global dictionary for debugging MLP intermediate values
+_MLP_DEBUG_TRACES = {}
+
 
 @triton_jit()
 def triton_mlp_activation_forward_kernel(
@@ -61,10 +64,22 @@ def triton_mlp_activation_forward_kernel(
         out = relu_out * relu_out
     elif activation_type == "identity":
         out = input_
+    elif activation_type == "gpt_oss_glu":
+        # GPT-OSS custom GLU: (up + 1) * (gate * sigmoid(gate * 1.702))
+        # For gated=True, input_ is gate, other (loaded below) is up
+        # Includes clamping: gate max 7.0, up in [-7.0, 7.0]
+        tl.static_assert(gated, "gpt_oss_glu requires gated=True")
+        other = tl.load(input_ptr + n_cols, mask=mask)
+        # Clamp gate to max 7.0
+        gate_clamped = tl.minimum(input_, 7.0)
+        # Clamp up to [-7.0, 7.0]
+        up_clamped = tl.minimum(tl.maximum(other, -7.0), 7.0)
+        glu = gate_clamped * (1.0 / (1.0 + tl.exp(-gate_clamped * 1.702)))  # gate * sigmoid(gate * 1.702)
+        out = (up_clamped + 1.0) * glu
     else:
         tl.static_assert(False, activation_type)
 
-    if gated:
+    if gated and activation_type != "gpt_oss_glu":
         other = tl.load(input_ptr + n_cols, mask=mask)
         out = out * other
 
@@ -124,15 +139,39 @@ def triton_mlp_activation_backward_kernel(
         grad = 1
         if gated or recompute:
             out = input_
+    elif activation_type == "gpt_oss_glu":
+        # GPT-OSS custom GLU: out = (up + 1) * (gate * sigmoid(gate * 1.702))
+        # input_ is gate, other is up
+        # Includes clamping: gate max 7.0, up in [-7.0, 7.0]
+        tl.static_assert(gated, "gpt_oss_glu requires gated=True")
+        other = tl.load(input_ptr + n_cols, mask=mask)
+        alpha = 1.702
+        # Clamp gate to max 7.0
+        gate_clamped = tl.minimum(input_, 7.0)
+        # Clamp up to [-7.0, 7.0]
+        up_clamped = tl.minimum(tl.maximum(other, -7.0), 7.0)
+        sigma = 1.0 / (1.0 + tl.exp(-gate_clamped * alpha))  # sigmoid(gate * alpha)
+        glu = gate_clamped * sigma
+        # grad_gate = (up + 1) * d_glu/d_gate = (up + 1) * sigma * (1 + gate * alpha * (1 - sigma))
+        # Only backprop through gate if it wasn't clamped (input_ <= 7.0)
+        grad_glu = sigma * (1.0 + gate_clamped * alpha * (1.0 - sigma))
+        grad_gate = tl.where(input_ <= 7.0, (up_clamped + 1.0) * grad_glu, 0.0)
+        # grad_up = glu = gate * sigma
+        # Only backprop through up if it wasn't clamped (other in [-7.0, 7.0])
+        grad_up = tl.where((other >= -7.0) & (other <= 7.0), glu, 0.0)
+        tl.store(grad_input_ptr, grad_gate * output_grad, mask=mask)
+        tl.store(grad_input_ptr + n_cols, grad_up * output_grad, mask=mask)
+        if recompute:
+            out = (up_clamped + 1.0) * glu
     else:
         tl.static_assert(False, activation_type)
 
-    if gated:
+    if gated and activation_type != "gpt_oss_glu":
         other = tl.load(input_ptr + n_cols, mask=mask)
         tl.store(grad_input_ptr, grad * other * output_grad, mask=mask)
         tl.store(grad_input_ptr + n_cols, out * output_grad, mask=mask)  # noqa
         out = out * other
-    else:
+    elif not gated:
         tl.store(grad_input_ptr, grad * output_grad, mask=mask)
 
     if recompute:
@@ -197,11 +236,27 @@ def torch_mlp_activation(
     gated: bool,
     activation_type: ActivationType,
 ) -> torch.Tensor:
-    if gated:
+    # DEBUG: Save activation input
+    if "activation_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["activation_inputs"] = []
+    _MLP_DEBUG_TRACES["activation_inputs"].append(input_.detach().cpu()[:1])  # Save first token only
+
+    # GPT-OSS GLU handles the gating internally, not via standard pattern
+    if activation_type == ActivationType.gpt_oss_glu:
+        assert gated, "gpt_oss_glu requires gated=True"
+        result = activation_type.activation_fn(input_)
+    elif gated:
         x1, x2 = input_.chunk(2, dim=-1)
-        return activation_type.activation_fn(x1) * x2
+        result = activation_type.activation_fn(x1) * x2
     else:
-        return activation_type.activation_fn(input_)
+        result = activation_type.activation_fn(input_)
+
+    # DEBUG: Save activation output
+    if "activation_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["activation_outputs"] = []
+    _MLP_DEBUG_TRACES["activation_outputs"].append(result.detach().cpu()[:1])  # Save first token only
+
+    return result
 
 
 def mlp_forward(
@@ -220,6 +275,17 @@ def mlp_forward(
     transposed_layer_2_weight: bool = False,
     sparse_map: SparseMap | None = None,
 ) -> tuple[torch.Tensor, list[typing.Any] | None]:
+    # DEBUG: Save MLP input (including scores for MoE)
+    if "mlp_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["mlp_inputs"] = []
+    _MLP_DEBUG_TRACES["mlp_inputs"].append(
+        {
+            "input": input_.detach().cpu()[:1],  # First token only
+            "scores": scores.detach().cpu()[:1] if scores is not None else None,  # First token scores
+            "sparse_map_used": sparse_map is not None,
+        }
+    )
+
     # Sparse copy
     input_shape = input_.shape
     intermediate_0 = input_ if sparse_map is None else copy_dense_to_sparse_forward(input_, sparse_map)[0]
@@ -228,6 +294,11 @@ def mlp_forward(
     intermediate_1, _ = output_parallel_linear_forward(
         intermediate_0, weight_1, bias_1, group, sequence_parallel, False, sparse_map
     )
+
+    # DEBUG: Save layer1 output
+    if "layer1_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["layer1_outputs"] = []
+    _MLP_DEBUG_TRACES["layer1_outputs"].append(intermediate_1.detach().cpu()[:1])  # Save first token only
 
     if recompute_level.recompute_sparse_input:
         intermediate_0 = None
@@ -257,6 +328,13 @@ def mlp_forward(
         sparse_map,
     )
 
+    # DEBUG: Save layer2 output
+    if "layer2_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["layer2_outputs"] = []
+    _MLP_DEBUG_TRACES["layer2_outputs"].append(
+        intermediate_3.detach().cpu()[:1] if sparse_map is None else intermediate_3.detach().cpu()
+    )  # Save first token
+
     # Context
     if recompute_level.recompute_activation or not training:
         intermediate_2 = None
@@ -267,6 +345,16 @@ def mlp_forward(
         intermediate_3 = None
     else:
         output, _ = copy_sparse_to_dense_forward(intermediate_3, scores, sparse_map)
+
+    # DEBUG: Save final MLP output
+    if "mlp_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["mlp_outputs"] = []
+    _MLP_DEBUG_TRACES["mlp_outputs"].append(
+        {
+            "output": output.detach().cpu()[:1],  # First token only
+            "shape": output.shape,
+        }
+    )
 
     context = (
         [
@@ -459,7 +547,20 @@ def mlp_autograd_looped(
     sequence_parallel: bool,
     training: bool = True,
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
+    bias_1: torch.Tensor | None = None,
+    bias_2: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    # DEBUG: Save looped MLP inputs
+    if "looped_inputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["looped_inputs"] = []
+    _MLP_DEBUG_TRACES["looped_inputs"].append(
+        {
+            "hidden_states": hidden_states.detach().cpu()[:1],  # First token
+            "scores": scores.detach().cpu()[:1],  # First token scores
+            "top_experts": top_experts.detach().cpu()[:1],  # First token expert indices
+        }
+    )
+
     # TODO: Needed?
     scores = scores.to(hidden_states.dtype)
     expert_mask = torch.nn.functional.one_hot(top_experts, num_classes=num_experts).permute(2, 1, 0)
@@ -468,7 +569,50 @@ def mlp_autograd_looped(
     hidden_states, weight_1_chunked = chunk_weight(hidden_states, weight_1, num_experts)
     hidden_states, weight_2_t_chunked = chunk_weight(hidden_states, weight_2, num_experts)
 
-    for expert_idx, (weight_1_chunk, weight_2_t_chunk) in enumerate(zip(weight_1_chunked, weight_2_t_chunked)):
+    # Chunk biases if present
+    if bias_1 is not None:
+        _, bias_1_chunked_raw = chunk_weight(hidden_states, bias_1, num_experts)
+        # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
+        # Preserve grad_buffer attribute after squeezing
+        bias_1_chunked = []
+        for b in bias_1_chunked_raw:
+            squeezed = b.squeeze(0) if b.ndim == 2 else b
+            if hasattr(b, "grad_buffer"):
+                squeezed.grad_buffer = b.grad_buffer.squeeze(0) if b.grad_buffer.ndim == 2 else b.grad_buffer
+            if hasattr(b, "param_grad_is_zero"):
+                squeezed.param_grad_is_zero = b.param_grad_is_zero
+            bias_1_chunked.append(squeezed)
+        # DEBUG: Check bias shape
+        if "bias_shapes" not in _MLP_DEBUG_TRACES:
+            _MLP_DEBUG_TRACES["bias_shapes"] = {}
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_1_orig"] = bias_1.shape
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_1_chunk_0"] = bias_1_chunked[0].shape
+    else:
+        bias_1_chunked = [None] * num_experts
+
+    if bias_2 is not None:
+        _, bias_2_chunked_raw = chunk_weight(hidden_states, bias_2, num_experts)
+        # Squeeze chunked biases to 1D since torch.nn.functional.linear expects 1D bias
+        # Preserve grad_buffer attribute after squeezing
+        bias_2_chunked = []
+        for b in bias_2_chunked_raw:
+            squeezed = b.squeeze(0) if b.ndim == 2 else b
+            if hasattr(b, "grad_buffer"):
+                squeezed.grad_buffer = b.grad_buffer.squeeze(0) if b.grad_buffer.ndim == 2 else b.grad_buffer
+            if hasattr(b, "param_grad_is_zero"):
+                squeezed.param_grad_is_zero = b.param_grad_is_zero
+            bias_2_chunked.append(squeezed)
+        # DEBUG: Check bias shape
+        if "bias_shapes" not in _MLP_DEBUG_TRACES:
+            _MLP_DEBUG_TRACES["bias_shapes"] = {}
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_2_orig"] = bias_2.shape
+        _MLP_DEBUG_TRACES["bias_shapes"]["bias_2_chunk_0"] = bias_2_chunked[0].shape
+    else:
+        bias_2_chunked = [None] * num_experts
+
+    for expert_idx, (weight_1_chunk, weight_2_t_chunk, bias_1_chunk, bias_2_chunk) in enumerate(
+        zip(weight_1_chunked, weight_2_t_chunked, bias_1_chunked, bias_2_chunked)
+    ):
         row, column = torch.where(expert_mask[expert_idx])
         if column.size(0) > 0:
             output[column] += (
@@ -476,21 +620,31 @@ def mlp_autograd_looped(
                     hidden_states[column],
                     None,
                     weight_1_chunk,
-                    None,
+                    bias_1_chunk,
                     weight_2_t_chunk,
-                    None,
+                    bias_2_chunk,
                     gated,
                     activation_type,
                     group,
                     sequence_parallel,
                     training,
                     recompute_level,
-                    True,
+                    True,  # transposed_layer_2_weight - weight_2 stored as (out, experts*in)
                 )
                 * scores[column, row, None]
             )
 
+    # Finalize gradient tracking in reverse order
+    if bias_2 is not None:
+        output = chunk_weight_post(output, bias_2, bias_2_chunked)
+    if bias_1 is not None:
+        output = chunk_weight_post(output, bias_1, bias_1_chunked)
     output = chunk_weight_post(output, weight_2, weight_2_t_chunked)
     output = chunk_weight_post(output, weight_1, weight_1_chunked)
+
+    # DEBUG: Save looped MLP output
+    if "looped_outputs" not in _MLP_DEBUG_TRACES:
+        _MLP_DEBUG_TRACES["looped_outputs"] = []
+    _MLP_DEBUG_TRACES["looped_outputs"].append(output.detach().cpu()[:1])  # First token
 
     return output

@@ -15,6 +15,7 @@ from fast_llm.models.gpt.conversion.config import (
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
+    GptOssCheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -544,6 +545,8 @@ _update_and_add_testing_config(
     updates={
         ("model", "base_model", "decoder", "block", "mlp", "type"): "moe",
         ("model", "base_model", "decoder", "block", "mlp", "router", "weight"): init_1,
+        ("model", "base_model", "decoder", "block", "mlp", "layer_1", "type"): "moe_affine_linear",
+        ("model", "base_model", "decoder", "block", "mlp", "layer_2", "type"): "moe_affine_linear",
         ("model", "base_model", "decoder", "block", "mlp", "experts"): 4,
         ("model", "base_model", "decoder", "block", "mlp", "experts_per_token"): 4,
     },
@@ -691,6 +694,78 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
     skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests GPT-OSS: heterogeneous blocks (alternating sliding/full attention), MoE, YARN RoPE, attention biases.
+    "llama",
+    "gpt_oss",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "sliding": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        "add_linear_biases": True,
+                        "window_size": 128,
+                        "rotary": {"type": "yarn"},
+                        "sinks": {"enabled": True, **init_1},
+                    },
+                    "mlp": {
+                        "type": "moe",
+                        "router": {"type": "affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_1": {"type": "moe_affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_2": {"type": "moe_affine_linear", "weight": init_2, "bias": {"enabled": True}},
+                        "experts": 4,
+                        "experts_per_token": 4,
+                        "intermediate_size": 1024,
+                        "gated": True,
+                        "activation": "silu",
+                        "add_linear_biases": True,
+                    },
+                },
+                "full": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        "add_linear_biases": True,
+                        "rotary": {"type": "yarn"},
+                        "sinks": {"enabled": True, **init_1},
+                    },
+                    "mlp": {
+                        "type": "moe",
+                        "router": {"type": "affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_1": {"type": "moe_affine_linear", "weight": init_1, "bias": {"enabled": True}},
+                        "layer_2": {"type": "moe_affine_linear", "weight": init_2, "bias": {"enabled": True}},
+                        "experts": 4,
+                        "experts_per_token": 4,
+                        "intermediate_size": 1024,
+                        "gated": True,
+                        "activation": "silu",
+                        "add_linear_biases": True,
+                    },
+                },
+            },
+            "num_blocks": 4,
+            "pattern": ["sliding", "full"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=GptOssCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported (due to MoE).
+    skip_tests=("ms",),
 )
 
 

@@ -1,5 +1,7 @@
 import typing
 
+import torch
+
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
@@ -12,7 +14,56 @@ from fast_llm.models.gpt.conversion.mistral import (
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
+from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, safe_merge_dicts
+
+
+class MoEMLPLayer2Converter(WeightConverter):
+    """
+    Converter for MoE layer 2 (down projection) weights.
+
+    HuggingFace format: Per-expert weights, each of shape [hidden_size, intermediate_size]
+    Fast-LLM format: Weight of shape [num_experts * intermediate_size, hidden_size]
+
+    Fast-LLM stores MoE layer 2 weights with input dimension (intermediate) flattened across experts.
+    The output dimension (hidden) is NOT multiplied by experts - each expert outputs to the same hidden size.
+    This matches the MoEAffineLinearConfig which extracts only the feature dimension for transposed weights.
+    """
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        # Fast-LLM: [num_experts * intermediate_size, hidden_size]
+        # HF needs: per-expert weights of [hidden_size, intermediate_size]
+        (merged_weight,) = weight
+        num_experts = len(self.export_name)
+        hidden_size = merged_weight.shape[1]
+        intermediate_size = merged_weight.shape[0] // num_experts
+
+        # Reshape to [num_experts, intermediate_size, hidden_size]
+        reshaped = merged_weight[:].reshape(num_experts, intermediate_size, hidden_size)
+
+        # Transpose each expert to [hidden_size, intermediate_size] (HF format)
+        return tuple(reshaped[i].t().contiguous() for i in range(num_experts))
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        # HF: per-expert weights, each [hidden_size, intermediate_size]
+        # Need to create [num_experts * intermediate_size, hidden_size]
+        num_experts = len(weight)
+
+        # Materialize first weight to get dtype, device, and shape
+        first_weight = weight[0][:]
+        hidden_size, intermediate_size = first_weight.shape  # HF stores as [hidden, intermediate]
+
+        # Transpose each expert's weights to [intermediate_size, hidden_size] and stack
+        expert_weights = [weight[i][:].t() for i in range(num_experts)]
+
+        # Concatenate along first dimension: [num_experts * intermediate_size, hidden_size]
+        merged = torch.cat(expert_weights, dim=0)
+
+        return (merged.contiguous(),)
 
 
 class MixtralMLPConverter(LlamaMLPConverter):
@@ -24,6 +75,13 @@ class MixtralMLPConverter(LlamaMLPConverter):
                 "type": "moe",
                 "experts": config["num_local_experts"],
                 "experts_per_token": config["num_experts_per_tok"],
+                # Use moe_affine_linear type for MoE expert layers to handle CompositeTensorDim correctly
+                "layer_1": {
+                    "type": "moe_affine_linear",
+                },
+                "layer_2": {
+                    "type": "moe_affine_linear",
+                },
             },
         )
 
@@ -65,7 +123,7 @@ class MixtralMLPConverter(LlamaMLPConverter):
                 f"{fast_llm_prefix}.layer_2",
                 tuple(f"{hf_prefix}.experts.{i}.w2" for i in range(config.experts)),
                 False,
-                MLPLayer2Converter,
+                MoEMLPLayer2Converter,
                 drop_on_export=drop_on_export,
             ),
         ]
