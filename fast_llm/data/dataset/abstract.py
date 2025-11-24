@@ -1,7 +1,7 @@
 import abc
 import typing
 
-import torch.utils.data.dataset
+import torch.utils.data
 
 from fast_llm.data.sample.abstract import Sample
 
@@ -46,7 +46,7 @@ class SampledDataset[SampleType: Sample](Dataset[SampleType]):
 
 
 # NOTE: We need to inherit from IterableDataset overwise torch data loader can not detect it properly
-class SampledIterableDataset[SampleType: Sample](torch.utils.data.dataset.IterableDataset[SampleType]):
+class SampledIterableDataset[SampleType: Sample](torch.utils.data.IterableDataset[SampleType]):
     """
     A sampled dataset class that provides an iterator over samples.
     """
