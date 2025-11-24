@@ -485,3 +485,7 @@ class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[Sam
             documents.append(documents[-1].get_padding(padding_length))
 
             yield documents[0].from_documents(documents)
+
+    @property
+    def name(self) -> str:
+        return self._dataset.name
