@@ -85,7 +85,7 @@ class PatchConvolutionConfig(BlockConfig):
     )
 
     @functools.cached_property
-    def input_channels(self):
+    def input_channels(self) -> int:
         # Number of input channels. Currently hard-coded to 3 (RGB).
         return 3
 
@@ -99,6 +99,7 @@ class PatchConvolutionConfig(BlockConfig):
 @config_class(registry=True)
 class VisionEncoderConfig(BlockConfig):
     _abstract = False
+    # TODO: ====== Rename to patch_embeddings? ======
     patch_convolution: PatchConvolutionConfig = Field(
         desc="Configuration for the patch convolution layer.",
         hint=FieldHint.architecture,
@@ -131,6 +132,11 @@ class VisionMultiModalModelConfig(LanguageModelConfig):
     vision_encoder: VisionEncoderConfig = Field(
         hint=FieldHint.architecture,
         desc="Configuration for the vision encoder.",
+    )
+    image_token_index: int | None = Field(
+        default=None,
+        hint=FieldHint.optional,
+        desc="Index of the image token. Unused, but required for Hugging Face conversion.",
     )
 
     @property

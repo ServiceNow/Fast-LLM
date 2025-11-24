@@ -23,6 +23,7 @@ from fast_llm.models.gpt.conversion.config import (
     MTPLlamaCheckpointFormat,
     Qwen2CheckpointFormat,
 )
+from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
@@ -690,24 +691,29 @@ _update_and_add_testing_config(
     model_type="multimodal",
     updates={
         ("model", "base_model", "vision_encoder"): {
-            "patch_convolution": {"patch_height": 4, "patch_width": 4},
+            "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
             "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
-            "adapter": {"intermediate_size": 512},
+            "adapter": {"intermediate_size": 256},
             "hidden_size": 256,
         },
         ("model", "base_model", "decoder", "num_blocks"): 1,
+        # Extend the vocab size to ensure the token id is not in the mock dataset.
+        ("model", "base_model", "embeddings", "vocab_size"): 386,
+        ("model", "base_model", "image_token_index"): 384,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
         ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+        # Pixtal doesn't support GQA
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
     },
     get_dataset=get_multimodal_test_dataset,
     megatron_args=None,
-    checkpoint_format=None,
+    checkpoint_format=LlavaCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement

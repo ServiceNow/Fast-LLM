@@ -40,7 +40,7 @@ class MistralAttentionConverter(LlamaAttentionConverter):
         assert not config.add_linear_biases
 
 
-class MistrallMLPConverter(LlamaMLPConverter):
+class MistralMLPConverter(LlamaMLPConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
         config["mlp_bias"] = False
@@ -56,7 +56,7 @@ class MistrallMLPConverter(LlamaMLPConverter):
 
 class MistralBlockConverter(LlamaBlockConverter):
     mixer_converter_class: typing.ClassVar[type[MistralAttentionConverter]] = MistralAttentionConverter
-    mlp_converter_class: typing.ClassVar[type[MistrallMLPConverter]] = MistrallMLPConverter
+    mlp_converter_class: typing.ClassVar[type[MistralMLPConverter]] = MistralMLPConverter
 
 
 class MistralDecoderConverter(LlamaDecoderConverter):
