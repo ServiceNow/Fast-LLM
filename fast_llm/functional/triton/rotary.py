@@ -21,14 +21,13 @@ def triton_rotary_kernel(
     backward: tl_constexpr,
 ):
     # TODO: Int64 ptr if needed?
-    pid_0_1 = tl.program_id(axis=0) # Folded (batch * seq) index
-    pid_2 = tl.program_id(axis=1) # Head index
-    pid_0 = pid_0_1 // seq_len
-    pid_1 = pid_0_1 - pid_0 * seq_len
+    pid_0 = tl.program_id(axis=0)  # Folded (batch * seq) index
+    pid_1 = tl.program_id(axis=1)  # Head index
+    position_id = pid_0 % seq_len
 
     offsets = tl.arange(0, rotary_block_size)
-    head_offsets = pid_2 * head_block_size + tl.arange(0, head_block_size)[:, None]
-    input_offsets = stride_0 * pid_0 + stride_1 * pid_1 + stride_2 * head_offsets + offsets[None, :]
+    head_offsets = pid_1 * head_block_size + tl.arange(0, head_block_size)[:, None]
+    input_offsets = stride_0 * (pid_0 // seq_len) + stride_1 * position_id + stride_2 * head_offsets + offsets[None, :]
     input_re_ptr = input_ptr + input_offsets
     input_im_ptr = input_re_ptr + rotary_dim
 
@@ -41,7 +40,7 @@ def triton_rotary_kernel(
         input_im = tl.load(input_im_ptr, mask=mask).to(tl.float32)
 
     # Computing frequencies here is faster but hurts precision, so we load pre-computed ones instead.
-    frequencies_offsets = 2 * rotary_dim * pid_1 + offsets
+    frequencies_offsets = 2 * rotary_dim * position_id + offsets
     frequencies_re_ptr = frequencies_ptr + frequencies_offsets
     frequencies_im_ptr = frequencies_re_ptr + rotary_dim
     frequencies_re = tl.load(frequencies_re_ptr)
