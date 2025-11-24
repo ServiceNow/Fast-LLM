@@ -8,8 +8,9 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.ssm import kda as kda_module
-from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig, LinearAttentionKwargs
+from fast_llm.layers.decoder.config import MixerConfig
+from fast_llm.layers.ssm import gdn as gdn_module
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig
 
 # from mamba2 import NemotronHMamba2
 
@@ -71,9 +72,8 @@ def materialize_meta_tensors(model, tensor_space):
     return model
 
 
-def unpack(packed_hidden_states, cu_seqlens):
+def unpack_and_padd(packed_hidden_states, cu_seqlens, package_num):
     batch_size = packed_hidden_states.shape[0]
-    package_num = cu_seqlens.shape[0] - 1
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
     hidden_dim = packed_hidden_states.shape[2]
     hidden_states = torch.zeros(
@@ -132,7 +132,7 @@ def generate_random_cu_seqlens(seq_len, packages_num=2):
     return cu_seqlens, index
 
 
-def _materialize_kda_tensors(module: torch.nn.Module, distributed: Distributed, device: torch.device) -> None:
+def _materialize_mixer_tensors(module: torch.nn.Module, distributed: Distributed, device: torch.device) -> None:
     """
     Materialize meta parameters on the requested device for KDA mixer layers.
     """
@@ -154,41 +154,46 @@ def _materialize_kda_tensors(module: torch.nn.Module, distributed: Distributed, 
 
 
 def _param_grad(param: torch.nn.Parameter) -> torch.Tensor | None:
-    # ParameterMeta stores grads in grad_buffer; fall back to .grad otherwise.
     return param.grad_buffer if hasattr(param, "grad_buffer") and param.grad_buffer is not None else param.grad
 
 
+# TODO: include mamba varlen
 @pytest.mark.slow
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA varlen needs CUDA")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Varlen test needs CUDA")
 @pytest.mark.skipif(
-    kda_module.chunk_kda is None or kda_module.fused_kda_gate is None,
-    reason="KDA fused kernels not available",
+    gdn_module.chunk_gated_delta_rule is None,
+    reason="Gated Delta Net fused kernels not available",
 )
-def test_kda_varlen_stacking_equivalence(distributed_config, distributed):
+@pytest.mark.parametrize(
+    "config, sequence_first",
+    [
+        pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), False),
+        pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), True),
+        # pytest.param(KimiDeltaAttentionConfig)
+    ],
+)
+def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: bool, distributed_config, distributed):
     """
-    Check that KDA forward/backward match with and without stacking using the real kernels.
+    Check that Gated Delta Net forward/backward match with and without packing.
     """
     device = torch.device("cuda")
     dtype = torch.float16
-    heads, head_dim = 2, 16
-    hidden_size = heads * head_dim
-
-    config = KimiDeltaAttentionConfig(heads=heads, head_dim=head_dim)
+    hidden_size = 32
     hidden_dim = TensorDim("hidden", hidden_size)
-    kda_packed = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
-    kda_ref = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
-    kda_packed.setup(distributed)
-    kda_ref.setup(distributed)
-    _materialize_kda_tensors(kda_packed, distributed, device)
-    _materialize_kda_tensors(kda_ref, distributed, device)
-    kda_ref.load_state_dict(kda_packed.state_dict())
-    kda_packed.to(device=device, dtype=dtype)
-    kda_ref.to(device=device, dtype=dtype)
+    mixer_packed = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
+    mixer_ref = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
+    mixer_packed.setup(distributed)
+    mixer_ref.setup(distributed)
+    _materialize_mixer_tensors(mixer_packed, distributed, device)
+    _materialize_mixer_tensors(mixer_ref, distributed, device)
+    mixer_ref.load_state_dict(mixer_packed.state_dict())
+    mixer_packed.to(device=device, dtype=dtype)
+    mixer_ref.to(device=device, dtype=dtype)
 
     batch_size = 2  # cu_seqlens path requires flattened batch
     seq_len = 15
-    packages_num = torch.randint(2, 5, (1, batch_size))[0]  # randomize packages num between 2 and 4
-    lengths = [
+    packages_num = torch.tensor([2, 3], device=device, dtype=torch.long)
+    sequence_lengths = [
         torch.tensor(
             generate_random_cu_seqlens(seq_len, packages_num=packages_num[i].item())[0],
             device=device,
@@ -196,63 +201,62 @@ def test_kda_varlen_stacking_equivalence(distributed_config, distributed):
         ).diff()
         for i in range(batch_size)
     ]
+    seqlens = torch.cat(sequence_lengths)
+    cu_seqlen = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.long, device=device),
+            torch.cumsum(seqlens, dim=0, dtype=torch.long).to(device),
+        )
+    )
 
-    # lengths = torch.tensor(cu_seqlens, device=device, dtype=torch.long)#.diff()
-    # total_tokens = lengths.sum().item()
     packed = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype, requires_grad=True)
+    if sequence_first:
+        packed = packed.transpose(0, 1)
 
     kwargs_packed = {
-        LinearAttentionKwargs.sequence_lengths: lengths,
-        BlockKwargs.sequence_first: False,
+        BlockKwargs.sequence_lengths: sequence_lengths,
+        BlockKwargs.sequence_first: sequence_first,
         BlockKwargs.hidden_dims: (hidden_dim,),
-        # BlockKwargs.sequence_q_dim: TensorDim("sequence_q", lengths.sum().item()),
     }
-    # Use the layer's preprocess to construct cu_seqlens/seq_idx the same way as the implementation.
-    kda_packed.preprocess(packed, kwargs_packed)
+    mixer_packed.preprocess(packed, kwargs_packed)
+    assert torch.all(kwargs_packed["cu_seqlens"] == cu_seqlen)
 
     kwargs_ref = {
         BlockKwargs.sequence_first: False,
         BlockKwargs.hidden_dims: (hidden_dim,),
     }
 
-    out_packed = kda_packed(packed, kwargs_packed)
+    out_packed = mixer_packed(packed, kwargs_packed)
+    if sequence_first:
+        out_packed = out_packed.transpose(0, 1)
     # Run reference path separately per sequence without varlen packing, then concatenate.
     ref_outs = []
     for b in range(batch_size):
         out_batch = []
-        length = lengths[b]
-        ref_seqs = torch.split(packed[b].unsqueeze(0), length.tolist(), dim=1)
+        length = sequence_lengths[b]
+        if sequence_first:
+            ref_seqs = torch.split(packed[:, b].unsqueeze(0), length.tolist(), dim=1)
+        else:
+            ref_seqs = torch.split(packed[b].unsqueeze(0), length.tolist(), dim=1)
         for seq in ref_seqs:
             kwargs_ref_seq = {
                 **kwargs_ref,
                 BlockKwargs.sequence_q_dim: TensorDim("sequence_q", seq.shape[1]),
             }
-            out_batch.append(kda_ref(seq, kwargs_ref_seq))
+            out_batch.append(mixer_ref(seq, kwargs_ref_seq))
         ref_outs.append(torch.cat(out_batch, dim=1))
     out_ref = torch.cat(ref_outs, dim=0)
     out_ref_packed = out_ref
 
-    assert out_packed.shape == packed.shape
     assert out_ref_packed.shape == out_packed.shape
     assert torch.allclose(out_packed, out_ref_packed, atol=1e-3, rtol=1e-3)
 
     out_packed.sum().backward()
     out_ref_packed.sum().backward()
 
-    assert _param_grad(kda_packed.q_proj.weight) is not None
-    assert _param_grad(kda_ref.q_proj.weight) is not None
-    assert torch.allclose(
-        _param_grad(kda_packed.q_proj.weight), _param_grad(kda_ref.q_proj.weight), atol=1e-3, rtol=1e-3
-    )
-    assert torch.allclose(
-        _param_grad(kda_packed.k_proj.weight), _param_grad(kda_ref.k_proj.weight), atol=1e-3, rtol=1e-3
-    )
-    assert torch.allclose(
-        _param_grad(kda_packed.v_proj.weight), _param_grad(kda_ref.v_proj.weight), atol=1e-3, rtol=1e-3
-    )
-    assert torch.allclose(
-        _param_grad(kda_packed.o_proj.weight), _param_grad(kda_ref.o_proj.weight), atol=1e-3, rtol=1e-3
-    )
+    for (name, param), (_, param_ref) in zip(mixer_packed.named_parameters(), mixer_ref.named_parameters()):
+        if param.requires_grad:
+            assert torch.allclose(_param_grad(param), _param_grad(param_ref), atol=1e-3, rtol=1e-3)
 
 
 if __name__ == "__main__":

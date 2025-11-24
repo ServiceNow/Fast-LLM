@@ -3,6 +3,7 @@ import typing
 
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
@@ -11,7 +12,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, LinearAttentionKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import div
 
@@ -263,28 +264,46 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        - we flatten batch + seq
+        - forward as packed sequence, i.e. BS = 1, cu_seqlens and seq_idx created in the preprocessing step must reflect this (these are None if cross_document_attention is True)
+        - scatter results back to B x T x D
+        - note, if there are padding tokens they are note removed, they are assumed to be ignored later in the loss calculation and are assumed to be always ont he right
+        """
+
         sequence_first = kwargs[BlockKwargs.sequence_first]
         # in sequence parallel TP the input here is already scattered across sequence dimension
         # TODO: do we need masking of padding tokens?
-        # TODO: make sure varlen is supported
+        # TODO: fuse soome of the reshapes into rearranges
         hidden_states = input_
 
-        # batch_size, sequence_length, _ = hidden_states.shape
-        projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs x seq_len x (qkvz)
-        projected_states_ba = self.in_proj_ba(hidden_states)  # bs x seq_len x (b a)
+        # these are not
+        cu_seqlens = kwargs.get(LinearAttentionKwargs.cu_seqlens, None)
+        seq_idx = kwargs.get(LinearAttentionKwargs.seq_idx, None)
+
+        projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
+        projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
         if sequence_first:
             projected_states_qkvz = projected_states_qkvz.transpose(0, 1)
             projected_states_ba = projected_states_ba.transpose(0, 1)
 
+        batch_size, sequence_length = projected_states_qkvz.shape[:2]
+
+        # note: to support var len training (packing) we need to flatten hidden states to batch_size = 1
+        # this is does not seem to be required by causal_conv1d_fn, but it it required by chunked_gdn_rule: https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/gated_delta_rule/chunk.py#L299
+        # similarly to kimi linear and to SHortCOnv from fla, we pass it flattened tro conv_1d as well, i.e. see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914
         query, key, value, z, beta, alpha = self.fix_query_key_value_ordering(
             projected_states_qkvz, projected_states_ba
         )
         query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
 
         mixed_qkv = torch.cat((query, key, value), dim=-1)
-        mixed_qkv = mixed_qkv.transpose(1, 2)
-        mixed_qkv = self.convolution(mixed_qkv)
-        mixed_qkv = mixed_qkv.transpose(1, 2)
+        mixed_qkv = rearrange(mixed_qkv, "b s ... -> (b s) ...").unsqueeze(0)  # 1 s d
+        mixed_qkv = rearrange(mixed_qkv, "b t d -> b d t")  # mixed_qkv.transpose(1, 2)
+        mixed_qkv = self.convolution(
+            mixed_qkv, seq_idx=seq_idx
+        )  # conv func. gets sequence dim as last dim, see https://github.com/Dao-AILab/causal-conv1d/blob/22a4577d8ace9d5703daea91a7fb56695492152b/causal_conv1d/causal_conv1d_interface.py#L110
+        mixed_qkv = rearrange(mixed_qkv, "b d t -> b t d")  # mixed_qkv.transpose(1, 2)
         query, key, value = torch.split(
             mixed_qkv,
             (
@@ -301,6 +320,9 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         beta = beta.sigmoid()
         g = -torch.exp(self.A_log) * F.softplus(alpha + self.dt_bias)
 
+        beta = rearrange(beta, "b s ... -> (b s) ...").unsqueeze(0)
+        g = rearrange(g, "b s ... -> (b s) ...").unsqueeze(0)
+
         if self._value_heads_per_key > 1:
             query = query.repeat_interleave(self._value_heads_per_key, dim=2)
             key = key.repeat_interleave(self._value_heads_per_key, dim=2)
@@ -314,9 +336,12 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
+            cu_seqlens=cu_seqlens,
         )
 
         z_shape_og = z.shape
+        core_attn_out = rearrange(core_attn_out.squeeze(0), "(b s) ... -> b s ...", b=batch_size, s=sequence_length)
+
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
         core_attn_out = self.norm(core_attn_out, z)
@@ -328,10 +353,50 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         return output
 
+    def _preprocess_for_varlen(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        """
+        Creates seqlens and cu_seqlens for packed training (varlen).
+        This assumes that forward pass is performed on a fully packed sequence, i.e. where sequences are flattened out into BS = 1.
+
+        Sets:
+        - seq_idx to [1, BS x T] tensor, where each elemnt is the sequence index of the corresponding token
+        - cu_seqlens to [N+1] tensor, where N is the total number of sequences in the batch, each element is the cumulative sequence length of packed sequences sofar
+        """
+
+        sequence_lengths = kwargs[LinearAttentionKwargs.sequence_lengths]
+        if sequence_lengths is None:
+            raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
+        seqlens = torch.cat(sequence_lengths)
+        cu_seqlens = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.long, device=batch.device),
+                torch.cumsum(seqlens, dim=0, dtype=torch.long).to(batch.device),
+            )
+        )
+        # this is supposed to be flattened, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303
+        # also whenever cu_seqlens is used, batchs size must be forced to 1: see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L347
+        kwargs[LinearAttentionKwargs.cu_seqlens] = cu_seqlens
+        # seq_idx has to be (bs, seqlen), but bs is forced to 1
+        kwargs[LinearAttentionKwargs.seq_idx] = (
+            (
+                torch.cat(
+                    [
+                        torch.arange(n, dtype=cu_seqlens.dtype, device=cu_seqlens.device)
+                        for n in (torch.diff(cu_seqlens).to(torch.int32))
+                    ],
+                    dim=0,
+                )
+                .eq(0)
+                .cumsum(0)
+                - 1
+            )
+            .to(torch.int32)
+            .unsqueeze(0)
+        )
+
+    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        if LinearAttentionKwargs.sequence_lengths in kwargs:
+            self._preprocess_for_varlen(batch, kwargs)
+
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        # return (
-        #     self.in_proj_qkvz.get_compute_usage(input_, config)
-        #     + self.in_proj_ba.get_compute_usage(input_, config)
-        #     + self.out_proj.get_compute_usage(input_, config)
-        # )
         raise NotImplementedError()
