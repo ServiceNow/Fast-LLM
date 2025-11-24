@@ -267,13 +267,16 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         """
         - we flatten batch + seq
         - forward as packed sequence, i.e. BS = 1, cu_seqlens and seq_idx created in the preprocessing step must reflect this (these are None if cross_document_attention is True)
-        - scatter results back to B x T x D
-        - note, if there are padding tokens they are note removed, they are assumed to be ignored later in the loss calculation and are assumed to be always ont he right
+        - scatter results back to B/T x T/B x D
+        - note, if there are padding tokens they are not treated in a special way here.
+            They are
+             - assumed to be ignored later in the loss calculation and
+             - are assumed to be always on the right and, hence, will be reflected in seq_idx and cu_seqlens (i.e. treated as a seperate packed sequence?)
+        -
         """
 
         sequence_first = kwargs[BlockKwargs.sequence_first]
         # in sequence parallel TP the input here is already scattered across sequence dimension
-        # TODO: do we need masking of padding tokens?
         # TODO: fuse soome of the reshapes into rearranges
         hidden_states = input_
 
@@ -355,8 +358,9 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
     def _preprocess_for_varlen(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
         """
-        Creates seqlens and cu_seqlens for packed training (varlen).
+        Creates seqlens and cu_seqlens for packed forward.
         This assumes that forward pass is performed on a fully packed sequence, i.e. where sequences are flattened out into BS = 1.
+        Note: padding tokens are always on the right and get their own entry in LinearAttentionKwargs.sequence_lengths --> they are treated as seperate sequence.
 
         Sets:
         - seq_idx to [1, BS x T] tensor, where each elemnt is the sequence index of the corresponding token
