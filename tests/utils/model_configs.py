@@ -3,6 +3,7 @@ import dataclasses
 import enum
 import functools
 import os
+import pathlib
 import typing
 
 import pytest
@@ -12,6 +13,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
+    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -21,8 +23,10 @@ from fast_llm.models.gpt.conversion.config import (
     MTPLlamaCheckpointFormat,
     Qwen2CheckpointFormat,
 )
+from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
+from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
@@ -78,6 +82,13 @@ class ModelTestingConfig:
     compare_factor: float = 1.0
     # Option to skip specific distributed configuration with name containing any of the provided strings.
     skip_tests: tuple[str] = ()
+    get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
+        get_model_test_dataset
+    )
+
+    def __post_init__(self):
+        _, config, _ = self.get_dataset(config_only=True)
+        self.config_dict["data"]["datasets"] = config
 
     @functools.cached_property
     def config_args(self):
@@ -205,6 +216,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                             "heads": 8,
                             "head_groups": 8,
                             "head_size": 32,
+                            # "cross_document_attention":False,
                         },
                         "mlp": {
                             "layer_1": {"weight": init_1},
@@ -231,27 +243,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
-        "data": {
-            "datasets": {
-                "training": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "end": 0.969,
-                },
-                "validation": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.969,
-                    "end": 0.999,
-                },
-                "test": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.999,
-                    "end": 1,
-                },
-            }
-        },
+        "data": {},
         "optimizer": {"learning_rate": {"base": 0.0001}},
     },
     megatron_args=[
@@ -279,7 +271,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
-        f"--data-path={MODEL_DATASET_PREFIX}",
         "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
@@ -680,6 +671,46 @@ _update_and_add_testing_config(
     megatron_args=None,
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests vision multimodal.
+    "llama",
+    "llava",
+    model_type="multimodal",
+    updates={
+        ("model", "base_model", "vision_encoder"): {
+            "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
+            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
+            "adapter": {"intermediate_size": 256},
+            "hidden_size": 256,
+        },
+        ("model", "base_model", "decoder", "num_blocks"): 1,
+        # Extend the vocab size to ensure the token id is not in the mock dataset.
+        ("model", "base_model", "embeddings", "vocab_size"): 386,
+        ("model", "base_model", "image_token_index"): 384,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
+        ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+        # Pixtal doesn't support GQA
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
+    },
+    get_dataset=get_multimodal_test_dataset,
+    megatron_args=None,
+    checkpoint_format=LlavaCheckpointFormat,
+    groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
@@ -688,8 +719,100 @@ _update_and_add_testing_config(
         # TODO: Implement
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
+    compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
+    # TODO: Gradient accumulation works but comparison is broken.
+    skip_tests=("sdp", "ms", "bf4", "df"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests apriel2 format with pattern decoder mixing all mixer types.
+    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
+    "llama",
+    "apriel2",
+    updates={
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "attn_full": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
+                "mamba": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba_2",
+                        "d_inner": 512,
+                        "state_size": 16,
+                        "dt_rank": 16,
+                        "d_xb": 256,
+                        "add_linear_biases": False,
+                    },
+                },
+                "stochastic": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "stochastic",
+                        "mixers": {
+                            "attn": {
+                                "type": "attention",
+                                "rotary": {"type": "default", "theta": 10000},
+                                "heads": 8,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "add_linear_biases": False,
+                            },
+                            "mamba": {
+                                "type": "mamba_2",
+                                "d_inner": 512,
+                                "state_size": 16,
+                                "dt_rank": 16,
+                                "d_xb": 256,
+                                "add_linear_biases": False,
+                            },
+                        },
+                        "sampling_strategy": "uniform",
+                        "main_mixer_name": "attn",
+                    },
+                },
+                "attn_swa": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "window_size": 128,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa"],
+            "num_blocks": 4,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Apriel2CheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported for Mamba.
     skip_tests=("sdp", "ms"),
 )
 
