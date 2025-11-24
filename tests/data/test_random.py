@@ -16,22 +16,16 @@ RANDOM_DATASET_EXPECTED_SAMPLES = [
 
 def test_gpt_random_dataset():
     # Make sure the random dataset works and check for unintended changes in behavior.
-    sampled = get_dataset_config({"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
-        get_sampling_data(4, sequence_length=7)
+    sampled = get_dataset_config(config := {"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
+        get_sampling_data(4, sequence_length=7, vocab_size=8192)
     )
     compare_sampled_dataset(sampled, RANDOM_DATASET_EXPECTED_SAMPLES)
 
-
-def test_gpt_random_data():
+    # Test in data.
     get_test_data_and_compare_samples(
-        {
-            "datasets": {
-                "training": {
-                    "type": "random",
-                }
-            }
-        },
+        {"datasets": {"training": config}},
         4,
         sequence_length=7,
+        vocab_size=8192,
         expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
     )

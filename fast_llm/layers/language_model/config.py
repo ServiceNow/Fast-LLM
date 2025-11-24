@@ -20,7 +20,11 @@ if typing.TYPE_CHECKING:
 
 
 class LanguageModelKwargs(BlockKwargs):
+    token_ids = "token_ids"
     position_ids = "position_ids"
+    token_map = "token_map"
+    sample_map = "sample_map"
+    embedding_map = "embedding_map"
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
@@ -53,6 +57,13 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    cross_document_position_embeddings: bool = Field(
+        default=True,
+        desc="Allow for cross-document position embeddings.",
+        doc="Disable to reset position ids at the beginning of each document.",
+        hint=FieldHint.feature,
+    )
+
     dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the embedding layer.",

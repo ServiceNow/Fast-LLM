@@ -38,6 +38,7 @@ class BlockKwargs:
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
     iteration = "iteration"
+    device = "device"
 
 
 @config_class(registry=True)
@@ -72,6 +73,7 @@ class BlockConfig(ModuleConfig):
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
+        *,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "BlockBase":

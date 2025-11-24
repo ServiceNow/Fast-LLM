@@ -1,10 +1,9 @@
+import enum
 import logging
 import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
@@ -30,6 +29,12 @@ class AttentionKwargs(BlockKwargs):
     # TODO: Review these
     presents = "presents"
     past_key_values = "past_key_values"
+
+
+class AttentionImplementation(enum.StrEnum):
+    auto = "auto"
+    flash = "flash"
+    backup = "backup"
 
 
 @config_class(dynamic_type={MixerConfig: "attention"})
@@ -107,6 +112,17 @@ class AttentionConfig(MixerConfig):
         " Under muP (if scaling number of heads instead of head_size): use 0.5.",
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    implementation: AttentionImplementation = Field(
+        default=AttentionImplementation.auto,
+        desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
+        hint=FieldHint.feature,
+    )
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Allow for cross-document attention.",
+        doc="Disable to prevent attention between tokens belonging to different documents.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -116,11 +132,11 @@ class AttentionConfig(MixerConfig):
 
         Assert.multiple(self.heads, self.head_groups)
 
+        if not self.causal:
+            assert self.window_size is None, "Non-causal windowed attention is not supported."
+
     @property
     def layer_class(self) -> "type[Attention]":
         from fast_llm.layers.attention.attention import Attention
 
         return Attention
-
-    def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)

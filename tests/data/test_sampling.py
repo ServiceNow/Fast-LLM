@@ -1,11 +1,12 @@
-import typing
-
 import numpy as np
 import pytest
+import torch
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.config import ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -13,8 +14,7 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
     validate_indexed_dataset_sampling,
 )
-from tests.utils.dataset import get_test_dataset
-from tests.utils.global_variables import DATASET_PREFIX
+from tests.utils.dataset import get_common_test_dataset
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -25,61 +25,51 @@ except ImportError:
 
 
 GPT_MEMMAP_SAMPLES = [
-    [4709, 819, 79, 207, 277, 1790],
-    [1790, 80, 6506, 1735, 542, 88],
-    [88, 4302, 269, 2794, 119, 80],
-    [80, 207, 567, 498, 89, 207],
-    [207, 4700, 549, 79, 417, 3036],
-    [3036, 253, 207, 2968, 4536, 1178],
-    [1178, 3291, 317, 277, 2679, 89],
-    [89, 542, 395, 583, 684, 554],
+    [49152, 46, 10, 819, 19, 45],
+    [45, 69, 17, 86, 38826, 15],
+    [15, 25, 51, 31, 32348, 64],
+    [64, 17, 93, 78, 40, 1793],
+    [1793, 1, 1746, 38, 27, 58],
+    [58, 22885, 93, 37, 92, 76],
+    [76, 29, 19, 17365, 93, 46],
+    [46, 83, 17211, 1, 785, 1023],
 ]
 
 
 def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
-    get_test_dataset()
-    sampled = get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build_and_sample(
-        get_sampling_data(8, sequence_length=5)
-    )
+    _, config, _ = get_common_test_dataset()
+    sampled = get_dataset_config(
+        dataset_config := config, GPTDatasetFromFileConfig[LanguageModelSample]
+    ).build_and_sample(get_sampling_data(8, sequence_length=5))
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
 
-
-def test_gpt_sampled_data():
-    get_test_dataset()
+    # Test in data.
     get_test_data_and_compare_samples(
-        {
-            "datasets": {
-                "training": {
-                    "type": "memmap",
-                    "path": DATASET_PREFIX,
-                }
-            }
-        },
+        {"datasets": {"training": dataset_config}},
         8,
         sequence_length=5,
         expected_samples=GPT_MEMMAP_SAMPLES,
     )
 
 
-class SimpleGPTIndexedDataset(GPTIndexedDataset):
+class SimpleGPTIndexedDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
         self._samples = samples
 
-    def get(self, index: int, offset=0, length=None, use_loss_masking_spans: bool = False) -> typing.Any:
-        if length is None:
-            length = len(self._samples[index])
-        assert not use_loss_masking_spans
-        return GPTSample(
-            token_ids=np.array(self._samples[index][offset : offset + length], dtype=np.int64), loss_masking_spans=None
-        )
+    def get_document(
+        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
+    ) -> SampleType:
+        if end is None:
+            end = len(self._samples[index])
+        return LanguageModelSample(TokenSample(torch.tensor(self._samples[index][begin:end], dtype=torch.int64)))
 
     def __len__(self) -> int:
         return len(self._samples)
 
-    def get_document_sizes(self) -> np.ndarray:
-        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
+    def get_document_sizes(self) -> torch.Tensor:
+        return torch.tensor([self.get_document_size(index) for index in range(len(self))], dtype=torch.int64)
 
     def get_document_size(self, index: int) -> int:
         return len(self._samples[index])
@@ -169,7 +159,6 @@ def test_gpt_sample_padding():
         sampling = get_sampling_data(
             num_samples=len(expected_samples),
             sequence_length=sequence_length,
-            vocab_size=vocab_size,
             seed=seed,
             shuffle=ShufflingType.disabled,
             truncate_documents=False,
@@ -180,4 +169,4 @@ def test_gpt_sample_padding():
         else:
             sampled = dataset.sample(sampling)
             for idx in range(len(expected_samples)):
-                Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx]))
+                Assert.all_equal(sampled[idx].tokens.tokens, np.array(expected_samples[idx]))

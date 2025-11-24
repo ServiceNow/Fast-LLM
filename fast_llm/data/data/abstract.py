@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Configurable
 from fast_llm.data.data.config import DataConfig
 from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.sample.abstract import Batch
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
 
@@ -47,5 +48,5 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         num_workers: int,
         prefetch_factor: int | None = None,
         timeout: float = 60,
-    ) -> typing.Iterator[typing.Any]:
+    ) -> typing.Iterator[Batch]:
         pass

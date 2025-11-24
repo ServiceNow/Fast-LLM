@@ -36,6 +36,7 @@ class BlockWithBiasConfig(BlockConfig):
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
+        *,
         lr_scale: float | None,
         peft: PeftConfig | None,
         return_bias: bool = False,
@@ -53,6 +54,26 @@ class BlockWithBiasConfig(BlockConfig):
 @config_class(registry=True)
 class MLPBaseConfig(BlockWithBiasConfig):
     _abstract = True
+
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        *,
+        output_dim: TensorDim | None = None,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        return_bias: bool = False,
+    ) -> "BlockWithBias":
+        return self.layer_class(
+            self,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            output_dim=output_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+            return_bias=return_bias,
+        )
 
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:

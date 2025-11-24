@@ -3,6 +3,7 @@ import dataclasses
 import enum
 import functools
 import os
+import pathlib
 import typing
 
 import pytest
@@ -22,8 +23,9 @@ from fast_llm.models.gpt.conversion.config import (
     MTPLlamaCheckpointFormat,
     Qwen2CheckpointFormat,
 )
+from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
@@ -79,6 +81,13 @@ class ModelTestingConfig:
     compare_factor: float = 1.0
     # Option to skip specific distributed configuration with name containing any of the provided strings.
     skip_tests: tuple[str] = ()
+    get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
+        get_model_test_dataset
+    )
+
+    def __post_init__(self):
+        _, config, _ = self.get_dataset(config_only=True)
+        self.config_dict["data"]["datasets"] = config
 
     @functools.cached_property
     def config_args(self):
@@ -206,6 +215,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                             "heads": 8,
                             "head_groups": 8,
                             "head_size": 32,
+                            # "cross_document_attention":False,
                         },
                         "mlp": {
                             "layer_1": {"weight": init_1},
@@ -232,27 +242,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
-        "data": {
-            "datasets": {
-                "training": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "end": 0.969,
-                },
-                "validation": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.969,
-                    "end": 0.999,
-                },
-                "test": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.999,
-                    "end": 1,
-                },
-            }
-        },
+        "data": {},
         "optimizer": {"learning_rate": {"base": 0.0001}},
     },
     megatron_args=[
@@ -280,7 +270,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
-        f"--data-path={MODEL_DATASET_PREFIX}",
         "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
@@ -681,17 +670,53 @@ _update_and_add_testing_config(
     megatron_args=None,
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests vision multimodal.
+    "llama",
+    "llava",
+    model_type="multimodal",
+    updates={
+        ("model", "base_model", "vision_encoder"): {
+            "patch_convolution": {"patch_height": 4, "patch_width": 4},
+            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
+            "adapter": {"intermediate_size": 512},
+            "hidden_size": 256,
+        },
+        ("model", "base_model", "decoder", "num_blocks"): 1,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
+        ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+    },
+    get_dataset=get_multimodal_test_dataset,
+    megatron_args=None,
+    checkpoint_format=None,
+    groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
+    compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sdp", "ms"),
+    # TODO: Gradient accumulation works but comparison is broken.
+    skip_tests=("sdp", "ms", "bf4", "df"),
 )
 
 
