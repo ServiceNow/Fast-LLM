@@ -19,7 +19,6 @@ from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
-    from fast_llm.data.dataset.streaming import StreamingDataset
     from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.data.sample.pipeline_rl import PipelineRLSample
     from fast_llm.engine.distributed.distributed import Distributed
@@ -112,39 +111,24 @@ class DatasetConfig[SampleType: Sample](Config):
 @config_class(registry=True)
 class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     """
-    A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
+    A sampled dataset containing a prepared list or iterable of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(
+        self, sampling: SamplingData
+    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
         raise NotImplementedError()
 
 
 @config_class()
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self) -> SamplableDataset[SampleType]:
+    def build(self) -> SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(
+        self, sampling: SamplingData
+    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
         return self.build().sample(sampling)
-
-
-@config_class(registry=True)
-class SampledIterableDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
-    """
-    A sampled iterable dataset returning a prepared samples to be accessed sequentially (as-is) during training.
-    """
-
-    def build_and_sample(self, sampling: SamplingData) -> SampledIterableDataset[SampleType]:
-        raise NotImplementedError()
-
-
-@config_class()
-class SamplableIterableDatasetConfig[SampleType: Sample](SampledIterableDatasetConfig[SampleType]):
-    def build(self, distributed: "Distributed") -> SamplableIterableDataset[SampleType]:
-        raise NotImplementedError()
-
-    def build_and_sample(self, sampling: SamplingData) -> SampledIterableDataset[SampleType]:
-        return self.build(sampling.distributed).sample(sampling)
 
 
 @config_class()
@@ -358,8 +342,8 @@ class RedisConfig(Config):
     )
 
 
-@config_class(dynamic_type={SampledIterableDatasetConfig: "streaming"})
-class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableIterableDatasetConfig[SampleType]):
+@config_class(dynamic_type={SampledDatasetConfig: "streaming"})
+class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableDatasetConfig[SampleType]):
     """
     Configuration for a streaming dataset that reads training data from a Redis stream.
     """
@@ -377,7 +361,7 @@ class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableIterableData
         hint=FieldHint.core,
     )
 
-    def build(self, distributed: "Distributed") -> "StreamingDataset":
+    def build_and_sample(self, sampling: SamplingData) -> SampledIterableDataset[SampleType]:
         from fast_llm.data.dataset.streaming import StreamingDataset
 
-        return StreamingDataset[SampleType](self, distributed)
+        return StreamingDataset[SampleType](self, sampling.distributed).sample(sampling)
