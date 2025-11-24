@@ -53,7 +53,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
                 name: mixer_config.get_layer(
                     distributed_config,
                     hidden_dim,
-                    lr_scale,
+                    lr_scale=lr_scale,
                     peft=peft,
                     return_bias=return_bias,
                 )
@@ -117,7 +117,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         from fast_llm.layers.block.config import BlockKwargs
 
         iteration = kwargs[BlockKwargs.iteration]
@@ -126,7 +126,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         kwargs[StochasticMixerKwargs.generator] = generator
 
         for mixer in self.mixers.values():
-            mixer.preprocess(batch, kwargs)
+            mixer.preprocess(kwargs)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         """
