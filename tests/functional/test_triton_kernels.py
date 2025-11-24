@@ -84,7 +84,7 @@ def test_triton_add():
 @requires_cuda
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "num_heads", "head_size"),
-    [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134)],
+    [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134), (2, 100000, 2, 4)],
 )
 def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     assert TritonConfig.TRITON_ENABLED
