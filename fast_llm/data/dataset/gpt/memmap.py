@@ -3,15 +3,17 @@ import struct
 import typing
 
 import numpy as np
+import torch
 
-from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
+from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
+from fast_llm.data.sample.gpt import GPTSample
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 
-class GPTMemmapDataset(GPTIndexedDataset):
+class GPTMemmapDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -142,37 +144,34 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    def get(
-        self,
-        idx: int,
-        offset: int = 0,
-        length: int | None = None,
-        use_loss_masking_spans: bool = False,
-        use_preference_loss_spans: bool = False,
-    ) -> GPTSample:
+    def get_document(
+        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
+    ) -> SampleType:
+        if end is None:
+            end = self.get_document_size(index)
         token_ids = np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
-            count=self._document_sizes[idx] - offset if length is None else length,
-            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+            count=end - begin,
+            offset=self._pointers[index] + begin * np.dtype(self._dtype).itemsize,
         )
         sample_spans = None
-        if use_loss_masking_spans and self._spans is not None:
-            sample_spans = self._spans[idx]
+        if parameters is not None and parameters.use_loss_masking_spans:
+            assert self._spans is not None
+            sample_spans = self._spans[index]
 
             # filter spans that are outside the range of the selected tokens in the document
-            sample_spans = sample_spans[
-                (sample_spans[:, 0] < offset + len(token_ids)) & (sample_spans[:, 1] >= offset)
-            ]
+            sample_spans = sample_spans[(sample_spans[:, 0] < begin + len(token_ids)) & (sample_spans[:, 1] >= begin)]
 
             # subtract by offset to normalize span boundaries
-            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset  # offset
-            sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
+            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], begin) - begin  # offset
+            sample_spans[:, 1] = np.minimum(sample_spans[:, 1], begin + len(token_ids) - 1) - begin
+            sample_spans = torch.from_numpy(sample_spans)
 
         chosen_span = None
         rejected_span = None
 
-        if use_preference_loss_spans:
+        if parameters is not None and parameters.use_preference_loss_spans:
             if not self._has_preference_spans:
                 raise ValueError("No preference spans found in memmap dataset.")
             elif self._has_preference_spans and self._chosen_spans is None:
@@ -180,28 +179,30 @@ class GPTMemmapDataset(GPTIndexedDataset):
             elif self._has_preference_spans and self._rejected_spans is None:
                 raise ValueError("Failed to read rejected spans from memmap dataset.")
             else:
-                chosen_span = self._chosen_spans[idx]
+                chosen_span = self._chosen_spans[index]
 
                 # filter spans that are outside the range of the selected tokens in the document
-                chosen_span = chosen_span[(chosen_span[0] < offset + len(token_ids)) & (chosen_span[1] >= offset)][0]
+                chosen_span = chosen_span[(chosen_span[0] < begin + len(token_ids)) & (chosen_span[1] >= begin)][0]
 
                 # subtract by offset to normalize span boundaries
-                chosen_span[0] = np.maximum(chosen_span[0], offset) - offset  # offset
-                chosen_span[1] = np.minimum(chosen_span[1], offset + len(token_ids) - 1) - offset
+                chosen_span[0] = np.maximum(chosen_span[0], begin) - begin  # offset
+                chosen_span[1] = np.minimum(chosen_span[1], begin + len(token_ids) - 1) - begin
+                chosen_span = torch.from_numpy(chosen_span)
 
-                rejected_span = self._rejected_spans[idx]
+                rejected_span = self._rejected_spans[index]
 
                 # filter spans that are outside the range of the selected tokens in the document
                 rejected_span = rejected_span[
-                    (rejected_span[0] < offset + len(token_ids)) & (rejected_span[1] >= offset)
+                    (rejected_span[0] < begin + len(token_ids)) & (rejected_span[1] >= begin)
                 ][0]
 
                 # subtract by offset to normalize span boundaries
-                rejected_span[0] = np.maximum(rejected_span[0], offset) - offset  # offset
-                rejected_span[1] = np.minimum(rejected_span[1], offset + len(token_ids) - 1) - offset
+                rejected_span[0] = np.maximum(rejected_span[0], begin) - begin  # offset
+                rejected_span[1] = np.minimum(rejected_span[1], begin + len(token_ids) - 1) - begin
+                rejected_span = torch.from_numpy(rejected_span)
 
         return GPTSample(
-            token_ids=token_ids,
+            token_ids=torch.from_numpy(token_ids),
             loss_masking_spans=sample_spans,
             chosen_span=chosen_span,
             rejected_span=rejected_span,
@@ -218,13 +219,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def num_tokens(self) -> int:
         return self._num_tokens
 
-    def get_document_sizes(self) -> np.ndarray:
+    def get_document_sizes(self) -> torch.Tensor:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
-        return self._document_sizes
+        return torch.from_numpy(self._document_sizes)
 
     def get_document_size(self, index: int) -> int:
         return self._document_sizes[index].item()
@@ -258,7 +259,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 assert document.token_ids.dtype == dtype, f"Expected dtype {dtype}, got {document.token_ids.dtype}."
 
                 # Write document to binary file
-                bin_stream.write(document.token_ids.tobytes(order="C"))
+                bin_stream.write(document.token_ids.numpy().tobytes(order="C"))
 
                 # Update metadata
                 doc_length = len(document.token_ids)
@@ -271,7 +272,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     chosen_spans.append(document.chosen_span)
                 if document.rejected_span is not None:
                     rejected_spans.append(document.rejected_span)
-                offset += doc_length * np.dtype(dtype).itemsize
+                offset += doc_length * dtype.itemsize
                 num_documents += 1
 
         # Finalize metadata arrays
@@ -297,7 +298,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             # Flag to indicate whether preference loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if chosen_spans.size > 0 and rejected_spans.size > 0 else 0))
             # Data type
-            idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
+            idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_torch(dtype)]))
             # "Number of sequences", same as documents in our case
             idx_stream.write(struct.pack("<Q", num_documents))
             # "Number of documents", needs a +1 for some reason

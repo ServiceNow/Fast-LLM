@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.data.data.gpt.data import GPTBatch
+from fast_llm.data.sample.gpt import GPTBatch
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
