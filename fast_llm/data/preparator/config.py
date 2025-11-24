@@ -7,7 +7,6 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 @config_class(registry=True, dynamic_type={RunnableConfig: "prepare"})
 class DatasetPreparatorConfig(RunnableConfig):
-    preparator_name: typing.ClassVar[str]
 
     @classmethod
     def get_dataset_preparator_class(cls) -> type["DatasetPreparator"]:

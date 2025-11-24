@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import torch
 
@@ -61,12 +62,12 @@ def reference_dpo_loss(
 
 
 def test_dpo_loss():
-    torch.manual_seed(0)
-    logits = torch.randn((10, 50, 100), requires_grad=True)
-    reference_model_logits = torch.randn((10, 50, 100))
-    targets = torch.randint(0, 100, (10, 50))
+    random_state = np.random.RandomState(0)
+    logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32).requires_grad_()
+    reference_model_logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32)
+    targets = torch.from_numpy(random_state.randint(0, 100, (10, 50)))
 
-    spans = get_random_spans(10, 10, 50)
+    spans = get_random_spans(np.full(10, 50), 0, 10, random_state)
 
     fastllm_loss, fast_llm_grad = compute_dpo_loss(
         logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1, grad_output=1

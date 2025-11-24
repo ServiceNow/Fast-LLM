@@ -34,11 +34,20 @@ class IndexedDataset[SampleType: Sample](SamplableDataset[SampleType]):
     ) -> SampleType:
         pass
 
-    @abc.abstractmethod
     def __len__(self) -> int:
         """
-        Number of samples in the dataset.
+        Number of documents in the dataset.
+        Note: this default implementation is slow and should be overridden when possible.
         """
+        return len(self.get_document_sizes())
+
+    @property
+    def num_tokens(self) -> int:
+        """
+        Number of tokens in the dataset.
+        Note: this default implementation is slow and should be overridden when possible.
+        """
+        return self.get_document_sizes().sum().item()
 
     def sample(self, sampling: SamplingData) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.sampled import SampledIndexedDataset
@@ -107,6 +116,13 @@ class ConcatenatedDataset[SampleType: Sample](IndexedDataset[SampleType]):
 
     def __len__(self) -> int:
         return self._dataset_splits[-1].item()
+
+    @property
+    def num_tokens(self) -> int:
+        """
+        Number of tokens in the dataset.
+        """
+        return sum(dataset.num_tokens for dataset in self._datasets)
 
     def get_document_sizes(self) -> torch.Tensor:
         # TODO: This can be really big.

@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import functools
 import itertools
+import logging
 import math
 import pathlib
 import typing
@@ -13,7 +14,10 @@ from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.engine.distributed.distributed import Distributed
+
+logger = logging.getLogger(__name__)
 
 
 class ShufflingType(str, enum.Enum):
@@ -105,7 +109,6 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     """
 
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
-        # TODO: ====== `SamplingData` contains more than needed (ex. `num_samples`)
         raise NotImplementedError()
 
 
@@ -266,3 +269,31 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
             self.weights,
             sampling,
         )
+
+
+@config_class(dynamic_type={SampledDatasetConfig: "memmap"})
+class MemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[SampleType]):
+    _abstract: typing.ClassVar[bool] = False
+    path: pathlib.Path = Field(
+        default=None,
+        desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
+        hint=FieldHint.core,
+    )
+
+    def build(self) -> "IndexedDataset[SampleType]":
+        name = str(self.path).replace("/", "__")
+        if self.path.is_file():
+            from fast_llm.data.dataset.memmap import MemmapDataset
+
+            return MemmapDataset[SampleType](name, self.path)
+        elif self.path.with_suffix(".bin").is_file() and self.path.with_suffix(".idx").is_file():
+            logger.warning(
+                "Using the legacy memmap dataset format."
+                " This format is deprecated and will be removed in a future release."
+                " Please recreate the dataset in the new memmap format."
+            )
+            from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
+
+            return LegacyMemmapDataset[SampleType](name, self.path)
+        else:
+            raise FileNotFoundError(self.path)
