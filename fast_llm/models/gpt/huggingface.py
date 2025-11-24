@@ -5,7 +5,8 @@ import typing
 import torch
 import transformers.modeling_outputs
 
-from fast_llm.data.sample.gpt import GPTBatch
+from fast_llm.data.sample.language_model import LanguageModelBatch
+from fast_llm.data.sample.token import TokenBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
@@ -80,7 +81,9 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
         batch = self.fast_llm_base_model.preprocess_batch(
-            GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
+            LanguageModelBatch(TokenBatch(input_ids, lengths=sequence_lenghts)),
+            phase=PhaseType.inference,
+            iteration=iteration,
         )
         ((input_, kwargs),) = batch
 

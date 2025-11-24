@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingParameters, ShufflingType
+from fast_llm.data.dataset.config import ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -61,7 +63,7 @@ def test_gpt_sampled_data():
     )
 
 
-class SimpleGPTIndexedDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
+class SimpleGPTIndexedDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
         self._samples = samples
@@ -71,7 +73,7 @@ class SimpleGPTIndexedDataset[SampleType: GPTSample](IndexedDataset[SampleType])
     ) -> SampleType:
         if end is None:
             end = len(self._samples[index])
-        return GPTSample(token_ids=torch.tensor(self._samples[index][begin:end], dtype=torch.int64))
+        return LanguageModelSample(TokenSample(torch.tensor(self._samples[index][begin:end], dtype=torch.int64)))
 
     def __len__(self) -> int:
         return len(self._samples)
@@ -178,4 +180,4 @@ def test_gpt_sample_padding():
         else:
             sampled = dataset.sample(sampling)
             for idx in range(len(expected_samples)):
-                Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx]))
+                Assert.all_equal(sampled[idx].tokens.tokens, np.array(expected_samples[idx]))
