@@ -1,6 +1,8 @@
 import abc
 import typing
 
+import torch.utils.data.dataset
+
 from fast_llm.data.sample.abstract import Sample
 
 if typing.TYPE_CHECKING:
@@ -43,30 +45,28 @@ class SampledDataset[SampleType: Sample](Dataset[SampleType]):
         pass
 
 
-class SampledIterableDataset[SampleType: Sample](Dataset[SampleType], typing.Iterable[SampleType]):
+# NOTE: We need to inherit from IterableDataset overwise torch data loader can not detect it properly
+class SampledIterableDataset[SampleType: Sample](torch.utils.data.dataset.IterableDataset[SampleType]):
     """
     A sampled dataset class that provides an iterator over samples.
-    (See the `Sampler` class below.)
     """
 
+    # NOTE: We add name here so it is compatible with Fast-LLM Dataset
+    @property
     @abc.abstractmethod
-    def __iter__(self) -> typing.Iterator[SampleType]:
-        """Return an iterator over samples."""
+    def name(self) -> str:
+        """
+        A name for the dataset to facilitate identification and debugging.
+        """
 
 
 class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
-
     @abc.abstractmethod
     def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
         pass
 
 
-class SamplableIterableDataset[SampleType: Sample](Dataset[SampleType]):
-
+class SamplableIterableDataset[SampleType: Sample](SampledIterableDataset[SampleType]):
     @abc.abstractmethod
     def sample(self, config: "SamplingData") -> SampledIterableDataset[SampleType]:
         pass
-
-    @abc.abstractmethod
-    def __iter__(self) -> typing.Iterator[SampleType]:
-        """Return an iterator over documents or samples."""
