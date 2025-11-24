@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -198,6 +198,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
+                BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
                 AttentionKwargs.device: self._distributed.device,
                 **reference_logits[i],
