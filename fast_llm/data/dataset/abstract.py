@@ -1,13 +1,11 @@
 import abc
 import typing
 
-from fast_llm.data.sample.abstract import Sample
-
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.config import SamplingData
 
 
-class Dataset[SampleType: Sample](abc.ABC):
+class Dataset(abc.ABC):
     """
     A generic dataset class compatible with torch.utils.data.Dataset but with a slightly different signature.
     """
@@ -19,23 +17,15 @@ class Dataset[SampleType: Sample](abc.ABC):
         A name for the dataset to facilitate identification and debugging.
         """
 
-    def __getstate__(self):
-        state = super().__getstate__()
-        # Pickling sometimes fails with bound `SampleType`.
-        # This is not needed at runtime, so we just drop it.
-        if "__orig_class__" in state:
-            del state["__orig_class__"]
-        return state
 
-
-class SampledDataset[SampleType: Sample](Dataset[SampleType]):
+class SampledDataset(Dataset):
     """
     A sampled dataset class containing a prepared list of samples to be indexed sequentially (as-is) during training.
     (See the `Sampler` class below.)
     """
 
     @abc.abstractmethod
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> typing.Any:
         pass
 
     @abc.abstractmethod
@@ -43,8 +33,8 @@ class SampledDataset[SampleType: Sample](Dataset[SampleType]):
         pass
 
 
-class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
+class SamplableDataset(Dataset):
 
     @abc.abstractmethod
-    def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
+    def sample(self, config: "SamplingData") -> SampledDataset:
         pass

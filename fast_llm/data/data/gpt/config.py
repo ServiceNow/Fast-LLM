@@ -1,11 +1,9 @@
 import logging
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
-from fast_llm.data.config import MultiprocessingContext
+from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.config import SampledDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.dataset.gpt.config import GPTSampledDatasetConfig, GPTSamplingConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -21,8 +19,12 @@ class GPTDataConfig(DataConfig):
 
     _abstract = False
 
+    tokenizer: TokenizerConfig = Field(
+        desc="Configuration for the tokenizer (for FIM).",
+        hint=FieldHint.feature,
+    )
     # TODO: Review field. Move closer to phase definition in training config?
-    datasets: dict[str, SampledDatasetConfig[GPTSample]] = Field(
+    datasets: dict[str, GPTSampledDatasetConfig] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,

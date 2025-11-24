@@ -23,10 +23,8 @@ class DataType(enum.StrEnum):
     int32 = "int32"
     int16 = "int16"
     int8 = "int8"
-    uint64 = "uint64"
-    uint32 = "uint32"
-    uint16 = "uint16"
     uint8 = "uint8"
+    uint16 = "uint16"
 
     @classmethod
     def _missing_(cls, dtype: str) -> "DataType":
@@ -107,9 +105,6 @@ def _set_torch_dtype_map() -> None:
         DataType.int32: torch.int32,
         DataType.int16: torch.int16,
         DataType.int8: torch.int8,
-        DataType.uint64: torch.uint64,
-        DataType.uint32: torch.uint32,
-        DataType.uint16: torch.uint16,
         DataType.uint8: torch.uint8,
     }
     _TORCH_DTYPE_MAP_INV = {y: x for x, y in _TORCH_DTYPE_MAP.items()}
@@ -132,10 +127,8 @@ def _set_numpy_dtype_map() -> None:
         DataType.int32: np.int32,
         DataType.int16: np.int16,
         DataType.int8: np.int8,
-        DataType.uint64: np.uint64,
-        DataType.uint32: np.uint32,
-        DataType.uint16: np.uint16,
         DataType.uint8: np.uint8,
+        DataType.uint16: np.uint16,
     }
     _NUMPY_DTYPE_MAP_INV = {y: x for x, y in _NUMPY_DTYPE_MAP.items()}
 
@@ -158,9 +151,6 @@ def _set_triton_dtype_map() -> None:
         DataType.int32: tl.int32,
         DataType.int16: tl.int16,
         DataType.int8: tl.int8,
-        DataType.uint64: tl.uint64,
-        DataType.uint32: tl.uint32,
-        DataType.uint16: tl.uint16,
         DataType.uint8: tl.uint8,
     }
 

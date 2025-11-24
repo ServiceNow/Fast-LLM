@@ -14,17 +14,17 @@ import tqdm
 import transformers
 import yaml
 
-from fast_llm.data.dataset.config import (
-    BlendedDatasetConfig,
-    DatasetSliceConfig,
-    IndexedDatasetConfig,
-    SampledDatasetConfig,
+from fast_llm.data.dataset.gpt.config import (
+    GPTBlendedDatasetConfig,
+    GPTDatasetSliceConfig,
+    GPTIndexedDatasetConfig,
+    GPTMemmapDatasetConfig,
+    GPTSampledDatasetConfig,
 )
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
-from fast_llm.data.sample.gpt import GPTSample
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -37,7 +37,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _data_type: DataType
     _text_column: str
     _loss_masking_spans_column: str | None
-    _sample_type: typing.ClassVar[type[GPTSample]] = GPTSample
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
@@ -145,8 +144,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
-                        torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        torch.tensor(item["token_spans"], dtype=torch.int32).reshape(-1, 2),
+                        np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
                     )
             elif (
                 "chosen_token_spans" in shard_dataset.column_names
@@ -156,13 +155,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             ):
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
-                        token_ids=torch.tensor(item["input_ids"], dtype=self._data_type.torch),
-                        chosen_span=torch.tensor(item["chosen_token_spans"], dtype=torch.int32).reshape(-1, 2),
-                        rejected_span=torch.tensor(item["rejected_token_spans"], dtype=torch.int32).reshape(-1, 2),
+                        token_ids=np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        chosen_span=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
+                        rejected_span=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(-1, 2),
                     )
             else:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(torch.tensor(item["input_ids"], dtype=self._data_type.torch))
+                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -377,9 +376,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             torch.distributed.destroy_process_group()
 
     @classmethod
-    def _save_dataset_config(
-        cls, dataset_config: IndexedDatasetConfig[_sample_type], output_path: pathlib.Path
-    ) -> None:
+    def _save_dataset_config(cls, dataset_config: GPTIndexedDatasetConfig, output_path: pathlib.Path) -> None:
         logger.info(f"Saving config to {output_path}")
         yaml.safe_dump(
             dataset_config.to_dict(),
@@ -387,12 +384,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
     @classmethod
-    def _blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]]
-    ) -> IndexedDatasetConfig[_sample_type]:
+    def _blend_dataset_configs(cls, dataset_configs: list[GPTMemmapDatasetConfig]) -> GPTIndexedDatasetConfig:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
-        return SampledDatasetConfig[cls._sample_type].from_dict(
+        return GPTSampledDatasetConfig.from_dict(
             {
                 "type": "blended",
                 "datasets": dataset_configs,
@@ -402,11 +397,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _split_and_blend_dataset_configs(
-        cls,
-        dataset_configs: list[GPTMemmapDatasetConfig[_sample_type]],
-        splits: dict[str, int | float],
-        output_path: pathlib.Path,
-    ) -> dict[str, SampledDatasetConfig[_sample_type]]:
+        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float], output_path: pathlib.Path
+    ) -> dict[str, GPTSampledDatasetConfig]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
@@ -435,13 +427,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
-                    sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
+                    sizes_cumsum = dataset.get_document_sizes().cumsum()
                     Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
                     begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
                     end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
                     if end_index > begin_index:
                         datasets_in_split.append(
-                            DatasetSliceConfig[cls._sample_type].from_dict(
+                            GPTDatasetSliceConfig.from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
@@ -463,7 +455,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             elif len(datasets_in_split) == 1:
                 dataset_splits[split_name] = datasets_in_split[0]
             else:
-                dataset_splits[split_name] = BlendedDatasetConfig[cls._sample_type].from_dict(
+                dataset_splits[split_name] = GPTBlendedDatasetConfig.from_dict(
                     {
                         "type": "blended",
                         "datasets": datasets_in_split,

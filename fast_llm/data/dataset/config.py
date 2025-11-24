@@ -7,7 +7,6 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -65,38 +64,37 @@ class SamplingData:
 
 
 @config_class()
-class DatasetConfig[SampleType: Sample](Config):
+class DatasetConfig(Config):
     _abstract: typing.ClassVar[bool] = True
 
 
-@config_class(registry=True)
-class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
+@config_class()
+class SampledDatasetConfig(DatasetConfig):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
-        # TODO: ====== `SamplingData` contains more than needed (ex. `num_samples`)
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
         raise NotImplementedError()
 
 
 @config_class()
-class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self) -> SamplableDataset[SampleType]:
+class SamplableDatasetConfig(SampledDatasetConfig):
+    def build(self) -> SamplableDataset:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
         return self.build().sample(sampling)
 
 
 @config_class()
-class IndexedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
-    def build(self) -> "IndexedDataset[SampleType]":
+class IndexedDatasetConfig(SamplableDatasetConfig):
+    def _build(self) -> "IndexedDataset":
         raise NotImplementedError()
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "concatenated"})
-class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+@config_class()
+class ConcatenatedDatasetConfig(SamplableDatasetConfig):
     """
     Concatenate multiple indexed datasets as if they were one.
     TODO: Make a post-sampling version? (staged training)
@@ -108,7 +106,7 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[IndexedDatasetConfig[SampleType]] = Field(
+    datasets: list[IndexedDatasetConfig] = Field(
         default_factory=list,
         desc="The datasets to concatenate.",
         hint=FieldHint.core,
@@ -124,8 +122,8 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
         return cls(self.name, [dataset.build() for dataset in self.datasets])
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "slice"})
-class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+@config_class()
+class DatasetSliceConfig(SamplableDatasetConfig):
     """
     Use a fraction of an indexed dataset, specified by the range (begin, end).
     Typically used to subsample a dataset, or to reserve part of the dataset for validation and/or testing.
@@ -135,7 +133,7 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
     """
 
     _abstract = False
-    dataset: IndexedDatasetConfig[SampleType] = Field(
+    dataset: IndexedDatasetConfig = Field(
         default=None,
         desc="The dataset to split.",
         hint=FieldHint.core,
@@ -154,9 +152,12 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
     def build(self) -> "DatasetSlice":
         from fast_llm.data.dataset.indexed import DatasetSlice
 
+        return self._build(DatasetSlice)
+
+    def _build[T: DatasetSlice](self, cls: type[T]) -> T:
         dataset = self.dataset.build()
         size = len(dataset)
-        return DatasetSlice[SampleType](
+        return cls(
             f"{dataset.name}_{self.begin}_{self.end}",
             dataset,
             round(self.begin * size),
@@ -164,8 +165,8 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
         )
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "sampled"})
-class SampledDatasetUpdateConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
+@config_class()
+class SampledDatasetUpdateConfig(SampledDatasetConfig):
     """
     Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
     Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
@@ -176,24 +177,24 @@ class SampledDatasetUpdateConfig[SampleType: Sample](SampledDatasetConfig[Sample
         desc="Optional override to sampling configuration parameters.",
         hint=FieldHint.core,
     )
-    dataset: SampledDatasetConfig[SampleType] = Field(
+    dataset: SampledDatasetConfig = Field(
         desc="The dataset to sample from.",
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, data: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, data: SamplingData) -> SampledDataset:
         return self.dataset.build_and_sample(data.update_config(self.sampling))
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "blended"})
-class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
+@config_class()
+class BlendedDatasetConfig(SampledDatasetConfig):
     _abstract = False
     name: str = Field(
         default="blended",
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[SampledDatasetConfig[SampleType]] = Field(
+    datasets: list[SampledDatasetConfig] = Field(
         default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
@@ -213,7 +214,7 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
     def build_and_sample(
         self,
         sampling: SamplingData,
-    ) -> SampledDataset[SampleType]:
+    ) -> SampledDataset:
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
@@ -234,7 +235,7 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
         # Blend the datasets.
-        return BlendedDataset[SampleType](
+        return BlendedDataset(
             self.name,
             sampled_datasets,
             self.weights,

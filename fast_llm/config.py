@@ -492,10 +492,6 @@ class Config(metaclass=ConfigMeta):
                 value = cls._validate_dict(value, type_, name)
             elif origin is type:
                 value = cls._validate_type(value, type_, name)
-            elif issubclass(origin, Config):
-                # TODO: Validate arguments for config generics.
-                cls._validate_element_type(value, type_.__origin__, strict=False)
-                value.validate(_is_validating=True)
             else:
                 raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):
@@ -810,8 +806,6 @@ class Config(metaclass=ConfigMeta):
                 value = cls._from_dict_array(value, type_, strict)
             elif issubclass(origin, dict):
                 value = cls._from_dict_dict(value, type_, strict)
-            elif issubclass(origin, Config):
-                value = cls._from_dict_config(value, type_, strict)
             elif origin is type:
                 pass
             else:
@@ -819,15 +813,10 @@ class Config(metaclass=ConfigMeta):
         elif not isinstance(type_, type):
             raise FieldTypeError(f"Not a type: {type_}.")
         elif issubclass(type_, Config):
-            value = cls._from_dict_config(value, type_, strict)
-        return value
-
-    @classmethod
-    def _from_dict_config(cls, value, type_, strict: bool):
-        if value is MISSING:
-            value = {}
-        if isinstance(value, dict):
-            value = type_._from_dict(value, strict)
+            if value is MISSING:
+                value = {}
+            if isinstance(value, dict):
+                value = type_._from_dict(value, strict)
         return value
 
     @classmethod
@@ -949,7 +938,6 @@ class Config(metaclass=ConfigMeta):
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
         Assert.eq(cls.__name__, cls.__qualname__)
-        super().__init_subclass__()
         for base_class in cls.__mro__:
             if issubclass(base_class, Config) and base_class is not cls:
                 assert cls.__class_validated__, (
@@ -1018,7 +1006,6 @@ class Configurable[ConfigType: Config](abc.ABC):
     def __init_subclass__(cls):
         # Automatically set `config_class` based on the bound type.
         # Make sure `ConfigType` is bound and respects class hierarchy.
-        super().__init_subclass__()
         try:
             config_class = None
             for base in types.get_original_bases(cls):

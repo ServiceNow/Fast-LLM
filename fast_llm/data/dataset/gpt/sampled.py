@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import math
 import pathlib
@@ -10,9 +11,7 @@ import yaml
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
-from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.abstract import Sample
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -25,6 +24,15 @@ except ImportError:
     _extension_available = False
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class GPTSample:
+    token_ids: np.ndarray
+    loss_masking_spans: np.ndarray | None = None
+    chosen_span: np.ndarray | None = None
+    rejected_span: np.ndarray | None = None
+    sequence_lengths: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -67,15 +75,14 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
+class GPTSampledIndexedDataset(SampledDataset):
     """
     A sampled GPT dataset.
     """
 
     def __init__(
         self,
-        indexed_dataset: IndexedDataset[SampleType],
-        # TODO: ====== Remove gpt-specific stuff ======
+        indexed_dataset: GPTIndexedDataset,
         sampling: GPTSamplingData,
     ):
         assert isinstance(sampling, GPTSamplingData)
@@ -126,7 +133,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        document_sizes = self._indexed_dataset.get_document_sizes().to(self._device)
+        document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
 
@@ -368,7 +375,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __len__(self) -> int:
         return self._parameters.num_samples
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> typing.Any:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -384,11 +391,12 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                     self._document_shuffling[index - self._unshuffled_documents].item()
                 ]
 
-            sample = self._indexed_dataset.get_document(
-                document_index.item(),
-                begin=0,
-                end=self._document_sizes[document_index].item(),
-                parameters=self._parameters,
+            sample = self._indexed_dataset.get(
+                document_index,
+                offset=0,
+                length=self._document_sizes[document_index],
+                use_loss_masking_spans=self._parameters.use_loss_masking_spans,
+                use_preference_loss_spans=self._parameters.use_preference_loss_spans,
             )
 
             chosen_span_end = sample.chosen_span[1] + 1
@@ -404,7 +412,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             sample.token_ids = padding
 
             if not self._parameters.cross_document_attention:
-                sample.sequence_lengths = torch.tensor(sequence_lengths)
+                sample.sequence_lengths = np.array(sequence_lengths)
 
             return sample
 
@@ -466,11 +474,11 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                sample = self._indexed_dataset.get_document(
+                sample = self._indexed_dataset.get(
                     document_index,
-                    begin=token_start_index_in_document,
-                    end=token_end_index_in_document,
-                    parameters=self._parameters,
+                    offset=token_start_index_in_document,
+                    length=token_end_index_in_document - token_start_index_in_document,
+                    use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
                 token_ids.append(sample.token_ids)
                 if self._parameters.use_loss_masking_spans:
@@ -488,23 +496,19 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             token_count += document_size
 
         sequence_lengths = (
-            torch.tensor([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
+            np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
             if not self._parameters.cross_document_attention
             else None
         )
         token_ids = np.concatenate(token_ids, dtype=np.int64)
         loss_masking_spans = (
-            torch.from_numpy(np.stack(loss_masking_spans, dtype=np.int32) if loss_masking_spans else np.array([]))
+            (np.stack(loss_masking_spans, dtype=np.int32) if loss_masking_spans else np.array([]))
             if self._parameters.use_loss_masking_spans
             else None
         )
         Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 
-        return GPTSample(
-            token_ids=torch.from_numpy(token_ids),
-            loss_masking_spans=loss_masking_spans,
-            sequence_lengths=sequence_lengths,
-        )
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
 
     @property
     def name(self) -> str:

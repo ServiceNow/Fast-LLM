@@ -1,4 +1,6 @@
+from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.gpt.config import GPTFimSampledDatasetConfig
+from fast_llm.data.tokenizer import Tokenizer
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
@@ -27,13 +29,13 @@ def test_gpt_fim():
     sampling_config = get_sampling_data(
         8,
         sequence_length=5,
+        tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH})),
         vocab_size=49157,
     )
     sampled = get_dataset_config(
         {
             "type": "fim",
             "dataset": {"type": "memmap", "path": DATASET_PREFIX},
-            "tokenizer": {"path": TOKENIZER_PATH},
             "rate": 0.5,
             "prefix_token": "w",
             "middle_token": "x",
@@ -53,7 +55,6 @@ def test_gpt_fim_data():
                 "training": {
                     "type": "fim",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
-                    "tokenizer": {"path": TOKENIZER_PATH},
                     "rate": 0.5,
                     "prefix_token": "w",
                     "middle_token": "x",
@@ -61,6 +62,7 @@ def test_gpt_fim_data():
                     "suffix_token": "z",
                 }
             },
+            "tokenizer": {"path": TOKENIZER_PATH},
         },
         8,
         sequence_length=5,

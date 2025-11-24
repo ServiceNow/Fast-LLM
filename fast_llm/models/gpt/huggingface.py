@@ -5,7 +5,7 @@ import typing
 import torch
 import transformers.modeling_outputs
 
-from fast_llm.data.sample.gpt import GPTBatch
+from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM

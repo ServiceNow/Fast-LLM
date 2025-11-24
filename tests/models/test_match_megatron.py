@@ -3,15 +3,12 @@ import typing
 
 import numpy as np
 import pytest
-import torch
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SampledDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingData
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSampledDatasetConfig, GPTSamplingData
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.sampled import logger
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.dataset.gpt.sampled import GPTSample, logger
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_model_test_dataset
@@ -82,7 +79,7 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
     compare_results_for_all_models(distributed_testing_config)
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "megatron"})
+@config_class(dynamic_type={GPTSampledDatasetConfig: "megatron"})
 class GPTMegatronDatasetConfig(GPTMemmapDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     path: str = Field(
@@ -145,14 +142,14 @@ class MegatronGPTSampledIndexedDataset(SampledDataset):
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
         sample_list = [
-            self._indexed_dataset.get_document(
+            self._indexed_dataset.get(
                 self._doc_idx[doc].item(),
-                begin=(doc == doc_f) * offset_f,
-                end=offset_l + 1 if doc == doc_l else None,
+                offset=(doc == doc_f) * offset_f,
+                length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
             )
             for doc in range(doc_f, doc_l + 1)
         ]
-        token_ids = torch.cat([sample.token_ids for sample in sample_list])
+        token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         return GPTSample(token_ids=token_ids)

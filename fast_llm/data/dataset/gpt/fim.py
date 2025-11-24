@@ -1,13 +1,12 @@
 import numpy as np
-import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
+class GPTFimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
@@ -16,7 +15,7 @@ class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
     def __init__(
         self,
         config: FimConfig,
-        dataset: SampledDataset[SampleType],
+        dataset: SampledDataset,
         sampling: GPTSamplingData,
     ):
         if sampling.parameters.use_loss_masking_spans:
@@ -27,7 +26,7 @@ class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
         self._dataset = dataset
 
         self._seed = sampling.config.seed
-        self._tokenizer = self._config.tokenizer.get_tokenizer()
+        self._tokenizer = sampling.tokenizer
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
@@ -41,15 +40,11 @@ class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index: int) -> SampleType:
-        # TODO: Use torch methods to avoid back and forth.
-        return GPTSample(
-            torch.from_numpy(
-                self._fim(
-                    self._dataset[index].token_ids.numpy(), np.random.RandomState(seed=(self._seed + index) % MAX_SEED)
-                )
-            )
+    def __getitem__(self, idx: int) -> np.ndarray:
+        fim_token_ids = self._fim(
+            self._dataset[idx].token_ids, np.random.RandomState(seed=(self._seed + idx) % MAX_SEED)
         )
+        return GPTSample(fim_token_ids)
 
     @property
     def name(self) -> str:
@@ -60,7 +55,6 @@ class GPTFimDataset[SampleType: GPTSample](SampledDataset[SampleType]):
         # TODO: permute segments in sample_list, before concatenating.
         sample_len = sample.shape[0]
         eod = self._tokenizer.eod
-        # TODO: Available through `tokens.lengths`
         segment_breaks = np.argwhere(sample == eod)  # split sample by document
 
         if segment_breaks.shape != (0, 1):  # then there is an EOD token in this example

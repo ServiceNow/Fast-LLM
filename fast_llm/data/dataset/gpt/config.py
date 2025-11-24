@@ -6,23 +6,27 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.data.config import TokenizerConfig
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import (
+    BlendedDatasetConfig,
+    ConcatenatedDatasetConfig,
+    DatasetSliceConfig,
     IndexedDatasetConfig,
     SamplableDatasetConfig,
     SampledDatasetConfig,
+    SampledDatasetUpdateConfig,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
 )
-from fast_llm.data.sample.gpt import GPTSample
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    from fast_llm.data.tokenizer import Tokenizer
 
 
 class ShufflingType(str, enum.Enum):
@@ -82,10 +86,27 @@ class GPTSamplingData(SamplingData):
 
     config: GPTSamplingConfig
     parameters: GPTSamplingParameters
+    tokenizer: "Tokenizer"
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+@config_class(registry=True)
+class GPTSampledDatasetConfig(SampledDatasetConfig):
+    pass
+
+
+@config_class()
+class GPTSamplableDatasetConfig(SamplableDatasetConfig, GPTSampledDatasetConfig):
+    pass
+
+
+@config_class()
+class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
+    def build(self) -> "GPTIndexedDataset":
+        raise NotImplementedError()
+
+
+@config_class(dynamic_type={GPTSampledDatasetConfig: "random"})
+class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -99,8 +120,8 @@ class GPTRandomDatasetConfig[SampleType: GPTSample](SamplableDatasetConfig[Sampl
         return GPTRandomDataset(self.name)
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class GPTMemmapDatasetConfig[SampleType: GPTSample](IndexedDatasetConfig[SampleType]):
+@config_class(dynamic_type={GPTSampledDatasetConfig: "memmap"})
+class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -124,8 +145,43 @@ class GPTMemmapDatasetConfig[SampleType: GPTSample](IndexedDatasetConfig[SampleT
         return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "file"})
-class GPTDatasetFromFileConfig[SampleType: GPTSample](SamplableDatasetConfig[SampleType]):
+@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated"})
+class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
+
+    def build(self) -> "GPTConcatenatedDataset":
+        from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset
+
+        return self._build(GPTConcatenatedDataset)
+
+
+@config_class(dynamic_type={GPTSampledDatasetConfig: "slice"})
+class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    dataset: GPTIndexedDatasetConfig = FieldUpdate()
+
+    def build(self) -> "GPTDatasetSlice":
+        from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
+
+        return self._build(GPTDatasetSlice)
+
+
+@config_class(dynamic_type={GPTSampledDatasetConfig: "sampled"})
+class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
+    _abstract = False
+    sampling: GPTSamplingConfig = FieldUpdate()
+    dataset: GPTSampledDatasetConfig = FieldUpdate()
+
+
+@config_class(dynamic_type={GPTSampledDatasetConfig: "blended"})
+class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
+
+
+@config_class(dynamic_type={GPTSampledDatasetConfig: "file"})
+class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -133,18 +189,18 @@ class GPTDatasetFromFileConfig[SampleType: GPTSample](SamplableDatasetConfig[Sam
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
         config = self._load_config()
         return config.build_and_sample(sampling)
 
-    def build(self) -> SamplableDataset[SampleType]:
+    def build(self) -> SamplableDataset:
         config = self._load_config()
-        assert isinstance(config, SamplableDatasetConfig)
+        assert isinstance(config, GPTSamplableDatasetConfig)
         return config.build()
 
-    def _load_config(self) -> SampledDatasetConfig[SampleType]:
+    def _load_config(self):
         assert self.path.is_file(), f"File {self.path} does not exist."
-        return SampledDatasetConfig[SampleType].from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
+        return GPTSampledDatasetConfig.from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
 
     def _convert_paths(self, config):
         # Recursively convert paths relative to `self.path.parent` to make them relative to cwd.
@@ -168,10 +224,6 @@ class FimConfig(Config):
     Configuration for FIM.
     """
 
-    tokenizer: TokenizerConfig = Field(
-        desc="Configuration for the tokenizer.",
-        hint=FieldHint.feature,
-    )
     rate: float = Field(
         # TODO: Use meaningful default now that fim is a wrapper?
         default=0.0,
@@ -234,15 +286,15 @@ class FimConfig(Config):
     )
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "fim"})
-class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType], FimConfig):
+@config_class(dynamic_type={GPTSampledDatasetConfig: "fim"})
+class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
     """
     Configuration for FIM.
     """
 
     _abstract: typing.ClassVar[bool] = False
 
-    dataset: SampledDatasetConfig = Field(
+    dataset: GPTSampledDatasetConfig = Field(
         default=None,
         desc="The dataset to wrap with fim.",
         hint=FieldHint.core,
@@ -250,15 +302,15 @@ class GPTFimSampledDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[Sam
 
     def build_and_sample(
         self,
-        sampling: SamplingData,
+        sampling: GPTSamplingData,
     ) -> SampledDataset:
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
         return GPTFimDataset(self, self.dataset.build_and_sample(sampling), sampling)
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
-class GPTTestSlowDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[SampleType]):
+@config_class(dynamic_type={GPTSampledDatasetConfig: "test_slow"})
+class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
     """
@@ -271,8 +323,8 @@ class GPTTestSlowDatasetConfig[SampleType: GPTSample](SampledDatasetConfig[Sampl
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
         assert sampling.distributed.config.world_size > 1
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
-        return GPTRandomDatasetConfig[SampleType]().build_and_sample(sampling)
+        return GPTRandomDatasetConfig().build_and_sample(sampling)

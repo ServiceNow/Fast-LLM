@@ -1,10 +1,11 @@
+import typing
+
 import numpy as np
 import pytest
-import torch
 
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, GPTSamplingParameters, ShufflingType
-from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.gpt import GPTSample
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -61,23 +62,24 @@ def test_gpt_sampled_data():
     )
 
 
-class SimpleGPTIndexedDataset[SampleType: GPTSample](IndexedDataset[SampleType]):
+class SimpleGPTIndexedDataset(GPTIndexedDataset):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
         self._samples = samples
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
-    ) -> SampleType:
-        if end is None:
-            end = len(self._samples[index])
-        return GPTSample(token_ids=torch.tensor(self._samples[index][begin:end], dtype=torch.int64))
+    def get(self, index: int, offset=0, length=None, use_loss_masking_spans: bool = False) -> typing.Any:
+        if length is None:
+            length = len(self._samples[index])
+        assert not use_loss_masking_spans
+        return GPTSample(
+            token_ids=np.array(self._samples[index][offset : offset + length], dtype=np.int64), loss_masking_spans=None
+        )
 
     def __len__(self) -> int:
         return len(self._samples)
 
-    def get_document_sizes(self) -> torch.Tensor:
-        return torch.tensor([self.get_document_size(index) for index in range(len(self))], dtype=torch.int64)
+    def get_document_sizes(self) -> np.ndarray:
+        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
 
     def get_document_size(self, index: int) -> int:
         return len(self._samples[index])
