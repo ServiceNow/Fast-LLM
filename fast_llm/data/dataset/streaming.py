@@ -86,13 +86,21 @@ class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[Sa
                 block=5000,  # wait up to 5 seconds
             )
 
+            data = None
             if messages:
                 for stream_key, msgs in messages:
                     assert stream_key == self._config.redis.stream_key.encode()
                     for msg_id, msg_data in msgs:
                         r.xack(self._config.redis.stream_key, self._config.redis.group_name, msg_id)
                         data = orjson.loads(msg_data[self._config.data_key.encode()])
+                        # NOTE: for testing with fakeredis only as on real consumer group it will be delivered only to one consumer
+                        if "eof" in data and data["eof"] == True:
+                            break
                         yield self._sample_from_dict(data)
+                    if "eof" in data and data["eof"] == True:
+                        break
+            if data is not None and "eof" in data and data["eof"] == True:
+                break
 
     def _sample_from_dict(cls, data: dict) -> PipelineRLSample:
         tokens = torch.tensor(data["tokens"], dtype=dtype_from_string(data["tokens_dtype"]))
