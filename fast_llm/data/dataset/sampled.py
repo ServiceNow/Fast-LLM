@@ -438,13 +438,15 @@ class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[Sam
         sampling: SamplingData,
     ):
         self._dataset = iterable_dataset
-        self._config = sampling
-        assert self._config.parameters.truncate_documents == False
-        assert self._config.config.shuffle == ShufflingType.disabled
+        self._config = sampling.config
+        self._parameters = sampling.parameters
+
+        assert self._parameters.truncate_documents == False
+        assert self._config.shuffle == ShufflingType.disabled
 
     def __iter__(self) -> typing.Iterator[SampleType]:
-        sample_length = self._config.parameters.sequence_length + self._config.parameters.extra_tokens
-        max_samples = self._config.parameters.num_samples
+        sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
+        max_samples = self._parameters.num_samples
         current_sample_length = 0
         documents: list[SampleType] = []
         num_samples = 0

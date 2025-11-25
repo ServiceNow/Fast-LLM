@@ -1,3 +1,5 @@
+import threading
+
 import fakeredis
 import orjson
 import pytest
@@ -52,6 +54,27 @@ def stream_config():
         ),
         data_key="data",
     )
+
+
+@pytest.fixture
+def fake_redis_server(stream_config):
+    server_address = (stream_config.redis.host, stream_config.redis.port)
+    server = fakeredis.TcpFakeServer(server_address, server_type="redis")
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    # Create a redis-py client pointing at the fake server
+    import redis
+
+    client = redis.Redis(host=server_address[0], port=server_address[1])
+
+    yield stream_config, client
+
+    # Everything after yield = teardown
+    server.shutdown()
+    server.server_close()
+    thread.join()
 
 
 # ---------------------------------------------------------------------
@@ -216,8 +239,8 @@ def test_sampling_overflow_creates_two_and_padding_final(monkeypatched_redis, st
     assert out[1].tokens.tokens.tolist() == list(range(6)) + [-100, -100, -100, -100]
 
 
-def test_data_single_consumer(monkeypatched_redis, stream_config):
-    fake_redis = monkeypatched_redis
+def test_data_single_consumer(fake_redis_server):
+    stream_config, fake_redis = fake_redis_server
 
     sequence_length = 10
     samples_count = 2
@@ -242,8 +265,7 @@ def test_data_single_consumer(monkeypatched_redis, stream_config):
         batch_config.setup(distributed_config=distributed.config)
         batch_config.validate()
 
-    # TODO: check why is not working with num_workers == 1
-    data_iter = data.get_iterator(batch_config, "streaming1", consumed_samples=0, num_workers=0, prefetch_factor=None)
+    data_iter = data.get_iterator(batch_config, "streaming1", consumed_samples=0, num_workers=1, prefetch_factor=1)
 
     batch = next(data_iter)
     assert batch.tokens.tokens.shape == (2, 10)
