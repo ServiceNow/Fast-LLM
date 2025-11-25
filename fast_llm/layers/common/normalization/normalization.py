@@ -311,7 +311,7 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
         super().__init__(config, hidden_dim, lr_scale)
 
         if rms_norm_gated is not None:
-            self._forward_gated = self._forward_local
+            self._forward_gated = self._forward_fla
         else:
             self._forward_gated = self._forward_local
 

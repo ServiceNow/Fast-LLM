@@ -760,9 +760,9 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla (passes with local non-fla norm)
+    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
-    # we should be using STP with this model!
+    # we should be using STP with this model, not TP!
     skip_tests=(r"sdp", r"ms", r"^tp2$"),
 )
 
