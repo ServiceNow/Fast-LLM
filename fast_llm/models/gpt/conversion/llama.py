@@ -419,7 +419,7 @@ class LlamaDecoderConverter:
         }
 
     @classmethod
-    def export_config(cls, config: FixedBlockSequenceConfig) -> dict:
+    def export_config(cls, config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
         if isinstance(config, PatternBlockSequenceConfig):
             # All exported block configs must be equal
             exported_block_configs = [
@@ -441,15 +441,19 @@ class LlamaDecoderConverter:
     @classmethod
     def get_converters(
         cls,
-        config: FixedBlockSequenceConfig,
+        config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
+        # In the case of PatternBlockSequenceConfig, compatibility was already checked in export_config
+        block_config = (
+            config.block if isinstance(config, FixedBlockSequenceConfig) else next(iter(config.blocks.values()))
+        )
         converters = []
         for block_index in range(config.num_blocks):
             converters += cls.block_converter_class.get_converters(
-                config.block,
+                block_config,
                 f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
                 drop_on_export,
