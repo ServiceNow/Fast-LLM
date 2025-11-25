@@ -426,19 +426,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             .unsqueeze(0)
         )
 
-    def _preprocess_for_cross_doc_attetion(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        """
-        Since forward is packed by default, this is needed for tests to path.
-        """
-        if LinearAttentionKwargs.sequence_lengths in kwargs:
-            return self._preprocess_for_varlen(batch, kwargs)
-        bs, sequence_lengths = (
-            batch.shape[:2] if not kwargs[BlockKwargs.sequence_first] else (batch.shape[1], batch.shape[0])
-        )
-        sequence_lengths = [torch.tensor([sequence_lengths] * bs, device=batch.device)]
-        kwargs[LinearAttentionKwargs.sequence_lengths] = sequence_lengths
-        self._preprocess_for_varlen(batch, kwargs)
-
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._preprocess_for_varlen(kwargs)
 
