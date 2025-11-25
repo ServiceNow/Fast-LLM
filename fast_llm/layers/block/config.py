@@ -1,4 +1,5 @@
 import functools
+import logging
 import typing
 import warnings
 
@@ -8,11 +9,13 @@ from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.block.block import BlockBase
     from fast_llm.layers.block.sequence import FixedBlockSequence, PatternBlockSequence
+
+logger = logging.getLogger(__name__)
 
 
 class BlockDimNames:
@@ -174,3 +177,15 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
         for block in self.blocks.values():
             models.update(block.get_distillation_models())
         return models
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Patch creeping type parameters from pretrained model
+        # TODO: fix this
+        if "block" in default:
+            removed = default.pop("block")
+            log(
+                f"Removing 'block' from default dict in PatternBlockSequenceConfig._from_dict: {removed}",
+                log_fn=logger.warning,
+            )
+        return super()._from_dict(default, strict=strict)
