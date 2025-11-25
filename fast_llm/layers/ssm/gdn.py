@@ -378,7 +378,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         return output
 
-    def _preprocess_for_varlen(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def _preprocess_for_varlen(self, kwargs: dict[str, typing.Any]) -> None:
         """
         Creates seqlens and cu_seqlens for packed forward.
         This assumes that forward pass is performed on a fully packed sequence, i.e. where sequences are flattened out into BS = 1.
@@ -390,15 +390,21 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         """
 
         sequence_lengths = kwargs[LinearAttentionKwargs.sequence_lengths]
+        device = kwargs.get("device", None)
         if sequence_lengths is None:
             raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
-        seqlens = torch.cat(sequence_lengths)
-        cu_seqlens = torch.cat(
-            (
-                torch.zeros(1, dtype=torch.long, device=batch.device),
-                torch.cumsum(seqlens, dim=0, dtype=torch.long).to(batch.device),
-            )
+        seqlens = torch.tensor(
+            [
+                0,
+                *(
+                    sequence_length
+                    for sequence_lengths in kwargs[LinearAttentionKwargs.sequence_lengths]
+                    for sequence_length in sequence_lengths
+                ),
+            ],
+            dtype=torch.int32,
         )
+        cu_seqlens = seqlens.cumsum_(0).to(device)
         # this is supposed to be flattened, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303
         # also whenever cu_seqlens is used, batchs size must be forced to 1: see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L347
         kwargs[LinearAttentionKwargs.cu_seqlens] = cu_seqlens
@@ -433,11 +439,8 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         kwargs[LinearAttentionKwargs.sequence_lengths] = sequence_lengths
         self._preprocess_for_varlen(batch, kwargs)
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        if LinearAttentionKwargs.sequence_lengths in kwargs:
-            self._preprocess_for_varlen(batch, kwargs)
-        else:
-            self._preprocess_for_cross_doc_attetion(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._preprocess_for_varlen(kwargs)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
