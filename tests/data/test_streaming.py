@@ -109,6 +109,76 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
     )
 
 
+def generate_parallelism_variants(total_gpus: int):
+    """
+    Generate all valid variants of (data_groups, tensor_parallel, pipeline_parallel, sequence_parallel)
+    for a  number of GPUs up to the total_gpus.
+    If total_gpus is odd and > 1, fallback to nearest lower even number for decomposable parallelism.
+    """
+    if total_gpus > 1 and total_gpus % 2 == 1:
+        total_gpus = total_gpus - 1
+
+    if total_gpus == 0:
+        return [
+            {
+                "data_groups": 1,
+                "tensor_parallel": 1,
+                "pipeline_parallel": 1,
+                "sequence_data_parallel": 1,
+                "total_gpus": 0,
+            }
+        ]
+
+    variants = [
+        {
+            "data_groups": 1,
+            "tensor_parallel": 1,
+            "pipeline_parallel": 1,
+            "sequence_data_parallel": 1,
+            "total_gpus": 1,
+        }
+    ]
+
+    for gpus in range(2, total_gpus + 1, 2):
+        # try all possible numbers of data groups (1..total_gpus)
+        for data_groups in range(1, gpus + 1):
+            if gpus % data_groups != 0:
+                continue  # cannot evenly split
+
+            gpus_per_group = gpus // data_groups
+
+            # now find all decompositions of gpus_per_group into tp*pp*sp
+            for tp in range(1, gpus_per_group + 1):
+                if gpus_per_group % tp != 0:
+                    continue
+                rem_after_tp = gpus_per_group // tp
+                for pp in range(1, rem_after_tp + 1):
+                    if rem_after_tp % pp != 0:
+                        continue
+                    sp = rem_after_tp // pp
+                    try:
+                        # instead of repeating all safeguards here just try to instantiate distributed config  to check if combination is valid
+                        DistributedConfig(
+                            tensor_parallel=tp,
+                            pipeline_parallel=pp,
+                            sequence_data_parallel=sp,
+                            world_size=gpus,
+                            rank=0,
+                        )
+                    except Exception:
+                        continue
+                    variants.append(
+                        {
+                            "data_groups": data_groups,
+                            "tensor_parallel": tp,
+                            "pipeline_parallel": pp,
+                            "sequence_data_parallel": sp,
+                            "total_gpus": gpus,
+                        }
+                    )
+    return variants
+
+
 # ---------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------
@@ -239,17 +309,25 @@ def test_sampling_overflow_creates_two_and_padding_final(monkeypatched_redis, st
     assert out[1].tokens.tokens.tolist() == list(range(6)) + [-100, -100, -100, -100]
 
 
-def test_data_single_consumer(fake_redis_server):
-    stream_config, fake_redis = fake_redis_server
-
-    sequence_length = 10
-    samples_count = 2
-
-    push_msg(fake_redis, stream_config, list(range(sequence_length)))
-    push_msg(fake_redis, stream_config, list(range(sequence_length)))
-
-    distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampling_data = make_sampling(sequence_length, 0, samples_count, distributed)
+def distributed_gptdata_streaming_test(
+    stream_config,
+    sequence_length,
+    micro_batch_size,
+    batch_size,
+    tensor_parallel,
+    pipeline_parallel,
+    sequence_data_parallel,
+    total_gpus,
+):
+    distributed = Distributed(
+        DistributedConfig(
+            tensor_parallel=tensor_parallel,
+            pipeline_parallel=pipeline_parallel,
+            sequence_data_parallel=sequence_data_parallel,
+        ),
+        use_cpu=total_gpus > 0,
+    )
+    sampling_data = make_sampling(sequence_length, 0, micro_batch_size, distributed)
 
     data_config = {"datasets": {"streaming1": stream_config.to_dict()}, "sampling": {"shuffle": "disabled"}}
     data_config = GPTDataConfig.from_dict(data_config)
@@ -260,7 +338,7 @@ def test_data_single_consumer(fake_redis_server):
 
     with NoAutoValidate():
         batch_config = GPTBatchConfig(
-            micro_batch_size=samples_count, batch_size=samples_count, sequence_length=sequence_length
+            micro_batch_size=micro_batch_size, batch_size=batch_size, sequence_length=sequence_length
         )
         batch_config.setup(distributed_config=distributed.config)
         batch_config.validate()
@@ -268,4 +346,41 @@ def test_data_single_consumer(fake_redis_server):
     data_iter = data.get_iterator(batch_config, "streaming1", consumed_samples=0, num_workers=1, prefetch_factor=1)
 
     batch = next(data_iter)
-    assert batch.tokens.tokens.shape == (2, 10)
+    assert batch.tokens.tokens.shape == (micro_batch_size, sequence_length)
+
+
+variants = generate_parallelism_variants(torch.cuda.device_count())
+
+
+@pytest.mark.parametrize(
+    "variant",
+    variants,
+    ids=[
+        f"dg{v['data_groups']}_tp{v['tensor_parallel']}_pp{v['pipeline_parallel']}_sp{v['sequence_data_parallel']}_gpu{v['total_gpus']}"
+        for v in variants
+    ],
+)
+def test_gptdata_streaming(fake_redis_server, variant):
+    if variant["total_gpus"] > 1:
+        pytest.skip(f"Skipping, not implemented for gpu count {variant["total_gpus"]}")
+
+    stream_config, fake_redis = fake_redis_server
+
+    sequence_length = 10
+    micro_batch_size = 2
+    batch_size = micro_batch_size * variant["data_groups"] // variant["sequence_data_parallel"]
+
+    for _ in range(batch_size):
+        push_msg(fake_redis, stream_config, list(range(sequence_length)))
+
+    # TODO: call with torchrun.distributed for more than 1 gpu
+    distributed_gptdata_streaming_test(
+        stream_config,
+        sequence_length,
+        micro_batch_size,
+        batch_size,
+        variant["tensor_parallel"],
+        variant["pipeline_parallel"],
+        variant["sequence_data_parallel"],
+        variant["total_gpus"],
+    )
