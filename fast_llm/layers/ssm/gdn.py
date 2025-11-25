@@ -210,9 +210,9 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        # self.norm = self._config.normalization.get_layer(
-        #     self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
-        # )
+        self.norm = self._config.normalization.get_layer(
+            self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
+        )
 
         self.chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
 
@@ -259,7 +259,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
         """
 
-        # Split contiguous q/k/v/z blocks and only then project them into per-head shapes.
         local_qkv_sizes = (
             self._local_key_heads * self._config.key_head_dim,
             self._local_key_heads * self._config.key_head_dim,
@@ -370,7 +369,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
-        # core_attn_out = self.norm(core_attn_out, z)
+        core_attn_out = self.norm(core_attn_out, z)
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
         if sequence_first:

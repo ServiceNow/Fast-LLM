@@ -311,14 +311,14 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
         super().__init__(config, hidden_dim, lr_scale)
 
         if rms_norm_gated is not None:
-            self._forward = self._forward_fused
+            self._forward_gated = self._forward_local
         else:
-            self._forward = self._forward
+            self._forward_gated = self._forward_local
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_.view(-1, *self._normalized_shape), gate).view_as(input_)
+        return self._forward_gated(input_.view(-1, *self._normalized_shape), gate).view_as(input_)
 
-    def _forward_fused(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    def _forward_fla(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         return rms_norm_gated(
             input_,
             gate,
@@ -331,6 +331,6 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
             residual_in_fp32=False,
         )
 
-    def _forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        normalized = self.rmsnorm(input_)
+    def _forward_local(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        normalized = self._forward(input_)
         return normalized * F.silu(gate)
