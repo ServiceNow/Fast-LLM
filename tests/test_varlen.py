@@ -1,4 +1,3 @@
-import inspect
 import itertools
 
 import pytest
@@ -11,25 +10,6 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import gdn as gdn_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
-
-# from mamba2 import NemotronHMamba2
-
-
-_mamba_varlen = False
-try:
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
-
-    _mamba_available = True
-    sig = inspect.signature(selective_scan_fn)
-    if "position_indices" in sig.parameters:
-        _mamba_varlen = True
-    else:
-        _mamba_varlen = False
-        # for training with packing install https://github.com/jxiw/varlen_mamba
-        # see https://github.com/jxiw/M1/blob/main/HYBRID_PACK.md
-
-except (ImportError, RuntimeError):
-    _mamba_available = False
 
 
 @pytest.fixture

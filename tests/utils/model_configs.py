@@ -831,7 +831,7 @@ _update_and_add_testing_config(
                     "mixer": {
                         "type": "gdn",
                         "value_heads": 4,
-                        "key_heads": 2,
+                        "key_heads": 4,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
                     },

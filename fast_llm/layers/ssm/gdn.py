@@ -210,9 +210,9 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        self.norm = self._config.normalization.get_layer(
-            self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
-        )
+        # self.norm = self._config.normalization.get_layer(
+        #     self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
+        # )
 
         self.chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
 
@@ -221,41 +221,65 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
             )
 
+    # def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
+    #     """Derives query, key and value tensors from mixed_qkvz and mixed_ba."""
+    #     new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
+    #         self._local_key_heads,
+    #         2 * self._config.key_head_dim
+    #         + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
+    #     )
+    #     new_tensor_shape_ba = mixed_ba.size()[:-1] + (
+    #         self._local_key_heads,
+    #         2 * self._local_value_heads // self._local_key_heads,
+    #     )
+    #     mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
+    #     mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
+    #     split_arg_list_qkvz = [
+    #         self._config.key_head_dim,
+    #         self._config.key_head_dim,
+    #         (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+    #         (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+    #     ]
+    #     split_arg_list_ba = [
+    #         self._local_value_heads // self._local_key_heads,
+    #         self._local_value_heads // self._local_key_heads,
+    #     ]
+    #     query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
+    #     b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
+    #     # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
+    #     value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
+    #     z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
+    #     b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
+    #     a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
+    #     return query, key, value, z, b, a
+
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """
+        note this must be the right way to split the TP, because TP splits each subdimention of ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim)) seperately.
         Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
         """
 
-        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._config.key_head_dim
-            + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
+        # Split contiguous q/k/v/z blocks and only then project them into per-head shapes.
+        local_qkv_sizes = (
+            self._local_key_heads * self._config.key_head_dim,
+            self._local_key_heads * self._config.key_head_dim,
+            self._local_value_heads * self._config.value_head_dim,
+            self._local_value_heads * self._config.value_head_dim,
         )
-        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._local_value_heads // self._local_key_heads,
-        )
+        query, key, value, z = torch.split(mixed_qkvz, local_qkv_sizes, dim=-1)
+        query = query.reshape(*query.shape[:-1], self._local_key_heads, self._config.key_head_dim)
+        key = key.reshape(*key.shape[:-1], self._local_key_heads, self._config.key_head_dim)
+        value = value.reshape(*value.shape[:-1], self._local_value_heads, self._config.value_head_dim)
+        z = z.reshape(*z.shape[:-1], self._local_value_heads, self._config.value_head_dim)
 
-        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-        split_arg_list_qkvz = [
-            self._config.key_head_dim,
-            self._config.key_head_dim,
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-        ]
-        split_arg_list_ba = [
-            self._local_value_heads // self._local_key_heads,
-            self._local_value_heads // self._local_key_heads,
-        ]
-        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
-        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
-        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
-        value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
-        z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
-        b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
-        a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
-        return query, key, value, z, b, a
+        beta, alpha = torch.split(
+            mixed_ba,
+            (self._local_value_heads, self._local_value_heads),
+            dim=-1,
+        )
+        beta = beta.reshape(*beta.shape[:-1], self._local_value_heads)
+        alpha = alpha.reshape(*alpha.shape[:-1], self._local_value_heads)
+        return query, key, value, z, beta, alpha
 
     def _forward(
         self,
@@ -280,7 +304,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         # TODO: fuse soome of the reshapes into rearranges
         hidden_states = input_
 
-        # these are not
         cu_seqlens = kwargs.get(LinearAttentionKwargs.cu_seqlens, None)
         seq_idx = kwargs.get(LinearAttentionKwargs.seq_idx, None)
 
@@ -321,7 +344,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         value = value.reshape(value.shape[0], value.shape[1], -1, self._config.value_head_dim)
 
         beta = beta.sigmoid()
-        g = -torch.exp(self.A_log) * F.softplus(alpha + self.dt_bias)
+        g = -self.A_log.float().exp() * F.softplus(alpha.float() + self.dt_bias)
 
         beta = rearrange(beta, "b s ... -> (b s) ...").unsqueeze(0)
         g = rearrange(g, "b s ... -> (b s) ...").unsqueeze(0)
@@ -347,7 +370,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
-        core_attn_out = self.norm(core_attn_out, z)
+        # core_attn_out = self.norm(core_attn_out, z)
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
         if sequence_first:
@@ -398,9 +421,24 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             .unsqueeze(0)
         )
 
+    def _preprocess_for_cross_doc_attetion(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+        """
+        Since forward is packed by default, this is needed for tests to path.
+        """
+        if LinearAttentionKwargs.sequence_lengths in kwargs:
+            return self._preprocess_for_varlen(batch, kwargs)
+        bs, sequence_lengths = (
+            batch.shape[:2] if not kwargs[BlockKwargs.sequence_first] else (batch.shape[1], batch.shape[0])
+        )
+        sequence_lengths = [torch.tensor([sequence_lengths] * bs, device=batch.device)]
+        kwargs[LinearAttentionKwargs.sequence_lengths] = sequence_lengths
+        self._preprocess_for_varlen(batch, kwargs)
+
     def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
         if LinearAttentionKwargs.sequence_lengths in kwargs:
             self._preprocess_for_varlen(batch, kwargs)
+        else:
+            self._preprocess_for_cross_doc_attetion(batch, kwargs)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
