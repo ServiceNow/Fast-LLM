@@ -817,6 +817,45 @@ _update_and_add_testing_config(
 )
 
 
+_update_and_add_testing_config(
+    # Tests hybrid with gated delta net mixer.
+    "llama",
+    "hybrid_gdn",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "gdn": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 2,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "gdn"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=16,
+    skip_tests=("sdp", "ms", "stp"),
+)
+
+
 @pytest.fixture(scope="session", params=MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
     models = request.config.getoption("--models")
