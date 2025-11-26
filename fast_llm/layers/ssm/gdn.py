@@ -117,6 +117,9 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
     - For tensor parallel implementtion (no sequnece prallel): we scatter teh heads accross ranks.
     - Sequence Tensor parallel: in_proj_qkvz all reduces across sequence dim. --> each rank performs work on full sequence but only a subset of heads (standrd TP).
 
+    Note, Qwen3_Next follows a different layout, where gdn_qkvz is assumed to be layed out as [h0: Q,K,V,Z][h1: Q,K,V,Z][h2: Q,K,V,Z]
+    Here we follow a more natural layout for gdn_qkvz: [Q_all_heads | K_all_heads | V_all_heads | Z_all_heads]. If we want to apply MIL init here it should be easier like this.
+
     """
 
     _config: ConfigType
@@ -131,6 +134,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         peft: PeftConfig | None,
         return_bias: bool = True,
     ):
+
         super().__init__(
             config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft, return_bias=return_bias
         )
@@ -141,6 +145,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         self._key_heads_dim = TensorDim(
             "gdn_key_heads", self._config.key_heads, self._parallel_dim if self._config.key_heads > 1 else None
         )
+
         self._value_head_dim = TensorDim("gdn_value_head_dim", self._config.value_head_dim)
         self._key_head_dim = TensorDim("gdn_key_head_dim", self._config.key_head_dim)
         self._local_value_heads = self._value_heads_dim.size
@@ -150,8 +155,18 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         query_dim = CompositeTensorDim("gdn_query", (self._key_heads_dim, self._key_head_dim))
         key_dim = CompositeTensorDim("gdn_key", (self._key_heads_dim, self._key_head_dim))
         value_dim = CompositeTensorDim("gdn_value", (self._value_heads_dim, self._value_head_dim))
+
         z_dim = CompositeTensorDim("gdn_z", (self._value_heads_dim, self._value_head_dim))
         qkvz_dim = ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim))
+        # for Qwen's layour use soemthing like this instead:
+        # n_vheads_per_k_head = self._config.value_heads // self._config.key_heads
+        # head_size = 2 * self._config.key_head_dim + 2 * self._config.value_head_dim * n_vheads_per_k_head
+        # n_heads = self._config.key_heads
+        # qkvz_dim = TensorDim(e
+        #     "gdn_qkvz",
+        #     n_heads * head_size,
+        #     self._parallel_dim if n_heads > 1 else None,
+        # )
         ba_dim = ConcatenatedTensorDim(
             "gdn_ba",
             (
@@ -159,6 +174,12 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 CompositeTensorDim("gdn_alpha", (self._value_heads_dim,)),
             ),
         )
+        # for Qwen's layour use something like this instead:
+        # ba_dim = TensorDim(
+        #     "gdn_ba",
+        #     2 * self._config.value_heads,
+        #     self._parallel_dim if 2 * self._config.value_heads > 1 else None,
+        # )
 
         qkv_channels_dim = ConcatenatedTensorDim("gdn_qkv", (query_dim, key_dim, value_dim))
 
@@ -221,42 +242,42 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
             )
 
-    # def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-    #     """Derives query, key and value tensors from mixed_qkvz and mixed_ba."""
-    #     new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-    #         self._local_key_heads,
-    #         2 * self._config.key_head_dim
-    #         + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
-    #     )
-    #     new_tensor_shape_ba = mixed_ba.size()[:-1] + (
-    #         self._local_key_heads,
-    #         2 * self._local_value_heads // self._local_key_heads,
-    #     )
-    #     mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-    #     mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-    #     split_arg_list_qkvz = [
-    #         self._config.key_head_dim,
-    #         self._config.key_head_dim,
-    #         (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-    #         (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-    #     ]
-    #     split_arg_list_ba = [
-    #         self._local_value_heads // self._local_key_heads,
-    #         self._local_value_heads // self._local_key_heads,
-    #     ]
-    #     query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
-    #     b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
-    #     # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
-    #     value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
-    #     z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
-    #     b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
-    #     a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
-    #     return query, key, value, z, b, a
+    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
+        """Derives query, key and value tensors from mixed_qkvz and mixed_ba."""
+        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
+            self._local_key_heads,
+            2 * self._config.key_head_dim
+            + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
+        )
+        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
+            self._local_key_heads,
+            2 * self._local_value_heads // self._local_key_heads,
+        )
+        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
+        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
+        split_arg_list_qkvz = [
+            self._config.key_head_dim,
+            self._config.key_head_dim,
+            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
+        ]
+        split_arg_list_ba = [
+            self._local_value_heads // self._local_key_heads,
+            self._local_value_heads // self._local_key_heads,
+        ]
+        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
+        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
+        value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
+        z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
+        b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
+        a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
+        return query, key, value, z, b, a
 
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """
-        note this must be the right way to split the TP, because TP splits each subdimention of ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim)) seperately.
         Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
+        Replaces fix_query_key_value_ordering from Qwen due to layout differences.
         """
 
         local_qkv_sizes = (
