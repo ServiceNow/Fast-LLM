@@ -1,3 +1,7 @@
+import logging
+import os
+import pickle
+import socket
 import threading
 
 import fakeredis
@@ -5,9 +9,6 @@ import orjson
 import pytest
 import torch
 
-from fast_llm.config import NoAutoValidate
-from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.config import (
     RedisConfig,
     SamplingConfig,
@@ -20,7 +21,10 @@ from fast_llm.data.dataset.streaming import StreamingDataset
 from fast_llm.data.sample.pipeline_rl import PipelineRLSample
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.models.gpt.config import GPTBatchConfig
+from tests.utils.utils import requires_cuda
+
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------
 # Fixtures
@@ -44,20 +48,14 @@ def monkeypatched_redis(monkeypatch, fake_redis):
 
 @pytest.fixture
 def stream_config():
-    return StreamingDatasetConfig(
-        redis=RedisConfig(
-            host="localhost",
-            port=6379,
-            stream_key="test_stream",
-            group_name="test_group",
-            consumer_name_prefix="consumer",
-        ),
-        data_key="data",
-    )
+    return get_stream_config()
 
 
 @pytest.fixture
 def fake_redis_server(stream_config):
+    # We search for free port as port from previous test can still be not free even after server shutdown
+    stream_config = stream_config.from_dict(stream_config.to_dict(), {("redis", "port"): find_free_port()})
+
     server_address = (stream_config.redis.host, stream_config.redis.port)
     server = fakeredis.TcpFakeServer(server_address, server_type="redis")
 
@@ -80,6 +78,26 @@ def fake_redis_server(stream_config):
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
+
+
+def find_free_port():
+    """Find a free TCP port and return it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def get_stream_config():
+    return StreamingDatasetConfig(
+        redis=RedisConfig(
+            host="localhost",
+            port=6379,
+            stream_key="test_stream",
+            group_name="test_group",
+            consumer_name_prefix="consumer",
+        ),
+        data_key="data",
+    )
 
 
 def push_msg(redis_client, config, tokens=None, is_eof=False):
@@ -118,26 +136,12 @@ def generate_parallelism_variants(total_gpus: int):
     if total_gpus > 1 and total_gpus % 2 == 1:
         total_gpus = total_gpus - 1
 
-    if total_gpus == 0:
-        return [
-            {
-                "data_groups": 1,
-                "tensor_parallel": 1,
-                "pipeline_parallel": 1,
-                "sequence_data_parallel": 1,
-                "total_gpus": 0,
-            }
-        ]
+    if total_gpus < 2:
+        # No gpu and one gpu tests are the same,
+        # so no need of creation of variant for a single gpu
+        return []
 
-    variants = [
-        {
-            "data_groups": 1,
-            "tensor_parallel": 1,
-            "pipeline_parallel": 1,
-            "sequence_data_parallel": 1,
-            "total_gpus": 1,
-        }
-    ]
+    variants = []
 
     for gpus in range(2, total_gpus + 1, 2):
         # try all possible numbers of data groups (1..total_gpus)
@@ -157,19 +161,24 @@ def generate_parallelism_variants(total_gpus: int):
                         continue
                     sp = rem_after_tp // pp
                     try:
-                        # instead of repeating all safeguards here just try to instantiate distributed config  to check if combination is valid
-                        DistributedConfig(
+                        # instead of repeating all safeguards here just try to
+                        # instantiate distributed config  to check if combination is valid
+                        dist_config = DistributedConfig(
                             tensor_parallel=tp,
                             pipeline_parallel=pp,
                             sequence_data_parallel=sp,
                             world_size=gpus,
+                            # TODO: works only on one node
+                            local_world_size=gpus,
                             rank=0,
                         )
                     except Exception:
                         continue
+
                     variants.append(
                         {
                             "data_groups": data_groups,
+                            "batch_data_parallel": dist_config.batch_data_parallel,
                             "tensor_parallel": tp,
                             "pipeline_parallel": pp,
                             "sequence_data_parallel": sp,
@@ -177,6 +186,113 @@ def generate_parallelism_variants(total_gpus: int):
                         }
                     )
     return variants
+
+
+def run_distributed_gptdata_streaming_test(
+    fake_redis_server,
+    variant,
+    run_distributed_script,
+    result_path,
+    request,
+):
+    import tests.data.gptdata_streaming_test
+
+    stream_config, fake_redis = fake_redis_server
+
+    sequence_length = 10
+    micro_batch_size = 2
+    batch_size = micro_batch_size * variant["batch_data_parallel"]
+    tensor_parallel = variant["tensor_parallel"]
+    pipeline_parallel = variant["pipeline_parallel"]
+    sequence_data_parallel = variant["sequence_data_parallel"]
+    total_gpus = variant["total_gpus"]
+    redis_port = stream_config.redis.port
+
+    for i in range(batch_size):
+        push_msg(fake_redis, stream_config, [i] * sequence_length)
+
+    result_path = result_path / "distributed_gptdata_streaming_test" / request.node.name
+
+    if total_gpus > 0:
+        script = [
+            "-m",
+            tests.data.gptdata_streaming_test.__name__,
+            "--sequence-length",
+            str(sequence_length),
+            "--micro-batch-size",
+            str(micro_batch_size),
+            "--batch-size",
+            str(batch_size),
+            "--tensor-parallel",
+            str(tensor_parallel),
+            "--pipeline-parallel",
+            str(pipeline_parallel),
+            "--sequence-data-parallel",
+            str(sequence_data_parallel),
+            "--total-gpus",
+            str(total_gpus),
+            "--result-path",
+            str(result_path),
+            "--redis-port",
+            str(redis_port),
+        ]
+        # TODO: distributed_capture is ignored now inside the script
+        if request.config.getoption("distributed_capture"):
+            logger.warning(
+                "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
+            )
+        else:
+            script.append("--no-distributed-capture")
+
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = "42"
+        run_distributed_script(script, num_gpus=total_gpus, env=env)
+    else:
+        tests.data.gptdata_streaming_test.distributed_gptdata_streaming_test(
+            sequence_length=sequence_length,
+            micro_batch_size=micro_batch_size,
+            batch_size=batch_size,
+            tensor_parallel=tensor_parallel,
+            pipeline_parallel=pipeline_parallel,
+            sequence_data_parallel=sequence_data_parallel,
+            total_gpus=total_gpus,
+            redis_port=redis_port,
+            result_path=result_path,
+        )
+
+    check_distributed_gptdata_streaming_test_results(
+        result_path=result_path,
+        micro_batch_size=micro_batch_size,
+        batch_data_parallel=variant["batch_data_parallel"],
+        total_gpu=variant["total_gpus"],
+    )
+
+
+def check_distributed_gptdata_streaming_test_results(
+    result_path,
+    micro_batch_size,
+    batch_data_parallel,
+    total_gpu,
+):
+    batch_data_parallel_size = total_gpu // batch_data_parallel if total_gpu > 0 else 1
+    sample_idx = set()
+    for i in range(batch_data_parallel):
+        ref_batch = None
+        for j in range(batch_data_parallel_size):
+            with (result_path / f"{i}_{j}" / "batch.pkl").open("rb") as f:
+                batch = pickle.load(f)
+            if ref_batch is None:
+                ref_batch = batch
+            else:
+                # batches for same batch_data_parallel_group must be equal on all ranks
+                assert torch.equal(batch.tokens.tokens, ref_batch.tokens.tokens)
+        for j in range(micro_batch_size):
+            val = ref_batch.tokens.tokens[j, 0].item()
+            # all samples in batches between groups and in the batch must be unique
+            assert val not in sample_idx
+            sample_idx.add(val)
+    # unique sample count must be the same as global batch size
+    assert len(sample_idx) == micro_batch_size * batch_data_parallel
 
 
 # ---------------------------------------------------------------------
@@ -309,49 +425,29 @@ def test_sampling_overflow_creates_two_and_padding_final(monkeypatched_redis, st
     assert out[1].tokens.tokens.tolist() == list(range(6)) + [-100, -100, -100, -100]
 
 
-def distributed_gptdata_streaming_test(
-    stream_config,
-    sequence_length,
-    micro_batch_size,
-    batch_size,
-    tensor_parallel,
-    pipeline_parallel,
-    sequence_data_parallel,
-    total_gpus,
-):
-    distributed = Distributed(
-        DistributedConfig(
-            tensor_parallel=tensor_parallel,
-            pipeline_parallel=pipeline_parallel,
-            sequence_data_parallel=sequence_data_parallel,
-        ),
-        use_cpu=total_gpus > 0,
+def test_gptdata_streaming_single_consumer(fake_redis_server, run_distributed_script_lean, result_path, request):
+
+    run_distributed_gptdata_streaming_test(
+        fake_redis_server=fake_redis_server,
+        variant={
+            "data_groups": 1,
+            "tensor_parallel": 1,
+            "pipeline_parallel": 1,
+            "sequence_data_parallel": 1,
+            "total_gpus": 0,
+            "batch_data_parallel": 1,
+        },
+        run_distributed_script=run_distributed_script_lean,
+        result_path=result_path,
+        request=request,
     )
-    sampling_data = make_sampling(sequence_length, 0, micro_batch_size, distributed)
-
-    data_config = {"datasets": {"streaming1": stream_config.to_dict()}, "sampling": {"shuffle": "disabled"}}
-    data_config = GPTDataConfig.from_dict(data_config)
-
-    data = GPTData(data_config, distributed.config)
-
-    data.setup(distributed, {"streaming1": sampling_data.parameters}, "/tmp")
-
-    with NoAutoValidate():
-        batch_config = GPTBatchConfig(
-            micro_batch_size=micro_batch_size, batch_size=batch_size, sequence_length=sequence_length
-        )
-        batch_config.setup(distributed_config=distributed.config)
-        batch_config.validate()
-
-    data_iter = data.get_iterator(batch_config, "streaming1", consumed_samples=0, num_workers=1, prefetch_factor=1)
-
-    batch = next(data_iter)
-    assert batch.tokens.tokens.shape == (micro_batch_size, sequence_length)
 
 
 variants = generate_parallelism_variants(torch.cuda.device_count())
 
 
+@pytest.mark.slow
+@requires_cuda
 @pytest.mark.parametrize(
     "variant",
     variants,
@@ -360,27 +456,13 @@ variants = generate_parallelism_variants(torch.cuda.device_count())
         for v in variants
     ],
 )
-def test_gptdata_streaming(fake_redis_server, variant):
-    if variant["total_gpus"] > 1:
-        pytest.skip(f"Skipping, not implemented for gpu count {variant["total_gpus"]}")
-
-    stream_config, fake_redis = fake_redis_server
-
-    sequence_length = 10
-    micro_batch_size = 2
-    batch_size = micro_batch_size * variant["data_groups"] // variant["sequence_data_parallel"]
-
-    for _ in range(batch_size):
-        push_msg(fake_redis, stream_config, list(range(sequence_length)))
-
-    # TODO: call with torchrun.distributed for more than 1 gpu
-    distributed_gptdata_streaming_test(
-        stream_config,
-        sequence_length,
-        micro_batch_size,
-        batch_size,
-        variant["tensor_parallel"],
-        variant["pipeline_parallel"],
-        variant["sequence_data_parallel"],
-        variant["total_gpus"],
+def test_gptdata_streamin_gpus(fake_redis_server, variant, run_distributed_script_lean, result_path, request):
+    # TODO: make tests on the same number of gpu as subtests similar to how it is done in the test_model
+    #       for speed
+    run_distributed_gptdata_streaming_test(
+        fake_redis_server=fake_redis_server,
+        variant=variant,
+        run_distributed_script=run_distributed_script_lean,
+        result_path=result_path,
+        request=request,
     )

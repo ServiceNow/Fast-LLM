@@ -60,6 +60,17 @@ def run_distributed_script(
 
 
 @pytest.fixture(scope="session")
+def run_distributed_script_lean(
+    worker_resources: "WorkerResources",
+):
+    return functools.partial(
+        do_run_distributed_script,
+        rendezvous_port=worker_resources.rendezvous_port,
+        torchrun_port=worker_resources.torchrun_port,
+    )
+
+
+@pytest.fixture(scope="session")
 def run_test_script_base_path(model_testing_config, result_path, request):
     return result_path / "models" / model_testing_config.name
 
