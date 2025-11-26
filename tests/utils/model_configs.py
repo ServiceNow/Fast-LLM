@@ -14,7 +14,6 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
-    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -748,6 +747,45 @@ _update_and_add_testing_config(
             },
             "num_blocks": 2,
             "pattern": ["t", "gdn"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests hybrid with gated delta net mixer.
+    "llama",
+    "hybrid_kda",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "kda": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "kda",
+                        "heads": 4,
+                        "head_dim": 16,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "kda"],
         },
     },
     megatron_args=None,

@@ -264,7 +264,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             g_kernel = g_kernel.transpose(0, 1)
         g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
 
-        g_kernel = fused_kda_gate(g_kernel, self.A_log, self._config.head_dim, g_bias=self.dt_bias)
+        g_kernel = fused_kda_gate(g_kernel, self.A_log, dt_bias=self.dt_bias)
 
         beta = torch.sigmoid(self.beta_proj(hidden_states).float())
         q = self._reshape_heads(q)
@@ -307,17 +307,23 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
-    def _preprocess_for_varlen(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
+    def _preprocess_for_varlen(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_lengths = kwargs[LinearAttentionKwargs.sequence_lengths]
+        device = kwargs.get("device", None)
         if sequence_lengths is None:
             raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
-        seqlens = torch.cat(sequence_lengths)
-        cu_seqlens = torch.cat(
-            (
-                torch.zeros(1, dtype=torch.long, device=batch.device),
-                torch.cumsum(seqlens, dim=0, dtype=torch.long).to(batch.device),
-            )
+        seqlens = torch.tensor(
+            [
+                0,
+                *(
+                    sequence_length
+                    for sequence_lengths in kwargs[LinearAttentionKwargs.sequence_lengths]
+                    for sequence_length in sequence_lengths
+                ),
+            ],
+            dtype=torch.int32,
         )
+        cu_seqlens = seqlens.cumsum_(0).to(device)
         # this is supposed to be flattened, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303
         # also whenever cu_seqlens is used, batchs size must be forced to 1: see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L347
         kwargs[LinearAttentionKwargs.cu_seqlens] = cu_seqlens
@@ -339,8 +345,5 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             .unsqueeze(0)
         )
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        if LinearAttentionKwargs.sequence_lengths in kwargs:
-            # TODO: packing is enabled by default, i.e. its always used?
-            # only get here when cross_document_attention is False
-            self._preprocess_for_varlen(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self._preprocess_for_varlen(kwargs)
