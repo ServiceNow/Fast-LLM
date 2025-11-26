@@ -8,7 +8,6 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.ssm.config import (
     DiscreteMamba2Config,
     GatedDeltaNetConfig,
@@ -230,19 +229,6 @@ class AprielMamba2Converter:
         ]
 
 
-class AprielMLPConverter(LlamaMLPConverter):
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["mlp_bias"] = False
-        return super().import_config(config)
-
-    @classmethod
-    def export_config(cls, config: MLPConfig) -> dict:
-        out = super().export_config(config)
-        del out["mlp_bias"]
-        return out
-
-
 class GatedDeltaNetConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -272,7 +258,7 @@ class GatedDeltaNetConverter:
     @classmethod
     def get_converters(
         cls,
-        config: KimiDeltaAttentionConfig,
+        config: GatedDeltaNetConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
@@ -443,16 +429,12 @@ class KimiDeltaAttentionConverter:
         ]
 
 
-class AprielBlockConverterBase(MistralBlockConverter):
-    mlp_converter_class: typing.ClassVar[type[AprielMLPConverter]] = AprielMLPConverter
-
-
-class AprielDiscreteMamba2BlockConverter(AprielBlockConverterBase):
+class AprielDiscreteMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielDiscreteMamba2Converter]] = AprielDiscreteMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
-class AprielKimiDeltaAttentionBlockConverter(AprielBlockConverterBase):
+class AprielKimiDeltaAttentionBlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[KimiDeltaAttentionConverter]] = KimiDeltaAttentionConverter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
@@ -462,7 +444,7 @@ class AprielMamba2BlockConverter(MistralBlockConverter):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
-class AprielGatedDeltaNetBlockConverter(AprielBlockConverterBase):
+class AprielGatedDeltaNetBlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[GatedDeltaNetConverter]] = GatedDeltaNetConverter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
@@ -472,7 +454,6 @@ class AprielBlockConverter:
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
-        KimiDeltaAttentionConfig: "kda",
         GatedDeltaNetConfig: "gdn",
     }
     _converter_classes = {
