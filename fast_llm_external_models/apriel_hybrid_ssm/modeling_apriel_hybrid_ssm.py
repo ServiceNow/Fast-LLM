@@ -27,6 +27,8 @@ try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
     from fla.ops.kda import chunk_kda, fused_recurrent_kda
     from fla.ops.kda.gate import fused_kda_gate
+    from fla.ops.utils.index import prepare_cu_seqlens_from_mask, prepare_lens_from_mask
+    from fla.utils import tensor_cache
 except ImportError:
     raise ImportError("Plese run `pip install -U fla-core`")
 
@@ -126,7 +128,7 @@ def pad_input(
 
 
 class KimiDeltaAttention(nn.Module):
-    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int):
+    def __init__(self, config: AprielHybridSSMConfig, layer_idx: int):
         super().__init__()
         self.config = config
         self.mode = "chunk"
