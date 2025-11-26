@@ -1,5 +1,3 @@
-import itertools
-
 import pytest
 import torch
 
@@ -84,7 +82,7 @@ def pack(hidden_states, cu_seqlens, batch_size):
     return packed_hidden_states
 
 
-def generate_random_cu_seqlens(seq_len, packages_num=2):
+def generate_random_seq_len(seq_len, packages_num=2):
     if packages_num < 1:
         raise ValueError("packages_num must be at least 1")
 
@@ -92,24 +90,27 @@ def generate_random_cu_seqlens(seq_len, packages_num=2):
     base, rem = divmod(seq_len, packages_num)
     # lengths: e.g. for seq_len=10, packages=3 → [4,3,3]
     lengths = [base + 1 if i < rem else base for i in range(packages_num)]
-
-    # split points exclude the final cumulative (seq_len)
-    split_points = list(itertools.accumulate(lengths))[:-1]
-
-    cu_seqlens = [0] + split_points + [seq_len]
-    # cu_seqlens = split_points  # + [seq_len]
-
-    # index: for each chunk, we emit 0,1,...,length-1
-    index = []
-    for length in lengths:
-        index.extend(range(length))
-
-    # sanity check
-    assert len(cu_seqlens) - 1 == packages_num
     assert sum(lengths) == seq_len
-    assert len(index) == seq_len
+    assert len(lengths) == packages_num
+    return lengths
 
-    return cu_seqlens, index
+    # # split points exclude the final cumulative (seq_len)
+    # split_points = list(itertools.accumulate(lengths))[:-1]
+
+    # cu_seqlens = split_points + [seq_len]
+    # # cu_seqlens = split_points  # + [seq_len]
+
+    # # index: for each chunk, we emit 0,1,...,length-1
+    # index = []
+    # for length in lengths:
+    #     index.extend(range(length))
+
+    # # sanity check
+    # assert len(cu_seqlens) == packages_num
+    # assert sum(lengths) == seq_len
+    # assert len(index) == seq_len
+
+    # return cu_seqlens, index
 
 
 def _materialize_mixer_tensors(module: torch.nn.Module, distributed: Distributed, device: torch.device) -> None:
@@ -149,7 +150,8 @@ def _param_grad(param: torch.nn.Parameter) -> torch.Tensor | None:
     [
         pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), False),
         pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), True),
-        # pytest.param(KimiDeltaAttentionConfig)
+        # pytest.param(KimiDeltaAttentionConfig(heads=4, head_dim=16), False),
+        # pytest.param(KimiDeltaAttentionConfig(heads=4, head_dim=16), True),
     ],
 )
 def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: bool, distributed_config, distributed):
@@ -174,34 +176,23 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: 
     seq_len = 15
     packages_num = torch.tensor([2, 3], device=device, dtype=torch.long)
     sequence_lengths = [
-        torch.tensor(
-            generate_random_cu_seqlens(seq_len, packages_num=packages_num[i].item())[0],
-            device=device,
-            dtype=torch.long,
-        ).diff()
-        for i in range(batch_size)
+        generate_random_seq_len(seq_len, packages_num=packages_num[i].item()) for i in range(batch_size)
     ]
-    seqlens = torch.cat(sequence_lengths)
-    cu_seqlen = torch.cat(
-        (
-            torch.zeros(1, dtype=torch.long, device=device),
-            torch.cumsum(seqlens, dim=0, dtype=torch.long).to(device),
-        )
-    )
 
     packed = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype, requires_grad=True)
     if sequence_first:
         packed = packed.transpose(0, 1)
 
     kwargs_packed = {
+        BlockKwargs.device: device,
         BlockKwargs.sequence_lengths: sequence_lengths,
         BlockKwargs.sequence_first: sequence_first,
         BlockKwargs.hidden_dims: (hidden_dim,),
     }
-    mixer_packed.preprocess(packed, kwargs_packed)
-    assert torch.all(kwargs_packed["cu_seqlens"] == cu_seqlen)
+    mixer_packed.preprocess(kwargs_packed)
 
     kwargs_ref = {
+        BlockKwargs.device: device,
         BlockKwargs.sequence_first: False,
         BlockKwargs.hidden_dims: (hidden_dim,),
     }
@@ -215,13 +206,13 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: 
         out_batch = []
         length = sequence_lengths[b]
         if sequence_first:
-            ref_seqs = torch.split(packed[:, b].unsqueeze(0), length.tolist(), dim=1)
+            ref_seqs = torch.split(packed[:, b].unsqueeze(0), length, dim=1)
         else:
-            ref_seqs = torch.split(packed[b].unsqueeze(0), length.tolist(), dim=1)
+            ref_seqs = torch.split(packed[b].unsqueeze(0), length, dim=1)
         for seq in ref_seqs:
             kwargs_ref_seq = {
                 **kwargs_ref,
-                BlockKwargs.sequence_q_dim: TensorDim("sequence_q", seq.shape[1]),
+                BlockKwargs.sequence_lengths: [seq.shape[1]],
             }
             out_batch.append(mixer_ref(seq, kwargs_ref_seq))
         ref_outs.append(torch.cat(out_batch, dim=1))
@@ -236,7 +227,13 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: 
 
     for (name, param), (_, param_ref) in zip(mixer_packed.named_parameters(), mixer_ref.named_parameters()):
         if param.requires_grad:
-            assert torch.allclose(_param_grad(param), _param_grad(param_ref), atol=1e-3, rtol=1e-3)
+            torch.testing.assert_close(
+                _param_grad(param),
+                _param_grad(param_ref),
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"Grad mismatch for parameter {name}",
+            )
 
 
 if __name__ == "__main__":

@@ -222,17 +222,15 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        # TODO: make sure varlen is supported
-        # TODO: do we need to deal with padding tokens?
+        """
+        Same as in gdn, the idea is to always do forward pass in a packed way, whcih is required for varlen support.
+        """
         sequence_first = kwargs[BlockKwargs.sequence_first]
         hidden_states = input_
-        # padding_tokens = kwargs.get(LinearAttentionKwargs.padding_tokens, None)
-
-        # if padding_tokens is not None:
 
         cu_seqlens = kwargs.get(LinearAttentionKwargs.cu_seqlens, None)
         seq_idx = kwargs.get(LinearAttentionKwargs.seq_idx, None)
-        # TODO: can be made more efficeint by rearranging hidden states directly
+        # TODO: can be made more efficeint by rearranging hidden states directly and only once
         residual_dtype = hidden_states.dtype
 
         q = self.q_proj(hidden_states)
@@ -240,15 +238,11 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         v = self.v_proj(hidden_states)
 
         if sequence_first:
-            # make bs first dim again
             q = q.transpose(0, 1)
             k = k.transpose(0, 1)
             v = v.transpose(0, 1)
 
         batch_size, sequence_length, _ = q.size()
-
-        # work with bs = 1 to make sure varlen works correctly, only needed if micro batch size is > 1
-        # can this be applied once to hidden state only? pr
         q = rearrange(q, "b s ... -> (b s) ...").unsqueeze(0)
         k = rearrange(k, "b s ... -> (b s) ...").unsqueeze(0)
         v = rearrange(v, "b s ... -> (b s) ...").unsqueeze(0)
@@ -263,8 +257,9 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         if sequence_first:
             g_kernel = g_kernel.transpose(0, 1)
         g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
+        g_kernel = self._reshape_heads(g_kernel)
 
-        g_kernel = fused_kda_gate(g_kernel, self.A_log, dt_bias=self.dt_bias)
+        g_kernel = fused_kda_gate(g_kernel, self.A_log.float(), dt_bias=self.dt_bias)
 
         beta = torch.sigmoid(self.beta_proj(hidden_states).float())
         q = self._reshape_heads(q)
@@ -312,13 +307,14 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         device = kwargs.get("device", None)
         if sequence_lengths is None:
             raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
+
         seqlens = torch.tensor(
             [
                 0,
                 *(
                     sequence_length
                     for sequence_lengths in kwargs[LinearAttentionKwargs.sequence_lengths]
-                    for sequence_length in sequence_lengths
+                    for sequence_length in sequence_lengths  # bs
                 ),
             ],
             dtype=torch.int32,
