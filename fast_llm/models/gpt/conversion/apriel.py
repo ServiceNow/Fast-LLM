@@ -9,12 +9,7 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.ssm.config import (
-    DiscreteMamba2Config,
-    GatedDeltaNetConfig,
-    KimiDeltaAttentionConfig,
-    Mamba2Config,
-)
+from fast_llm.layers.ssm.config import DiscreteMamba2Config, GatedDeltaNetConfig, Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
@@ -268,11 +263,11 @@ class GatedDeltaNetConverter:
                 "gdn_linear_conv_kernel_size": config.convolution_layer.kernel_size,
             },
         }
-    
+
     @classmethod
     def get_converters(
         cls,
-        config: KimiDeltaAttentionConfig,
+        config: GatedDeltaNetConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
@@ -345,7 +340,6 @@ class AprielBlockConverter:
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
-        KimiDeltaAttentionConfig: "kda",
         GatedDeltaNetConfig: "gdn",
     }
     _converter_classes = {
