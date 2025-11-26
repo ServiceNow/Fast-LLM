@@ -127,3 +127,14 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
         from fast_llm.layers.common.normalization.normalization import RMSNormalization
 
         return RMSNormalization
+
+
+@config_class(dynamic_type={NormalizationConfig: "gated_rms_norm"})
+class GatedRMSNormalizationConfig(RMSNormalizationConfig):
+    _abstract = False
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization.normalization import GatedRMSNormalization
+
+        return GatedRMSNormalization

@@ -8,7 +8,7 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.ssm.config import DiscreteMamba2Config, Mamba2Config
+from fast_llm.layers.ssm.config import DiscreteMamba2Config, GatedDeltaNetConfig, Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
@@ -224,6 +224,84 @@ class AprielMamba2Converter:
         ]
 
 
+class GatedDeltaNetConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "type": "gated_delta_net",
+            "value_heads": config["linear_attn_config"]["gdn_value_head_dim"],
+            "key_heads": config["linear_attn_config"]["gdn_num_key_heads"],
+            "key_head_dim": config["linear_attn_config"]["gdn_key_head_dim"],
+            "value_head_dim": config["linear_attn_config"]["value_head_dim"],
+            "convolution_layer": {
+                "kernel_size": config["linear_attn_config"]["gdn_linear_conv_kernel_size"],
+            },
+        }
+
+    @classmethod
+    def export_config(cls, config: GatedDeltaNetConfig) -> dict:
+        return {
+            "linear_attn_config": {
+                "gdn_num_value_heads": config.value_heads,
+                "gdn_num_key_heads": config.key_heads,
+                "gdn_key_head_dim": config.key_head_dim,
+                "gdn_value_head_dim": config.value_head_dim,
+                "gdn_linear_conv_kernel_size": config.convolution_layer.kernel_size,
+            },
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: GatedDeltaNetConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_qkvz",
+                f"{hf_prefix}.in_proj_qkvz",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_ba",
+                f"{hf_prefix}.in_proj_ba",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.convolution",
+                f"{hf_prefix}.convolution",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.out_proj",
+                f"{hf_prefix}.out_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.A_log",
+                f"{hf_prefix}.A_log",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.dt_bias",
+                f"{hf_prefix}.dt_bias",
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.norm",
+                f"{hf_prefix}.norm",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
 class AprielDiscreteMamba2BlockConverter(MistralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[AprielDiscreteMamba2Converter]] = AprielDiscreteMamba2Converter
     hf_mixer_name: typing.ClassVar[str] = "mixer"
@@ -234,16 +312,23 @@ class AprielMamba2BlockConverter(MistralBlockConverter):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
+class AprielGatedDeltaNetBlockConverter(MistralBlockConverter):
+    mixer_converter_class: typing.ClassVar[type[GatedDeltaNetConverter]] = GatedDeltaNetConverter
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
+
+
 class AprielBlockConverter:
     layout_names = {
         AttentionConfig: "t",
         Mamba2Config: "m2",
         DiscreteMamba2Config: "m2d",
+        GatedDeltaNetConfig: "gdn",
     }
     _converter_classes = {
         AttentionConfig: MistralBlockConverter,
         Mamba2Config: AprielMamba2BlockConverter,
         DiscreteMamba2Config: AprielDiscreteMamba2BlockConverter,
+        GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
     _config_classes = {value: key for key, value in layout_names.items()}
 
