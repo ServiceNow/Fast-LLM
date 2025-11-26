@@ -23,9 +23,12 @@ from transformers.utils.generic import ModelOutput
 
 from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
 
-# from vllm.model_executor.layers.mamba.ops.mamba_ssm import selective_scan_fn as varlen_selective_scan_fn
-# from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn as varlen_causal_conv1d_fn
-
+try:
+    from fla.modules import FusedRMSNormGated, ShortConvolution
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
+except ImportError:
+    raise ImportError("Plese run `pip install -U fla-core`")
 
 logger = logging.get_logger(__name__)
 
@@ -43,6 +46,239 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
+def index_first_axis(x, indices):
+    other_shape = x.shape[1:]
+    second_dim = other_shape.numel()
+    return torch.gather(
+        rearrange(x, "b ... -> b (...)"),
+        0,
+        repeat(indices, "z -> z d", d=second_dim),
+    ).reshape(-1, *other_shape)
+
+
+def index_put_first_axis(x, indices, first_axis_dim):
+    y = torch.zeros(first_axis_dim, *x.shape[1:], device=x.device, dtype=x.dtype)
+    # TODO [2022-03-04] For some reason torch.scatter is a bit faster than indexing.
+    y[indices] = x
+    # y.scatter_(0, repeat(indices, 'z -> z d', d=x.shape[1]), x)
+    return y
+
+
+@tensor_cache
+def get_unpad_data(
+    attention_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    lens = prepare_lens_from_mask(attention_mask)
+    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+    max_seqlen_in_batch = lens.max().item()
+    cu_seqlens = prepare_cu_seqlens_from_mask(attention_mask)
+    return indices, cu_seqlens, max_seqlen_in_batch
+
+
+def unpad_input(
+    q: torch.Tensor,
+    states: tuple[torch.Tensor],
+    attention_mask: torch.Tensor,
+    q_len: int,
+    keepdim: bool = False,
+):
+    indices_k, cu_seqlens_k, max_seqlen_in_batch_k = get_unpad_data(attention_mask)
+    batch_size, seq_len, *_ = states[0].shape
+
+    state = tuple(index_first_axis(rearrange(s, "b s ... -> (b s) ..."), indices_k) for s in states)
+
+    if q_len == seq_len:
+        q = index_first_axis(rearrange(q, "b s ... -> (b s) ..."), indices_k)
+        cu_seqlens_q = cu_seqlens_k
+        max_seqlen_in_batch_q = max_seqlen_in_batch_k
+        indices_q = indices_k
+    elif q_len == 1:
+        max_seqlen_in_batch_q = 1
+        cu_seqlens_q = torch.arange(batch_size + 1, dtype=torch.int32, device=q.device)
+        indices_q = cu_seqlens_q[:-1]
+        q = q.squeeze(1)
+    else:
+        raise NotImplementedError("We only support either q_len == k_len (prefilling) or q_len == 1 (decoding)")
+
+    if keepdim:
+        q = q.unsqueeze(0)
+        state = tuple(s.unsqueeze(0) for s in state)
+
+    return (
+        q,
+        state,
+        indices_q,
+        (cu_seqlens_q, cu_seqlens_k),
+        (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
+    )
+
+
+def pad_input(
+    hidden_states: torch.Tensor,
+    indices: torch.LongTensor,
+    batch_size: int,
+    seq_len: int,
+) -> torch.Tensor:
+    output = index_put_first_axis(hidden_states, indices, batch_size * seq_len)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch_size)
+
+
+class KimiDeltaAttention(nn.Module):
+    def __init__(self, config: AprielSSMHybridConfig, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.mode = "chunk"
+
+        self.hidden_size = config.hidden_size
+        self.conv_size = config.short_conv_kernel_size
+        self.head_dim = config.head_dim
+        self.num_heads = config.num_heads
+        self.head_k_dim = self.head_dim
+        self.num_k_heads = self.num_heads
+
+        self.layer_idx = layer_idx
+
+        assert self.mode in ["chunk", "fused_recurrent"], f"Not suppoerted mode `{self.mode}`."
+
+        projection_k_size = self.head_k_dim * self.num_k_heads
+        projection_size = self.head_dim * self.num_heads
+
+        self.q_proj = nn.Linear(self.hidden_size, projection_k_size, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, projection_k_size, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, projection_size, bias=False)
+
+        self.q_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+        self.k_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+        self.v_conv1d = ShortConvolution(
+            hidden_size=projection_size,
+            kernel_size=self.conv_size,
+            activation="silu",
+        )
+
+        self.A_log = torch.nn.Parameter(
+            torch.log(torch.empty(self.num_heads, dtype=torch.float32).uniform_(1, 16)).view(1, 1, -1, 1)
+        )
+
+        self.f_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.f_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
+
+        self.dt_bias = nn.Parameter(torch.empty(projection_size, dtype=torch.float32))
+
+        self.b_proj = nn.Linear(self.hidden_size, self.num_heads, bias=False)
+
+        self.g_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.g_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
+
+        self.o_norm = FusedRMSNormGated(self.head_dim, eps=config.rms_norm_eps, activation="sigmoid")
+        self.o_proj = nn.Linear(projection_size, self.hidden_size, bias=False)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        cache_params=None,
+        **kwargs: Unpack[dict],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, Cache | None]:
+        if attention_mask is not None:
+            if attention_mask.dim() != 2:
+                attention_mask = kwargs.get("padding_mask")
+
+            if attention_mask is not None and attention_mask.dim() != 2:
+                raise ValueError(
+                    "attention_mask must be a 0-1 matrix of shape [batch_size, seq_len] "
+                    "(0 = padding). 3D masks are not supported here.",
+                )
+        use_cache = cache_params is not None
+        batch_size, q_len, _ = hidden_states.shape
+        mode = "fused_recurrent" if q_len <= 64 else self.mode
+        if self.training:
+            assert mode == "chunk", "Only chunk mode is supported in training."
+
+        cu_seqlens = kwargs.get("cu_seqlens")
+        indices = None
+        if attention_mask is not None:
+            indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
+            hidden_states = index_first_axis(rearrange(hidden_states, "b s ... -> (b s) ..."), indices).unsqueeze(0)
+
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        if cache_params is not None:
+            if cache_params.conv_states[self.layer_idx] is not None:
+                conv_state_q, conv_state_k, conv_state_v = cache_params.conv_states[self.layer_idx]
+            recurrent_state = cache_params.recurrent_states[self.layer_idx]
+        q, conv_state_q = self.q_conv1d(
+            x=self.q_proj(hidden_states),
+            cache=conv_state_q,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        k, conv_state_k = self.k_conv1d(
+            x=self.k_proj(hidden_states),
+            cache=conv_state_k,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        v, conv_state_v = self.v_conv1d(
+            x=self.v_proj(hidden_states),
+            cache=conv_state_v,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens,
+        )
+        g = self.f_b_proj(self.f_a_proj(hidden_states))
+        g = fused_kda_gate(g, self.A_log, self.head_dim, g_bias=self.dt_bias)
+        beta = self.b_proj(hidden_states).float().sigmoid()
+
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_dim)
+
+        if mode == "chunk":
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+        if cache_params is not None:
+            cache_params.recurrent_states[self.layer_idx] = recurrent_state
+            cache_params.conv_states[self.layer_idx] = (conv_state_q, conv_state_k, conv_state_v)
+
+        g = self.g_b_proj(self.g_a_proj(hidden_states))
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+        o = self.o_norm(o, g)
+
+        o = rearrange(o, "b t h d -> b t (h d)")
+        o = self.o_proj(o)
+        if attention_mask is not None:
+            o = pad_input(o.squeeze(0), indices, batch_size, q_len)
+
+        return o
 
 
 class HybridMambaAttentionStaticCache(Cache):
