@@ -1,6 +1,4 @@
-"""
-Apriel2 modeling - HuggingFace format that mirrors Fast-LLM's architecture.
-"""
+"""Apriel2 HuggingFace model implementation."""
 
 import math
 import random
@@ -47,32 +45,23 @@ if not is_fast_path_available:
     )
 
 
-# Type definitions for BlockSequence preprocessing pattern
 class BlockSequenceKwargs(TypedDict, total=False):
-    """Typed namespace for BlockSequence.forward() kwargs - INPUTS ONLY."""
-    # Masks and positions (inputs)
     attention_mask: Optional[torch.Tensor]
     position_ids: Optional[torch.LongTensor]
     cache_position: Optional[torch.LongTensor]
-
-    # Cache
     past_key_values: Optional[Apriel2Cache]
-
-    # Control flags
     output_attentions: bool
     output_hidden_states: bool
     use_cache: bool
 
 
 class PreprocessingOutput(TypedDict, total=False):
-    """Typed namespace for mixer preprocessing outputs."""
     position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]]
-    attention_mask: Optional[torch.Tensor]  # Can override input attention_mask
+    attention_mask: Optional[torch.Tensor]
 
 
 @torch.compile
 def torch_causal_conv1d_fn(x, weight, bias=None, activation="silu"):
-    """Causal conv1d fallback. Slower than CUDA kernels but CPU-compatible."""
     assert activation == "silu", f"Only silu activation is supported, got {activation}"
 
     seqlen = x.shape[-1]
@@ -88,7 +77,6 @@ def torch_causal_conv1d_fn(x, weight, bias=None, activation="silu"):
 
 @torch.compile
 def torch_causal_conv1d_update(x, conv_state, weight, bias=None, activation="silu"):
-    """Causal conv1d update fallback. Modifies conv_state in-place."""
     assert activation == "silu", f"Only silu activation is supported, got {activation}"
 
     dtype = x.dtype
@@ -103,12 +91,10 @@ def torch_causal_conv1d_update(x, conv_state, weight, bias=None, activation="sil
 def torch_selective_scan_fn(
     u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=True, return_last_state=False
 ):
-    """Selective scan fallback. TODO: Implement SSM recurrence."""
     raise NotImplementedError("torch_selective_scan_fn not yet implemented. Install mamba_ssm for CUDA kernels.")
 
 
 def torch_selective_state_update(state, x, dt, A, B, C, D=None, z=None, dt_bias=None, dt_softplus=True):
-    """Selective state update fallback. TODO: Implement single-step SSM update."""
     raise NotImplementedError("torch_selective_state_update not yet implemented. Install mamba_ssm for CUDA kernels.")
 
 
@@ -137,7 +123,6 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 @torch.compile
 def segsum(x):
-    """More stable segment sum calculation."""
     T = x.size(-1)
     x = repeat(x, "... d -> ... d e", e=T)
     mask = torch.tril(torch.ones(T, T, device=x.device, dtype=bool), diagonal=-1)
@@ -150,11 +135,6 @@ def segsum(x):
 
 @torch.compile
 def materialize_mixer(A_log, B, C, D):
-    """
-    Since the transfer matrix will be equated to the attention matrix,
-    we need to support the form: torch.matmul(attn_weights, value_states).
-    Thus, y = torch.matmul(T, X)
-    """
     batch_size, length, n_heads, d_state = B.shape
     assert A_log.shape == (batch_size, length, n_heads)
     assert B.shape == C.shape == (batch_size, length, n_heads, d_state)
@@ -171,7 +151,6 @@ def materialize_mixer(A_log, B, C, D):
 
 
 def apply_mask_to_padding_states(hidden_states, attention_mask):
-    """Tunes out the hidden states for padding tokens."""
     if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
         dtype = hidden_states.dtype
         hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
@@ -179,20 +158,11 @@ def apply_mask_to_padding_states(hidden_states, attention_mask):
 
 
 class Apriel2Attention(nn.Module):
-    """
-    Attention wrapper that handles rotary embeddings internally.
-    Contains self.self_attn and self.rotary_emb as sub-modules.
-    Mirrors Fast-LLM's architecture where each Attention has its own rotary.
-    """
-
     def __init__(self, d_model: int, mixer_config: dict, layer_idx: int, config):
         super().__init__()
-
-        # Store config for preprocessing
         self.config = config
         self.mixer_config = mixer_config
 
-        # Extract attention parameters from mixer_config
         num_heads = mixer_config.get("heads", 32)
         num_key_value_heads = mixer_config.get("head_groups", num_heads)
         head_dim = mixer_config.get("head_size", d_model // num_heads)
@@ -202,7 +172,6 @@ class Apriel2Attention(nn.Module):
             else 10000.0
         )
 
-        # Create attention config
         attn_config = SimpleNamespace(
             hidden_size=d_model,
             num_attention_heads=num_heads,
@@ -215,7 +184,6 @@ class Apriel2Attention(nn.Module):
             _attn_implementation=config._attn_implementation,
         )
 
-        # Create attention sub-module
         self.self_attn = MistralAttention(attn_config, layer_idx)
 
     @classmethod
