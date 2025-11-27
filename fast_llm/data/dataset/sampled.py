@@ -446,10 +446,8 @@ class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[Sam
 
     def __iter__(self) -> typing.Iterator[SampleType]:
         sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
-        max_samples = self._parameters.num_samples
         current_sample_length = 0
         documents: list[SampleType] = []
-        num_samples = 0
         for doc in self._dataset:
             if len(doc) > sample_length:
                 logging.warning(f"Dropping doc with length {len(doc)} higher then sample_length {sample_length}")
@@ -461,10 +459,6 @@ class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[Sam
 
                 yield documents[0].from_documents(documents)
 
-                num_samples += 1
-                if num_samples >= max_samples:
-                    break
-
                 documents = [doc]
                 current_sample_length = len(doc)
             else:
@@ -474,14 +468,10 @@ class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[Sam
             if current_sample_length == sample_length:
                 yield documents[0].from_documents(documents)
 
-                num_samples += 1
-                if num_samples >= max_samples:
-                    break
-
                 documents = []
                 current_sample_length = 0
 
-        if num_samples < max_samples and current_sample_length > 0:
+        if current_sample_length > 0:
             padding_length = sample_length - current_sample_length
             assert padding_length > 0
             documents.append(documents[-1].get_padding(padding_length))
