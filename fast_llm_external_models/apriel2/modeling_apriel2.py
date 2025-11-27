@@ -4,7 +4,7 @@ Apriel2 modeling - HuggingFace format that mirrors Fast-LLM's architecture.
 
 import math
 import random
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, TypedDict
 from types import SimpleNamespace
 
 import torch
@@ -17,7 +17,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.processing_utils import Unpack
 from transformers.utils import logging
 
-from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 from fast_llm_external_models.apriel2.cache import Apriel2Cache
 from transformers.models.mistral.modeling_mistral import (
     MistralAttention,
@@ -45,6 +45,29 @@ if not is_fast_path_available:
         "Mamba fast path not available. Requires CUDA, mamba_ssm, and causal_conv1d packages. "
         "Falling back to PyTorch implementation (slower, CPU-compatible)."
     )
+
+
+# Type definitions for BlockSequence preprocessing pattern
+class BlockSequenceKwargs(TypedDict, total=False):
+    """Typed namespace for BlockSequence.forward() kwargs - INPUTS ONLY."""
+    # Masks and positions (inputs)
+    attention_mask: Optional[torch.Tensor]
+    position_ids: Optional[torch.LongTensor]
+    cache_position: Optional[torch.LongTensor]
+
+    # Cache
+    past_key_values: Optional[Apriel2Cache]
+
+    # Control flags
+    output_attentions: bool
+    output_hidden_states: bool
+    use_cache: bool
+
+
+class PreprocessingOutput(TypedDict, total=False):
+    """Typed namespace for mixer preprocessing outputs."""
+    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]]
+    attention_mask: Optional[torch.Tensor]  # Can override input attention_mask
 
 
 @torch.compile
@@ -165,6 +188,10 @@ class Apriel2Attention(nn.Module):
     def __init__(self, d_model: int, mixer_config: dict, layer_idx: int, config):
         super().__init__()
 
+        # Store config for preprocessing
+        self.config = config
+        self.mixer_config = mixer_config
+
         # Extract attention parameters from mixer_config
         num_heads = mixer_config.get("heads", 32)
         num_key_value_heads = mixer_config.get("head_groups", num_heads)
@@ -191,6 +218,49 @@ class Apriel2Attention(nn.Module):
         # Create attention sub-module
         self.self_attn = MistralAttention(attn_config, layer_idx)
 
+    @classmethod
+    def setup(
+        cls,
+        mixer_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+    ) -> nn.ModuleDict:
+        """
+        Setup resources needed by this mixer (rotary embeddings).
+        Called once per block type, before instances are created.
+
+        Args:
+            mixer_config: Mixer configuration dict
+            hidden_size: Model hidden size
+            max_position_embeddings: Maximum sequence length
+
+        Returns:
+            ModuleDict containing 'rotary_emb'
+        """
+        from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
+
+        # Extract rotary embedding config from mixer config
+        num_heads = mixer_config.get("heads", 32)
+        head_dim = mixer_config.get("head_size", hidden_size // num_heads)
+        rope_theta = (
+            mixer_config.get("rotary", {}).get("theta", 10000.0)
+            if isinstance(mixer_config.get("rotary"), dict)
+            else 10000.0
+        )
+
+        rotary_config = SimpleNamespace(
+            max_position_embeddings=max_position_embeddings,
+            rope_theta=rope_theta,
+            head_dim=head_dim,
+            hidden_size=hidden_size,
+            num_attention_heads=num_heads,
+            partial_rotary_factor=1.0,
+        )
+
+        return nn.ModuleDict({
+            'rotary_emb': MistralRotaryEmbedding(config=rotary_config)
+        })
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -201,24 +271,101 @@ class Apriel2Attention(nn.Module):
     ):
         return self.self_attn(hidden_states, position_embeddings, attention_mask, **kwargs)
 
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        resources: Optional[nn.ModuleDict],
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> PreprocessingOutput:
+        """
+        Compute attention preprocessing: position embeddings and causal masks.
+
+        Args:
+            hidden_states: Current hidden states (for shape/device)
+            resources: ModuleDict of resources from setup() (contains 'rotary_emb')
+            **kwargs: Metadata (position_ids, attention_mask, cache_position, etc.)
+
+        Returns:
+            PreprocessingOutput with position_embeddings and attention_mask
+        """
+        # Compute position embeddings using rotary_emb from resources
+        position_embeddings = None
+        if resources is not None and 'rotary_emb' in resources:
+            position_ids = kwargs['position_ids']
+            rotary_emb = resources['rotary_emb']
+            cos, sin = rotary_emb(hidden_states, position_ids)
+            position_embeddings = (cos, sin)
+
+        # Compute mask based on mixer config
+        is_causal = self.mixer_config.get('causal', True)
+        if is_causal and kwargs.get('cache_position') is not None:
+            # Causal attention - compute causal mask
+            sliding_window = self.mixer_config.get('sliding_window', None)
+            mask_function = create_causal_mask if sliding_window is None else create_sliding_window_causal_mask
+
+            # Build config for mask creation
+            mask_config = SimpleNamespace(
+                hidden_size=self.config.hidden_size,
+                num_attention_heads=self.mixer_config.get('heads', 32),
+                num_key_value_heads=self.mixer_config.get('head_groups', self.mixer_config.get('heads', 32)),
+                head_dim=self.mixer_config.get('head_size', self.config.hidden_size // self.mixer_config.get('heads', 32)),
+                max_position_embeddings=self.config.max_position_embeddings,
+                sliding_window=sliding_window,
+                _attn_implementation=getattr(self.config, '_attn_implementation', 'eager'),
+            )
+
+            mask = mask_function(
+                config=mask_config,
+                input_embeds=hidden_states,
+                attention_mask=kwargs.get('attention_mask'),
+                cache_position=kwargs['cache_position'],
+                past_key_values=kwargs.get('past_key_values'),
+                position_ids=kwargs['position_ids'],
+            )
+        else:
+            # Non-causal attention (vision) - pass through original mask
+            mask = kwargs.get('attention_mask')
+
+        # Return computed tensors (not modules!)
+        return {
+            'position_embeddings': position_embeddings,
+            'attention_mask': mask,
+        }
+
+
+# Shared helper functions for both text and vision models
+
+def get_mixer_class(mixer_type: str) -> type:
+    """Map mixer type string to mixer class."""
+    if mixer_type == "attention":
+        return Apriel2Attention
+    elif mixer_type == "mamba":
+        return Apriel2Mamba
+    elif mixer_type == "gated_delta_net":
+        return Apriel2GatedDeltaNet
+    elif mixer_type == "kimi_linear_attention":
+        return KimiLinearAttention
+    elif mixer_type == "stochastic":
+        return Apriel2StochasticMixer
+    else:
+        raise ValueError(f"Unknown mixer type: {mixer_type}")
+
 
 def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, allow_stochastic: bool = True):
+    """Create a mixer instance from config. Uses get_mixer_class() for type→class mapping."""
     mixer_type = mixer_config.get("type", "attention")
+    mixer_class = get_mixer_class(mixer_type)  # Handles unknown types
 
+    # Different mixer types have different constructor signatures
     if mixer_type == "attention":
-        return Apriel2Attention(hidden_size, mixer_config, layer_idx, config)
-    elif mixer_type == "mamba":
-        return Apriel2Mamba(hidden_size, mixer_config, layer_idx=layer_idx)
-    elif mixer_type == "gated_delta_net":
-        return Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=layer_idx)
-    elif mixer_type == "kimi_linear_attention":
-        return KimiLinearAttention(hidden_size, mixer_config, layer_idx=layer_idx)
+        return mixer_class(hidden_size, mixer_config, layer_idx, config)
     elif mixer_type == "stochastic":
         if not allow_stochastic:
             raise ValueError("Stochastic mixers cannot contain nested stochastic mixers")
-        return Apriel2StochasticMixer(mixer_config, config, layer_idx)
+        return mixer_class(mixer_config, config, layer_idx)
     else:
-        raise ValueError(f"Unknown mixer type: {mixer_type}")
+        # mamba, gated_delta_net, kimi_linear_attention all have same signature
+        return mixer_class(hidden_size, mixer_config, layer_idx=layer_idx)
 
 
 class Apriel2Mamba(nn.Module):
@@ -333,7 +480,7 @@ class Apriel2Mamba(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value=None,
+        past_key_values=None,
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ):
@@ -352,18 +499,18 @@ class Apriel2Mamba(nn.Module):
 
         seqlen_offset = kwargs.get("seqlen_offset", cache_position[0]) if cache_position is not None else 0
         use_precomputed_states = (
-            past_key_value is not None
-            and isinstance(past_key_value, Apriel2Cache)
-            and past_key_value.conv_states[self.layer_idx] is not None
+            past_key_values is not None
+            and isinstance(past_key_values, Apriel2Cache)
+            and past_key_values.conv_states[self.layer_idx] is not None
             and seqlen == 1
-            and past_key_value.conv_states[self.layer_idx].shape[0]
-            == past_key_value.recurrent_states[self.layer_idx].shape[0]
+            and past_key_values.conv_states[self.layer_idx].shape[0]
+            == past_key_values.recurrent_states[self.layer_idx].shape[0]
             == batch
             and cache_position is not None
             and seqlen_offset > 0
         )
 
-        ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+        ssm_state, conv_state = self._get_states_from_cache(past_key_values, batch)
         # Adaptive mode selection: use step() for single-token generation
         # This provides significant speedup during autoregressive decoding
         if use_precomputed_states:
@@ -432,6 +579,25 @@ class Apriel2Mamba(nn.Module):
         out = self.out_proj(y)
 
         return (out[:, :seqlen, :],)
+
+    @classmethod
+    def setup(
+        cls,
+        mixer_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+    ) -> nn.ModuleDict:
+        """Mamba has no setup resources - returns empty ModuleDict."""
+        return nn.ModuleDict()
+
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        resources: Optional[nn.ModuleDict],
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> PreprocessingOutput:
+        """Mamba has no preprocessing - returns empty dict."""
+        return {}
 
     def step(self, hidden_states, conv_state, ssm_state):
         dtype = hidden_states.dtype
@@ -534,15 +700,28 @@ class Apriel2GatedDeltaNet(nn.Module):
         dtype=None,
     ):
         super().__init__()
+        self.layer_idx = layer_idx
+
+        # Store config for cache allocation
+        self.num_v_heads = config_dict.get("num_value_heads", 32)
+        self.num_k_heads = config_dict.get("num_key_heads", 8)
+        self.head_k_dim = config_dict.get("key_head_dim", 64)
+        self.head_v_dim = config_dict.get("value_head_dim", 64)
+        self.conv_kernel_size = config_dict.get("conv_kernel_size", 4)
+
+        # Derived dimensions
+        self.key_dim = self.head_k_dim * self.num_k_heads
+        self.value_dim = self.head_v_dim * self.num_v_heads
+        self.conv_dim = self.key_dim * 2 + self.value_dim
 
         # Map config_dict to Qwen3NextConfig format
         config = SimpleNamespace(
             hidden_size=d_model,
-            linear_num_value_heads=config_dict.get("num_value_heads", 32),
-            linear_num_key_heads=config_dict.get("num_key_heads", 8),
-            linear_key_head_dim=config_dict.get("key_head_dim", 64),
-            linear_value_head_dim=config_dict.get("value_head_dim", 64),
-            linear_conv_kernel_dim=config_dict.get("conv_kernel_size", 4),
+            linear_num_value_heads=self.num_v_heads,
+            linear_num_key_heads=self.num_k_heads,
+            linear_key_head_dim=self.head_k_dim,
+            linear_value_head_dim=self.head_v_dim,
+            linear_conv_kernel_dim=self.conv_kernel_size,
             hidden_act=config_dict.get("activation", "silu"),
             rms_norm_eps=config_dict.get("norm_eps", 1e-5),
             dtype=dtype,
@@ -550,12 +729,68 @@ class Apriel2GatedDeltaNet(nn.Module):
 
         self.gdn = Qwen3NextGatedDeltaNet(config, layer_idx)
 
-    def forward(self, hidden_states: torch.Tensor, past_key_value=None, attention_mask=None, **kwargs):
+    def _ensure_cache_initialized(self, past_key_values, batch_size, device, dtype):
+        """Initialize cache if it doesn't exist for this layer.
+
+        Qwen3NextGatedDeltaNet expects cache to be pre-initialized when has_previous_state is True.
+        This ensures the cache exists before the underlying implementation accesses it.
+        """
+        if past_key_values is None:
+            return
+
+        # Check if this layer's cache needs initialization
+        # For stochastic mixers, set_active_mixer routes access to the correct sub-cache
+        if past_key_values.conv_states[self.layer_idx] is None:
+            # Allocate conv_state: (batch, conv_dim, conv_kernel_size)
+            conv_state = torch.zeros(
+                batch_size, self.conv_dim, self.conv_kernel_size,
+                device=device, dtype=dtype
+            )
+            past_key_values.conv_states[self.layer_idx] = conv_state
+
+        if past_key_values.recurrent_states[self.layer_idx] is None:
+            # Allocate recurrent_state: (batch, num_v_heads, head_v_dim, head_k_dim)
+            recurrent_state = torch.zeros(
+                batch_size, self.num_v_heads, self.head_v_dim, self.head_k_dim,
+                device=device, dtype=dtype
+            )
+            past_key_values.recurrent_states[self.layer_idx] = recurrent_state
+
+    def forward(self, hidden_states: torch.Tensor, past_key_values=None, attention_mask=None, **kwargs):
         cache_position = kwargs.get("cache_position", None)
+
+        # Ensure cache is initialized before calling underlying implementation
+        # This is needed because Qwen3NextGatedDeltaNet expects cache to exist when has_previous_state is True
+        self._ensure_cache_initialized(
+            past_key_values,
+            batch_size=hidden_states.shape[0],
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+
         output = self.gdn(
-            hidden_states, cache_params=past_key_value, cache_position=cache_position, attention_mask=attention_mask
+            hidden_states, cache_params=past_key_values, cache_position=cache_position, attention_mask=attention_mask
         )
         return (output,)
+
+    @classmethod
+    def setup(
+        cls,
+        mixer_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+    ) -> nn.ModuleDict:
+        """GatedDeltaNet has no setup resources - returns empty ModuleDict."""
+        return nn.ModuleDict()
+
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        resources: Optional[nn.ModuleDict],
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> PreprocessingOutput:
+        """GatedDeltaNet has no preprocessing - returns empty dict."""
+        return {}
 
 
 class KimiLinearAttention(nn.Module):
@@ -572,41 +807,279 @@ class KimiLinearAttention(nn.Module):
         super().__init__()
         raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
 
+    @classmethod
+    def setup(
+        cls,
+        mixer_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+    ) -> nn.ModuleDict:
+        """KimiLinearAttention setup not implemented."""
+        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+
     def forward(self, hidden_states: torch.Tensor, **kwargs):
         raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
 
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        resources: Optional[nn.ModuleDict],
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> PreprocessingOutput:
+        """KimiLinearAttention preprocessing not implemented."""
+        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
 
-class Apriel2DecoderBlock(nn.Module):
-    def __init__(self, config: Apriel2Config, layer_idx: int):
+
+class Apriel2BlockSequence(nn.Module):
+    """
+    Block sequence abstraction - mirrors Fast-LLM's BlockSequence.
+    Used by both text decoder and vision encoder.
+
+    Architecture:
+    - Pure container for blocks (handles fixed/pattern types)
+    - Delegates resource setup to mixers via mixer.setup()
+    - Owns mixer_resources (ModuleDict from setup, deduplicated by block_name)
+    - Delegates preprocessing to mixers via mixer.preprocess()
+    - Caches preprocessing per unique block type (efficient)
+    - Completely agnostic to mixer types (attention, mamba, etc.)
+
+    Setup + Preprocessing pattern:
+    1. Call mixer.setup() for each unique block type → collect resources (rotary_emb, etc.)
+    2. Call mixer.preprocess() for each unique block type → compute tensors
+    3. Cache preprocessing results indexed by block_name
+    4. Reuse cached preprocessing for blocks of same type
+    5. Merge preprocessing outputs into block kwargs
+    """
+
+    def __init__(
+        self,
+        sequence_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+        config: Apriel2TextConfig,
+    ):
         super().__init__()
-        self.hidden_size = config.hidden_size
-        self.layer_idx = layer_idx
+        self.sequence_config = sequence_config
+        self.hidden_size = hidden_size
+        self.max_position_embeddings = max_position_embeddings
+        self.config = config
 
-        # Get block name and config for this layer
-        self.block_name = config.get_block_name(layer_idx)
-        block_config = config.get_block_config(layer_idx)
+        # Build blocks (handles fixed/pattern)
+        # NOTE: _build_blocks() calls classmethod setup() to create mixer_resources BEFORE instances
+        self.blocks = self._build_blocks()
+
+        # Extract unique mixer instances (one per unique block_name) for preprocessing
+        self.unique_mixers: dict[str, nn.Module] = {}
+        for layer_idx, block in enumerate(self.blocks):
+            block_name = self.get_block_name(layer_idx)
+            if block_name not in self.unique_mixers:
+                self.unique_mixers[block_name] = block.mixer
+
+    def _build_blocks(self) -> nn.ModuleList:
+        """
+        Build blocks based on fixed/pattern type.
+
+        Phase 1: Setup resources (called once per block type, before instances)
+        Phase 2: Create block instances (resources already available)
+        """
+        seq_type = self.sequence_config.get("type", "fixed")
+        num_blocks = self.sequence_config.get("num_blocks")
+
+        # PHASE 1: Setup resources BEFORE creating instances
+        # Initialize mixer_resources container
+        self.mixer_resources = nn.ModuleDict()
+
+        # Extract unique block types and call setup for each
+        if seq_type == "fixed":
+            # Fixed: single block type repeated
+            block_config = self.sequence_config.get("block", {})
+            mixer_config = block_config.get("mixer", {})
+            mixer_type = mixer_config.get("type", "attention")
+
+            # Call classmethod setup
+            mixer_class = get_mixer_class(mixer_type)
+            resources = mixer_class.setup(mixer_config, self.hidden_size, self.max_position_embeddings)
+            if len(resources) > 0:
+                self.mixer_resources["block"] = resources
+
+        elif seq_type == "pattern":
+            # Pattern: multiple block types in repeating pattern
+            blocks_config = self.sequence_config.get("blocks", {})
+            for block_name, block_config in blocks_config.items():
+                mixer_config = block_config.get("mixer", {})
+                mixer_type = mixer_config.get("type", "attention")
+
+                # Call classmethod setup
+                mixer_class = get_mixer_class(mixer_type)
+                resources = mixer_class.setup(mixer_config, self.hidden_size, self.max_position_embeddings)
+                if len(resources) > 0:
+                    self.mixer_resources[block_name] = resources
+        else:
+            raise ValueError(f"Unknown sequence type: {seq_type}")
+
+        # PHASE 2: Create block instances (resources already set up)
+        # Extract rms_norm_eps from config
+        rms_norm_eps = getattr(self.config, "rms_norm_eps", 1e-5)
+
+        blocks = []
+        for layer_idx in range(num_blocks):
+            # Get block_config for this layer
+            if seq_type == "fixed":
+                block_config = self.sequence_config.get("block", {})
+            elif seq_type == "pattern":
+                pattern = self.sequence_config.get("pattern", [])
+                blocks_config = self.sequence_config.get("blocks", {})
+                block_name = pattern[layer_idx % len(pattern)]
+                block_config = blocks_config[block_name]
+
+            # Create block with explicit parameters (no fake config creation!)
+            blocks.append(Apriel2Block(
+                block_config=block_config,
+                hidden_size=self.hidden_size,
+                layer_idx=layer_idx,
+                rms_norm_eps=rms_norm_eps,
+                config=self.config,
+            ))
+
+        return nn.ModuleList(blocks)
+
+    def get_block_name(self, layer_idx: int) -> str:
+        """Get block name for a specific layer (shared logic)."""
+        seq_type = self.sequence_config.get("type", "fixed")
+        if seq_type == "fixed":
+            return "block"
+        elif seq_type == "pattern":
+            pattern = self.sequence_config.get("pattern", [])
+            return pattern[layer_idx % len(pattern)]
+        else:
+            raise ValueError(f"Unknown sequence type: {seq_type}")
+
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> dict[str, PreprocessingOutput]:
+        """
+        Compute preprocessing for all unique block types.
+        Aggregates preprocessing from all unique mixers.
+
+        Args:
+            hidden_states: Current hidden states (for shape/device)
+            **kwargs: Metadata (position_ids, attention_mask, cache_position, etc.)
+
+        Returns:
+            Preprocessing cache keyed by block_name
+        """
+        preprocessing_cache: dict[str, PreprocessingOutput] = {}
+        for block_name, mixer in self.unique_mixers.items():
+            # Get resources for this block type (from setup)
+            # Note: nn.ModuleDict doesn't have .get(), so we check membership first
+            resources = self.mixer_resources[block_name] if block_name in self.mixer_resources else None
+
+            # Mixer computes preprocessing using resources (read-only)
+            # Returns PreprocessingOutput (position_embeddings, attention_mask, etc.)
+            preprocessing_cache[block_name] = mixer.preprocess(
+                hidden_states, resources, **kwargs
+            )
+
+        return preprocessing_cache
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> tuple[torch.Tensor, Optional[tuple], Optional[tuple]]:
+        """
+        Forward pass through block sequence.
+
+        Args:
+            hidden_states: Input tensor (data)
+            **kwargs: Metadata (attention_mask, position_ids, etc.)
+
+        Returns:
+            (hidden_states, all_hidden_states, all_attentions)
+        """
+        # Compute preprocessing ONCE per unique block type
+        # Delegates to self.preprocess() which aggregates from all mixers
+        preprocessing_cache = self.preprocess(hidden_states, **kwargs)
+
+        # Initialize output collections
+        all_hidden_states = () if kwargs.get('output_hidden_states') else None
+        all_attentions = () if kwargs.get('output_attentions') else None
+
+        # Iterate through blocks - REUSE cached preprocessing
+        for layer_idx, block in enumerate(self.blocks):
+            # Collect intermediate hidden state if requested
+            if all_hidden_states is not None:
+                all_hidden_states += (hidden_states,)
+
+            # Get preprocessing for this block type (reused for blocks of same type)
+            block_name = self.get_block_name(layer_idx)
+            preprocessing_kwargs = preprocessing_cache[block_name]
+
+            # Merge input kwargs with preprocessing outputs
+            # Preprocessing can override (e.g., causal mask overrides attention_mask)
+            block_kwargs = {**kwargs, **preprocessing_kwargs}
+
+            # Pipe through: y = f(x, **kwargs)
+            # Block extracts what it needs from kwargs
+            layer_outputs = block(hidden_states, **block_kwargs)
+            hidden_states = layer_outputs[0]
+
+            # Collect attention if requested
+            if all_attentions is not None:
+                all_attentions += (layer_outputs[1] if len(layer_outputs) > 1 else None,)
+
+        return hidden_states, all_hidden_states, all_attentions
+
+
+class Apriel2Block(nn.Module):
+    """
+    Transformer block with mixer (attention/mamba/etc) and MLP.
+    Used for both text decoder and vision encoder.
+    """
+
+    def __init__(
+        self,
+        block_config: dict,
+        hidden_size: int,
+        layer_idx: int,
+        rms_norm_eps: float,
+        config: Apriel2TextConfig,
+    ):
+        """
+        Args:
+            block_config: Dict with 'mixer', 'mlp', 'normalization' configs
+            hidden_size: Model hidden size
+            layer_idx: Layer index in the sequence
+            rms_norm_eps: Epsilon for RMS normalization
+            config: Model config (passed to mixers that need it)
+        """
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.layer_idx = layer_idx
 
         # Create mixer based on type
         mixer_config = block_config.get("mixer", {"type": "attention"})
-        self.mixer = create_mixer(mixer_config, config.hidden_size, layer_idx, config, allow_stochastic=True)
+        self.mixer = create_mixer(mixer_config, hidden_size, layer_idx, config, allow_stochastic=True)
 
         # Create MLP
         mlp_config = block_config.get("mlp", {"type": "mlp"})
-        self.mlp = self._create_mlp(mlp_config, config)
+        self.mlp = self._create_mlp(mlp_config, hidden_size)
 
         # Create normalization layers
         norm_config = block_config.get("normalization", {"type": "rms_norm"})
-        self.input_layernorm = self._create_norm(norm_config, config)
-        self.post_attention_layernorm = self._create_norm(norm_config, config)
+        self.input_layernorm = self._create_norm(norm_config, hidden_size, rms_norm_eps)
+        self.post_attention_layernorm = self._create_norm(norm_config, hidden_size, rms_norm_eps)
 
-    def _create_mlp(self, mlp_config: dict, config: Apriel2Config):
+    def _create_mlp(self, mlp_config: dict, hidden_size: int):
         """Create MLP based on config."""
         mlp_type = mlp_config.get("type", "mlp")
 
         if mlp_type == "mlp":
-            intermediate_size = mlp_config.get("intermediate_size", config.hidden_size * 4)
+            intermediate_size = mlp_config.get("intermediate_size", hidden_size * 4)
             mlp_cfg = SimpleNamespace(
-                hidden_size=config.hidden_size,
+                hidden_size=hidden_size,
                 intermediate_size=intermediate_size,
                 hidden_act=mlp_config.get("activation", "silu"),
             )
@@ -614,13 +1087,13 @@ class Apriel2DecoderBlock(nn.Module):
         else:
             raise ValueError(f"Unknown MLP type: {mlp_type}")
 
-    def _create_norm(self, norm_config: dict, config: Apriel2Config):
+    def _create_norm(self, norm_config: dict, hidden_size: int, rms_norm_eps: float):
         """Create normalization layer based on config."""
         norm_type = norm_config.get("type", "rms_norm")
         if norm_type == "rms_norm":
-            return MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            return MistralRMSNorm(hidden_size, eps=rms_norm_eps)
         elif norm_type == "layer_norm":
-            return nn.LayerNorm(config.hidden_size, eps=config.rms_norm_eps)
+            return nn.LayerNorm(hidden_size, eps=rms_norm_eps)
         else:
             raise ValueError(f"Unknown normalization type: {norm_type}")
 
@@ -629,7 +1102,7 @@ class Apriel2DecoderBlock(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Apriel2Cache] = None,
+        past_key_values: Optional[Apriel2Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
         position_embeddings=None,
@@ -642,7 +1115,7 @@ class Apriel2DecoderBlock(nn.Module):
             hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_values=past_key_values,
             output_attentions=output_attentions,
             use_cache=use_cache,
             position_embeddings=position_embeddings,
@@ -674,7 +1147,7 @@ class Apriel2StochasticMixer(nn.Module):
     During inference: uses the main_mixer
     """
 
-    def __init__(self, mixer_config: dict, config: Apriel2Config, layer_idx: int):
+    def __init__(self, mixer_config: dict, config: Apriel2TextConfig, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
 
@@ -722,9 +1195,9 @@ class Apriel2StochasticMixer(nn.Module):
             mixer_name = self.main_mixer_name
 
         # Set active mixer in cache for proper state routing
-        past_key_value = kwargs.get("past_key_value")
-        if past_key_value is not None and hasattr(past_key_value, "set_active_mixer"):
-            past_key_value.set_active_mixer(self.layer_idx, mixer_name)
+        past_key_values = kwargs.get("past_key_values")
+        if past_key_values is not None and hasattr(past_key_values, "set_active_mixer"):
+            past_key_values.set_active_mixer(self.layer_idx, mixer_name)
 
         mixer = self.mixers[mixer_name]
         mixer_position_embeddings = position_embeddings.get(mixer_name) if position_embeddings else None
@@ -733,11 +1206,77 @@ class Apriel2StochasticMixer(nn.Module):
             hidden_states, attention_mask=mixer_attention_mask, position_embeddings=mixer_position_embeddings, **kwargs
         )
 
+    @classmethod
+    def setup(
+        cls,
+        mixer_config: dict,
+        hidden_size: int,
+        max_position_embeddings: int,
+    ) -> nn.ModuleDict:
+        """
+        Setup resources for stochastic mixer with nested mixers.
+        Called before instance creation, recursively calls setup on nested mixer classes.
+
+        Returns a ModuleDict where each key is a nested mixer name and value is its setup ModuleDict.
+        """
+        nested_resources = nn.ModuleDict()
+
+        # Get nested mixers config
+        mixers_config = mixer_config.get("mixers", {})
+
+        for mixer_name, sub_mixer_config in mixers_config.items():
+            # Get mixer class from type
+            mixer_type = sub_mixer_config.get("type", "attention")
+            mixer_class = get_mixer_class(mixer_type)
+
+            # Call setup on nested mixer class
+            mixer_resources = mixer_class.setup(sub_mixer_config, hidden_size, max_position_embeddings)
+            if len(mixer_resources) > 0:
+                nested_resources[mixer_name] = mixer_resources
+
+        return nested_resources
+
+    def preprocess(
+        self,
+        hidden_states: torch.Tensor,
+        resources: Optional[nn.ModuleDict],
+        **kwargs: Unpack[BlockSequenceKwargs],
+    ) -> PreprocessingOutput:
+        """
+        Preprocess for stochastic mixer with nested mixers.
+
+        Returns a PreprocessingOutput where position_embeddings and attention_mask
+        are dicts mapping nested mixer names to their respective values.
+        """
+        nested_position_embeddings = {}
+        nested_attention_masks = {}
+
+        for mixer_name, nested_mixer in self.mixers.items():
+            # Get resources for this nested mixer (if resources is a ModuleDict of ModuleDicts)
+            # Note: nn.ModuleDict doesn't have .get(), so we check membership first
+            nested_resources = resources[mixer_name] if resources is not None and mixer_name in resources else None
+
+            # Get preprocessing for nested mixer
+            nested_output = nested_mixer.preprocess(hidden_states, nested_resources, **kwargs)
+            # Extract position_embeddings (may be None for some mixer types)
+            if nested_output.get("position_embeddings") is not None:
+                nested_position_embeddings[mixer_name] = nested_output["position_embeddings"]
+            # Extract attention_mask (may be None for SDPA, or float for eager)
+            # We include it even if None to override the original long int mask
+            if "attention_mask" in nested_output:
+                nested_attention_masks[mixer_name] = nested_output["attention_mask"]
+
+        # Return PreprocessingOutput with nested position_embeddings and attention_mask dicts
+        return PreprocessingOutput(
+            position_embeddings=nested_position_embeddings if nested_position_embeddings else None,
+            attention_mask=nested_attention_masks if nested_attention_masks else None,
+        )
+
 
 class Apriel2PreTrainedModel(PreTrainedModel):
-    config_class = Apriel2Config
+    config_class = Apriel2TextConfig
     base_model_prefix = "model"
-    _no_split_modules = ["Apriel2DecoderBlock"]
+    _no_split_modules = ["Apriel2Block"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
@@ -768,8 +1307,10 @@ class Apriel2PreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
 
-class Apriel2Model(Apriel2PreTrainedModel):
-    def __init__(self, config: Apriel2Config):
+class Apriel2TextModel(Apriel2PreTrainedModel):
+    """Apriel2 text-only base model (without LM head)."""
+
+    def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -778,13 +1319,13 @@ class Apriel2Model(Apriel2PreTrainedModel):
         # Embeddings
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 
-        # Build shared rotary embeddings (one per unique block type)
-        self.rotary_embs = nn.ModuleDict()
-        self._build_rotary_embs()
-
-        # Decoder blocks
-        self.layers = nn.ModuleList(
-            [Apriel2DecoderBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        # Decoder block sequence (uses shared BlockSequence abstraction)
+        # Causal behavior determined by mixer config (attention mixers have causal=True by default)
+        self.decoder = Apriel2BlockSequence(
+            sequence_config=config.decoder,
+            hidden_size=config.hidden_size,
+            max_position_embeddings=config.max_position_embeddings,
+            config=config,
         )
 
         # Final norm
@@ -793,185 +1334,6 @@ class Apriel2Model(Apriel2PreTrainedModel):
         self.gradient_checkpointing = False
         self.post_init()
 
-    def _create_rotary_emb_for_attention(self, mixer_config: dict):
-        from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
-
-        head_dim = mixer_config.get("head_size", self.config.hidden_size // mixer_config.get("heads", 32))
-        rope_theta = (
-            mixer_config.get("rotary", {}).get("theta", 10000.0)
-            if isinstance(mixer_config.get("rotary"), dict)
-            else 10000.0
-        )
-
-        rotary_config = SimpleNamespace(
-            max_position_embeddings=self.config.max_position_embeddings,
-            rope_theta=rope_theta,
-            head_dim=head_dim,
-            hidden_size=self.config.hidden_size,
-            num_attention_heads=mixer_config.get("heads", 32),
-            partial_rotary_factor=1.0,
-        )
-        return MistralRotaryEmbedding(config=rotary_config)
-
-    def _build_attn_config_for_mask(self, mixer_config: dict):
-        """Build attention config for causal mask creation."""
-        num_heads = mixer_config.get("heads", 32)
-        num_key_value_heads = mixer_config.get("head_groups", num_heads)
-        head_dim = mixer_config.get("head_size", self.config.hidden_size // num_heads)
-
-        return SimpleNamespace(
-            hidden_size=self.config.hidden_size,
-            num_attention_heads=num_heads,
-            num_key_value_heads=num_key_value_heads,
-            head_dim=head_dim,
-            max_position_embeddings=self.config.max_position_embeddings,
-            sliding_window=mixer_config.get("sliding_window", None),
-            _attn_implementation=self.config._attn_implementation,
-        )
-
-    def _build_rotary_embs(self):
-        """Build rotary embedding instances for all unique attention blocks."""
-        decoder_type = self.config.decoder.get("type", "fixed")
-
-        if decoder_type == "fixed":
-            block_config = self.config.decoder.get("block", {})
-            self._build_rotary_embs_for_block("block", block_config)
-        elif decoder_type == "pattern":
-            blocks = self.config.decoder.get("blocks", {})
-            for block_name, block_config in blocks.items():
-                self._build_rotary_embs_for_block(block_name, block_config)
-        else:
-            raise ValueError(f"Unknown decoder type: {decoder_type}")
-
-    def _build_rotary_embs_for_block(self, block_name: str, block_config: dict):
-        """Build rotary embeddings for a single block and its mixers."""
-        mixer_config = block_config.get("mixer", {})
-        mixer_type = mixer_config.get("type")
-
-        if mixer_type == "attention":
-            self.rotary_embs[block_name] = self._create_rotary_emb_for_attention(mixer_config)
-        elif mixer_type == "stochastic":
-            mixers = mixer_config.get("mixers", {})
-            nested_dict = nn.ModuleDict()
-            for mixer_name, sub_mixer_config in mixers.items():
-                if sub_mixer_config.get("type") == "attention":
-                    nested_dict[mixer_name] = self._create_rotary_emb_for_attention(sub_mixer_config)
-            if len(nested_dict) > 0:
-                self.rotary_embs[block_name] = nested_dict
-
-    def _create_causal_mask(
-        self,
-        attn_config,
-        input_embeds: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        position_ids: torch.LongTensor,
-        past_key_values: Optional[Apriel2Cache],
-        cache_position: torch.Tensor,
-    ) -> Optional[Union[torch.Tensor, BlockMask]]:
-        """Create causal mask for an attention config."""
-
-        mask_function = create_causal_mask if attn_config.sliding_window is None else create_sliding_window_causal_mask
-        return mask_function(
-            config=attn_config,
-            input_embeds=input_embeds,
-            attention_mask=attention_mask,
-            cache_position=cache_position,
-            past_key_values=past_key_values,
-            position_ids=position_ids,
-        )
-
-    def _compute_position_embeddings_and_masks(
-        self,
-        input_embeds: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        position_ids: torch.LongTensor,
-        past_key_values: Optional[Apriel2Cache],
-        cache_position: torch.Tensor,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Compute position embeddings and attention masks for all unique attention blocks."""
-        position_embeddings = {}
-        attention_masks = {}
-        decoder_type = self.config.decoder.get("type", "fixed")
-
-        if decoder_type == "fixed":
-            block_config = self.config.decoder.get("block", {})
-            self._compute_for_block(
-                "block",
-                block_config,
-                input_embeds,
-                attention_mask,
-                position_ids,
-                past_key_values,
-                cache_position,
-                position_embeddings,
-                attention_masks,
-            )
-        elif decoder_type == "pattern":
-            blocks = self.config.decoder.get("blocks", {})
-            for block_name, block_config in blocks.items():
-                self._compute_for_block(
-                    block_name,
-                    block_config,
-                    input_embeds,
-                    attention_mask,
-                    position_ids,
-                    past_key_values,
-                    cache_position,
-                    position_embeddings,
-                    attention_masks,
-                )
-        else:
-            raise ValueError(f"Unknown decoder type: {decoder_type}")
-
-        return position_embeddings, attention_masks
-
-    def _compute_for_block(
-        self,
-        block_name: str,
-        block_config: dict,
-        input_embeds: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        position_ids: torch.LongTensor,
-        past_key_values: Optional[Apriel2Cache],
-        cache_position: torch.Tensor,
-        position_embeddings: dict[str, Any],
-        attention_masks: dict[str, Any],
-    ) -> None:
-        """Compute position embeddings and attention masks for a block."""
-        mixer_config = block_config.get("mixer", {})
-        mixer_type = mixer_config.get("type")
-
-        if mixer_type == "attention":
-            rotary_emb = self.rotary_embs[block_name]
-            cos, sin = rotary_emb(input_embeds, position_ids)
-            attn_config = self._build_attn_config_for_mask(mixer_config)
-            causal_mask = self._create_causal_mask(
-                attn_config, input_embeds, attention_mask, position_ids, past_key_values, cache_position
-            )
-
-            position_embeddings[block_name] = (cos, sin)
-            attention_masks[block_name] = causal_mask
-
-        elif mixer_type == "stochastic":
-            mixers = mixer_config.get("mixers", {})
-            nested_pos_embs = {}
-            nested_masks = {}
-
-            for mixer_name, sub_mixer_config in mixers.items():
-                if sub_mixer_config.get("type") == "attention":
-                    rotary_emb = self.rotary_embs[block_name][mixer_name]
-                    cos, sin = rotary_emb(input_embeds, position_ids)
-                    attn_config = self._build_attn_config_for_mask(sub_mixer_config)
-                    causal_mask = self._create_causal_mask(
-                        attn_config, input_embeds, attention_mask, position_ids, past_key_values, cache_position
-                    )
-
-                    nested_pos_embs[mixer_name] = (cos, sin)
-                    nested_masks[mixer_name] = causal_mask
-
-            if nested_pos_embs:
-                position_embeddings[block_name] = nested_pos_embs
-                attention_masks[block_name] = nested_masks
 
     def forward(
         self,
@@ -1018,47 +1380,27 @@ class Apriel2Model(Apriel2PreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        position_embeddings, causal_masks = self._compute_position_embeddings_and_masks(
-            inputs_embeds, attention_mask, position_ids, past_key_values, cache_position
+        # Forward through decoder block sequence (handles position embeddings, masks, and iteration)
+        hidden_states, all_hidden_states, all_self_attns = self.decoder(
+            inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **flash_attn_kwargs,
         )
 
-        hidden_states = inputs_embeds
-
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
-
-        for layer_idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
-            block_name = self.config.get_block_name(layer_idx)
-            layer_position_embeddings = position_embeddings.get(block_name)
-            layer_attention_mask = causal_masks.get(block_name)
-
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=layer_attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-                position_embeddings=layer_position_embeddings,
-                **flash_attn_kwargs,
-            )
-
-            hidden_states = layer_outputs[0]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
-        if use_cache:
-            next_decoder_cache = past_key_values
-
+        # Apply final normalization
         hidden_states = self.norm(hidden_states)
 
+        # Add final hidden state if requested
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
+
+        next_decoder_cache = past_key_values if use_cache else None
 
         if not return_dict:
             return tuple(
@@ -1074,11 +1416,11 @@ class Apriel2Model(Apriel2PreTrainedModel):
 
 
 class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
-    """Apriel2 model with a language modeling head."""
+    """Apriel2 model with a language modeling head (text-only)."""
 
-    def __init__(self, config: Apriel2Config):
+    def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
-        self.model = Apriel2Model(config)
+        self.model = Apriel2TextModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -1160,3 +1502,418 @@ class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
+class Apriel2PatchConvolution(nn.Module):
+    """Converts images to patch embeddings via 2D convolution."""
+
+    def __init__(self, vision_hidden_size: int, patch_conv_config: dict):
+        super().__init__()
+
+        # Extract parameters from config dict
+        patch_height = patch_conv_config.get("patch_height", 16)
+        patch_width = patch_conv_config.get("patch_width", 16)
+        input_channels = patch_conv_config.get("input_channels", 3)  # RGB
+
+        # 2D convolution to create patch embeddings
+        # Mirrors Fast-LLM's convolution with stride = patch size
+        self.conv = nn.Conv2d(
+            in_channels=input_channels,
+            out_channels=vision_hidden_size,
+            kernel_size=(patch_height, patch_width),
+            stride=(patch_height, patch_width),
+            bias=False,
+        )
+
+        # Normalization layer
+        norm_config = patch_conv_config.get("normalization", {"type": "layer_norm"})
+        norm_type = norm_config.get("type", "layer_norm")
+        norm_eps = norm_config.get("eps", 1e-5)
+
+        if norm_type == "layer_norm":
+            self.norm = nn.LayerNorm(vision_hidden_size, eps=norm_eps)
+        elif norm_type == "rms_norm":
+            self.norm = MistralRMSNorm(vision_hidden_size, eps=norm_eps)
+        else:
+            raise ValueError(f"Unknown normalization type: {norm_type}")
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pixel_values: [batch, channels, height, width]
+        Returns:
+            patch_embeddings: [batch, num_patches, hidden_size]
+        """
+        # Apply convolution: [batch, channels, height, width] -> [batch, hidden, num_patches_h, num_patches_w]
+        x = self.conv(pixel_values)
+
+        # Flatten spatial dimensions: [batch, hidden, num_patches_h, num_patches_w] -> [batch, hidden, num_patches]
+        batch_size, hidden_size, h, w = x.shape
+        x = x.view(batch_size, hidden_size, h * w)
+
+        # Transpose to sequence format: [batch, hidden, num_patches] -> [batch, num_patches, hidden]
+        x = x.transpose(1, 2)
+
+        # Apply normalization
+        x = self.norm(x)
+
+        return x
+
+
+class Apriel2VisionEncoder(nn.Module):
+    """Vision encoder with patch convolution, transformer blocks, and adapter."""
+
+    def __init__(self, vision_encoder_config: dict, text_config: Apriel2Config):
+        super().__init__()
+
+        self.hidden_size = vision_encoder_config.get("hidden_size", 1024)
+
+        # Build patch convolution
+        patch_conv_config = vision_encoder_config.get("patch_convolution", {})
+        self.patch_convolution = Apriel2PatchConvolution(self.hidden_size, patch_conv_config)
+
+        # Build vision transformer encoder using shared BlockSequence abstraction
+        encoder_config = vision_encoder_config.get("encoder", {})
+
+        # Create a minimal config for vision blocks
+        vision_block_config = Apriel2TextConfig(
+            hidden_size=self.hidden_size,
+            max_position_embeddings=1024,  # Large enough for typical vision use cases
+            rms_norm_eps=text_config.rms_norm_eps,
+            _attn_implementation=getattr(text_config, "_attn_implementation", "eager"),
+        )
+
+        # Vision encoder block sequence
+        # Non-causal behavior determined by mixer config (vision attention has causal=False)
+        self.encoder = Apriel2BlockSequence(
+            sequence_config=encoder_config,
+            hidden_size=self.hidden_size,
+            max_position_embeddings=1024,
+            config=vision_block_config,
+        )
+
+        # Build adapter/projector
+        adapter_config = vision_encoder_config.get("adapter", {})
+        self.adapter = self._build_adapter(adapter_config, text_config.hidden_size)
+
+    def _build_adapter(self, adapter_config: dict, text_hidden_size: int) -> nn.Module:
+        """Build adapter/projector from config dict."""
+        adapter_type = adapter_config.get("type", "mlp")
+
+        if adapter_type == "mlp":
+            # 2-layer MLP projector (mirrors Fast-LLM's adapter)
+            intermediate_size = adapter_config.get("intermediate_size", text_hidden_size)
+            activation = adapter_config.get("activation", "gelu")
+
+            return Apriel2MultiModalProjector(
+                vision_hidden_size=self.hidden_size,
+                text_hidden_size=text_hidden_size,
+                intermediate_size=intermediate_size,
+                activation=activation,
+            )
+        else:
+            raise ValueError(f"Unknown adapter type: {adapter_type}")
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pixel_values: [batch, channels, height, width]
+        Returns:
+            image_features: [batch, num_patches, text_hidden_size]
+        """
+        # Patch convolution: [batch, channels, height, width] -> [batch, num_patches, vision_hidden]
+        hidden_states = self.patch_convolution(pixel_values)
+
+        batch_size, num_patches = hidden_states.shape[:2]
+
+        # Create position_ids for vision patches: [0, 1, 2, ..., num_patches-1]
+        position_ids = torch.arange(num_patches, device=hidden_states.device).unsqueeze(0).expand(batch_size, -1)
+
+        # Forward through vision encoder block sequence
+        hidden_states, _, _ = self.encoder(
+            hidden_states,
+            attention_mask=None,  # Vision doesn't use causal masking
+            position_ids=position_ids,
+            past_key_values=None,  # Vision encoding doesn't use cache
+            output_attentions=False,
+            output_hidden_states=False,
+            use_cache=False,
+            cache_position=None,
+        )
+
+        # Adapter/projector: [batch, num_patches, vision_hidden] -> [batch, num_patches, text_hidden]
+        image_features = self.adapter(hidden_states)
+
+        return image_features
+
+
+class Apriel2MultiModalProjector(nn.Module):
+    """Projects vision features to text embedding space (2-layer MLP)."""
+
+    def __init__(
+        self,
+        vision_hidden_size: int,
+        text_hidden_size: int,
+        intermediate_size: Optional[int] = None,
+        activation: str = "gelu",
+    ):
+        super().__init__()
+        from transformers.activations import ACT2FN
+
+        if intermediate_size is None:
+            intermediate_size = text_hidden_size
+
+        self.linear_1 = nn.Linear(vision_hidden_size, intermediate_size, bias=True)
+        self.act = ACT2FN[activation]
+        self.linear_2 = nn.Linear(intermediate_size, text_hidden_size, bias=True)
+
+    def forward(self, image_features):
+        hidden_states = self.linear_1(image_features)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.linear_2(hidden_states)
+        return hidden_states
+
+
+class Apriel2Model(PreTrainedModel):
+    """Apriel2 multimodal base model (vision + text, without LM head)."""
+
+    config_class = Apriel2Config
+    base_model_prefix = "model"
+
+    def __init__(self, config: Apriel2Config):
+        super().__init__(config)
+
+        self.config = config
+
+        # Build vision encoder from vision_encoder dict
+        if config.vision_encoder is not None:
+            self.vision_encoder = Apriel2VisionEncoder(config.vision_encoder, config)
+        else:
+            self.vision_encoder = None
+
+        # Language model uses the config directly (inherits decoder, embeddings, head)
+        self.language_model = Apriel2TextModel(config)
+        self.vocab_size = config.vocab_size
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.language_model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.language_model.embed_tokens = value
+
+    def get_image_features(self, pixel_values):
+        """Extract and project image features."""
+        if self.vision_encoder is None:
+            raise ValueError("Cannot extract image features: vision_encoder is None")
+        return self.vision_encoder(pixel_values)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Apriel2Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> Union[tuple, BaseModelOutputWithPast]:
+        # If pixel_values provided, we need to merge vision and text embeddings
+        if pixel_values is not None and input_ids is not None:
+            # Encode and project images
+            image_features = self.get_image_features(pixel_values)
+
+            # Get text embeddings
+            inputs_embeds = self.language_model.embed_tokens(input_ids)
+
+            # Merge image features into text embeddings using efficient masked_scatter
+            # This follows LLaVA's pattern for better performance than loops
+            image_token_index = self.config.image_token_index
+
+            # Create mask for image token positions: [batch, seq_len]
+            special_image_mask = input_ids == image_token_index
+
+            # Validate token count matches feature count
+            num_image_tokens = special_image_mask.sum().item()
+            num_image_features = image_features.shape[0] * image_features.shape[1]
+
+            if num_image_tokens != num_image_features:
+                raise ValueError(
+                    f"Image features and image tokens do not match: "
+                    f"got {num_image_tokens} image tokens but {num_image_features} image features "
+                    f"(shape: {image_features.shape})"
+                )
+
+            # Expand mask to match embedding dimension: [batch, seq_len, hidden_size]
+            special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
+
+            # Flatten image features to match the number of True values in mask
+            # [batch, num_patches, hidden_size] -> [batch * num_patches, hidden_size]
+            image_features = image_features.view(-1, image_features.shape[-1])
+
+            # Use masked_scatter for efficient vectorized merge
+            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        # Forward through language model
+        return self.language_model(
+            input_ids=None if inputs_embeds is not None else input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+
+class Apriel2ForConditionalGeneration(PreTrainedModel, GenerationMixin):
+    """Apriel2 multimodal model with language modeling head (vision + text)."""
+
+    config_class = Apriel2Config
+    _tied_weights_keys = []  # No weight tying by default, but can be configured
+
+    def __init__(self, config: Apriel2Config):
+        super().__init__(config)
+        self.model = Apriel2Model(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        # Handle weight tying if configured
+        if config.tie_word_embeddings:
+            self._tied_weights_keys = ["lm_head.weight"]
+
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.model.set_input_embeddings(value)
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
+    def get_image_features(self, pixel_values):
+        """Extract and project image features."""
+        return self.model.get_image_features(pixel_values)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Apriel2Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs,
+    ) -> Union[tuple, CausalLMOutputWithPast]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # Forward through model
+        outputs = self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+        hidden_states = outputs.last_hidden_state if return_dict else outputs[0]
+
+        # Compute logits
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
+
+        loss = None
+        if labels is not None:
+            # Upcast to float if we need to compute the loss to avoid potential precision issues
+            logits = logits.float()
+            shift_logits = logits[..., :-1, :]
+            shift_labels = labels[..., 1:]
+            if attention_mask is not None:
+                # Use the input attention mask to shift the logits and labels
+                # Crop attention mask in case it is longer (e.g., in PrefixTuning with peft)
+                shift_attention_mask = attention_mask[:, -shift_logits.shape[1] :].to(logits.device)
+                shift_logits = shift_logits[shift_attention_mask != 0].contiguous()
+                shift_labels = shift_labels[shift_attention_mask.to(shift_labels.device) != 0].contiguous()
+            else:
+                shift_logits = shift_logits.contiguous()
+                shift_labels = shift_labels.contiguous()
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss()
+            flat_logits = shift_logits.view(-1, self.vocab_size)
+            flat_labels = shift_labels.view(-1).to(shift_logits.device)
+            loss = loss_fct(flat_logits, flat_labels)
+
+        if not return_dict:
+            output = (logits,) + (outputs[1:] if return_dict else outputs[1:])
+            return (loss,) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values if return_dict else outputs[1],
+            hidden_states=outputs.hidden_states if return_dict else None,
+            attentions=outputs.attentions if return_dict else None,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        pixel_values=None,
+        attention_mask=None,
+        use_cache=True,
+        logits_to_keep=None,
+        **kwargs,
+    ):
+        """Prepare inputs for generation, handling multimodal inputs correctly."""
+        # Overwritten -- custom handling for pixel_values during cached generation
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            cache_position=cache_position,
+            use_cache=use_cache,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+
+        # If we're in cached decoding stage, pixel_values should be None because input ids do not contain
+        # special image tokens anymore. Otherwise pixel_values should be passed to model.
+        # NOTE: use_cache=False always needs pixel_values
+        if cache_position is not None and cache_position[0] == 0:
+            model_inputs["pixel_values"] = pixel_values
+
+        return model_inputs

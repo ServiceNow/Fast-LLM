@@ -13,7 +13,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
-    Apriel2CheckpointFormat,
+    Apriel2TextCheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -23,7 +23,7 @@ from fast_llm.models.gpt.conversion.config import (
     MTPLlamaCheckpointFormat,
     Qwen2CheckpointFormat,
 )
-from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
+from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat, LlavaCheckpointFormat
 from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
@@ -727,10 +727,10 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests apriel2 format with pattern decoder mixing all mixer types.
+    # Tests apriel2_text format with pattern decoder mixing all mixer types.
     # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
     "llama",
-    "apriel2",
+    "apriel2_text",
     updates={
         ("model", "base_model", "tied_embedding_weight"): True,
         ("model", "base_model", "decoder"): {
@@ -802,7 +802,7 @@ _update_and_add_testing_config(
         },
     },
     megatron_args=None,
-    checkpoint_format=Apriel2CheckpointFormat,
+    checkpoint_format=Apriel2TextCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -814,6 +814,48 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split not supported for Mamba.
     skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
+    # Uses the same decoder as apriel2_text but adds vision capabilities.
+    "apriel2_text",
+    "apriel2",
+    model_type="multimodal",
+    updates={
+        ("model", "base_model", "vision_encoder"): {
+            "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
+            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
+            "adapter": {"intermediate_size": 256},
+            "hidden_size": 256,
+        },
+        # Reduce decoder blocks for faster testing
+        ("model", "base_model", "decoder", "num_blocks"): 2,
+        # Extend the vocab size to ensure the image token id is not in the mock dataset.
+        ("model", "base_model", "embeddings", "vocab_size"): 386,
+        ("model", "base_model", "image_token_index"): 384,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
+        ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+        # Pixtral doesn't support GQA
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
+    },
+    get_dataset=get_multimodal_test_dataset,
+    megatron_args=None,
+    checkpoint_format=Apriel2CheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=6.0,
+    # Micro-sequence split and sequence-first not supported for Mamba.
+    skip_tests=("sdp", "ms", "bf4", "df"),
 )
 
 

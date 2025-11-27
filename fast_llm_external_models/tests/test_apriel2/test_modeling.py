@@ -61,7 +61,7 @@ class TestApriel2Modeling:
         from fast_llm_external_models.apriel2.cache import Apriel2Cache
         wrong_cache = Apriel2Cache(config)
         # Initialize with zeros (wrong state)
-        for layer_idx in range(config.num_hidden_layers):
+        for layer_idx in range(config.decoder["num_blocks"]):
             # For attention layers, initialize empty cache
             if hasattr(wrong_cache.layers[layer_idx], 'key_cache'):
                 wrong_cache.layers[layer_idx].key_cache = torch.zeros(2, 4, 1, 16)

@@ -12,7 +12,7 @@ class TestStochasticMixerStructure:
     def test_all_submixers_present(self, apriel2_config_all_mixers):
         """Stochastic layer contains all 4 configured sub-mixers."""
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
-        stochastic_layer = model.model.layers[1]  # Layer 1 is the "all_mixers" layer
+        stochastic_layer = model.model.decoder.blocks[1]  # Layer 1 is the "all_mixers" layer
 
         assert hasattr(stochastic_layer.mixer, 'mixers'), "Stochastic mixer should have 'mixers' attribute"
         assert set(stochastic_layer.mixer.mixers.keys()) == {
@@ -32,7 +32,7 @@ class TestStochasticMixerStructure:
     def test_main_mixer_is_configured(self, apriel2_config_all_mixers):
         """Verify main_mixer_name is set correctly."""
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
-        stochastic_layer = model.model.layers[1]
+        stochastic_layer = model.model.decoder.blocks[1]
 
         assert stochastic_layer.mixer.main_mixer_name == "attention"
         assert stochastic_layer.mixer.main_mixer_name in stochastic_layer.mixer.mixers
@@ -65,15 +65,25 @@ class TestStochasticMixerStructure:
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
 
         config_tiny = Apriel2Config(
-            vocab_size=100, hidden_size=64, num_hidden_layers=2,
-            num_attention_heads=4, num_key_value_heads=2
+            vocab_size=100, hidden_size=64,
+            num_attention_heads=4, num_key_value_heads=2,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 2,
+                "block": {
+                    "mixer": {"type": "attention"},
+                    "mlp": {"type": "mlp"},
+                    "normalization": {"type": "rms_norm"},
+                },
+            },
         )
 
         config_stochastic = Apriel2Config(
-            vocab_size=100, hidden_size=64, num_hidden_layers=2,
+            vocab_size=100, hidden_size=64,
             num_attention_heads=4, num_key_value_heads=2,
             decoder={
                 "type": "pattern",
+                "num_blocks": 2,
                 "pattern": ["attn", "stoch"],
                 "blocks": {
                     "attn": {"mixer": {"type": "attention"}},
@@ -105,7 +115,7 @@ class TestStochasticMixerStructure:
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
 
         # Check that model has parameters
-        stochastic_layer = model.model.layers[1]
+        stochastic_layer = model.model.decoder.blocks[1]
         total_params = sum(p.numel() for p in stochastic_layer.mixer.parameters())
         assert total_params > 0, "Stochastic mixer should have parameters"
 

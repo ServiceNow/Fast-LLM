@@ -53,7 +53,7 @@ class Apriel2Cache(Cache):
     def __init__(self, config):
         super().__init__(layer_class_to_replicate=_DummyCacheLayer)
         self.config = config
-        n = config.num_hidden_layers
+        n = config.decoder["num_blocks"]
         self.layers = []
         self.mixer_types = []
         self.active_mixers = [None] * n

@@ -12,9 +12,17 @@ def apriel2_config_tiny():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_hidden_layers=2,
         num_attention_heads=4,
         num_key_value_heads=2,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {"type": "attention"},
+                "mlp": {"type": "mlp"},
+                "normalization": {"type": "rms_norm"},
+            },
+        },
     )
 
 
@@ -26,11 +34,11 @@ def apriel2_config_stochastic():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_hidden_layers=2,
         num_attention_heads=4,
         num_key_value_heads=2,
         decoder={
             "type": "pattern",
+            "num_blocks": 2,
             "pattern": ["attn", "stoch"],
             "blocks": {
                 "attn": {"mixer": {"type": "attention"}},
@@ -61,11 +69,11 @@ def apriel2_config_multi_mixer():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_hidden_layers=1,
         num_attention_heads=4,
         num_key_value_heads=2,
         decoder={
             "type": "pattern",
+            "num_blocks": 1,
             "pattern": ["multi"],
             "blocks": {
                 "multi": {
@@ -107,11 +115,11 @@ def apriel2_config_all_mixers():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_hidden_layers=2,
         num_attention_heads=4,
         num_key_value_heads=2,
         decoder={
             "type": "pattern",
+            "num_blocks": 2,
             "pattern": ["attn", "all_mixers"],
             "blocks": {
                 "attn": {"mixer": {"type": "attention"}},

@@ -15,7 +15,7 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
 from fast_llm.layers.ssm.config import Mamba2Config
 from fast_llm.models.gpt.config import GPTModelConfig
-from fast_llm.models.gpt.conversion.config import Apriel2CheckpointFormat
+from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
@@ -568,15 +568,15 @@ class Apriel2BaseModelConverter(MistralBaseModelConverter):
 class Apriel2HuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
     """HuggingFace checkpoint handler for Apriel2 format."""
 
-    format: typing.ClassVar[type[CheckpointFormat]] = Apriel2CheckpointFormat
+    format: typing.ClassVar[type[CheckpointFormat]] = Apriel2TextCheckpointFormat
     architecture: typing.ClassVar[str] = "Apriel2ForCausalLM"
     base_model_converter_class: typing.ClassVar[type[Apriel2BaseModelConverter]] = Apriel2BaseModelConverter
 
     @classmethod
     def get_transformers_configuration_class(cls) -> type[PretrainedConfig]:
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
 
-        return Apriel2Config
+        return Apriel2TextConfig
 
     @classmethod
     def get_model_files(cls) -> tuple[str, str, str | None]:
@@ -593,8 +593,8 @@ class Apriel2HuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
             super()._export_config(config),
             {
                 "auto_map": {
-                    "AutoConfig": "configuration_apriel2.Apriel2Config",
-                    "AutoModel": "modeling_apriel2.Apriel2Model",
+                    "AutoConfig": "configuration_apriel2.Apriel2TextConfig",
+                    "AutoModel": "modeling_apriel2.Apriel2TextModel",
                     "AutoModelForCausalLM": "modeling_apriel2.Apriel2ForCausalLM",
                 },
             },

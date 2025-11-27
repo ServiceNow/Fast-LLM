@@ -94,7 +94,7 @@ class TestMixerSwitching:
         model.eval()
 
         stochastic_layer_idx = 1  # Layer 1 is the stochastic layer
-        stochastic_layer = model.model.layers[stochastic_layer_idx]
+        stochastic_layer = model.model.decoder.blocks[stochastic_layer_idx]
         input_ids = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10), device=device)
 
         # Forward 1: Use attention (default main mixer)
@@ -157,7 +157,7 @@ class TestMixerSwitching:
         model.eval()
 
         stochastic_layer_idx = 1
-        stochastic_layer = model.model.layers[stochastic_layer_idx]
+        stochastic_layer = model.model.decoder.blocks[stochastic_layer_idx]
         input_ids = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10), device=device)
 
         # Forward with attention
@@ -194,7 +194,7 @@ class TestMixerSwitching:
         model.eval()
 
         stochastic_layer_idx = 1
-        stochastic_layer = model.model.layers[stochastic_layer_idx]
+        stochastic_layer = model.model.decoder.blocks[stochastic_layer_idx]
 
         # Forward with attention (10 tokens)
         input_ids1 = torch.randint(0, apriel2_config_all_mixers.vocab_size, (2, 10))
