@@ -1,9 +1,4 @@
-"""
-Apriel2 checkpoint format converter.
-
-Apriel2 is a HuggingFace format that closely mirrors Fast-LLM's config structure,
-making conversion straightforward.
-"""
+"""Apriel2 text-only checkpoint format converter."""
 
 import typing
 
@@ -11,28 +6,29 @@ from transformers import PretrainedConfig
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
+from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
 from fast_llm.layers.ssm.config import Mamba2Config
-from fast_llm.models.gpt.config import GPTModelConfig
-from fast_llm.models.gpt.conversion.config import Apriel2CheckpointFormat
-from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
-from fast_llm.models.gpt.conversion.mistral import (
-    MistralBaseModelConverter,
-    MistralBlockConverter,
-    MistralDecoderConverter,
-    MistralHeadConverter,
-    MistralHuggingfaceCheckpointHandler,
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
+from fast_llm.models.gpt.conversion.llama import (
+    LlamaEmbeddingsConverter,
+    LlamaNormalizationConverter,
+    MLPLayer2Converter,
+    QueryWeightConverter,
+    KeyValueWeightConverter,
+    SplitWeightConverter,
+    get_parameter_converter,
+    get_weight_and_bias_converters,
 )
+from fast_llm.models.gpt.model import GPTModel
 from fast_llm.utils import Assert, safe_merge_dicts
 
 
 class Apriel2AttentionConverter:
-    """Converter for attention mixers."""
-
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        """Import attention config from Apriel2 format."""
         return {
             "type": "attention",
             "heads": config.get("heads", 32),
@@ -45,10 +41,8 @@ class Apriel2AttentionConverter:
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
-        """Export attention config to Apriel2 format."""
         from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 
-        # Determine rotary type string
         if type(config.rotary) is DefaultRotaryConfig:
             rotary_type = "default"
         elif type(config.rotary) is Llama3RotaryConfig:
@@ -79,10 +73,6 @@ class Apriel2AttentionConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        """Get weight converters for attention."""
-        from fast_llm.models.gpt.conversion.llama import QueryWeightConverter, KeyValueWeightConverter
-
-        # Use same weight names as Llama converter
         return [
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.query",
@@ -110,11 +100,8 @@ class Apriel2AttentionConverter:
 
 
 class Apriel2MambaConverter:
-    """Converter for Mamba mixers."""
-
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        """Import Mamba config from Apriel2 format."""
         return {
             "type": "mamba_2",
             "state_size": config.get("state_size", 16),
@@ -126,7 +113,6 @@ class Apriel2MambaConverter:
 
     @classmethod
     def export_config(cls, config: Mamba2Config) -> dict:
-        """Export Mamba config to Apriel2 format."""
         exported = {
             "type": "mamba",
             "state_size": config.state_size,
@@ -153,7 +139,6 @@ class Apriel2MambaConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        """Get weight converters for Mamba."""
         return [
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.in_proj",
@@ -198,16 +183,9 @@ class Apriel2MambaConverter:
         ]
 
 
-# TODO: Add converters for GatedDeltaNet and KimiLinearAttention when implemented
-
-
 class Apriel2StochasticMixerConverter:
-    """Converter for stochastic mixers."""
-
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        """Import stochastic mixer config from Apriel2 format."""
-        # Import each sub-mixer config
         mixers = {}
         for name, sub_mixer_config in config.get("mixers", {}).items():
             mixer_type = sub_mixer_config.get("type")
@@ -227,8 +205,6 @@ class Apriel2StochasticMixerConverter:
 
     @classmethod
     def export_config(cls, config: StochasticMixerConfig) -> dict:
-        """Export stochastic mixer config to Apriel2 format."""
-        # Export each sub-mixer config
         mixers = {}
         for name, sub_mixer in config.mixers.items():
             mixer_type = type(sub_mixer)
@@ -254,24 +230,17 @@ class Apriel2StochasticMixerConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        """Get weight converters for stochastic mixer."""
         converters = []
-
-        # Create converters for each sub-mixer
         for name, sub_mixer in config.mixers.items():
             mixer_type = type(sub_mixer)
-
             if mixer_type is AttentionConfig:
                 converter_class = Apriel2AttentionConverter
-                # Attention sub-mixers have .self_attn nested inside
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}.self_attn"
             elif mixer_type is Mamba2Config:
                 converter_class = Apriel2MambaConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
-
-            # Sub-mixers are stored in a ModuleDict with names as keys
             converters.extend(
                 converter_class.get_converters(
                     sub_mixer,
@@ -284,13 +253,9 @@ class Apriel2StochasticMixerConverter:
         return converters
 
 
-class Apriel2BlockConverter(MistralBlockConverter):
-    """Converter for decoder blocks."""
-
+class Apriel2BlockConverter:
     @classmethod
     def import_config(cls, config: dict, block_config: dict) -> dict:
-        """Import block config from Apriel2 format."""
-        # Import mixer config
         mixer_config = block_config.get("mixer", {})
         mixer_type = mixer_config.get("type", "attention")
 
@@ -324,14 +289,12 @@ class Apriel2BlockConverter(MistralBlockConverter):
 
     @classmethod
     def export_config(cls, config: DecoderBlockConfig) -> dict:
-        """Export block config to Apriel2 format."""
         from fast_llm.layers.common.normalization.config import (
             RMSNormalizationConfig,
             LayerNormalizationConfig,
             NoNormalizationConfig,
         )
 
-        # Export mixer config
         mixer_type = type(config.mixer)
 
         if mixer_type is AttentionConfig:
@@ -343,7 +306,6 @@ class Apriel2BlockConverter(MistralBlockConverter):
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
 
-        # Determine normalization type string
         norm_type = type(config.normalization)
         if norm_type is RMSNormalizationConfig:
             norm_type_str = "rms_norm"
@@ -354,7 +316,6 @@ class Apriel2BlockConverter(MistralBlockConverter):
         else:
             raise ValueError(f"Unknown normalization type: {norm_type}")
 
-        # Export MLP
         from fast_llm.layers.decoder.mlp.config import MLPConfig
 
         if not isinstance(config.mlp, MLPConfig):
@@ -366,7 +327,6 @@ class Apriel2BlockConverter(MistralBlockConverter):
             "activation": config.mlp.activation.value,
         }
 
-        # Export normalization
         normalization = {"type": norm_type_str}
 
         return {
@@ -383,10 +343,7 @@ class Apriel2BlockConverter(MistralBlockConverter):
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        """Get weight converters for block."""
         converters = []
-
-        # Mixer converters - all at .mixer with appropriate sub-paths
         mixer_type = type(config.mixer)
         if mixer_type is AttentionConfig:
             converter_class = Apriel2AttentionConverter
@@ -409,9 +366,6 @@ class Apriel2BlockConverter(MistralBlockConverter):
             )
         )
 
-        # MLP converters - Fast-LLM uses layer_1 and layer_2
-        from fast_llm.models.gpt.conversion.llama import SplitWeightConverter, MLPLayer2Converter
-
         converters.extend([
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -428,9 +382,6 @@ class Apriel2BlockConverter(MistralBlockConverter):
                 drop_on_export=drop_on_export,
             ),
         ])
-
-        # Normalization converters - Fast-LLM uses norm_1 and norm_2
-        from fast_llm.models.gpt.conversion.llama import LlamaNormalizationConverter
 
         converters.extend([
             *LlamaNormalizationConverter.get_converters(
@@ -450,19 +401,15 @@ class Apriel2BlockConverter(MistralBlockConverter):
         return converters
 
 
-class Apriel2DecoderConverter(MistralDecoderConverter):
-    """Converter for decoder."""
-
+class Apriel2DecoderConverter:
     block_converter_class: typing.ClassVar[type[Apriel2BlockConverter]] = Apriel2BlockConverter
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        """Import decoder config from Apriel2 format."""
         decoder_config = config.get("decoder", {})
         decoder_type = decoder_config.get("type", "fixed")
 
         if decoder_type == "fixed":
-            # Fixed decoder: single block config
             block_config = decoder_config.get("block", {})
             imported_block = cls.block_converter_class.import_config(config, block_config)
 
@@ -473,7 +420,6 @@ class Apriel2DecoderConverter(MistralDecoderConverter):
             }
 
         elif decoder_type == "pattern":
-            # Pattern decoder: multiple named blocks
             blocks = {}
             for name, block_config in decoder_config.get("blocks", {}).items():
                 blocks[name] = cls.block_converter_class.import_config(config, block_config)
@@ -490,11 +436,9 @@ class Apriel2DecoderConverter(MistralDecoderConverter):
 
     @classmethod
     def export_config(cls, config) -> dict:
-        """Export decoder config to Apriel2 format."""
         from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 
         if isinstance(config, FixedBlockSequenceConfig):
-            # Fixed decoder
             block_config = cls.block_converter_class.export_config(config.block)
             return {
                 "decoder": {
@@ -505,7 +449,6 @@ class Apriel2DecoderConverter(MistralDecoderConverter):
             }
 
         elif isinstance(config, PatternBlockSequenceConfig):
-            # Pattern decoder
             blocks = {}
             for name, block_config in config.blocks.items():
                 blocks[name] = cls.block_converter_class.export_config(block_config)
@@ -530,7 +473,6 @@ class Apriel2DecoderConverter(MistralDecoderConverter):
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        """Get weight converters for decoder."""
         from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 
         converters = []
@@ -556,27 +498,94 @@ class Apriel2DecoderConverter(MistralDecoderConverter):
         return converters
 
 
-class Apriel2HeadConverter(MistralHeadConverter):
-    block_converter_class: typing.ClassVar[type[Apriel2BlockConverter]] = Apriel2BlockConverter
+class Apriel2HeadConverter:
+    normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {"normalization": cls.normalization_converter_class.import_config(config)}
+
+    @classmethod
+    def export_config(cls, config) -> dict:
+        from fast_llm.layers.language_model.config import LanguageModelHeadConfig
+        Assert.custom(isinstance, config, LanguageModelHeadConfig)
+        return cls.normalization_converter_class.export_config(config.normalization)
+
+    @classmethod
+    def get_converters(
+        cls,
+        config,
+        exported_config: dict,
+        fast_llm_prefix: str,
+    ) -> list[WeightConverter]:
+        return [
+            *cls.normalization_converter_class.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.final_norm",
+                "model.norm",
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.output_weights",
+                "lm_head.weight",
+                drop_on_import=exported_config.get("tie_word_embeddings", False),
+                drop_on_export=exported_config.get("tie_word_embeddings", False),
+            ),
+        ]
 
 
-class Apriel2BaseModelConverter(MistralBaseModelConverter):
+class Apriel2BaseModelConverter:
     decoder_converter_class: typing.ClassVar[type[Apriel2DecoderConverter]] = Apriel2DecoderConverter
+    embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
     head_converter_class: typing.ClassVar[type[Apriel2HeadConverter]] = Apriel2HeadConverter
 
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "embeddings": cls.embeddings_converter_class.import_config(config),
+            "decoder": cls.decoder_converter_class.import_config(config),
+            "head": cls.head_converter_class.import_config(config),
+            "hidden_size": config["hidden_size"],
+            "tied_embedding_weight": config.get("tie_word_embeddings", False),
+        }
 
-class Apriel2HuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
-    """HuggingFace checkpoint handler for Apriel2 format."""
+    @classmethod
+    def export_config(cls, config: GPTBaseModelConfig) -> dict:
+        Assert.custom(isinstance, config, GPTBaseModelConfig)
+        return safe_merge_dicts(
+            cls.embeddings_converter_class.export_config(config.embeddings),
+            cls.decoder_converter_class.export_config(config.decoder),
+            cls.head_converter_class.export_config(config.head),
+            {
+                "tie_word_embeddings": config.tied_embedding_weight,
+                "hidden_size": config.hidden_size,
+            },
+        )
 
-    format: typing.ClassVar[type[CheckpointFormat]] = Apriel2CheckpointFormat
+    @classmethod
+    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        return [
+            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
+            *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.decoder.blocks"),
+            *cls.head_converter_class.get_converters(config.head, exported_config, "head"),
+        ]
+
+
+class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    _model: GPTModel
+    _model_class: typing.ClassVar[type] = GPTModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = Apriel2TextCheckpointFormat
     architecture: typing.ClassVar[str] = "Apriel2ForCausalLM"
     base_model_converter_class: typing.ClassVar[type[Apriel2BaseModelConverter]] = Apriel2BaseModelConverter
 
     @classmethod
-    def get_transformers_configuration_class(cls) -> type[PretrainedConfig]:
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+    def get_huggingface_model_type(cls) -> str:
+        return "apriel2_text"
 
-        return Apriel2Config
+    @classmethod
+    def get_transformers_configuration_class(cls) -> type[PretrainedConfig]:
+        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
+
+        return Apriel2TextConfig
 
     @classmethod
     def get_model_files(cls) -> tuple[str, str, str | None]:
@@ -589,13 +598,25 @@ class Apriel2HuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
 
     @classmethod
     def _export_config(cls, config: GPTModelConfig) -> dict[str, typing.Any]:
-        return safe_merge_dicts(
-            super()._export_config(config),
+        base_model = config.base_model
+        exported = safe_merge_dicts(
+            cls.base_model_converter_class.export_config(base_model),
             {
+                "architectures": [cls.architecture],
+                "model_type": cls.get_huggingface_model_type(),
                 "auto_map": {
-                    "AutoConfig": "configuration_apriel2.Apriel2Config",
-                    "AutoModel": "modeling_apriel2.Apriel2Model",
+                    "AutoConfig": "configuration_apriel2.Apriel2TextConfig",
+                    "AutoModel": "modeling_apriel2.Apriel2TextModel",
                     "AutoModelForCausalLM": "modeling_apriel2.Apriel2ForCausalLM",
                 },
             },
         )
+        return exported
+
+    @classmethod
+    def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        return {"base_model": cls.base_model_converter_class.import_config(config)}
+
+    @classmethod
+    def _get_weight_converters(cls, config: GPTModelConfig, export_config: dict) -> list[WeightConverter]:
+        return cls.base_model_converter_class.get_converters(config.base_model, export_config)

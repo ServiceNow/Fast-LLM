@@ -23,3 +23,7 @@ class LlavaCheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
 
 class LlavaHybridSSMCheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "llava_hybrid_ssm"
+
+
+class Apriel2CheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "apriel2"
