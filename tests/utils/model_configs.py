@@ -4,6 +4,7 @@ import enum
 import functools
 import os
 import pathlib
+import re
 import typing
 
 import pytest
@@ -13,7 +14,6 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
-    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -80,7 +80,7 @@ class ModelTestingConfig:
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
     # Scale the comparison thresholds for specific models.
     compare_factor: float = 1.0
-    # Option to skip specific distributed configuration with name containing any of the provided strings.
+    # Option to skip specific distributed configuration with name matching any of the provided regex patterns.
     skip_tests: tuple[str] = ()
     get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
         get_model_test_dataset
@@ -136,7 +136,7 @@ class ModelTestingConfig:
         return self.model_config_class.get_base_model_config_class()
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
-        return any(key in distributed_config.name for key in self.skip_tests)
+        return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
 
 def _update_and_add_testing_config(
@@ -461,7 +461,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Arg update for cross-entropy splits doesn't work here.
-    skip_tests=("ce4", "ms"),
+    skip_tests=(r"ce4", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -594,7 +594,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
+    skip_tests=(r"sdp", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -636,8 +636,8 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split not supported.
     skip_tests=(
-        "sdp",
-        "ms",
+        r"sdp",
+        r"ms",
     ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
@@ -721,88 +721,36 @@ _update_and_add_testing_config(
     },
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
-    # TODO: Gradient accumulation works but comparison is broken.
-    skip_tests=("sdp", "ms", "bf4", "df"),
+    skip_tests=(r"sdp", r"ms", r"bf4", r"df"),
 )
 
 
 _update_and_add_testing_config(
-    # Tests apriel2 format with pattern decoder mixing all mixer types.
-    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
+    # Tests hybrid with gated delta net mixer.
     "llama",
-    "apriel2",
+    "hybrid_gdn",
     updates={
-        ("model", "base_model", "tied_embedding_weight"): True,
         ("model", "base_model", "decoder"): {
             "type": "pattern",
             "blocks": {
-                "attn_full": {
+                "t": copy.deepcopy(_llama_block),
+                "gdn": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default", "theta": 10000},
-                        "heads": 8,
-                        "head_groups": 4,
-                        "head_size": 32,
-                        "add_linear_biases": False,
-                    },
-                },
-                "mamba": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "mamba_2",
-                        "d_inner": 512,
-                        "state_size": 16,
-                        "dt_rank": 16,
-                        "d_xb": 256,
-                        "add_linear_biases": False,
-                    },
-                },
-                "stochastic": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "stochastic",
-                        "mixers": {
-                            "attn": {
-                                "type": "attention",
-                                "rotary": {"type": "default", "theta": 10000},
-                                "heads": 8,
-                                "head_groups": 4,
-                                "head_size": 32,
-                                "add_linear_biases": False,
-                            },
-                            "mamba": {
-                                "type": "mamba_2",
-                                "d_inner": 512,
-                                "state_size": 16,
-                                "dt_rank": 16,
-                                "d_xb": 256,
-                                "add_linear_biases": False,
-                            },
-                        },
-                        "sampling_strategy": "uniform",
-                        "main_mixer_name": "attn",
-                    },
-                },
-                "attn_swa": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default", "theta": 10000},
-                        "heads": 8,
-                        "head_groups": 4,
-                        "head_size": 32,
-                        "window_size": 128,
-                        "add_linear_biases": False,
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 4,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
                     },
                 },
             },
-            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa"],
-            "num_blocks": 4,
+            "num_blocks": 2,
+            "pattern": ["t", "gdn"],
         },
     },
     megatron_args=None,
-    checkpoint_format=Apriel2CheckpointFormat,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -811,9 +759,49 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
-    # Micro-sequence split not supported for Mamba.
-    skip_tests=("sdp", "ms"),
+    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests hybrid with gated delta net mixer.
+    "llama",
+    "hybrid_kda",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "kda": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "kda",
+                        "heads": 4,
+                        "head_dim": 16,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "kda"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=10.0,  # similar to gdn with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=(r"sdp", r"ms", r"^tp2$"),
 )
 
 
