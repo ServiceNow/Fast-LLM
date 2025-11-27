@@ -93,9 +93,12 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
-        self._debug.log_output(
-            logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+        logit_dims = (
+            kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,)
+            if BlockKwargs.hidden_dims in kwargs
+            else None
         )
+        self._debug(logits, "Router logits", logit_dims, kwargs)
 
         # Apply z_loss if applicable
         if self._config.z_loss_coefficient > 0.0:
@@ -123,18 +126,11 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         else:
             raise NotImplementedError(self._config.routing)
 
-        self._debug.log_output(
-            scores, "router_scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
-        )
-        self._debug.log_output(
-            top_experts,
-            "router_top_experts",
-            kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
-            kwargs,
-        )
+        self._debug(scores, "router_scores", logit_dims, kwargs)
+        self._debug(top_experts, "router_top_experts", logit_dims, kwargs)
 
         out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
-        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
         return out, None
 
     def _forward_dropless(

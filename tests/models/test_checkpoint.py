@@ -333,7 +333,34 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         dtype=torch.int64,
         device="cuda",
     )
-    output_ref = model_ref(test_input)
+    kwargs = {}
+    if model_testing_config.model_type == "multimodal":
+        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).cuda()
+        kwargs["image_sizes"] = torch.tensor(
+            [
+                [20, 20],  # Full image, 25 patches
+                [12, 12],  # Smaller, 9 patches
+                [9, 15],  # Cropped to patch size, 6 patches
+                [5, 20],  # Cropped in one dim, 5 patches
+                [7, 5],  # Single patch
+                [2, 3],  # Cropped out (0 patch)
+            ]
+        )
+        image_token_index = model_ref.fast_llm_base_model.config.image_token_index
+        # First sample has one image at the beginning.
+        test_input[0, :25] = image_token_index
+        # Second sample has one image in the middle
+        test_input[1, 30:39] = image_token_index
+        # Third sample has no image.
+        # Fourth sample has four images.
+        # First one has discontinuous embedding (ex. image break token)
+        test_input[3, :3] = image_token_index
+        test_input[3, 7:10] = image_token_index
+        # Second and third one next to each other.
+        test_input[3, 28:34] = image_token_index
+        # Last one cropped out.
+
+    output_ref = model_ref(test_input, **kwargs)
     model_from_fast_llm = hf_class.from_pretrained(fast_llm_path).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(

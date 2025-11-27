@@ -72,5 +72,5 @@ class PatchEmbeddings[ConfigType: PatchEmbeddingsConfig](Block[ConfigType]):
             .unsqueeze(int(kwargs[AttentionKwargs.sequence_first]))
             .to(self._residual_dtype)
         )
-        self._debug(out, None, kwargs[VisionKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(VisionKwargs.hidden_dims), kwargs)
         return out

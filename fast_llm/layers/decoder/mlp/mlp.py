@@ -137,5 +137,5 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             transposed_layer_2_weight=self.layer_2.transposed_weight,
         )
         bias = self.layer_2.bias if self._parallel_dim.group else None
-        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs, bias=bias)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs, bias=bias)
         return out, bias

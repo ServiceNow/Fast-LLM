@@ -146,7 +146,7 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         )
         if kwargs[BlockKwargs.sequence_first]:
             out = out.transpose(0, 1)
-        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
         return out, None
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

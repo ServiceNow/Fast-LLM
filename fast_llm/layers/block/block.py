@@ -31,7 +31,7 @@ class DebugLayer:
         self,
         tensor: torch.Tensor | None,
         suffix: str | None,
-        dims: tuple[TensorDim | str, ...],
+        dims: tuple[TensorDim | str, ...] | None,
         kwargs: dict[str, typing.Any],
         bias: torch.Tensor | None = None,
         **logging_kwargs,
@@ -73,10 +73,16 @@ class DebugLayer:
                 )
 
     def _get_meta(
-        self, tensor: torch.Tensor | None, name: str, dims: tuple[TensorDim | str, ...], kwargs: dict[str, typing.Any]
+        self,
+        tensor: torch.Tensor | None,
+        name: str,
+        dims: tuple[TensorDim | str, ...] | None,
+        kwargs: dict[str, typing.Any],
     ) -> TensorMeta | None:
         if tensor is None:
             return None
+        if dims is None:
+            dims = tuple(f"dim_{i}" for i in range(tensor.ndim))
         hidden_dims = {
             dim.name: dim for dim in kwargs[BlockKwargs.hidden_dims] + (kwargs[BlockKwargs.sequence_q_dim],)
         }

@@ -175,7 +175,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             kwargs.get(LanguageModelKwargs.mask_inputs),
             embedding_map,
         )
-        self._debug(out, None, kwargs[LanguageModelKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
         return out
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

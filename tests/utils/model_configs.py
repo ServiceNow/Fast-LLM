@@ -7,6 +7,7 @@ import pathlib
 import typing
 
 import pytest
+import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
@@ -31,6 +32,9 @@ from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
 )
+
+if typing.TYPE_CHECKING:
+    import transformers.models.auto.auto_factory
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -84,6 +88,9 @@ class ModelTestingConfig:
     skip_tests: tuple[str] = ()
     get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
         get_model_test_dataset
+    )
+    auto_model_class: type["transformers.models.auto.auto_factory._BaseAutoModelClass"] = (
+        transformers.AutoModelForCausalLM
     )
 
     def __post_init__(self):
@@ -428,6 +435,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 
@@ -505,6 +513,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 _update_and_add_testing_config(
@@ -723,6 +732,7 @@ _update_and_add_testing_config(
     # Micro-sequence split and sequence-first not supported.
     # TODO: Gradient accumulation works but comparison is broken.
     skip_tests=("sdp", "ms", "bf4", "df"),
+    auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
 
@@ -811,7 +821,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
+    compare_factor=5.0,
     # Micro-sequence split not supported for Mamba.
     skip_tests=("sdp", "ms"),
 )

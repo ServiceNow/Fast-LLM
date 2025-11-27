@@ -236,7 +236,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         out, bias = self.out_proj(y)
-        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
         return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

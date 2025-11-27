@@ -208,7 +208,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         out, bias = self.out_proj(y)
-        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
         return out, bias
 
     @torch.compile

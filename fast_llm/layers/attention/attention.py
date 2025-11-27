@@ -387,7 +387,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
             input_ = input_.transpose(0, 1).contiguous()
         out, bias = self.dense(input_)
-        self._debug(out, None, kwargs[AttentionKwargs.hidden_dims], kwargs)
+        self._debug(out, None, kwargs.get(AttentionKwargs.hidden_dims), kwargs)
         return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

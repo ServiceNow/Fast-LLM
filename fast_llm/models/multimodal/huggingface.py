@@ -98,7 +98,7 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         sample_map, token_map = torch.nonzero(image_mask, as_tuple=True)
         Assert.eq(len(sample_map), len(image_patches))
         # Fast-LLM uses negative token ids as placeholders for image tokens.
-        batch.tokens.tokens[image_mask] = -100
+        batch.tokens.tokens = torch.where(image_mask, -100, batch.tokens.tokens)
 
         batch.image_patches = PatchBatch(
             image_patches,

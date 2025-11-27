@@ -18,7 +18,7 @@ from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, re
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
-from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
@@ -168,7 +168,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             ln_output = self.final_norm(input_)
             # Transormers expect normalized outputs for the last transformer layer,
             # so we add the norm output to the hidden states.
-            self._debug(ln_output, "final_norm", kwargs[BlockKwargs.hidden_dims], kwargs)
+            self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
 
         grad_output = kwargs[LanguageModelKwargs.grad_output] / (
             self._parallel_dim.size if self._sequence_parallel_logits else 1
@@ -331,12 +331,15 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             )
 
         sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
-        batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
-        dims = (
-            (sequence_dim, batch_dim, self._vocab_dim)
-            if kwargs[LanguageModelKwargs.sequence_first]
-            else (batch_dim, sequence_dim, self._vocab_dim)
-        )
+        if LanguageModelKwargs.hidden_dims in kwargs:
+            batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
+            dims = (
+                (sequence_dim, batch_dim, self._vocab_dim)
+                if kwargs[LanguageModelKwargs.sequence_first]
+                else (batch_dim, sequence_dim, self._vocab_dim)
+            )
+        else:
+            dims = None
         self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
 
         if targets is None:
