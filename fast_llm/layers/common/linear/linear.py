@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 class LinearLike(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
         self._forward = wrap_forward_backward(self.forward_only, self.backward)
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
