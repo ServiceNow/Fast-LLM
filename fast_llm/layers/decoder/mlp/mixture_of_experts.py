@@ -76,8 +76,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             dropless_moe = False
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
 
-        if self._debug.enabled:
-            self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
+        self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
 
     def _get_intermediate_dims(self) -> tuple[TensorDim, TensorDim]:
         intermediate_1_dim, intermediate_2_dim = super()._get_intermediate_dims()
@@ -94,10 +93,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
-        if self._debug.enabled:
-            self._debug(
-                logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
-            )
+        self._debug.log_output(
+            logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+        )
 
         # Apply z_loss if applicable
         if self._config.z_loss_coefficient > 0.0:
@@ -125,19 +123,19 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         else:
             raise NotImplementedError(self._config.routing)
 
-        if self._debug.enabled:
-            # To log all ranks set `global_=False`
-            self._debug(
-                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
-            )
-            self._debug(
-                top_experts,
-                "Router top experts",
-                kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
-                kwargs,
-            )
+        self._debug.log_output(
+            scores, "router_scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+        )
+        self._debug.log_output(
+            top_experts,
+            "router_top_experts",
+            kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
+            kwargs,
+        )
 
-        return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
+        out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
+        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        return out, None
 
     def _forward_dropless(
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor

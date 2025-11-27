@@ -10,6 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.decoder.mlp.config import MLPConfig
@@ -120,21 +121,21 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 ),
                 None,
             )
-        return (
-            mlp_autograd(
-                input_,
-                None,
-                self.layer_1.weight,
-                self.layer_1.bias,
-                self.layer_2.weight,
-                None if self._parallel_dim.group else self.layer_2.bias,
-                gated=self._config.gated,
-                activation_type=self._config.activation,
-                group=self._parallel_dim.group,
-                sequence_parallel=self._sequence_parallel,
-                training=self.training,
-                recompute_level=self._config.recompute_level,
-                transposed_layer_2_weight=self.layer_2.transposed_weight,
-            ),
-            self.layer_2.bias if self._parallel_dim.group else None,
+        out = mlp_autograd(
+            input_,
+            None,
+            self.layer_1.weight,
+            self.layer_1.bias,
+            self.layer_2.weight,
+            None if self._parallel_dim.group else self.layer_2.bias,
+            gated=self._config.gated,
+            activation_type=self._config.activation,
+            group=self._parallel_dim.group,
+            sequence_parallel=self._sequence_parallel,
+            training=self.training,
+            recompute_level=self._config.recompute_level,
+            transposed_layer_2_weight=self.layer_2.transposed_weight,
         )
+        bias = self.layer_2.bias if self._parallel_dim.group else None
+        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs, bias=bias)
+        return out, bias

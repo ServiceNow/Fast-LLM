@@ -208,12 +208,11 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
         # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
         dt = dt.transpose(1, 2)
 
-        if self._debug.enabled:
-            self._debug(z, "z", self._xz_dims, kwargs)
-            self._debug(x, "x", self._xz_dims, kwargs)
-            self._debug(b, "b", self._bc_dims, kwargs)
-            self._debug(c, "c", self._bc_dims, kwargs)
-            self._debug(dt, "dt", self._xz_dims, kwargs)
+        self._debug(z, "z", self._xz_dims, kwargs)
+        self._debug(x, "x", self._xz_dims, kwargs)
+        self._debug(b, "b", self._bc_dims, kwargs)
+        self._debug(c, "c", self._bc_dims, kwargs)
+        self._debug(dt, "dt", self._xz_dims, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -227,8 +226,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
             delta_softplus=True,
         )
 
-        if self._debug.enabled:
-            self._debug(y, "y", self._xz_dims, kwargs)
+        self._debug(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
@@ -237,7 +235,9 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
             y = y.transpose(0, 1).contiguous()
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        return self.out_proj(y)
+        out, bias = self.out_proj(y)
+        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Implement.

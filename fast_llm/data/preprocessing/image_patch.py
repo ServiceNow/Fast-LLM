@@ -30,16 +30,17 @@ class ImagePatchConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    do_resize: bool = Field(default=True, desc="Whether to resize the image.")
     max_image_height: int = Field(
         default=1024,
         desc="Maximum height of the complete image, in pixels."
-        "If the original image is larger than this, it will be resized to this height.",
+        "If the original image is larger than this and resizing is enabled, it will be resized to this height.",
         hint=FieldHint.optional,
     )
     max_image_width: int = Field(
         default=1024,
         desc="Maximum width of the complete image, in pixels."
-        "If the original image is larger than this, it will be resized to this width.",
+        "If the original image is larger than this and resizing is enabled, it will be resized to this width.",
         hint=FieldHint.optional,
     )
     image_break_token: int | None = Field(
@@ -72,14 +73,14 @@ class ImagePatchConfig(Config):
         Assert.gt(self.max_patches_height, 0)
         Assert.gt(self.max_patches_width, 0)
 
-    def get_patches(
-        self, images: list[bytes], token_data_type: DataType = DataType.int64
+    def get_patches_from_images(
+        self, images: list["torch.Tensor|bytes"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
         if len(images) > 0:
             image_patches, image_positions, image_token_maps, image_token_ids = zip(
-                *(self._get_patches(image, token_data_type) for image in images)
+                *(self._get_patches_from_image(image, token_data_type) for image in images)
             )
             return (
                 torch.cat(image_patches),
@@ -98,27 +99,36 @@ class ImagePatchConfig(Config):
                 [0],
             )
 
-    def _get_patches(
-        self, image_bytes: bytes, token_data_type: DataType = DataType.int64
+    def _get_patches_from_image(
+        self, image: "torch.Tensor|bytes", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
-        import numpy as np
-        import PIL.Image
         import torch
 
-        with PIL.Image.open(io.BytesIO(image_bytes)) as image:
-            if image.mode != "RGB":
-                # Convert all images to RGB
-                image = image.convert("RGB")
-            image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
-            Assert.eq(image.dtype, torch.uint8)
+        if not torch.is_tensor(image):
+            import numpy as np
+            import PIL.Image
 
-        # Resize to a multiple of patch size smaller or equal to max size.
-        image = self._resize(image)
+            with PIL.Image.open(io.BytesIO(image)) as image:
+                if image.mode != "RGB":
+                    # Convert all images to RGB
+                    image = image.convert("RGB")
+                image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
+                Assert.eq(image.dtype, torch.uint8)
+
+        if self.do_resize:
+            # Resize to a multiple of patch size smaller or equal to max size.
+            image = self._resize(image)
+        else:
+            # Crop the image to ensure its shape is a multiple of the patch size.
+            image = image[
+                :, : image.size(1) - image.size(1) % self.height, : image.size(2) - image.size(2) % self.width
+            ]
+
         num_patches_height = div(image.size(1), self.height)
         num_patches_width = div(image.size(2), self.width)
         # Convert to patches. (`torch.nn.functional.unfold` not supported for uint8.)
         patches = (
-            image.view(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
+            image.reshape(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
             .permute(3, 1, 0, 2, 4)
             .flatten(0, 1)
         )

@@ -27,9 +27,56 @@ class DebugLayer:
     def __init__(self, module: torch.nn.Module):
         self._module = module
 
+    def __call__(
+        self,
+        tensor: torch.Tensor | None,
+        suffix: str | None,
+        dims: tuple[TensorDim | str, ...],
+        kwargs: dict[str, typing.Any],
+        bias: torch.Tensor | None = None,
+        **logging_kwargs,
+    ):
+        name = self._name if suffix is None else f"{self._name}.{suffix}"
+        output_hidden_state = (
+            BlockKwargs.output_hidden_states in kwargs
+            and any(pattern.match(name) for pattern in kwargs[BlockKwargs.output_hidden_states])
+            and tensor is not None
+        )
+        if (level := get_model_debug_level()) == 0 and not output_hidden_state:
+            return
+        if bias is not None:
+            assert tensor is not None
+            tensor = tensor + bias
+        meta = self._get_meta(tensor, name, dims, kwargs)
+
+        if output_hidden_state:
+            kwargs[BlockKwargs.hidden_states][name] = (meta, tensor)
+
+        if level > 1:
+            log_pipeline_parallel_main_rank(lambda: log_memory_usage(name, str))
+
+        if level > 0 and tensor is not None:
+            log_distributed_tensor(
+                "",
+                tensor,
+                level=level,
+                meta=meta,
+                **logging_kwargs,
+            )
+            if tensor.requires_grad:
+                log_distributed_grad(
+                    "",
+                    tensor,
+                    level=level,
+                    meta=self._get_meta(tensor, name + f"{name}.grad", dims, kwargs),
+                    **logging_kwargs,
+                )
+
     def _get_meta(
-        self, tensor: torch.Tensor, name: str, dims: tuple[TensorDim | str, ...], kwargs: dict[str, typing.Any]
-    ) -> TensorMeta:
+        self, tensor: torch.Tensor | None, name: str, dims: tuple[TensorDim | str, ...], kwargs: dict[str, typing.Any]
+    ) -> TensorMeta | None:
+        if tensor is None:
+            return None
         hidden_dims = {
             dim.name: dim for dim in kwargs[BlockKwargs.hidden_dims] + (kwargs[BlockKwargs.sequence_q_dim],)
         }
@@ -42,7 +89,7 @@ class DebugLayer:
                 )
                 for i, dim in enumerate(dims)
             ),
-            tensor_name=f"{self._name} {name}",
+            tensor_name=name,
             dtype=tensor.dtype,
         )
 
@@ -50,47 +97,6 @@ class DebugLayer:
     def _name(self):
         # Should be called after `module_name` is set in `BaseModel`
         return getattr(self._module, "module_name", "unknown")
-
-    @property
-    def enabled(self) -> bool:
-        return get_model_debug_level() > 0
-
-    def __call__[
-        T
-    ](
-        self,
-        tensor: torch.Tensor | None,
-        name: str,
-        dims: tuple[TensorDim | str, ...],
-        kwargs: dict[str, typing.Any],
-        scale: float = 1.0,
-        global_: bool = True,
-        log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
-    ) -> None:
-        if (level := get_model_debug_level()) == 0:
-            return
-        if level > 1:
-            log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
-        if tensor is not None:
-            log_distributed_tensor(
-                "",
-                tensor,
-                level=level,
-                meta=self._get_meta(tensor, name, dims, kwargs),
-                global_=global_,
-                log_fn=log_fn,
-                scale=scale,
-            )
-            if tensor.requires_grad:
-                log_distributed_grad(
-                    "",
-                    tensor,
-                    level=level,
-                    meta=self._get_meta(tensor, name + " grad", dims, kwargs),
-                    global_=global_,
-                    log_fn=log_fn,
-                    scale=scale,
-                )
 
 
 class BlockBase[ConfigType: ModuleConfig](Configurable[ConfigType], LayerBase):

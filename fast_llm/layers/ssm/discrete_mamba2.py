@@ -207,7 +207,9 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockWithBias[ConfigType]
             y = y.transpose(0, 1).contiguous()
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        return self.out_proj(y)
+        out, bias = self.out_proj(y)
+        self._debug(out, None, kwargs[BlockKwargs.hidden_dims], kwargs)
+        return out, bias
 
     @torch.compile
     def _apply_a_log(self, x: torch.Tensor, A_log: torch.Tensor) -> torch.Tensor:

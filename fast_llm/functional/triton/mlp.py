@@ -374,7 +374,7 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
     # Layer 1 backward
     grad_input = output_parallel_linear_backward(
         grad_intermediate_1,
-        (intermediate_0, weight_1, bias_1, group, sequence_parallel, False, sparse_map),
+        (intermediate_0, weight_1, bias_1, group, sequence_parallel, False, True, sparse_map),
     )
 
     # Sparse copy

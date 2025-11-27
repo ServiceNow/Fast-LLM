@@ -691,7 +691,7 @@ _update_and_add_testing_config(
     model_type="multimodal",
     updates={
         ("model", "base_model", "vision_encoder"): {
-            "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
+            "embeddings": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
             "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
             "adapter": {"intermediate_size": 256},
             "hidden_size": 256,

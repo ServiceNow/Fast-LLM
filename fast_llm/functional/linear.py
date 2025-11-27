@@ -70,8 +70,12 @@ def update_linear_gradients(
 
 
 def linear_forward(
-    input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None, transposed_weight: bool = False
-) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]]:
+    input_: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    transposed_weight: bool = False,
+    input_requires_grad: bool = True,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]]:
     # Matmul
     if TritonConfig.TRITON_LINEAR:
         assert bias is None
@@ -81,17 +85,19 @@ def linear_forward(
         ).unflatten(0, input_.shape[:-1])
     else:
         output = torch.nn.functional.linear(input_, maybe_transpose(weight, transposed_weight), bias)
-    return output, (input_, weight, bias, transposed_weight)
+    return output, (input_, weight, bias, transposed_weight, input_requires_grad)
 
 
 def linear_backward(
     grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]
-) -> torch.Tensor:
-    input_, weight, bias, transposed_weight = context
+) -> torch.Tensor | None:
+    input_, weight, bias, transposed_weight, input_requires_grad = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
     # Input grad
-    if TritonConfig.TRITON_LINEAR:
+    if not input_requires_grad:
+        grad_input = None
+    elif TritonConfig.TRITON_LINEAR:
         grad_input = dense_matmul(grad_output.flatten(0, -2), weight_t).view_as(input_)
     else:
         grad_input = grad_output.matmul(weight_t)
@@ -108,6 +114,7 @@ def output_parallel_linear_forward(
     group: ProcessGroup | None,
     sequence_parallel: bool,
     transposed_weight: bool = False,
+    input_requires_grad: bool = True,
     sparse_map: SparseMap | None = None,
 ) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
     # Gather sequence-parallel slices (non-overlapped)
@@ -133,12 +140,13 @@ def output_parallel_linear_forward(
         group,
         sequence_parallel,
         transposed_weight,
+        input_requires_grad,
         sparse_map,
     )
 
 
-def output_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:
-    input_, weight, bias, group, sequence_parallel, transposed_weight, sparse_map = context
+def output_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor | None:
+    input_, weight, bias, group, sequence_parallel, transposed_weight, input_requires_grad, sparse_map = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
     # Gather sequence-parallel slices (overlapped)
@@ -148,15 +156,20 @@ def output_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[ty
         gather_handle = None
 
     # Input grad
-    if TritonConfig.TRITON_LINEAR or sparse_map is not None:
-        grad_input = input_inner_sparse_matmul(grad_output.flatten(0, -2), weight_t, sparse_map).view_as(input_)
-    else:
-        grad_input = grad_output.matmul(weight_t)
+    if input_requires_grad:
+        if TritonConfig.TRITON_LINEAR or sparse_map is not None:
+            grad_input = input_inner_sparse_matmul(grad_output.flatten(0, -2), weight_t, sparse_map).view_as(input_)
+        else:
+            grad_input = grad_output.matmul(weight_t)
 
-    # Reduce input grad (overlapped)
-    grad_input, reduce_handle = (reduce_scatter_op if sequence_parallel else reduce_op)(
-        grad_input, group=group, async_op=True
-    )
+        # Reduce input grad (overlapped)
+        grad_input, reduce_handle = (reduce_scatter_op if sequence_parallel else reduce_op)(
+            grad_input, group=group, async_op=True
+        )
+    else:
+        grad_input = None
+        reduce_handle = None
+
     if sequence_parallel:
         gather_handle.wait()
 
@@ -175,6 +188,7 @@ def input_parallel_linear_forward(
     group: ProcessGroup | None,
     sequence_parallel: bool,
     transposed_weight: bool = False,
+    input_requires_grad: bool = True,
     sparse_map: SparseMap | None = None,
 ) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
     # Matmul
@@ -197,12 +211,13 @@ def input_parallel_linear_forward(
         group,
         sequence_parallel,
         transposed_weight,
+        input_requires_grad,
         sparse_map,
     )
 
 
-def input_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:
-    input_, weight, bias, group, sequence_parallel, transposed_weight, sparse_map = context
+def input_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor | None:
+    input_, weight, bias, group, sequence_parallel, transposed_weight, input_requires_grad, sparse_map = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
     # Gather sequence-parallel slices (non-overlapped)
@@ -210,7 +225,9 @@ def input_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typ
         grad_output = gather_op(grad_output, group, dim=0)
 
     # Input grad
-    if TritonConfig.TRITON_LINEAR or sparse_map is not None:
+    if not input_requires_grad:
+        grad_input = None
+    elif TritonConfig.TRITON_LINEAR or sparse_map is not None:
         grad_input = output_sparse_matmul(grad_output.flatten(0, -2), weight_t, sparse_map).view_as(input_)
     else:
         grad_input = grad_output.matmul(weight_t)

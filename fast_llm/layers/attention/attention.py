@@ -365,9 +365,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         key = key.view(*key.shape[:2], self._local_head_groups, self._config.head_size)
         value = value.view(*value.shape[:2], self._local_head_groups, self._config.head_size)
 
-        if self._debug.enabled:
-            self._debug(query, "query_rotary_input", self._query_dims, kwargs)
-            self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
+        self._debug(query, "query_rotary_input", self._query_dims, kwargs)
+        self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
         with set_generator(self._distributed.tp_generator):
@@ -379,16 +378,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             else:
                 raise NotImplementedError(self._implementation)
 
-        if self._debug.enabled:
-            self._debug(query, "query", self._query_dims, kwargs)
-            self._debug(key, "key", self._kv_dims, kwargs)
-            self._debug(value, "value", self._kv_dims, kwargs)
-            self._debug(input_, "context", self._context_dims, kwargs)
+        self._debug(query, "query", self._query_dims, kwargs)
+        self._debug(key, "key", self._kv_dims, kwargs)
+        self._debug(value, "value", self._kv_dims, kwargs)
+        self._debug(input_, "context", self._context_dims, kwargs)
 
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
             input_ = input_.transpose(0, 1).contiguous()
-        return self.dense(input_)
+        out, bias = self.dense(input_)
+        self._debug(out, None, kwargs[AttentionKwargs.hidden_dims], kwargs)
+        return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         batch_dim: TensorDim = kwargs[AttentionKwargs.hidden_dims][1 if kwargs[AttentionKwargs.sequence_first] else 0]
