@@ -8,13 +8,19 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
-from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
+from fast_llm.data.dataset.abstract import (
+    SamplableDataset,
+    SamplableIterableDataset,
+    SampledDataset,
+    SampledIterableDataset,
+)
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
     from fast_llm.data.sample.language_model import LanguageModelSample
+    from fast_llm.data.sample.pipeline_rl import PipelineRLSample
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
@@ -105,19 +111,23 @@ class DatasetConfig[SampleType: Sample](Config):
 @config_class(registry=True)
 class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     """
-    A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
+    A sampled dataset containing a prepared list or iterable of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(
+        self, sampling: SamplingData
+    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
         raise NotImplementedError()
 
 
 @config_class()
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self) -> SamplableDataset[SampleType]:
+    def build(self) -> SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(
+        self, sampling: SamplingData
+    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
         return self.build().sample(sampling)
 
 
@@ -297,3 +307,61 @@ class MemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[
             return LegacyMemmapDataset[SampleType](name, self.path)
         else:
             raise FileNotFoundError(self.path)
+
+
+@config_class()
+class RedisConfig(Config):
+    host: str = Field(
+        default="localhost",
+        desc="Hostname or IP address of the Redis server.",
+        hint=FieldHint.core,
+    )
+
+    port: int = Field(
+        default=6379,
+        desc="Port number on which the Redis server is running.",
+        hint=FieldHint.core,
+    )
+
+    stream_key: str = Field(
+        default=None,
+        desc="Name of the Redis stream to read data from.",
+        hint=FieldHint.core,
+    )
+
+    group_name: str = Field(
+        default="fast_llm_dp_group",
+        desc="Name of the Redis consumer group used for data-parallel reading.",
+        hint=FieldHint.core,
+    )
+
+    consumer_name_prefix: str = Field(
+        default="fast_llm_dp_group_consumer",
+        desc="Prefix used to generate unique consumer names for each rank.",
+        hint=FieldHint.core,
+    )
+
+
+@config_class(dynamic_type={SampledDatasetConfig: "streaming"})
+class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableDatasetConfig[SampleType]):
+    """
+    Configuration for a streaming dataset that reads training data from a Redis stream.
+    """
+
+    _abstract = False
+
+    redis: RedisConfig = Field(
+        desc="Redis connection and stream settings used to fetch incoming training data.",
+        hint=FieldHint.core,
+    )
+
+    data_key: str = Field(
+        default="data",
+        desc="The Redis message field containing the serialized sample payload.",
+        hint=FieldHint.core,
+    )
+
+    def build_and_sample(self, sampling: SamplingData) -> SampledIterableDataset[SampleType]:
+        from fast_llm.data.dataset.streaming import StreamingDataset
+
+        return StreamingDataset[SampleType](self, sampling.distributed).sample(sampling)

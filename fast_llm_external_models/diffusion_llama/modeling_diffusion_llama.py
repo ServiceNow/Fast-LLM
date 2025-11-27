@@ -706,7 +706,7 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, SLAMGenerationMixin):
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        **kwargs,  # TODO: Kwargs for Diffusion? : Unpack[KwargsForCausalLM],
+        **kwargs,  # TODO: Kwargs for Diffusion? : Unpack[TransformersKwargs],
     ) -> MaskedLMOutput:
         r"""
         # TODO: Update docstring for diffusion

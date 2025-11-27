@@ -27,6 +27,7 @@ from tests.utils.save_load_configs import (  # isort: skip
 from tests.utils.run_test_script import (  # isort: skip
     compare_results_for_all_models,
     run_distributed_script,
+    run_distributed_script_lean,
     run_test_script_base_path,
     run_test_script_for_all_models,
 )
