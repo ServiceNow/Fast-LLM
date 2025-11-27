@@ -46,7 +46,7 @@ def test_fast_llm_kda_matches_apriel_forward():
     dtype = torch.bfloat16
 
     hidden_size = 16
-    seq_len = 6
+    seq_len = 65
     num_heads = 4
     head_dim = 4
     kernel_size = 4
@@ -67,7 +67,7 @@ def test_fast_llm_kda_matches_apriel_forward():
         heads=num_heads,
         head_dim=head_dim,
         convolution_layer={"kernel_size": kernel_size, "activation": "silu"},
-        normalization={"epsilon": hf_config.rms_norm_eps},
+        normalization={"epsilon": hf_config.rms_norm_eps, "activation": "sigmoid"},
     )
     distributed_config = DistributedConfig(
         tensor_parallel=1,
@@ -128,10 +128,11 @@ def test_fast_llm_kda_matches_apriel_forward():
         hf_param = hf_layer.state_dict()[hf_name]
         if fast_param.shape != hf_param.shape:
             hf_param = hf_param.reshape_as(fast_param)
+        print(f"Comparing parameter {fast_name} with shape {fast_param.shape}")
         torch.testing.assert_close(fast_param, hf_param, atol=1e-6, rtol=1e-6)
 
     hidden_states = torch.randn(2, seq_len, hidden_size, device=device, dtype=dtype, requires_grad=False)
-
+    hf_layer.training = True
     hf_out = hf_layer(hidden_states)
 
     sequence_lengths = [[seq_len] for _ in range(hidden_states.size(0))]

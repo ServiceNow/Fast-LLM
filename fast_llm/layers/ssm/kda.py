@@ -256,8 +256,8 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
         if sequence_first:
             g_kernel = g_kernel.transpose(0, 1)
-        g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
         g_kernel = self._reshape_heads(g_kernel)
+        g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
 
         g_kernel = fused_kda_gate(g_kernel, self.A_log.float(), dt_bias=self.dt_bias)
 

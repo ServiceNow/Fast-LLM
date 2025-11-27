@@ -237,7 +237,9 @@ class KimiDeltaAttention(nn.Module):
             cu_seqlens=cu_seqlens,
         )
         g = self.f_b_proj(self.f_a_proj(hidden_states))
-        g = fused_kda_gate(g, self.A_log, self.head_dim, g_bias=self.dt_bias)
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+
+        g = fused_kda_gate(g, self.A_log.float().squeeze(), dt_bias=self.dt_bias)
         beta = self.b_proj(hidden_states).float().sigmoid()
 
         q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim), (q, k))
@@ -250,8 +252,8 @@ class KimiDeltaAttention(nn.Module):
                 v=v,
                 g=g,
                 beta=beta,
-                initial_state=recurrent_state,
-                output_final_state=True,
+                initial_state=None,
+                output_final_state=False,
                 use_qk_l2norm_in_kernel=True,
                 cu_seqlens=cu_seqlens,
             )
