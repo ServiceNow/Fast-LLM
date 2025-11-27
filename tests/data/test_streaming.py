@@ -1,8 +1,10 @@
+import contextlib
 import logging
 import os
 import pickle
 import socket
 import threading
+import time
 
 import fakeredis
 import orjson
@@ -57,34 +59,51 @@ def fake_redis_server(stream_config):
     stream_config = stream_config.from_dict(stream_config.to_dict(), {("redis", "port"): find_free_port()})
 
     server_address = (stream_config.redis.host, stream_config.redis.port)
-    server = fakeredis.TcpFakeServer(server_address, server_type="redis")
 
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # ----- Monkey-patch handler to suppress broken pipes -----
+    orig_handle = fakeredis._tcp_server.TCPFakeRequestHandler.handle
+
+    def safe_handle(self):
+        try:
+            orig_handle(self)
+        except (ConnectionResetError, BrokenPipeError):
+            # Client disconnected abruptly (e.g., when a PyTorch DataLoader iterator is deleted).
+            # These errors occur only with fake Redis and can be safely ignored.
+            pass
+        except Exception as e:
+            print(f"Unexpected exception in fake Redis handler: {e}")
+
+    fakeredis._tcp_server.TCPFakeRequestHandler.handle = safe_handle
+
+    server = fakeredis.TcpFakeServer(server_address, server_type="redis")
+    server_killer = FakeRedisServerKiller(server)
+
+    # ----- Start server thread -----
+    def serve():
+        try:
+            server.serve_forever()
+        except Exception:
+            # Extra safety: catch anything from serve_forever
+            pass
+
+    thread = threading.Thread(target=serve, daemon=True)
     thread.start()
 
-    # Create a redis-py client pointing at the fake server
+    # ----- reate a redis-py client pointing at the fake serve -----
     import redis
 
     client = redis.Redis(host=server_address[0], port=server_address[1])
 
-    yield stream_config, client
+    yield stream_config, client, server_killer
 
-    # Everything after yield = teardown
-    server.shutdown()
-    server.server_close()
+    # ----- Teardown -----
+    server_killer.kill()
     thread.join()
 
 
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
-
-
-def find_free_port():
-    """Find a free TCP port and return it."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 def get_stream_config():
@@ -98,18 +117,6 @@ def get_stream_config():
         ),
         data_key="data",
     )
-
-
-def push_msg(redis_client, config, tokens=None, is_eof=False):
-    """Push a message into FakeRedis stream."""
-    if is_eof:
-        msg = {"eof": True}
-    else:
-        msg = {
-            "tokens": tokens,
-            "tokens_dtype": "int64",
-        }
-    redis_client.xadd(config.redis.stream_key, {config.data_key: orjson.dumps(msg)})
 
 
 def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
@@ -188,6 +195,98 @@ def generate_parallelism_variants(total_gpus: int):
     return variants
 
 
+def find_free_port():
+    """Find a free TCP port and return it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def push_msg(redis_client, config, tokens=None, is_eof=False):
+    """Push a message into FakeRedis stream."""
+    if is_eof:
+        msg = {"eof": True}
+    else:
+        msg = {
+            "tokens": tokens,
+            "tokens_dtype": "int64",
+        }
+    redis_client.xadd(config.redis.stream_key, {config.data_key: orjson.dumps(msg)})
+
+
+class FakeRedisServerKiller:
+    def __init__(self, server):
+        self._server = server
+        self._is_killed = False
+        self._lock = threading.Lock()
+
+    def kill(self):
+        with self._lock:
+            if not self._is_killed:
+                try:
+                    self._server.shutdown()
+                    self._server.server_close()
+                finally:
+                    self._is_killed = True
+
+
+def wait_until_stream_empty(r, stream_key, group, stop_event):
+    """
+    Wait until lag == 0, meaning all messages have been delivered AND acknowledged.
+    Absence of group mean test has not started yet, so we wait
+    """
+    group = group.encode()
+    while not stop_event.is_set():
+        groups = r.xinfo_groups(stream_key)
+
+        g = next((g for g in groups if g["name"] == group), None)
+        if g is not None:
+            lag = g.get("lag", 0)
+            if lag == 0:
+                return
+
+        time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def redis_batch_producer(
+    redis_client, fake_redis_server_killer, stream_config, batch_size, sequence_length, num_batches=None
+):
+    stop_event = threading.Event()
+    thread_exc = []
+
+    def producer_loop():
+        try:
+            stream = stream_config.redis.stream_key
+            group = stream_config.redis.group_name
+            batch_idx = 0
+            while not stop_event.is_set():
+                if num_batches is not None and batch_idx >= num_batches:
+                    break
+                for i in range(batch_size):
+                    if stop_event.is_set():
+                        return
+                    push_msg(redis_client, stream_config, [batch_idx * batch_size + i] * sequence_length)
+                wait_until_stream_empty(redis_client, stream, group, stop_event)
+                batch_idx += 1
+        except Exception as e:
+            # if failed to push messages kill redis server so waiting side in the test would unlock
+            fake_redis_server_killer.kill()
+            thread_exc.append(e)
+            raise
+
+    thread = threading.Thread(target=producer_loop, daemon=True)
+    thread.start()
+
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=10)
+        if thread_exc:
+            raise thread_exc[0]
+
+
 def run_distributed_gptdata_streaming_test(
     fake_redis_server,
     variant,
@@ -197,7 +296,7 @@ def run_distributed_gptdata_streaming_test(
 ):
     import tests.data.gptdata_streaming_test
 
-    stream_config, fake_redis = fake_redis_server
+    stream_config, fake_redis, fake_redis_server_killer = fake_redis_server
 
     sequence_length = 10
     micro_batch_size = 2
@@ -208,57 +307,61 @@ def run_distributed_gptdata_streaming_test(
     total_gpus = variant["total_gpus"]
     redis_port = stream_config.redis.port
 
-    for i in range(batch_size):
-        push_msg(fake_redis, stream_config, [i] * sequence_length)
-
     result_path = result_path / "distributed_gptdata_streaming_test" / request.node.name
 
-    if total_gpus > 0:
-        script = [
-            "-m",
-            tests.data.gptdata_streaming_test.__name__,
-            "--sequence-length",
-            str(sequence_length),
-            "--micro-batch-size",
-            str(micro_batch_size),
-            "--batch-size",
-            str(batch_size),
-            "--tensor-parallel",
-            str(tensor_parallel),
-            "--pipeline-parallel",
-            str(pipeline_parallel),
-            "--sequence-data-parallel",
-            str(sequence_data_parallel),
-            "--total-gpus",
-            str(total_gpus),
-            "--result-path",
-            str(result_path),
-            "--redis-port",
-            str(redis_port),
-        ]
-        # TODO: distributed_capture is ignored now inside the script
-        if request.config.getoption("distributed_capture"):
-            logger.warning(
-                "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
-            )
-        else:
-            script.append("--no-distributed-capture")
+    with redis_batch_producer(
+        redis_client=fake_redis,
+        fake_redis_server_killer=fake_redis_server_killer,
+        stream_config=stream_config,
+        batch_size=batch_size,
+        sequence_length=10,
+    ):
+        if total_gpus > 0:
+            script = [
+                "-m",
+                tests.data.gptdata_streaming_test.__name__,
+                "--sequence-length",
+                str(sequence_length),
+                "--micro-batch-size",
+                str(micro_batch_size),
+                "--batch-size",
+                str(batch_size),
+                "--tensor-parallel",
+                str(tensor_parallel),
+                "--pipeline-parallel",
+                str(pipeline_parallel),
+                "--sequence-data-parallel",
+                str(sequence_data_parallel),
+                "--total-gpus",
+                str(total_gpus),
+                "--result-path",
+                str(result_path),
+                "--redis-port",
+                str(redis_port),
+            ]
+            # TODO: distributed_capture is ignored now inside the script
+            if request.config.getoption("distributed_capture"):
+                logger.warning(
+                    "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
+                )
+            else:
+                script.append("--no-distributed-capture")
 
-        env = os.environ.copy()
-        env["PYTHONHASHSEED"] = "42"
-        run_distributed_script(script, num_gpus=total_gpus, env=env)
-    else:
-        tests.data.gptdata_streaming_test.distributed_gptdata_streaming_test(
-            sequence_length=sequence_length,
-            micro_batch_size=micro_batch_size,
-            batch_size=batch_size,
-            tensor_parallel=tensor_parallel,
-            pipeline_parallel=pipeline_parallel,
-            sequence_data_parallel=sequence_data_parallel,
-            total_gpus=total_gpus,
-            redis_port=redis_port,
-            result_path=result_path,
-        )
+            env = os.environ.copy()
+            env["PYTHONHASHSEED"] = "42"
+            run_distributed_script(script, num_gpus=total_gpus, env=env)
+        else:
+            tests.data.gptdata_streaming_test.distributed_gptdata_streaming_test(
+                sequence_length=sequence_length,
+                micro_batch_size=micro_batch_size,
+                batch_size=batch_size,
+                tensor_parallel=tensor_parallel,
+                pipeline_parallel=pipeline_parallel,
+                sequence_data_parallel=sequence_data_parallel,
+                total_gpus=total_gpus,
+                redis_port=redis_port,
+                result_path=result_path,
+            )
 
     check_distributed_gptdata_streaming_test_results(
         result_path=result_path,
@@ -349,19 +452,16 @@ def test_sampling_1_doc_exact_fit(monkeypatched_redis, stream_config):
     """Docs exactly fill one sample."""
     fake_redis = monkeypatched_redis
 
-    # Two rollouts: lengths 4 and 6 -> exactly 10
     push_msg(fake_redis, stream_config, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
-    out = list(sampler)
+    out = next(iter(sampler))
 
-    assert len(out) == 1
-    s = out[0]
-    assert isinstance(s, PipelineRLSample)
-    assert len(s) == 10
-    assert s.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert isinstance(out, PipelineRLSample)
+    assert len(out) == 10
+    assert out.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 def test_sampling_2_docs_exact_fit(monkeypatched_redis, stream_config):
@@ -375,13 +475,11 @@ def test_sampling_2_docs_exact_fit(monkeypatched_redis, stream_config):
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
-    out = list(sampler)
+    out = next(iter(sampler))
 
-    assert len(out) == 1
-    s = out[0]
-    assert isinstance(s, PipelineRLSample)
-    assert len(s) == 10
-    assert s.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert isinstance(out, PipelineRLSample)
+    assert len(out) == 10
+    assert out.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 def test_sampling_skips_too_long_doc_and_padding_final(monkeypatched_redis, stream_config):
@@ -389,40 +487,37 @@ def test_sampling_skips_too_long_doc_and_padding_final(monkeypatched_redis, stre
     fake_redis = monkeypatched_redis
 
     push_msg(fake_redis, stream_config, list(range(20)))  # skip: too long
-    push_msg(fake_redis, stream_config, list(range(8)))  # usable
-    push_msg(fake_redis, stream_config, is_eof=True)
+    push_msg(fake_redis, stream_config, list(range(10)))  # usable
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
-    out = list(sampler)
+    out = next(iter(sampler))
 
-    assert len(out) == 1
-    s = out[0]
-    assert len(s) == 10
-    assert s.tokens.tokens.tolist() == list(range(8)) + [-100, -100]
+    # too big message is skipped and next message is returned instead
+    assert len(out) == 10
+    assert out.tokens.tokens.tolist() == list(range(10))
 
 
-def test_sampling_overflow_creates_two_and_padding_final(monkeypatched_redis, stream_config):
+def test_sampling_overflow_creates_two(monkeypatched_redis, stream_config):
     """A document overflowing the boundary triggers padding + next sample."""
     fake_redis = monkeypatched_redis
 
     push_msg(fake_redis, stream_config, list(range(6)))
-    push_msg(fake_redis, stream_config, list(range(6)))
-    push_msg(fake_redis, stream_config, is_eof=True)
+    push_msg(fake_redis, stream_config, list(range(10)))
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 2, distributed))
 
-    out = list(sampler)
-
-    assert len(out) == 2
+    sampler_iter = iter(sampler)
+    out = [next(sampler_iter)]
+    out.append(next(sampler_iter))
 
     # sample 1: 0..5 + pad(4)
     assert out[0].tokens.tokens.tolist() == list(range(6)) + [-100, -100, -100, -100]
 
     # sample 2: 0..5 + pad(4)
-    assert out[1].tokens.tokens.tolist() == list(range(6)) + [-100, -100, -100, -100]
+    assert out[1].tokens.tokens.tolist() == list(range(10))
 
 
 def test_gptdata_streaming_single_consumer(fake_redis_server, run_distributed_script_lean, result_path, request):
@@ -457,8 +552,8 @@ variants = generate_parallelism_variants(torch.cuda.device_count())
     ],
 )
 def test_gptdata_streamin_gpus(fake_redis_server, variant, run_distributed_script_lean, result_path, request):
-    # TODO: make tests on the same number of gpu as subtests similar to how it is done in the test_model
-    #       for speed
+    # TODO: make tests on the same number of gpu as subtests
+    #  similar to how it is done in the test_model for speed
     run_distributed_gptdata_streaming_test(
         fake_redis_server=fake_redis_server,
         variant=variant,
