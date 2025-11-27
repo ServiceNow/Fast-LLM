@@ -227,6 +227,16 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 fast_llm_value=lambda x: DTInitType.random if x == MISSING else DTInitType(x),
                 export_value=lambda x: x.value,
             ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "norm_before_gate"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "norm_before_gate",
+                    ),
+                ),
+                default_value=False,
+            ),
         ]
 
     def _create_weight_converters(
@@ -296,11 +306,22 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             converters += self._get_weight_and_bias_converters(
                 f"layers.{offset+i+1}.mixer.dt_proj", f"{hf_base_prefix}model.layers.{i}.mixer.dt_proj", False
             )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{offset+i+1}.mixer.norm", f"{hf_base_prefix}model.layers.{i}.mixer.norm", True
+            )
             # bias is treated separately in Mamba2 and must always exist (https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py)
             converters.append(
                 WeightConverter(
                     f"layers.{offset+i+1}.mixer.dt_proj_bias",
                     f"{hf_base_prefix}model.layers.{i}.mixer.dt_proj.bias",
+                    self._model.config.base_model,
+                )
+            )
+            # for nemotron mamba2, bias is a seperate parameter
+            converters.append(
+                WeightConverter(
+                    f"layers.{offset+i+1}.mixer.dt_bias",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.dt_bias",
                     self._model.config.base_model,
                 )
             )
@@ -788,6 +809,14 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
             RenameParamConverter(
                 fast_llm_names=(("ssm", "d_inner"),),
                 export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "head_dim"),),
+                export_names=(("ssm_cfg", "head_dim"),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "n_groups"),),
+                export_names=(("ssm_cfg", "n_groups"),),
             ),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]

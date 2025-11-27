@@ -38,6 +38,7 @@ class SSMDimNames:
     head_dim = "ssm_head_dim"
     head_groups = "ssm_head_groups"
     group_heads = "ssm_group_heads"
+    conv1d_dim = "ssm_conv1d_dim"
 
     # Mamba 2
     x_proj_dim_2 = "x_proj_dim_2"  # d_xb
@@ -48,7 +49,10 @@ class SSMDimNames:
     # Composite dimensions
     composite_heads = "ssm_composite_heads"
     composite_heads_and_head_dim = "ssm_composite_heads_and_head_dim"
+    composite_heads_and_head_dim_nontp = "ssm_composite_heads_and_head_dim_nontp"
+    composite_heads_and_state_dim = "ssm_composite_heads_and_state_dim"
     composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
+    composite_head_groups_and_head = "ssm_composite_head_groups_and_head"
 
     # Concatenated dimensions
     concatenated_convolution = "ssm_concatenated_convolution"
@@ -65,6 +69,7 @@ class SSMBlockType(enum.StrEnum):
     mamba2_discrete = "m2d"
     mamba2 = "m2"
     transformer = "t"
+    nemotron_h_mamba2 = "nm2"
 
     def get_mixer_class(self):
         if self == SSMBlockType.mamba:
@@ -79,6 +84,10 @@ class SSMBlockType(enum.StrEnum):
             from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 
             return DiscreteMamba2
+        elif self == SSMBlockType.nemotron_h_mamba2:
+            from fast_llm.layers.ssm.mamba2 import NemotronHMamba2
+
+            return NemotronHMamba2
         else:
             raise NotImplementedError(self)
 
@@ -226,6 +235,27 @@ class SSMConfig(LLMBlockConfig):
         valid=check_field(Assert.gt, 0),
     )
 
+    # Nemotron H Mamba2 (the real mamba2 actually)
+    # here instead of setting d_inner, we set head dim. and number of heads
+    # Note: we do not implement n_groups for Mamba2, because, sicne we do MiL init, we do not want to share B and C parameters accross heads.
+    # Instead, we mimic the GQA behaviour (x -> v, B -> k, C -> q), where x and B are shared accross heads. So this is the same as having n_groups = n_heads?
+    n_groups: int = Field(
+        default=128,
+        desc="Number of groups for Mamba2. Allows sharing B and C parameters accross heads.",
+        hint=FieldHint.architecture,
+    )
+    head_dim: int = Field(
+        default=128,
+        desc="Head dimension for Nemotron H",
+        hint=FieldHint.architecture,
+    )
+
+    norm_before_gate: bool = Field(
+        default=False,
+        desc="Whether to apply the norm before the gate in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
@@ -243,6 +273,11 @@ class SSMConfig(LLMBlockConfig):
         elif block_type == SSMBlockType.mamba2:
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = div(self.d_xb, self.state_size)
+        elif block_type == SSMBlockType.nemotron_h_mamba2:
+            # head dim and state size are not the same
+            Assert.eq(self.head_dim, self.state_size)  # for MIL init
+            num_heads = self.n_groups  # div(self.d_inner, self.head_dim)
+            num_head_groups = div(self.d_xb, self.head_dim)
         elif block_type == SSMBlockType.mamba2_discrete:
             # TODO: Use different variables?
             num_heads = self.n_v_heads
@@ -253,6 +288,8 @@ class SSMConfig(LLMBlockConfig):
         tensor_space.add_tensor_dim(state := TensorDim(SSMDimNames.state, self.state_size))
         if block_type == SSMBlockType.mamba2_discrete:
             tensor_space.add_tensor_dim(head_dim := TensorDim(SSMDimNames.head_dim, div(self.d_inner, num_heads)))
+        elif block_type == SSMBlockType.nemotron_h_mamba2:
+            tensor_space.add_tensor_dim(head_dim := TensorDim(SSMDimNames.head_dim, self.head_dim))
         else:
             head_dim = state
 
@@ -261,14 +298,16 @@ class SSMConfig(LLMBlockConfig):
         tensor_space.add_tensor_dim(
             heads := CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads))
         )
+        # full d_inner or intermediate_size (e.g. for z gate, also the d_inner size for C in mamba2)
         tensor_space.add_tensor_dim(
             heads_and_head_dim := CompositeTensorDim(
                 SSMDimNames.composite_heads_and_head_dim, (head_groups, group_heads, head_dim)
             )
         )
+        # d_xb
         tensor_space.add_tensor_dim(
-            head_groups_and_state := CompositeTensorDim(
-                SSMDimNames.composite_head_groups_and_state, (head_groups, state)
+            head_groups_and_head := CompositeTensorDim(
+                SSMDimNames.composite_head_groups_and_head, (head_groups, head_dim)
             )
         )
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.convolution_kernel, self.conv_kernel_dimension))
@@ -292,7 +331,41 @@ class SSMConfig(LLMBlockConfig):
             tensor_space.add_tensor_dim(
                 ConcatenatedTensorDim(
                     SSMDimNames.concatenated_inner_projection,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim),
+                    (heads_and_head_dim, head_groups_and_head, head_groups_and_head, heads_and_head_dim),
+                )
+            )
+        elif block_type == SSMBlockType.nemotron_h_mamba2:
+            # for the norm
+            tensor_space.add_tensor_dim(
+                TensorDim(
+                    SSMDimNames.composite_heads_and_head_dim_nontp, num_head_groups * group_heads.size * head_dim.size
+                )
+            )
+            # state and head dim are not the same
+            # C: for each head, size of state
+            tensor_space.add_tensor_dim(
+                heads_and_state_dim := CompositeTensorDim(
+                    SSMDimNames.composite_heads_and_state_dim, (head_groups, group_heads, state)
+                )
+            )
+            # B: for each head group, size of state
+            tensor_space.add_tensor_dim(
+                head_groups_and_state := CompositeTensorDim(
+                    SSMDimNames.composite_head_groups_and_state, (head_groups, state)
+                )
+            )
+            # here we apply depthwise conv. layer to xBC, so the dim. is x (d_xb) x B (d_bb) x C
+            tensor_space.add_tensor_dim(
+                conv1d_dim := ConcatenatedTensorDim(
+                    SSMDimNames.conv1d_dim, (heads_and_state_dim, head_groups_and_head, head_groups_and_state)
+                )
+            )
+
+            # inner projection dimention: also includes z (gate), which has size d_inner (heads_and_head_dim)
+            tensor_space.add_tensor_dim(
+                ConcatenatedTensorDim(
+                    SSMDimNames.concatenated_inner_projection,
+                    (conv1d_dim, heads_and_head_dim),
                 )
             )
         elif block_type == SSMBlockType.mamba2_discrete:
