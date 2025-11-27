@@ -208,7 +208,7 @@ class Apriel2Attention(nn.Module):
             num_attention_heads=num_heads,
             num_key_value_heads=num_key_value_heads,
             head_dim=head_dim,
-            max_position_embeddings=config.max_position_embeddings,
+            max_position_embeddings=config.embeddings["max_position_embeddings"],
             rope_theta=rope_theta,
             attention_dropout=0.0,
             sliding_window=mixer_config.get("sliding_window", None),
@@ -309,7 +309,7 @@ class Apriel2Attention(nn.Module):
                 num_attention_heads=self.mixer_config.get('heads', 32),
                 num_key_value_heads=self.mixer_config.get('head_groups', self.mixer_config.get('heads', 32)),
                 head_dim=self.mixer_config.get('head_size', self.config.hidden_size // self.mixer_config.get('heads', 32)),
-                max_position_embeddings=self.config.max_position_embeddings,
+                max_position_embeddings=self.config.embeddings["max_position_embeddings"],
                 sliding_window=sliding_window,
                 _attn_implementation=getattr(self.config, '_attn_implementation', 'eager'),
             )
@@ -918,8 +918,8 @@ class Apriel2BlockSequence(nn.Module):
             raise ValueError(f"Unknown sequence type: {seq_type}")
 
         # PHASE 2: Create block instances (resources already set up)
-        # Extract rms_norm_eps from config
-        rms_norm_eps = getattr(self.config, "rms_norm_eps", 1e-5)
+        # Extract rms_norm_eps from config head.normalization.epsilon
+        rms_norm_eps = self.config.head["normalization"]["epsilon"]
 
         blocks = []
         for layer_idx in range(num_blocks):
@@ -1324,12 +1324,12 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
         self.decoder = Apriel2BlockSequence(
             sequence_config=config.decoder,
             hidden_size=config.hidden_size,
-            max_position_embeddings=config.max_position_embeddings,
+            max_position_embeddings=config.embeddings["max_position_embeddings"],
             config=config,
         )
 
-        # Final norm
-        self.norm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # Final norm (epsilon from head.normalization config)
+        self.norm = MistralRMSNorm(config.hidden_size, eps=config.head["normalization"]["epsilon"])
 
         self.gradient_checkpointing = False
         self.post_init()
@@ -1575,11 +1575,14 @@ class Apriel2VisionEncoder(nn.Module):
         # Build vision transformer encoder using shared BlockSequence abstraction
         encoder_config = vision_encoder_config.get("encoder", {})
 
-        # Create a minimal config for vision blocks
+        # Get norm epsilon from text config's head.normalization.epsilon
+        norm_epsilon = text_config.head["normalization"]["epsilon"]
+
+        # Create a minimal config for vision blocks (hierarchical structure)
         vision_block_config = Apriel2TextConfig(
             hidden_size=self.hidden_size,
-            max_position_embeddings=1024,  # Large enough for typical vision use cases
-            rms_norm_eps=text_config.rms_norm_eps,
+            embeddings={"max_position_embeddings": 1024},  # Large enough for typical vision use cases
+            head={"normalization": {"type": "rms_norm", "epsilon": norm_epsilon}},
             _attn_implementation=getattr(text_config, "_attn_implementation", "eager"),
         )
 
@@ -1674,33 +1677,28 @@ class Apriel2MultiModalProjector(nn.Module):
         return hidden_states
 
 
-class Apriel2Model(PreTrainedModel):
-    """Apriel2 multimodal base model (vision + text, without LM head)."""
+class Apriel2Model(Apriel2TextModel):
+    """
+    Apriel2 multimodal base model (vision + text, without LM head).
+
+    Inherits from Apriel2TextModel (which provides embed_tokens, decoder, norm)
+    and adds vision_encoder. This mirrors Fast-LLM's VisionMultiModalModel(LanguageModel)
+    inheritance pattern for trivial weight conversion.
+    """
 
     config_class = Apriel2Config
-    base_model_prefix = "model"
 
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
 
-        self.config = config
-
-        # Build vision encoder from vision_encoder dict
+        # Add vision encoder (text components inherited from Apriel2TextModel)
         if config.vision_encoder is not None:
             self.vision_encoder = Apriel2VisionEncoder(config.vision_encoder, config)
         else:
             self.vision_encoder = None
 
-        # Language model uses the config directly (inherits decoder, embeddings, head)
-        self.language_model = Apriel2TextModel(config)
-        self.vocab_size = config.vocab_size
+        # Re-run post_init to handle any vision encoder initialization
         self.post_init()
-
-    def get_input_embeddings(self):
-        return self.language_model.embed_tokens
-
-    def set_input_embeddings(self, value):
-        self.language_model.embed_tokens = value
 
     def get_image_features(self, pixel_values):
         """Extract and project image features."""
@@ -1728,11 +1726,10 @@ class Apriel2Model(PreTrainedModel):
             # Encode and project images
             image_features = self.get_image_features(pixel_values)
 
-            # Get text embeddings
-            inputs_embeds = self.language_model.embed_tokens(input_ids)
+            # Get text embeddings (use inherited embed_tokens)
+            inputs_embeds = self.embed_tokens(input_ids)
 
-            # Merge image features into text embeddings using efficient masked_scatter
-            # This follows LLaVA's pattern for better performance than loops
+            # Merge image features into text embeddings
             image_token_index = self.config.image_token_index
 
             # Create mask for image token positions: [batch, seq_len]
@@ -1753,15 +1750,17 @@ class Apriel2Model(PreTrainedModel):
             special_image_mask = special_image_mask.unsqueeze(-1).expand_as(inputs_embeds)
 
             # Flatten image features to match the number of True values in mask
-            # [batch, num_patches, hidden_size] -> [batch * num_patches, hidden_size]
             image_features = image_features.view(-1, image_features.shape[-1])
 
             # Use masked_scatter for efficient vectorized merge
             inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
 
-        # Forward through language model
-        return self.language_model(
-            input_ids=None if inputs_embeds is not None else input_ids,
+            # Clear input_ids since we're using inputs_embeds
+            input_ids = None
+
+        # Forward through inherited text model components
+        return super().forward(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1775,8 +1774,13 @@ class Apriel2Model(PreTrainedModel):
         )
 
 
-class Apriel2ForConditionalGeneration(PreTrainedModel, GenerationMixin):
-    """Apriel2 multimodal model with language modeling head (vision + text)."""
+class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
+    """
+    Apriel2 multimodal model with language modeling head (vision + text).
+
+    Inherits from Apriel2PreTrainedModel to get proper cache handling.
+    Uses Apriel2Model (which inherits from Apriel2TextModel) for the base model.
+    """
 
     config_class = Apriel2Config
     _tied_weights_keys = []  # No weight tying by default, but can be configured
@@ -1794,10 +1798,10 @@ class Apriel2ForConditionalGeneration(PreTrainedModel, GenerationMixin):
         self.post_init()
 
     def get_input_embeddings(self):
-        return self.model.get_input_embeddings()
+        return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
-        self.model.set_input_embeddings(value)
+        self.model.embed_tokens = value
 
     def get_output_embeddings(self):
         return self.lm_head

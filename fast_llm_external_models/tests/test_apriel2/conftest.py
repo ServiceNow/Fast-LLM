@@ -12,15 +12,18 @@ def apriel2_config_tiny():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_attention_heads=4,
-        num_key_value_heads=2,
         decoder={
             "type": "fixed",
             "num_blocks": 2,
             "block": {
-                "mixer": {"type": "attention"},
-                "mlp": {"type": "mlp"},
-                "normalization": {"type": "rms_norm"},
+                "mixer": {
+                    "type": "attention",
+                    "heads": 4,
+                    "head_groups": 2,
+                    "head_size": 16,
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
             },
         },
     )
@@ -34,30 +37,45 @@ def apriel2_config_stochastic():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_attention_heads=4,
-        num_key_value_heads=2,
         decoder={
             "type": "pattern",
             "num_blocks": 2,
             "pattern": ["attn", "stoch"],
             "blocks": {
-                "attn": {"mixer": {"type": "attention"}},
+                "attn": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
                 "stoch": {
                     "mixer": {
                         "type": "stochastic",
                         "main_mixer_name": "attention",
                         "mixers": {
-                            "attention": {"type": "attention", "sliding_window": 4096},
+                            "attention": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "sliding_window": 4096,
+                            },
                             "mamba": {
                                 "type": "mamba",
                                 "conv_bias": True,
-                                "dt_proj_bias": True
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                                "dt_proj_bias": True,
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        },
     )
 
 
@@ -69,8 +87,6 @@ def apriel2_config_multi_mixer():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_attention_heads=4,
-        num_key_value_heads=2,
         decoder={
             "type": "pattern",
             "num_blocks": 1,
@@ -81,23 +97,37 @@ def apriel2_config_multi_mixer():
                         "type": "stochastic",
                         "main_mixer_name": "attn_small",
                         "mixers": {
-                            "attn_small": {"type": "attention", "sliding_window": 2048},
-                            "attn_large": {"type": "attention", "sliding_window": 8192},
+                            "attn_small": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "sliding_window": 2048,
+                            },
+                            "attn_large": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "sliding_window": 8192,
+                            },
                             "mamba_v1": {
                                 "type": "mamba",
                                 "conv_bias": True,
-                                "dt_proj_bias": True
+                                "dt_proj_bias": True,
                             },
                             "mamba_v2": {
                                 "type": "mamba",
                                 "conv_bias": True,
-                                "dt_proj_bias": True
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                                "dt_proj_bias": True,
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        },
     )
 
 
@@ -115,39 +145,54 @@ def apriel2_config_all_mixers():
     return Apriel2Config(
         vocab_size=100,
         hidden_size=64,
-        num_attention_heads=4,
-        num_key_value_heads=2,
         decoder={
             "type": "pattern",
             "num_blocks": 2,
             "pattern": ["attn", "all_mixers"],
             "blocks": {
-                "attn": {"mixer": {"type": "attention"}},
+                "attn": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
                 "all_mixers": {
                     "mixer": {
                         "type": "stochastic",
                         "main_mixer_name": "attention",
                         "mixers": {
                             "attention": {
-                                "type": "attention"
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
                             },
                             "swa": {
                                 "type": "attention",
-                                "sliding_window": 2048
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "sliding_window": 2048,
                             },
                             "mamba": {
                                 "type": "mamba",
                                 "conv_bias": True,
-                                "dt_proj_bias": True
+                                "dt_proj_bias": True,
                             },
                             "gated_delta_net": {
-                                "type": "gated_delta_net"
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                                "type": "gated_delta_net",
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        },
     )
 
 

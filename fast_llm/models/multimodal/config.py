@@ -59,16 +59,14 @@ class MultiModalModelConfig(GPTModelConfig):
         return MultiModalModel
 
     @classmethod
-    def get_inference_runner_class(cls) -> type["MultiModalModelInferenceRunner"]:
-        from fast_llm.models.multimodal.model import MultiModalModelInferenceRunner
+    def get_inference_runner_class(cls) -> type["MultiModalInferenceRunner"]:
+        from fast_llm.models.multimodal.model import MultiModalInferenceRunner
 
-        return MultiModalModelInferenceRunner
+        return MultiModalInferenceRunner
 
     @classmethod
-    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceMultiModalModelForCausalLM"]:
-        from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
-
-        return HuggingfaceMultiModalModelForCausalLM
+    def get_huggingface_model_for_causal_lm_class(cls):
+        raise NotImplementedError("HuggingFace wrapper not implemented for multimodal models")
 
 
 @config_class()
