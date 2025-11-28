@@ -1,14 +1,13 @@
 """Convert Llava HF checkpoint to Apriel2 HF format.
 
-This module provides pure format conversion from Llava/Pixtral models to Apriel2.
-It does NOT modify the architecture - use surgery.py for that.
+This module provides declarative, plan-based conversion from Llava/Pixtral models to Apriel2.
 
 The converter handles:
 - Config conversion: Llava config -> Apriel2 config (1-to-1 mapping)
-- Weight conversion: Llava state_dict -> Apriel2 state_dict (pure name mapping)
+- Weight conversion: Llava state_dict -> Apriel2 state_dict via expression plans
 
-For architecture modifications (adding stochastic mixers, changing patterns, etc.),
-use surgery.py after conversion.
+For architecture modifications (adding stochastic mixers, hybridization, etc.),
+pass a surgery config to compose the conversion with a surgery plan.
 """
 
 import argparse
@@ -169,152 +168,91 @@ def _convert_vision_config(llava_config: dict) -> dict:
 
 
 # =============================================================================
-# Weight Conversion
+# Plan-Based Conversion
 # =============================================================================
 
-# Weight name mappings (Llava -> Apriel2)
-_STATIC_WEIGHT_MAP = {
-    # Embeddings
-    "language_model.model.embed_tokens.weight": "model.embed_tokens.weight",
-    # Final norm and LM head
-    "language_model.model.norm.weight": "model.norm.weight",
-    "language_model.lm_head.weight": "lm_head.weight",
-    # Vision tower
-    "vision_tower.patch_conv.weight": "model.vision_encoder.patch_convolution.conv.weight",
-    "vision_tower.ln_pre.weight": "model.vision_encoder.patch_convolution.norm.weight",
-    # Vision adapter
-    "multi_modal_projector.linear_1.weight": "model.vision_encoder.adapter.linear_1.weight",
-    "multi_modal_projector.linear_1.bias": "model.vision_encoder.adapter.linear_1.bias",
-    "multi_modal_projector.linear_2.weight": "model.vision_encoder.adapter.linear_2.weight",
-    "multi_modal_projector.linear_2.bias": "model.vision_encoder.adapter.linear_2.bias",
-}
 
-# Decoder layer component mappings
-_DECODER_LAYER_MAP = {
-    "self_attn.q_proj.weight": "mixer.self_attn.q_proj.weight",
-    "self_attn.k_proj.weight": "mixer.self_attn.k_proj.weight",
-    "self_attn.v_proj.weight": "mixer.self_attn.v_proj.weight",
-    "self_attn.o_proj.weight": "mixer.self_attn.o_proj.weight",
-    "mlp.gate_proj.weight": "mlp.gate_proj.weight",
-    "mlp.up_proj.weight": "mlp.up_proj.weight",
-    "mlp.down_proj.weight": "mlp.down_proj.weight",
-    "input_layernorm.weight": "input_layernorm.weight",
-    "post_attention_layernorm.weight": "post_attention_layernorm.weight",
-}
+def convert(
+    llava_config: dict,
+    source_files: list[Path],
+    output_file: Path,
+    surgery_config: dict | None = None,
+    device: str = "cpu",
+    dtype: torch.dtype = torch.float32,
+) -> dict:
+    """Convert Llava checkpoint to Apriel2 using plan-based streaming.
 
-# Vision encoder layer component mappings
-_VISION_LAYER_MAP = {
-    "attention.q_proj.weight": "mixer.self_attn.q_proj.weight",
-    "attention.k_proj.weight": "mixer.self_attn.k_proj.weight",
-    "attention.v_proj.weight": "mixer.self_attn.v_proj.weight",
-    "attention.o_proj.weight": "mixer.self_attn.o_proj.weight",
-    "feed_forward.gate_proj.weight": "mlp.gate_proj.weight",
-    "feed_forward.up_proj.weight": "mlp.up_proj.weight",
-    "feed_forward.down_proj.weight": "mlp.down_proj.weight",
-    "attention_norm.weight": "input_layernorm.weight",
-    "ffn_norm.weight": "post_attention_layernorm.weight",
-}
-
-
-def map_weight_name(llava_name: str) -> str | None:
-    """Map a single Llava weight name to Apriel2 format.
+    This conversion:
+    1. Uses declarative plans that can be inspected and composed
+    2. Loads weights on-demand and releases them when done (memory efficient)
+    3. Supports surgery (architecture modification) via plan composition
 
     Args:
-        llava_name: Llava weight name.
+        llava_config: Source Llava config dict.
+        source_files: List of source safetensor files.
+        output_file: Output safetensor file path.
+        surgery_config: Optional target config for surgery (architecture modification).
+        device: Device for computation (default: cpu).
+        dtype: Data type for weights (default: float32).
 
     Returns:
-        Apriel2 weight name, or None if unmapped.
+        Final Apriel2 config dict.
     """
-    # Check static mappings
-    if llava_name in _STATIC_WEIGHT_MAP:
-        return _STATIC_WEIGHT_MAP[llava_name]
+    from .expr_plan import (
+        StreamingExecutor,
+        compose,
+        plan_llava_to_apriel2,
+        plan_surgery,
+    )
 
-    # Check decoder layer patterns
-    if llava_name.startswith("language_model.model.layers."):
-        parts = llava_name.split(".")
-        layer_idx = int(parts[3])
-        rest = ".".join(parts[4:])
-        if rest in _DECODER_LAYER_MAP:
-            return f"model.decoder.blocks.{layer_idx}.{_DECODER_LAYER_MAP[rest]}"
+    # Build conversion plan (Llava -> Apriel2)
+    conversion_plan = plan_llava_to_apriel2(llava_config)
+    logger.info(f"Built conversion plan: {conversion_plan.summary()['num_targets']} targets")
 
-    # Check vision layer patterns
-    if llava_name.startswith("vision_tower.transformer.layers."):
-        parts = llava_name.split(".")
-        layer_idx = int(parts[3])
-        rest = ".".join(parts[4:])
-        if rest in _VISION_LAYER_MAP:
-            return f"model.vision_encoder.encoder.blocks.{layer_idx}.{_VISION_LAYER_MAP[rest]}"
+    # Get intermediate Apriel2 config
+    intermediate_config = convert_config(llava_config)
 
-    return None
+    # Apply surgery if requested
+    if surgery_config:
+        surgery_plan = plan_surgery(intermediate_config, surgery_config)
+        logger.info(f"Built surgery plan: {surgery_plan.summary()['num_targets']} targets")
 
-
-def convert_weights(llava_weights: dict[str, Tensor]) -> dict[str, Tensor]:
-    """Convert Llava weights to Apriel2 format.
-
-    This is a pure name mapping - no weight transformations.
-
-    Args:
-        llava_weights: Source Llava state_dict.
-
-    Returns:
-        Apriel2 state_dict.
-    """
-    apriel2_weights = {}
-    unmapped = []
-
-    for llava_name, tensor in llava_weights.items():
-        apriel2_name = map_weight_name(llava_name)
-        if apriel2_name:
-            apriel2_weights[apriel2_name] = tensor
-        else:
-            unmapped.append(llava_name)
-
-    if unmapped:
-        logger.warning(f"Unmapped weights: {unmapped[:5]}{'...' if len(unmapped) > 5 else ''}")
-
-    return apriel2_weights
-
-
-def convert_weights_from_files(
-    input_dir: Path,
-    output_dir: Path,
-) -> None:
-    """Convert weights from files on disk.
-
-    Args:
-        input_dir: Directory containing Llava checkpoint.
-        output_dir: Directory to write Apriel2 checkpoint.
-    """
-    # Find model files
-    safetensor_files = sorted(input_dir.glob("*.safetensors"))
-    if not safetensor_files:
-        bin_files = sorted(input_dir.glob("pytorch_model*.bin"))
-        if not bin_files:
-            raise ValueError(f"No model files found in {input_dir}")
-        use_safetensors = False
-        model_files = bin_files
+        # Compose: Llava -> Apriel2 -> Modified Apriel2
+        full_plan = compose(conversion_plan, surgery_plan)
+        logger.info(f"Composed plan: {full_plan.summary()['num_targets']} targets")
+        final_config = surgery_config
     else:
-        use_safetensors = True
-        model_files = safetensor_files
+        full_plan = conversion_plan
+        final_config = intermediate_config
 
-    # Load and convert all weights
-    all_weights = {}
-    for model_file in tqdm(model_files, desc="Loading weights"):
-        if use_safetensors:
-            with safe_open(model_file, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    all_weights[key] = f.get_tensor(key)
-        else:
-            state_dict = torch.load(model_file, map_location="cpu", weights_only=True)
-            all_weights.update(state_dict)
+    # Build weight loader that reads from safetensor files
+    source_handles: dict[Path, any] = {}
 
-    # Convert
-    apriel2_weights = convert_weights(all_weights)
+    def load_source(key: str) -> Tensor:
+        """Load a source tensor from safetensor files."""
+        for source_file in source_files:
+            if source_file not in source_handles:
+                source_handles[source_file] = safe_open(
+                    source_file, framework="pt", device=device
+                )
+            handle = source_handles[source_file]
+            if key in handle.keys():
+                return handle.get_tensor(key)
+        raise KeyError(f"Source key not found in any file: {key}")
 
-    # Save
-    output_file = output_dir / "model.safetensors"
-    logger.info(f"Saving {len(apriel2_weights)} weights to {output_file}")
-    save_file(apriel2_weights, output_file)
+    # Execute with streaming
+    executor = StreamingExecutor(full_plan, load_source, device, dtype)
+
+    # Collect results
+    result_weights = {}
+    for target_key, tensor in tqdm(executor.execute(), desc="Converting", total=len(full_plan)):
+        result_weights[target_key] = tensor
+
+    # Save output
+    logger.info(f"Saving {len(result_weights)} weights to {output_file}")
+    save_file(result_weights, output_file)
+
+    return final_config
 
 
 # =============================================================================
@@ -423,61 +361,40 @@ def main():
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load and convert config
+    # Load config
     logger.info(f"Loading source config from {config_file}")
     with open(config_file) as f:
         llava_config = json.load(f)
 
-    apriel2_config = convert_config(llava_config)
-
-    # Convert weights (to in-memory state dict)
+    # Find model files (safetensors only)
     safetensor_files = sorted(input_dir.glob("*.safetensors"))
-    bin_files = sorted(input_dir.glob("pytorch_model*.bin"))
+    if not safetensor_files:
+        raise ValueError(
+            f"No safetensor files found in {input_dir}. "
+            "Plan-based conversion requires safetensor files."
+        )
 
-    if safetensor_files:
-        model_files = safetensor_files
-        use_safetensors = True
-    elif bin_files:
-        model_files = bin_files
-        use_safetensors = False
-    else:
-        raise ValueError(f"No model files found in {input_dir}")
-
-    all_weights = {}
-    for model_file in tqdm(model_files, desc="Loading weights"):
-        if use_safetensors:
-            with safe_open(model_file, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    all_weights[key] = f.get_tensor(key)
-        else:
-            state_dict = torch.load(model_file, map_location="cpu", weights_only=True)
-            all_weights.update(state_dict)
-
-    apriel2_weights = convert_weights(all_weights)
-
-    # Apply surgery if requested
+    # Load surgery config if specified
+    surgery_config = None
     if args.surgery:
-        from .surgery import surgery
-
         logger.info(f"Loading surgery config from {args.surgery}")
         with open(args.surgery) as f:
             surgery_config = yaml.safe_load(f)
 
-        # The surgery config specifies the target architecture
-        target_config = surgery_config
-        apriel2_weights = surgery(apriel2_config, apriel2_weights, target_config)
-        apriel2_config = target_config
+    # Convert using plan-based approach
+    output_weights_file = args.output_dir / "model.safetensors"
+    apriel2_config = convert(
+        llava_config,
+        safetensor_files,
+        output_weights_file,
+        surgery_config=surgery_config,
+    )
 
     # Save config
     output_config_file = args.output_dir / "config.json"
     logger.info(f"Saving config to {output_config_file}")
     with open(output_config_file, "w") as f:
         json.dump(apriel2_config, f, indent=2)
-
-    # Save weights
-    output_weights_file = args.output_dir / "model.safetensors"
-    logger.info(f"Saving {len(apriel2_weights)} weights to {output_weights_file}")
-    save_file(apriel2_weights, output_weights_file)
 
     # Copy tokenizer files
     copy_tokenizer_files(input_dir, args.output_dir)

@@ -1,8 +1,8 @@
-"""Tests for Llava to Apriel2 converter and surgery.
+"""Tests for Llava to Apriel2 converter.
 
 Tests cover:
-- Pure format conversion (Llava -> Apriel2)
-- Surgery operations (Apriel2 -> Apriel2)
+- Config conversion (Llava -> Apriel2)
+- Plan-based weight conversion
 - Forward pass equivalence between source and converted models
 
 Run with: pytest fast_llm_external_models/tests/test_apriel2/test_convert_from_llava.py
@@ -18,10 +18,11 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.convert_from_llava import (
-    convert_config,
-    convert_weights,
-    map_weight_name,
+from fast_llm_external_models.apriel2.convert_from_llava import convert_config
+from fast_llm_external_models.apriel2.expr_plan import (
+    execute,
+    plan_llava_to_apriel2,
+    plan_surgery,
 )
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
 
@@ -97,84 +98,35 @@ class TestConvertConfig:
 
 
 # =============================================================================
-# Weight Name Mapping Tests
+# Plan-Based Weight Conversion Tests
 # =============================================================================
 
 
-class TestMapWeightName:
-    """Test weight name mapping."""
+class TestPlanConversion:
+    """Test plan-based weight conversion."""
 
-    def test_static_mappings(self):
-        """Test static weight mappings."""
-        assert map_weight_name("language_model.model.embed_tokens.weight") == "model.embed_tokens.weight"
-        assert map_weight_name("language_model.model.norm.weight") == "model.norm.weight"
-        assert map_weight_name("language_model.lm_head.weight") == "lm_head.weight"
-
-    def test_decoder_layer_mappings(self):
-        """Test decoder layer weight mappings."""
-        assert map_weight_name(
-            "language_model.model.layers.0.self_attn.q_proj.weight"
-        ) == "model.decoder.blocks.0.mixer.self_attn.q_proj.weight"
-
-        assert map_weight_name(
-            "language_model.model.layers.5.mlp.gate_proj.weight"
-        ) == "model.decoder.blocks.5.mlp.gate_proj.weight"
-
-        assert map_weight_name(
-            "language_model.model.layers.10.input_layernorm.weight"
-        ) == "model.decoder.blocks.10.input_layernorm.weight"
-
-    def test_vision_layer_mappings(self):
-        """Test vision encoder layer mappings."""
-        assert map_weight_name(
-            "vision_tower.transformer.layers.0.attention.q_proj.weight"
-        ) == "model.vision_encoder.encoder.blocks.0.mixer.self_attn.q_proj.weight"
-
-        assert map_weight_name(
-            "vision_tower.transformer.layers.2.feed_forward.gate_proj.weight"
-        ) == "model.vision_encoder.encoder.blocks.2.mlp.gate_proj.weight"
-
-    def test_vision_adapter_mappings(self):
-        """Test vision adapter (projector) mappings."""
-        assert map_weight_name(
-            "multi_modal_projector.linear_1.weight"
-        ) == "model.vision_encoder.adapter.linear_1.weight"
-
-        assert map_weight_name(
-            "multi_modal_projector.linear_2.bias"
-        ) == "model.vision_encoder.adapter.linear_2.bias"
-
-    def test_unknown_weight_returns_none(self):
-        """Test that unknown weights return None."""
-        assert map_weight_name("unknown.weight") is None
-        assert map_weight_name("some.random.path") is None
-
-
-# =============================================================================
-# Weight Conversion Tests
-# =============================================================================
-
-
-class TestConvertWeights:
-    """Test weight conversion."""
-
-    def test_converts_all_weights(self, llava_pixtral_checkpoint):
-        """Test that all weights are converted."""
-        # Load source weights
+    def test_plan_converts_all_weights(self, llava_pixtral_checkpoint):
+        """Test that plan converts all weights."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        apriel2_weights = convert_weights(source_weights)
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, source_weights)
 
         # Should have same number of weights (all mapped)
         assert len(apriel2_weights) == len(source_weights)
 
-    def test_weight_names_are_apriel2_format(self, llava_pixtral_checkpoint):
-        """Test that converted weight names are in Apriel2 format."""
+    def test_plan_weight_names_are_apriel2_format(self, llava_pixtral_checkpoint):
+        """Test that plan produces Apriel2 format weight names."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        apriel2_weights = convert_weights(source_weights)
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, source_weights)
 
         # Check decoder weights
         assert any("model.decoder.blocks.0.mixer" in k for k in apriel2_weights.keys())
@@ -184,60 +136,65 @@ class TestConvertWeights:
         assert any("model.vision_encoder.encoder.blocks" in k for k in apriel2_weights.keys())
         assert any("model.vision_encoder.adapter" in k for k in apriel2_weights.keys())
 
-    def test_weight_values_unchanged(self, llava_pixtral_checkpoint):
+    def test_plan_weight_values_unchanged(self, llava_pixtral_checkpoint):
         """Test that weight values are not modified during conversion."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        apriel2_weights = convert_weights(source_weights)
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, source_weights)
 
-        # Check a few specific weights are identical
+        # Check specific weights are identical
         source_embed = source_weights["language_model.model.embed_tokens.weight"]
         target_embed = apriel2_weights["model.embed_tokens.weight"]
         assert torch.equal(source_embed, target_embed)
 
 
 # =============================================================================
-# Surgery Tests
+# Surgery Tests (Plan-Based)
 # =============================================================================
 
 
 class TestSurgery:
-    """Test surgery operations (Apriel2 -> Apriel2)."""
+    """Test surgery operations (Apriel2 -> Apriel2) via plans."""
 
-    def test_identity_surgery(self, llava_pixtral_checkpoint, tmp_path):
+    def test_identity_surgery(self, llava_pixtral_checkpoint):
         """Test surgery with same source and target config (identity)."""
-        from fast_llm_external_models.apriel2.surgery import surgery
-
         # Load and convert to Apriel2 base
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        llava_config = json.load(open(llava_pixtral_checkpoint / "config.json"))
+        # Convert via plan
+        conversion_plan = plan_llava_to_apriel2(llava_config)
         apriel2_config = convert_config(llava_config)
-        apriel2_weights = convert_weights(source_weights)
+        apriel2_weights = execute(conversion_plan, source_weights)
 
         # Surgery with same config = identity
-        result_weights = surgery(apriel2_config, apriel2_weights, apriel2_config)
+        surgery_plan = plan_surgery(apriel2_config, apriel2_config)
+        result_weights = execute(surgery_plan, apriel2_weights)
 
-        # Non-decoder weights should be identical
+        # Weights should be identical
         assert "model.embed_tokens.weight" in result_weights
         assert torch.allclose(
             result_weights["model.embed_tokens.weight"],
             apriel2_weights["model.embed_tokens.weight"],
         )
 
-    def test_surgery_to_stochastic_mixer(self, llava_pixtral_checkpoint, tmp_path):
+    def test_surgery_to_stochastic_mixer(self, llava_pixtral_checkpoint):
         """Test surgery that wraps attention with stochastic mixer."""
-        from fast_llm_external_models.apriel2.surgery import surgery
-
         # Load and convert to Apriel2 base
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        llava_config = json.load(open(llava_pixtral_checkpoint / "config.json"))
+        conversion_plan = plan_llava_to_apriel2(llava_config)
         source_config = convert_config(llava_config)
-        source_weights = convert_weights(source_weights)
+        source_weights = execute(conversion_plan, source_weights)
 
         # Target config with stochastic mixer
         target_config = json.loads(json.dumps(source_config))  # Deep copy
@@ -253,7 +210,8 @@ class TestSurgery:
             },
         }
 
-        result_weights = surgery(source_config, source_weights, target_config)
+        surgery_plan = plan_surgery(source_config, target_config)
+        result_weights = execute(surgery_plan, source_weights)
 
         # Should have weights for both sub-mixers
         attn_keys = [k for k in result_weights if ".mixers.attention." in k]
@@ -263,17 +221,17 @@ class TestSurgery:
         assert len(sw_keys) > 0, "No sliding_window sub-mixer weights"
         assert len(attn_keys) == len(sw_keys), "Sub-mixer weight counts differ"
 
-    def test_surgery_mamba_random_init(self, llava_pixtral_checkpoint, tmp_path):
-        """Test surgery that adds mamba (requires random init)."""
-        from fast_llm_external_models.apriel2.surgery import surgery
-
+    def test_surgery_mamba_uses_mil(self, llava_pixtral_checkpoint):
+        """Test surgery that adds mamba uses MIL initialization."""
         # Load and convert to Apriel2 base
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        llava_config = json.load(open(llava_pixtral_checkpoint / "config.json"))
+        conversion_plan = plan_llava_to_apriel2(llava_config)
         source_config = convert_config(llava_config)
-        source_weights = convert_weights(source_weights)
+        source_weights_converted = execute(conversion_plan, source_weights)
         hidden_size = source_config["hidden_size"]
 
         # Target config with mamba
@@ -287,18 +245,21 @@ class TestSurgery:
                     "type": "mamba",
                     "d_state": 16,
                     "d_conv": 4,
-                    "expand": 2,
+                    "d_inner": 2 * hidden_size,
+                    "d_xb": hidden_size // 4,
+                    "dt_rank": hidden_size // 16,
                 },
             },
         }
 
-        result_weights = surgery(source_config, source_weights, target_config)
+        surgery_plan = plan_surgery(source_config, target_config)
+        result_weights = execute(surgery_plan, source_weights_converted)
 
-        # Should have mamba weights (randomly initialized)
+        # Should have mamba weights
         mamba_keys = [k for k in result_weights if ".mixers.mamba." in k]
         assert len(mamba_keys) > 0, "No mamba weights created"
 
-        # Mamba weights should exist and have correct shapes
+        # Check mamba weights exist and have correct structure
         for key in mamba_keys:
             assert result_weights[key] is not None
             assert result_weights[key].numel() > 0
@@ -317,13 +278,15 @@ def _load_models_for_comparison(llava_pixtral_checkpoint, tmp_path):
     source_model = LlavaForConditionalGeneration.from_pretrained(llava_pixtral_checkpoint)
     source_model.eval()
 
-    # Load and convert weights
+    # Load and convert weights via plan
+    with open(llava_pixtral_checkpoint / "config.json") as f:
+        llava_config = json.load(f)
     with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
         source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-    llava_config = json.load(open(llava_pixtral_checkpoint / "config.json"))
     apriel2_config_dict = convert_config(llava_config)
-    apriel2_weights = convert_weights(source_weights)
+    plan = plan_llava_to_apriel2(llava_config)
+    apriel2_weights = execute(plan, source_weights)
 
     # Load Apriel2 model
     apriel2_config = Apriel2Config(**apriel2_config_dict)
@@ -489,12 +452,14 @@ class TestFullModelEquivalence:
 
     def test_model_can_load_converted_weights(self, llava_pixtral_checkpoint, tmp_path):
         """Test that converted weights can be loaded into Apriel2 model."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
         with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
-        llava_config = json.load(open(llava_pixtral_checkpoint / "config.json"))
         apriel2_config_dict = convert_config(llava_config)
-        apriel2_weights = convert_weights(source_weights)
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, source_weights)
 
         apriel2_config = Apriel2Config(**apriel2_config_dict)
         model = Apriel2ForConditionalGeneration(apriel2_config)
@@ -529,12 +494,9 @@ class TestApriel15Conversion:
     def test_apriel_1_5_weight_conversion(self, apriel_1_5_checkpoint, tmp_path):
         """Test full weight conversion of Apriel 1.5."""
         from fast_llm_external_models.apriel2.convert_from_llava import (
-            convert_config,
-            convert_weights,
             resolve_input,
             copy_model_files,
         )
-        from safetensors import safe_open
 
         output_dir = tmp_path / "apriel2_converted"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -557,7 +519,9 @@ class TestApriel15Conversion:
                 for key in f.keys():
                     all_weights[key] = f.get_tensor(key)
 
-        apriel2_weights = convert_weights(all_weights)
+        # Convert via plan
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, all_weights)
         save_file(apriel2_weights, output_dir / "model.safetensors")
 
         copy_model_files(output_dir)
@@ -573,66 +537,48 @@ class TestApriel15Conversion:
 
 
 # =============================================================================
-# Converters Tests
+# Plan Integration Tests
 # =============================================================================
 
 
-class TestConverters:
-    """Test converter registry and implementations."""
+class TestPlanIntegration:
+    """Test plan-based conversion integration."""
 
-    def test_identity_converter(self):
-        """Test identity conversion (same type)."""
-        from fast_llm_external_models.apriel2.converters import get_converter
+    def test_plan_source_keys_match_llava_keys(self, llava_pixtral_checkpoint):
+        """Plan source keys must exist in Llava checkpoint."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
+        with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
+            llava_keys = set(f.keys())
 
-        converter = get_converter("attention", "attention")
-        assert converter is not None
+        plan = plan_llava_to_apriel2(llava_config)
+        plan_source_keys = plan.source_keys()
 
-        weights = {"self_attn.q_proj.weight": torch.randn(256, 256)}
-        result = converter(weights, {}, {}, 256)
+        missing = plan_source_keys - llava_keys
+        assert not missing, f"Plan references non-existent source keys: {sorted(missing)[:10]}"
 
-        assert torch.allclose(weights["self_attn.q_proj.weight"], result["self_attn.q_proj.weight"])
+    def test_plan_keys_match_model_state_dict(self, llava_pixtral_checkpoint):
+        """Plan target keys must match actual Apriel2 model state_dict keys."""
+        with open(llava_pixtral_checkpoint / "config.json") as f:
+            llava_config = json.load(f)
 
-    def test_attention_to_sliding_window(self):
-        """Test attention to sliding window conversion."""
-        from fast_llm_external_models.apriel2.converters import get_converter
+        # Get keys from plan
+        plan = plan_llava_to_apriel2(llava_config)
+        plan_keys = plan.target_keys()
 
-        converter = get_converter("attention", "sliding_window")
-        assert converter is not None
+        # Get keys from instantiated model
+        apriel2_config_dict = convert_config(llava_config)
+        config = Apriel2Config(**apriel2_config_dict)
+        model = Apriel2ForConditionalGeneration(config)
+        model_keys = set(model.state_dict().keys())
 
-        weights = {"self_attn.q_proj.weight": torch.randn(256, 256)}
-        result = converter(weights, {}, {"window_size": 512}, 256)
+        missing_in_plan = model_keys - plan_keys
+        extra_in_plan = plan_keys - model_keys
 
-        # Should copy weights unchanged
-        assert torch.allclose(weights["self_attn.q_proj.weight"], result["self_attn.q_proj.weight"])
+        # Filter out expected missing keys (caches, positions, etc.)
+        missing_in_plan = {k for k in missing_in_plan if not any(
+            skip in k.lower() for skip in ["cache", "position", "mask"]
+        )}
 
-    def test_no_converter_returns_none(self):
-        """Test that missing converter returns None."""
-        from fast_llm_external_models.apriel2.converters import get_converter
-
-        # No converter for attention -> mamba
-        converter = get_converter("attention", "mamba")
-        assert converter is None
-
-    def test_random_init_mamba(self):
-        """Test random initialization for mamba."""
-        from fast_llm_external_models.apriel2.converters import random_init_mixer
-
-        config = {"type": "mamba", "d_state": 16, "d_conv": 4, "expand": 2}
-        weights = random_init_mixer(config, 256)
-
-        assert "in_proj.weight" in weights
-        assert "conv1d.weight" in weights
-        assert "out_proj.weight" in weights
-        assert weights["in_proj.weight"].shape[0] == 2 * 2 * 256  # 2 * expand * hidden
-
-    def test_random_init_attention(self):
-        """Test random initialization for attention."""
-        from fast_llm_external_models.apriel2.converters import random_init_mixer
-
-        config = {"type": "attention", "heads": 8, "head_groups": 4, "head_size": 32}
-        weights = random_init_mixer(config, 256)
-
-        assert "self_attn.q_proj.weight" in weights
-        assert "self_attn.k_proj.weight" in weights
-        assert "self_attn.v_proj.weight" in weights
-        assert "self_attn.o_proj.weight" in weights
+        assert not missing_in_plan, f"Model keys not in plan: {sorted(missing_in_plan)[:10]}"
+        assert not extra_in_plan, f"Plan keys not in model: {sorted(extra_in_plan)[:10]}"
