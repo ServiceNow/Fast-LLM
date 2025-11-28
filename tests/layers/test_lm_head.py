@@ -256,7 +256,7 @@ def test_lm_head(
     else:
         logit_weight = None
 
-    for prediction_distance, head in enumerate((model.head,) if prediction_heads == 1 else model.head.heads):
+    for prediction_distance, head in enumerate(model.head.heads):
         # Prepare the LM head
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)

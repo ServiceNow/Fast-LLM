@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
@@ -129,9 +129,9 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
                     # Gives the same result, assuming we disable cross-image attention (TODO: Enforce)
                     batch_and_sequence_q_dim,
                     # TODO: Relate to tensor dims in patch convolution.
-                    TensorDim("input_channels", self._config.vision_encoder.patch_convolution.input_channels),
-                    TensorDim("patch_height", self._config.vision_encoder.patch_convolution.patch_height),
-                    TensorDim("patch_width", self._config.vision_encoder.patch_convolution.patch_width),
+                    TensorDim("input_channels", self._config.vision_encoder.embeddings.input_channels),
+                    TensorDim("patch_height", self._config.vision_encoder.embeddings.patch_height),
+                    TensorDim("patch_width", self._config.vision_encoder.embeddings.patch_width),
                 )
             )
             hidden_dims = (
@@ -193,6 +193,8 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
             VisionKwargs.sequence_lengths: [cropped_image_patches.lengths + [pad_size]],
             VisionKwargs.sequence_length: sequence_length,
             VisionKwargs.device: self._distributed.device,
+            BlockKwargs.output_hidden_states: kwargs.get(BlockKwargs.output_hidden_states, []),
+            BlockKwargs.hidden_states: kwargs[BlockKwargs.hidden_states],
         }
         # We need to modify `local_unpadded_size` directly in `preprocessed_meta` since it's the one used by the engine.
         # Unsafe, but only needed for testing.
@@ -200,8 +202,6 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
         hidden_batch_and_sequence_q_dim = kwargs[self._vision_encoder_namespace][VisionKwargs.hidden_dims][
             0 if kwargs[self._vision_encoder_namespace][VisionKwargs.sequence_first] else 1
         ]
-        print(kwargs[self._vision_encoder_namespace][VisionKwargs.hidden_dims])
-        print(hidden_batch_and_sequence_q_dim)
         assert isinstance(hidden_batch_and_sequence_q_dim, PatchSequenceTensorDim)
         PatchSequenceTensorDim.local_unpadded_size = cropped_image_patches.patches.size(0)
 

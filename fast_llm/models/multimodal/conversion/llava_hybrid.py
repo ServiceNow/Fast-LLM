@@ -41,6 +41,7 @@ class LlavaHybridSSMHuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandl
                     "AutoModel": "modeling_llava_hybrid.LlavaHybridModel",
                     "AutoModelForCausalLM": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
                     "AutoModelForVision2Seq": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
+                    "AutoModelForImageTextToText": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
                 },
             },
         )

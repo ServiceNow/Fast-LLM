@@ -86,7 +86,7 @@ class AttentionConfig(MixerConfig):
     causal: bool = Field(
         default=True,
         desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     dropout: float = Field(
         default=0.0,

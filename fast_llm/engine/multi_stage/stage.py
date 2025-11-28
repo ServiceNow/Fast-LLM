@@ -132,23 +132,6 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             if output is not None:
                 self._log_layer_forward(output, kwargs, i)
 
-            # TODO: very slow and memory consuming, only use for debugging for now
-            # TODO: decide if and how we want to return
-            #       HF transformer style details from forward properly
-            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
-                # Last layer does not provide output
-                if output is not None:
-                    meta = self._meta_outputs[i]
-                    if output.shape == meta.shape:
-                        output_global, _ = meta.local_to_global(output.detach())
-                    else:
-                        # TODO: Handle variable shape.
-                        output_global = output
-
-                    kwargs["hidden_states"][self._layers[i].module_name] = {
-                        "layer_type": type(layer).__name__,
-                        "tensor": output_global,
-                    }
         return None if output is None else output.detach(), (input_, output)
 
     def backward(

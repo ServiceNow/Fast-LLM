@@ -55,27 +55,3 @@ class CausalConv1d(torch.nn.Module):
 
     def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
-
-
-class Convolution2D(torch.nn.Module):
-    """
-    TODO: Generalize to other convolutions?
-    """
-
-    def __init__(
-        self,
-        weight: ParameterMeta,
-        bias: ParameterMeta | None,
-        *,
-        stride: tuple[int, int],
-    ):
-        super().__init__()
-        self.weight = weight
-        self.bias = bias
-        self._stride = stride
-
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self._stride)
-
-    def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
-        raise NotImplementedError()

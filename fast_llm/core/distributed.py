@@ -145,32 +145,6 @@ def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None
         return _tensor_to_object(output_tensor)
 
 
-def broadcast_optional(tensor: torch.Tensor | None, group: ProcessGroup = None, src: int = 0) -> torch.Tensor:
-    """
-    Broadcasts an optional tensor of size, shape, and dtype unknown in advance.
-    Returns the tensor on all ranks or None if no tensor was sent.
-    """
-    assert group is not None
-
-    if group.rank() == src:
-        has_tensor = tensor is not None
-        if has_tensor:
-            meta = (has_tensor, tensor.shape, tensor.dtype)
-        else:
-            meta = (has_tensor, None, None)
-        broadcast_object(meta, group, src)
-        if has_tensor:
-            broadcast(tensor.to(torch.cuda.current_device()), src, group)
-        return tensor
-    else:
-        has_tensor, shape, dtype = broadcast_object(None, group, src)
-        if not has_tensor:
-            return None
-        output_tensor = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
-        broadcast(output_tensor, src, group)
-        return output_tensor
-
-
 def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
     assert group is not None
     work = group.send([tensor], dst, tag)

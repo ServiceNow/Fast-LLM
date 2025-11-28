@@ -3,14 +3,14 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
-from fast_llm.layers.common.linear.config import Convolution2DConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.vision.patch_convolution import PatchConvolution
+    from fast_llm.layers.vision.embeddings import PatchEmbeddings
     from fast_llm.layers.vision.vision_encoder import VisionEncoder, VisionMultiModalModel
 
 
@@ -58,10 +58,10 @@ class ImageNormalizationConfig(Config):
 
 
 @config_class()
-class PatchConvolutionConfig(BlockConfig):
+class PatchEmbeddingsConfig(BlockConfig):
     _abstract = False
-    convolution: Convolution2DConfig = Field(
-        desc="Configuration for the 2d convolution.",
+    patch_embeddings: AffineLinearConfig = Field(
+        desc="Configuration for the patch embedding layer.",
         hint=FieldHint.architecture,
     )
     normalization: NormalizationConfig = Field(
@@ -90,17 +90,17 @@ class PatchConvolutionConfig(BlockConfig):
         return 3
 
     @property
-    def layer_class(self) -> "type[PatchConvolution]":
-        from fast_llm.layers.vision.patch_convolution import PatchConvolution
+    def layer_class(self) -> "type[PatchEmbeddings]":
+        from fast_llm.layers.vision.embeddings import PatchEmbeddings
 
-        return PatchConvolution
+        return PatchEmbeddings
 
 
 @config_class(registry=True)
 class VisionEncoderConfig(BlockConfig):
     _abstract = False
     # TODO: ====== Rename to patch_embeddings? ======
-    patch_convolution: PatchConvolutionConfig = Field(
+    embeddings: PatchEmbeddingsConfig = Field(
         desc="Configuration for the patch convolution layer.",
         hint=FieldHint.architecture,
     )
