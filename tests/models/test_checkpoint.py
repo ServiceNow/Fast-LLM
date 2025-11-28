@@ -5,7 +5,6 @@ import shutil
 import pytest
 import safetensors.torch
 import torch
-import transformers
 import yaml
 
 from fast_llm.engine.checkpoint.config import (
@@ -328,7 +327,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
     ).eval()
     test_input = torch.randint(
         0,
-        model_ref.config.fast_llm_config.base_model.embeddings.vocab_size,
+        384,
         size=(4, 100),
         dtype=torch.int64,
         device="cuda",
@@ -370,18 +369,13 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         )
     ).eval()
     errors = []
-    auto_model = (
-        transformers.AutoModel
-        if model_testing_config.name in ("diffusion_llama", "dream")
-        else transformers.AutoModelForCausalLM
-    )
-    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
+    model_as_hf = model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
-        output = model(test_input)
+        output = model(test_input, **kwargs)
         # TODO: Make a generic comparison util.
         CompareConfig().compare_tensors(
             {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},

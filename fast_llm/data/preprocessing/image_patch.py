@@ -129,7 +129,7 @@ class ImagePatchConfig(Config):
         # Convert to patches. (`torch.nn.functional.unfold` not supported for uint8.)
         patches = (
             image.reshape(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
-            .permute(3, 1, 0, 2, 4)
+            .permute(1, 3, 0, 2, 4)
             .flatten(0, 1)
         )
 

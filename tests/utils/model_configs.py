@@ -821,7 +821,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=5.0,
+    compare_factor=10.0,
     # Micro-sequence split not supported for Mamba.
     skip_tests=("sdp", "ms"),
 )

@@ -95,6 +95,7 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
 
         # Hugging Face encodes token positions through an image token, from which we extract the patch mapping.
         image_mask = batch.tokens.tokens == self._image_token_index
+
         sample_map, token_map = torch.nonzero(image_mask, as_tuple=True)
         Assert.eq(len(sample_map), len(image_patches))
         # Fast-LLM uses negative token ids as placeholders for image tokens.

@@ -89,7 +89,7 @@ def linear_forward(
 
 
 def linear_backward(
-    grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]
+    grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]
 ) -> torch.Tensor | None:
     input_, weight, bias, transposed_weight, input_requires_grad = context
     weight_t = maybe_transpose(weight, transposed_weight)
@@ -254,6 +254,7 @@ def input_parallel_linear_autograd(
     group: ProcessGroup | None,
     sequence_parallel: bool,
     transposed_weight: bool = False,
+    input_requires_grad: bool = True,
     sparse_map: SparseMap | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     # Autograd goes nuts it this goes in the function.
@@ -265,6 +266,7 @@ def input_parallel_linear_autograd(
             group,
             sequence_parallel,
             transposed_weight,
+            input_requires_grad,
             sparse_map,
         ),
         bias if group else None,

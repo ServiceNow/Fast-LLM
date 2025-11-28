@@ -154,6 +154,7 @@ class InputParallelLinear(LinearBase):
             group=self._parallel_dim.group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
+            input_requires_grad=input_.requires_grad,
         )
 
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, tuple[typing.Any, ...]]:
