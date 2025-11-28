@@ -1,0 +1,32 @@
+# Example: Stochastic supernet with attention + sliding window
+#
+# Converts a homogeneous attention model to a stochastic supernet
+# where each layer can sample from multiple mixer types during training.
+#
+# Usage:
+#   python convert_from_llava.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
+#       --config examples/stochastic_supernet.yaml
+
+decoder:
+  type: fixed
+  block:
+    mixer:
+      type: stochastic
+      main_mixer_name: attention
+      sampling_strategy: uniform
+      mixers:
+        # Main attention mixer - inherits config and weights from source
+        attention:
+          init: transfer
+
+        # Sliding window - same architecture with window size override
+        sliding_window:
+          init: transfer
+          window_size: 4096
+
+    # MLP and normalization transfer from source
+    mlp:
+      init: transfer
+
+    normalization:
+      init: transfer
