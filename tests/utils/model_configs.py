@@ -823,7 +823,8 @@ _update_and_add_testing_config(
     },
     compare_factor=10.0,
     # Micro-sequence split not supported for Mamba.
-    skip_tests=("sdp", "ms"),
+    # Pipeline-parallel gives a different mixer selection.
+    skip_tests=("sdp", "ms", "pp"),
 )
 
 
