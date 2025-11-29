@@ -194,7 +194,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 " Please make sure Fast-LLM is installed correctly."
             )
             long_docs_filter = (
-                document_sizes + image_token_sizes + +audio_token_sizes > self._parameters.sequence_length + 1
+                document_sizes + image_token_sizes + audio_token_sizes > self._parameters.sequence_length + 1
             )
             ignored_documents = long_docs_filter.sum()
             if ignored_documents:
@@ -500,7 +500,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             ]
             image_tokens = sum(image_sizes)
 
-            audio_token_size_arr, _ = get_num_audio_tokens(
+            audio_token_size_arr, aud_to_filter = get_num_audio_tokens(
                 audio_lengths,
                 self._parameters.aud_padding_duration,
                 self._parameters.aud_sampling_rate,
@@ -514,7 +514,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             if not self._truncate_documents:
                 # Document too long, ignore
-                if document_size > self._parameters.sequence_length + 1:
+                if document_size > self._parameters.sequence_length + 1 or aud_to_filter:
                     document_sampling_index += 1
                     continue
 
