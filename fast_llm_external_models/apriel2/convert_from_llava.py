@@ -19,9 +19,6 @@ from pathlib import Path
 
 import torch
 import yaml
-from safetensors import safe_open
-from safetensors.torch import save_file
-from torch import Tensor
 from tqdm import tqdm
 
 # Allow running as script or module
@@ -29,7 +26,9 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fast_llm_external_models.apriel2.expr_plan import (
-    ExprPlan,
+    DEFAULT_MAX_SHARD_SIZE,
+    SafetensorLoader,
+    ShardedSafetensorWriter,
     StreamingExecutor,
     compose,
     plan_llava_to_apriel2,
@@ -224,27 +223,30 @@ def build_plan(
 def convert(
     llava_config: dict,
     source_files: list[Path],
-    output_file: Path,
+    output_dir: Path,
     surgery_config: dict | None = None,
     device: str = "cpu",
     dtype: torch.dtype = torch.float32,
     show_plan: bool = False,
+    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
 ) -> dict:
     """Convert Llava checkpoint to Apriel2 using plan-based streaming.
 
     This conversion:
     1. Uses declarative plans that can be inspected and composed
     2. Loads weights on-demand and releases them when done (memory efficient)
-    3. Supports surgery (architecture modification) via plan composition
+    3. Writes output in shards to bound memory usage
+    4. Supports surgery (architecture modification) via plan composition
 
     Args:
         llava_config: Source Llava config dict.
         source_files: List of source safetensor files.
-        output_file: Output safetensor file path.
+        output_dir: Output directory for safetensor files.
         surgery_config: Optional target config for surgery (architecture modification).
         device: Device for computation (default: cpu).
         dtype: Data type for weights (default: float32).
         show_plan: If True, print the plan tree before converting.
+        max_shard_size: Maximum shard size in bytes (default: 5GB).
 
     Returns:
         Final Apriel2 config dict.
@@ -260,32 +262,15 @@ def convert(
         print(full_plan.render_tree(collapse_layers=True))
         print("=" * 60 + "\n")
 
-    # Build weight loader that reads from safetensor files
-    source_handles: dict[Path, any] = {}
+    # Execute with streaming I/O
+    with SafetensorLoader(source_files, device) as loader:
+        executor = StreamingExecutor(full_plan, loader, device, dtype)
 
-    def load_source(key: str) -> Tensor:
-        """Load a source tensor from safetensor files."""
-        for source_file in source_files:
-            if source_file not in source_handles:
-                source_handles[source_file] = safe_open(
-                    source_file, framework="pt", device=device
-                )
-            handle = source_handles[source_file]
-            if key in handle.keys():
-                return handle.get_tensor(key)
-        raise KeyError(f"Source key not found in any file: {key}")
-
-    # Execute with streaming
-    executor = StreamingExecutor(full_plan, load_source, device, dtype)
-
-    # Collect results
-    result_weights = {}
-    for target_key, tensor in tqdm(executor.execute(), desc="Converting", total=len(full_plan)):
-        result_weights[target_key] = tensor
-
-    # Save output
-    logger.info(f"Saving {len(result_weights)} weights to {output_file}")
-    save_file(result_weights, output_file)
+        with ShardedSafetensorWriter(output_dir, max_shard_size=max_shard_size) as writer:
+            for target_key, tensor in tqdm(
+                executor.execute(), desc="Converting", total=len(full_plan)
+            ):
+                writer.add(target_key, tensor)
 
     return final_config
 
@@ -440,12 +425,11 @@ def main():
             "Plan-based conversion requires safetensor files."
         )
 
-    # Convert using plan-based approach
-    output_weights_file = args.output_dir / "model.safetensors"
+    # Convert using plan-based approach with streaming sharded output
     apriel2_config = convert(
         llava_config,
         safetensor_files,
-        output_weights_file,
+        args.output_dir,
         surgery_config=surgery_config,
         show_plan=args.show_plan or args.verbose,
     )
