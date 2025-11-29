@@ -7,6 +7,7 @@ import torch
 from fast_llm_external_models.apriel2.expr_plan import (
     Concat,
     Expr,
+    ExprAdapter,
     ExprPlan,
     Init,
     Ref,
@@ -31,30 +32,30 @@ class TestExpressionTypes:
 
     def test_ref_find_refs(self):
         """Ref finds its own key."""
-        expr = Ref("model.weight")
+        expr = Ref(key="model.weight")
         assert expr.find_refs() == {"model.weight"}
 
     def test_ref_evaluate(self):
         """Ref evaluates to source tensor."""
-        expr = Ref("a")
+        expr = Ref(key="a")
         sources = {"a": torch.tensor([1.0, 2.0, 3.0])}
         result = expr.evaluate(sources)
         assert torch.allclose(result, sources["a"])
 
     def test_ref_missing_key(self):
         """Ref raises KeyError for missing source."""
-        expr = Ref("missing")
+        expr = Ref(key="missing")
         with pytest.raises(KeyError):
             expr.evaluate({})
 
     def test_slice_find_refs(self):
         """Slice finds refs from inner expression."""
-        expr = Slice(Ref("a"), ((0, 5, None), (None, None, None)))
+        expr = Slice(expr=Ref(key="a"), slices=((0, 5, None), (None, None, None)))
         assert expr.find_refs() == {"a"}
 
     def test_slice_evaluate(self):
         """Slice extracts portion of tensor."""
-        expr = Slice(Ref("a"), ((0, 2, None), (1, 3, None)))
+        expr = Slice(expr=Ref(key="a"), slices=((0, 2, None), (1, 3, None)))
         sources = {"a": torch.arange(12).reshape(3, 4).float()}
         result = expr.evaluate(sources)
         assert result.shape == (2, 2)
@@ -62,12 +63,12 @@ class TestExpressionTypes:
 
     def test_concat_find_refs(self):
         """Concat finds refs from all children."""
-        expr = Concat((Ref("a"), Ref("b"), Ref("c")), dim=0)
+        expr = Concat(exprs=(Ref(key="a"), Ref(key="b"), Ref(key="c")), dim=0)
         assert expr.find_refs() == {"a", "b", "c"}
 
     def test_concat_evaluate(self):
         """Concat joins tensors along dimension."""
-        expr = Concat((Ref("a"), Ref("b")), dim=0)
+        expr = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0)
         sources = {
             "a": torch.ones(2, 3),
             "b": torch.zeros(3, 3),
@@ -79,26 +80,26 @@ class TestExpressionTypes:
 
     def test_init_find_refs(self):
         """Init has no refs."""
-        expr = Init((10, 20), "kaiming")
+        expr = Init(shape=(10, 20), init_type="kaiming")
         assert expr.find_refs() == set()
 
     def test_init_zeros(self):
         """Init zeros creates zero tensor."""
-        expr = Init((5, 10), "zeros")
+        expr = Init(shape=(5, 10), init_type="zeros")
         result = expr.evaluate({})
         assert result.shape == (5, 10)
         assert torch.allclose(result, torch.zeros(5, 10))
 
     def test_init_ones(self):
         """Init ones creates ones tensor."""
-        expr = Init((5,), "ones")
+        expr = Init(shape=(5,), init_type="ones")
         result = expr.evaluate({})
         assert result.shape == (5,)
         assert torch.allclose(result, torch.ones(5))
 
     def test_init_kaiming(self):
         """Init kaiming creates reasonable values."""
-        expr = Init((100, 50), "kaiming")
+        expr = Init(shape=(100, 50), init_type="kaiming")
         result = expr.evaluate({})
         assert result.shape == (100, 50)
         # Kaiming should have reasonable variance
@@ -106,26 +107,26 @@ class TestExpressionTypes:
 
     def test_init_deterministic(self):
         """Init is deterministic given target key."""
-        expr = Init((10, 10), "kaiming")
+        expr = Init(shape=(10, 10), init_type="kaiming")
         result1 = expr.evaluate({}, target_key="model.layer.weight")
         result2 = expr.evaluate({}, target_key="model.layer.weight")
         assert torch.allclose(result1, result2)
 
     def test_init_different_keys_different_values(self):
         """Different target keys give different random values."""
-        expr = Init((10, 10), "kaiming")
+        expr = Init(shape=(10, 10), init_type="kaiming")
         result1 = expr.evaluate({}, target_key="model.layer1.weight")
         result2 = expr.evaluate({}, target_key="model.layer2.weight")
         assert not torch.allclose(result1, result2)
 
     def test_reshape_find_refs(self):
         """Reshape finds refs from inner expression."""
-        expr = Reshape(Ref("a"), (4, 5))
+        expr = Reshape(expr=Ref(key="a"), shape=(4, 5))
         assert expr.find_refs() == {"a"}
 
     def test_reshape_evaluate(self):
         """Reshape changes tensor shape."""
-        expr = Reshape(Ref("a"), (4, 5))
+        expr = Reshape(expr=Ref(key="a"), shape=(4, 5))
         sources = {"a": torch.arange(20).float()}
         result = expr.evaluate(sources)
         assert result.shape == (4, 5)
@@ -145,7 +146,7 @@ class TestSliceHelpers:
 
     def test_make_slice(self):
         """make_slice creates Slice expression."""
-        expr = make_slice(Ref("a"), [slice_spec(0, 5), full_slice()])
+        expr = make_slice(Ref(key="a"), [slice_spec(0, 5), full_slice()])
         assert isinstance(expr, Slice)
         assert expr.slices == ((0, 5, None), (None, None, None))
 
@@ -155,23 +156,23 @@ class TestSubstitute:
 
     def test_substitute_ref(self):
         """Substitute replaces Ref with binding."""
-        expr = Ref("x")
-        bindings = {"x": Ref("y")}
+        expr = Ref(key="x")
+        bindings = {"x": Ref(key="y")}
         result = substitute(expr, bindings)
         assert isinstance(result, Ref)
         assert result.key == "y"
 
     def test_substitute_ref_passthrough(self):
         """Substitute keeps Ref if no binding."""
-        expr = Ref("x")
+        expr = Ref(key="x")
         bindings = {}
         result = substitute(expr, bindings)
         assert result == expr
 
     def test_substitute_slice(self):
         """Substitute recurses into Slice."""
-        expr = Slice(Ref("x"), ((0, 5, None),))
-        bindings = {"x": Ref("y")}
+        expr = Slice(expr=Ref(key="x"), slices=((0, 5, None),))
+        bindings = {"x": Ref(key="y")}
         result = substitute(expr, bindings)
         assert isinstance(result, Slice)
         assert isinstance(result.expr, Ref)
@@ -179,8 +180,8 @@ class TestSubstitute:
 
     def test_substitute_concat(self):
         """Substitute recurses into Concat children."""
-        expr = Concat((Ref("a"), Ref("b")), dim=0)
-        bindings = {"a": Ref("x"), "b": Ref("y")}
+        expr = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0)
+        bindings = {"a": Ref(key="x"), "b": Ref(key="y")}
         result = substitute(expr, bindings)
         assert isinstance(result, Concat)
         assert result.exprs[0].key == "x"
@@ -188,18 +189,18 @@ class TestSubstitute:
 
     def test_substitute_init_unchanged(self):
         """Substitute leaves Init unchanged."""
-        expr = Init((10,), "zeros")
-        result = substitute(expr, {"x": Ref("y")})
+        expr = Init(shape=(10,), init_type="zeros")
+        result = substitute(expr, {"x": Ref(key="y")})
         assert result == expr
 
     def test_substitute_complex(self):
         """Substitute handles complex nested expressions."""
         # Concat of Slice(Ref) and Init
-        expr = Concat((
-            Slice(Ref("a"), ((0, 5, None),)),
-            Init((5,), "zeros"),
+        expr = Concat(exprs=(
+            Slice(expr=Ref(key="a"), slices=((0, 5, None),)),
+            Init(shape=(5,), init_type="zeros"),
         ), dim=0)
-        bindings = {"a": Ref("source")}
+        bindings = {"a": Ref(key="source")}
         result = substitute(expr, bindings)
 
         assert isinstance(result, Concat)
@@ -213,8 +214,8 @@ class TestFuse:
 
     def test_fuse_flatten_concat(self):
         """Fuse flattens nested Concat with same dim."""
-        inner = Concat((Ref("a"), Ref("b")), dim=0)
-        outer = Concat((inner, Ref("c")), dim=0)
+        inner = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0)
+        outer = Concat(exprs=(inner, Ref(key="c"),), dim=0)
         result = fuse(outer)
 
         assert isinstance(result, Concat)
@@ -225,8 +226,8 @@ class TestFuse:
 
     def test_fuse_no_flatten_different_dim(self):
         """Fuse doesn't flatten Concat with different dim."""
-        inner = Concat((Ref("a"), Ref("b")), dim=1)
-        outer = Concat((inner, Ref("c")), dim=0)
+        inner = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=1)
+        outer = Concat(exprs=(inner, Ref(key="c"),), dim=0)
         result = fuse(outer)
 
         assert isinstance(result, Concat)
@@ -235,7 +236,7 @@ class TestFuse:
 
     def test_fuse_reshape_reshape(self):
         """Fuse collapses nested Reshape."""
-        expr = Reshape(Reshape(Ref("a"), (4, 5)), (2, 10))
+        expr = Reshape(expr=Reshape(expr=Ref(key="a"), shape=(4, 5)), shape=(2, 10))
         result = fuse(expr)
 
         assert isinstance(result, Reshape)
@@ -248,56 +249,61 @@ class TestSerialization:
 
     def test_ref_roundtrip(self):
         """Ref serializes and deserializes."""
-        expr = Ref("model.weight")
-        d = expr.to_dict()
-        restored = Expr.from_dict(d)
+        expr = Ref(key="model.weight")
+        d = expr.model_dump()
+        restored = ExprAdapter.validate_python(d)
         assert isinstance(restored, Ref)
         assert restored.key == expr.key
 
     def test_slice_roundtrip(self):
         """Slice serializes and deserializes."""
-        expr = Slice(Ref("a"), ((0, 5, None), (None, None, 2)))
-        d = expr.to_dict()
-        restored = Expr.from_dict(d)
+        expr = Slice(expr=Ref(key="a"), slices=((0, 5, None), (None, None, 2)))
+        d = expr.model_dump()
+        restored = ExprAdapter.validate_python(d)
         assert isinstance(restored, Slice)
         assert restored.slices == expr.slices
 
     def test_concat_roundtrip(self):
         """Concat serializes and deserializes."""
-        expr = Concat((Ref("a"), Init((5,), "zeros")), dim=1)
-        d = expr.to_dict()
-        restored = Expr.from_dict(d)
+        expr = Concat(exprs=(Ref(key="a"), Init(shape=(5,), init_type="zeros")), dim=1)
+        d = expr.model_dump()
+        restored = ExprAdapter.validate_python(d)
         assert isinstance(restored, Concat)
         assert len(restored.exprs) == 2
         assert restored.dim == 1
 
     def test_init_roundtrip(self):
         """Init serializes and deserializes."""
-        expr = Init((10, 20), "kaiming")
-        d = expr.to_dict()
-        restored = Expr.from_dict(d)
+        expr = Init(shape=(10, 20), init_type="kaiming")
+        d = expr.model_dump()
+        restored = ExprAdapter.validate_python(d)
         assert isinstance(restored, Init)
         assert restored.shape == expr.shape
         assert restored.init_type == expr.init_type
 
     def test_reshape_roundtrip(self):
         """Reshape serializes and deserializes."""
-        expr = Reshape(Ref("a"), (4, 5))
-        d = expr.to_dict()
-        restored = Expr.from_dict(d)
+        expr = Reshape(expr=Ref(key="a"), shape=(4, 5))
+        d = expr.model_dump()
+        restored = ExprAdapter.validate_python(d)
         assert isinstance(restored, Reshape)
         assert restored.shape == expr.shape
 
     def test_plan_json_roundtrip(self):
         """Plan serializes to JSON and back."""
-        plan = ExprPlan(source_format="a", target_format="b")
-        plan.define("out.x", Ref("in.x"))
-        plan.define("out.y", Concat((Ref("in.a"), Init((5,), "zeros")), dim=0))
+        plan = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "out.x": Ref(key="in.x"),
+                "out.y": Concat(exprs=(Ref(key="in.a"), Init(shape=(5,), init_type="zeros")), dim=0),
+            },
+        )
 
-        d = plan.to_dict()
+        d = plan.model_dump()
         json_str = json.dumps(d)
         d2 = json.loads(json_str)
-        restored = ExprPlan.from_dict(d2)
+        restored = ExprPlan.model_validate(d2)
 
         assert len(restored) == 2
         assert restored.source_format == "a"
@@ -311,34 +317,42 @@ class TestExprPlan:
 
     def test_plan_define_and_access(self):
         """Plan stores and retrieves expressions."""
-        plan = ExprPlan()
-        plan.define("target", Ref("source"))
+        plan = ExprPlan(mappings={
+            "target": Ref(key="source"),
+        })
         assert "target" in plan
         assert isinstance(plan["target"], Ref)
 
     def test_plan_source_keys(self):
         """Plan identifies all source references."""
-        plan = ExprPlan()
-        plan.define("a", Ref("x"))
-        plan.define("b", Concat((Ref("y"), Ref("z")), dim=0))
-        plan.define("c", Init((10,), "zeros"))
+        plan = ExprPlan(mappings={
+            "a": Ref(key="x"),
+            "b": Concat(exprs=(Ref(key="y"), Ref(key="z")), dim=0),
+            "c": Init(shape=(10,), init_type="zeros"),
+        })
 
         assert plan.source_keys() == {"x", "y", "z"}
 
     def test_plan_target_keys(self):
         """Plan identifies all target keys."""
-        plan = ExprPlan()
-        plan.define("a", Ref("x"))
-        plan.define("b", Ref("y"))
+        plan = ExprPlan(mappings={
+            "a": Ref(key="x"),
+            "b": Ref(key="y"),
+        })
 
         assert plan.target_keys() == {"a", "b"}
 
     def test_plan_summary(self):
         """Plan summary provides useful info."""
-        plan = ExprPlan(source_format="llava", target_format="apriel2")
-        plan.define("a", Ref("x"))
-        plan.define("b", Concat((Ref("y"), Ref("z")), dim=0))
-        plan.define("c", Init((10,), "zeros"))
+        plan = ExprPlan(
+            source_format="llava",
+            target_format="apriel2",
+            mappings={
+                "a": Ref(key="x"),
+                "b": Concat(exprs=(Ref(key="y"), Ref(key="z")), dim=0),
+                "c": Init(shape=(10,), init_type="zeros"),
+            },
+        )
 
         summary = plan.summary()
         assert summary["source_format"] == "llava"
@@ -348,9 +362,10 @@ class TestExprPlan:
 
     def test_plan_fuse(self):
         """Plan fuse applies optimizations."""
-        inner = Concat((Ref("a"), Ref("b")), dim=0)
-        plan = ExprPlan()
-        plan.define("out", Concat((inner, Ref("c")), dim=0))
+        inner = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0)
+        plan = ExprPlan(mappings={
+            "out": Concat(exprs=(inner, Ref(key="c"),), dim=0),
+        })
 
         fused = plan.fuse()
         assert isinstance(fused["out"], Concat)
@@ -362,13 +377,23 @@ class TestComposition:
 
     def test_compose_simple_refs(self):
         """Compose simple Ref chains."""
-        plan1 = ExprPlan(source_format="a", target_format="b")
-        plan1.define("intermediate", Ref("original"))
+        plan1 = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "intermediate": Ref(key="original"),
+            },
+        )
 
-        plan2 = ExprPlan(source_format="b", target_format="c")
-        plan2.define("final", Ref("intermediate"))
+        plan2 = ExprPlan(
+            source_format="b",
+            target_format="c",
+            mappings={
+                "final": Ref(key="intermediate"),
+            },
+        )
 
-        composed = compose(plan1, plan2)
+        composed = plan1 | plan2
 
         assert composed.source_format == "a"
         assert composed.target_format == "c"
@@ -378,14 +403,24 @@ class TestComposition:
 
     def test_compose_with_concat(self):
         """Compose through Concat expressions."""
-        plan1 = ExprPlan(source_format="a", target_format="b")
-        plan1.define("x", Ref("src_x"))
-        plan1.define("y", Ref("src_y"))
+        plan1 = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "x": Ref(key="src_x"),
+                "y": Ref(key="src_y"),
+            },
+        )
 
-        plan2 = ExprPlan(source_format="b", target_format="c")
-        plan2.define("combined", Concat((Ref("x"), Ref("y")), dim=0))
+        plan2 = ExprPlan(
+            source_format="b",
+            target_format="c",
+            mappings={
+                "combined": Concat(exprs=(Ref(key="x"), Ref(key="y")), dim=0),
+            },
+        )
 
-        composed = compose(plan1, plan2)
+        composed = plan1 | plan2
 
         assert "combined" in composed
         result = composed["combined"]
@@ -395,13 +430,23 @@ class TestComposition:
 
     def test_compose_with_slice(self):
         """Compose through Slice expressions."""
-        plan1 = ExprPlan(source_format="a", target_format="b")
-        plan1.define("full", Ref("source"))
+        plan1 = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "full": Ref(key="source"),
+            },
+        )
 
-        plan2 = ExprPlan(source_format="b", target_format="c")
-        plan2.define("partial", Slice(Ref("full"), ((0, 5, None),)))
+        plan2 = ExprPlan(
+            source_format="b",
+            target_format="c",
+            mappings={
+                "partial": Slice(expr=Ref(key="full"), slices=((0, 5, None),)),
+            },
+        )
 
-        composed = compose(plan1, plan2)
+        composed = plan1 | plan2
 
         result = composed["partial"]
         assert isinstance(result, Slice)
@@ -410,13 +455,23 @@ class TestComposition:
 
     def test_compose_preserves_init(self):
         """Compose preserves Init expressions."""
-        plan1 = ExprPlan(source_format="a", target_format="b")
-        plan1.define("x", Ref("src"))
+        plan1 = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "x": Ref(key="src"),
+            },
+        )
 
-        plan2 = ExprPlan(source_format="b", target_format="c")
-        plan2.define("combined", Concat((Ref("x"), Init((5,), "zeros")), dim=0))
+        plan2 = ExprPlan(
+            source_format="b",
+            target_format="c",
+            mappings={
+                "combined": Concat(exprs=(Ref(key="x"), Init(shape=(5,), init_type="zeros")), dim=0),
+            },
+        )
 
-        composed = compose(plan1, plan2)
+        composed = plan1 | plan2
 
         result = composed["combined"]
         assert isinstance(result.exprs[0], Ref)
@@ -425,14 +480,24 @@ class TestComposition:
 
     def test_compose_passthrough(self):
         """Compose keeps refs that plan1 doesn't produce."""
-        plan1 = ExprPlan(source_format="a", target_format="b")
-        plan1.define("x", Ref("src_x"))
+        plan1 = ExprPlan(
+            source_format="a",
+            target_format="b",
+            mappings={
+                "x": Ref(key="src_x"),
+            },
+        )
         # plan1 doesn't define "passthrough"
 
-        plan2 = ExprPlan(source_format="b", target_format="c")
-        plan2.define("out", Concat((Ref("x"), Ref("passthrough")), dim=0))
+        plan2 = ExprPlan(
+            source_format="b",
+            target_format="c",
+            mappings={
+                "out": Concat(exprs=(Ref(key="x"), Ref(key="passthrough")), dim=0),
+            },
+        )
 
-        composed = compose(plan1, plan2)
+        composed = plan1 | plan2
 
         result = composed["out"]
         assert result.exprs[0].key == "src_x"  # Substituted
@@ -444,8 +509,9 @@ class TestStreamingExecution:
 
     def test_execute_simple(self):
         """Execute simple plan."""
-        plan = ExprPlan()
-        plan.define("out", Ref("in"))
+        plan = ExprPlan(mappings={
+            "out": Ref(key="in"),
+        })
 
         sources = {"in": torch.tensor([1.0, 2.0, 3.0])}
         result = execute(plan, sources)
@@ -455,8 +521,9 @@ class TestStreamingExecution:
 
     def test_execute_concat(self):
         """Execute plan with Concat."""
-        plan = ExprPlan()
-        plan.define("combined", Concat((Ref("a"), Ref("b")), dim=0))
+        plan = ExprPlan(mappings={
+            "combined": Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0),
+        })
 
         sources = {
             "a": torch.ones(2, 3),
@@ -469,13 +536,14 @@ class TestStreamingExecution:
     def test_execute_mil_like(self):
         """Execute MIL-like Concat of Slices and Init."""
         # Simulated MIL: in_proj = [z, x, B, C]
-        plan = ExprPlan()
-        plan.define("in_proj", Concat((
-            Init((4, 8), "zeros"),  # z
-            Slice(Ref("v"), ((0, 2, None), (None, None, None))),  # x
-            Slice(Ref("k"), ((0, 2, None), (None, None, None))),  # B
-            Slice(Ref("q"), ((0, 4, None), (None, None, None))),  # C
-        ), dim=0))
+        plan = ExprPlan(mappings={
+            "in_proj": Concat(exprs=(
+                Init(shape=(4, 8), init_type="zeros"),  # z
+                Slice(expr=Ref(key="v"), slices=((0, 2, None), (None, None, None))),  # x
+                Slice(expr=Ref(key="k"), slices=((0, 2, None), (None, None, None))),  # B
+                Slice(expr=Ref(key="q"), slices=((0, 4, None), (None, None, None))),  # C
+            ), dim=0),
+        })
 
         sources = {
             "q": torch.ones(4, 8),
@@ -492,10 +560,11 @@ class TestStreamingExecution:
 
     def test_streaming_ref_counting(self):
         """Streaming executor releases sources after use."""
-        plan = ExprPlan()
-        plan.define("out1", Ref("shared"))
-        plan.define("out2", Ref("shared"))
-        plan.define("out3", Ref("unique"))
+        plan = ExprPlan(mappings={
+            "out1": Ref(key="shared"),
+            "out2": Ref(key="shared"),
+            "out3": Ref(key="unique"),
+        })
 
         load_calls = []
 
@@ -515,8 +584,9 @@ class TestStreamingExecution:
 
     def test_streaming_memory_cleanup(self):
         """Streaming executor cleans up memory."""
-        plan = ExprPlan()
-        plan.define("out", Ref("in"))
+        plan = ExprPlan(mappings={
+            "out": Ref(key="in"),
+        })
 
         cache_state = {"loaded": False, "released": False}
 
@@ -603,11 +673,14 @@ class TestPlanBuilders:
             target_prefix="mamba.",
         )
 
-        plan = ExprPlan()
+        # Build mappings dict from exprs
+        mappings = {}
         for key, expr in exprs.items():
             # Adjust keys for test
             adjusted_key = key.replace("model.decoder.blocks.0.mixer.", "")
-            plan.define(adjusted_key, expr)
+            mappings[adjusted_key] = expr
+
+        plan = ExprPlan(mappings=mappings)
 
         # Create attention weights
         sources = {
@@ -649,8 +722,8 @@ class TestFullPipeline:
         target_config = apriel2_config_stochastic.to_dict()
         surgery_plan = plan_surgery(intermediate_config, target_config)
 
-        # Compose
-        full_plan = compose(conversion_plan, surgery_plan)
+        # Compose using | operator
+        full_plan = conversion_plan | surgery_plan
 
         assert full_plan.source_format == "llava"
         assert full_plan.target_format == "apriel2"
@@ -694,12 +767,12 @@ class TestExpressionRepr:
 
     def test_ref_repr(self):
         """Ref has readable repr."""
-        expr = Ref("model.weight")
+        expr = Ref(key="model.weight")
         assert "model.weight" in repr(expr)
 
     def test_slice_repr(self):
         """Slice has readable repr."""
-        expr = Slice(Ref("a"), ((0, 5, None), (None, None, None)))
+        expr = Slice(expr=Ref(key="a"), slices=((0, 5, None), (None, None, None)))
         r = repr(expr)
         # Repr shows :5 for 0:5 (standard Python slice notation)
         assert ":5" in r
@@ -707,14 +780,177 @@ class TestExpressionRepr:
 
     def test_concat_repr(self):
         """Concat has readable repr."""
-        expr = Concat((Ref("a"), Ref("b")), dim=0)
+        expr = Concat(exprs=(Ref(key="a"), Ref(key="b")), dim=0)
         r = repr(expr)
         assert "Concat" in r
         assert "dim=0" in r
 
     def test_init_repr(self):
         """Init has readable repr."""
-        expr = Init((10, 20), "kaiming")
+        expr = Init(shape=(10, 20), init_type="kaiming")
         r = repr(expr)
         assert "(10, 20)" in r
         assert "kaiming" in r
+
+
+class TestInitModeSemantics:
+    """Test init: transfer vs init: random semantics in surgery."""
+
+    def test_transfer_fails_for_unsupported_conversion(self):
+        """init: transfer (default) fails fast when no converter exists."""
+        # Source config with mamba
+        source_config = {
+            "hidden_size": 64,
+            "vocab_size": 100,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "mamba",
+                        "d_inner": 128,
+                        "d_state": 16,
+                        "dt_rank": 4,
+                        "d_xb": 32,
+                        "d_conv": 4,
+                        "repeat_kv_before_conv": True,
+                        "conv_bias": True,
+                        "dt_proj_bias": True,
+                        "dt_min": 0.001,
+                        "dt_max": 0.1,
+                        "dt_init_floor": 1e-4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        # Target with gated_delta_net - no mamba->GDN converter exists
+        target_config = {
+            **source_config,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "gated_delta_net",
+                        "init": "transfer",  # explicitly request transfer
+                        "num_value_heads": 4,
+                        "num_key_heads": 2,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                        "conv_kernel_size": 4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        with pytest.raises(ValueError, match="No converter available"):
+            plan_surgery(source_config, target_config)
+
+    def test_random_succeeds_for_unsupported_conversion(self):
+        """init: random allows any target type without converter."""
+        # Source config with mamba (no converter to GDN exists)
+        source_config = {
+            "hidden_size": 64,
+            "vocab_size": 100,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "mamba",
+                        "d_inner": 128,
+                        "d_state": 16,
+                        "dt_rank": 4,
+                        "d_xb": 32,
+                        "d_conv": 4,
+                        "repeat_kv_before_conv": True,
+                        "conv_bias": True,
+                        "dt_proj_bias": True,
+                        "dt_min": 0.001,
+                        "dt_max": 0.1,
+                        "dt_init_floor": 1e-4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        # Target with gated_delta_net using random init (requires explicit params)
+        target_config = {
+            **source_config,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "gated_delta_net",
+                        "init": "random",  # random init - no converter needed
+                        "num_value_heads": 4,
+                        "num_key_heads": 2,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                        "conv_kernel_size": 4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        # Should succeed - random init doesn't need a converter
+        plan = plan_surgery(source_config, target_config)
+        assert len(plan) > 0
+
+    def test_transfer_default_for_supported_conversion(self):
+        """Default (no init key) uses transfer for supported conversions."""
+        source_config = {
+            "hidden_size": 64,
+            "vocab_size": 100,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        # Target with attention (same type) - no init key
+        target_config = {
+            **source_config,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                        # No init key - defaults to transfer
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+        plan = plan_surgery(source_config, target_config)
+
+        # Verify it uses Refs (transfer), not Init (random)
+        for target, expr in plan:
+            if "self_attn" in target:
+                assert isinstance(expr, Ref), f"Expected Ref for {target}, got {type(expr)}"

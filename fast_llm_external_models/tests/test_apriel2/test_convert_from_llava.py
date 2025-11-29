@@ -248,6 +248,12 @@ class TestSurgery:
                     "d_inner": 2 * hidden_size,
                     "d_xb": hidden_size // 4,
                     "dt_rank": hidden_size // 16,
+                    "repeat_kv_before_conv": True,
+                    "conv_bias": True,
+                    "dt_proj_bias": True,
+                    "dt_min": 0.001,
+                    "dt_max": 0.1,
+                    "dt_init_floor": 1e-4,
                 },
             },
         }

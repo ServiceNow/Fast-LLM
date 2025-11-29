@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 import torch
@@ -22,6 +23,18 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 from torch import Tensor
 from tqdm import tqdm
+
+# Allow running as script or module
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from fast_llm_external_models.apriel2.expr_plan import (
+    ExprPlan,
+    StreamingExecutor,
+    compose,
+    plan_llava_to_apriel2,
+    plan_surgery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,39 +185,19 @@ def _convert_vision_config(llava_config: dict) -> dict:
 # =============================================================================
 
 
-def convert(
+def build_plan(
     llava_config: dict,
-    source_files: list[Path],
-    output_file: Path,
     surgery_config: dict | None = None,
-    device: str = "cpu",
-    dtype: torch.dtype = torch.float32,
-) -> dict:
-    """Convert Llava checkpoint to Apriel2 using plan-based streaming.
-
-    This conversion:
-    1. Uses declarative plans that can be inspected and composed
-    2. Loads weights on-demand and releases them when done (memory efficient)
-    3. Supports surgery (architecture modification) via plan composition
+):
+    """Build conversion plan without executing.
 
     Args:
         llava_config: Source Llava config dict.
-        source_files: List of source safetensor files.
-        output_file: Output safetensor file path.
         surgery_config: Optional target config for surgery (architecture modification).
-        device: Device for computation (default: cpu).
-        dtype: Data type for weights (default: float32).
 
     Returns:
-        Final Apriel2 config dict.
+        Tuple of (plan, final_config).
     """
-    from .expr_plan import (
-        StreamingExecutor,
-        compose,
-        plan_llava_to_apriel2,
-        plan_surgery,
-    )
-
     # Build conversion plan (Llava -> Apriel2)
     conversion_plan = plan_llava_to_apriel2(llava_config)
     logger.info(f"Built conversion plan: {conversion_plan.summary()['num_targets']} targets")
@@ -224,6 +217,48 @@ def convert(
     else:
         full_plan = conversion_plan
         final_config = intermediate_config
+
+    return full_plan, final_config
+
+
+def convert(
+    llava_config: dict,
+    source_files: list[Path],
+    output_file: Path,
+    surgery_config: dict | None = None,
+    device: str = "cpu",
+    dtype: torch.dtype = torch.float32,
+    show_plan: bool = False,
+) -> dict:
+    """Convert Llava checkpoint to Apriel2 using plan-based streaming.
+
+    This conversion:
+    1. Uses declarative plans that can be inspected and composed
+    2. Loads weights on-demand and releases them when done (memory efficient)
+    3. Supports surgery (architecture modification) via plan composition
+
+    Args:
+        llava_config: Source Llava config dict.
+        source_files: List of source safetensor files.
+        output_file: Output safetensor file path.
+        surgery_config: Optional target config for surgery (architecture modification).
+        device: Device for computation (default: cpu).
+        dtype: Data type for weights (default: float32).
+        show_plan: If True, print the plan tree before converting.
+
+    Returns:
+        Final Apriel2 config dict.
+    """
+    # Build the plan
+    full_plan, final_config = build_plan(llava_config, surgery_config)
+
+    # Show plan if requested
+    if show_plan:
+        print("\n" + "=" * 60)
+        print("CONVERSION PLAN")
+        print("=" * 60)
+        print(full_plan.render_tree(collapse_layers=True))
+        print("=" * 60 + "\n")
 
     # Build weight loader that reads from safetensor files
     source_handles: dict[Path, any] = {}
@@ -343,6 +378,17 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Build and show the conversion plan without executing",
+    )
+    parser.add_argument(
+        "--show-plan",
+        action="store_true",
+        help="Print the conversion plan tree before executing",
+    )
 
     args = parser.parse_args()
 
@@ -358,13 +404,33 @@ def main():
     if not config_file.exists():
         raise ValueError(f"Config file not found: {config_file}")
 
-    # Create output directory
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
     # Load config
     logger.info(f"Loading source config from {config_file}")
     with open(config_file) as f:
         llava_config = json.load(f)
+
+    # Load surgery config if specified
+    surgery_config = None
+    if args.surgery:
+        logger.info(f"Loading surgery config from {args.surgery}")
+        with open(args.surgery) as f:
+            surgery_config = yaml.safe_load(f)
+
+    # Dry-run mode: just build and show the plan, don't execute
+    if args.dry_run:
+        plan, final_config = build_plan(llava_config, surgery_config)
+        print("\n" + "=" * 60)
+        print("CONVERSION PLAN (dry-run)")
+        print("=" * 60)
+        print(plan.render_tree(collapse_layers=True))
+        print("=" * 60)
+        summary = plan.summary()
+        print(f"\nSummary: {summary['num_targets']} targets, {summary['num_source_refs']} source refs")
+        print("Dry-run complete. No files written.")
+        return
+
+    # Create output directory
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Find model files (safetensors only)
     safetensor_files = sorted(input_dir.glob("*.safetensors"))
@@ -374,13 +440,6 @@ def main():
             "Plan-based conversion requires safetensor files."
         )
 
-    # Load surgery config if specified
-    surgery_config = None
-    if args.surgery:
-        logger.info(f"Loading surgery config from {args.surgery}")
-        with open(args.surgery) as f:
-            surgery_config = yaml.safe_load(f)
-
     # Convert using plan-based approach
     output_weights_file = args.output_dir / "model.safetensors"
     apriel2_config = convert(
@@ -388,6 +447,7 @@ def main():
         safetensor_files,
         output_weights_file,
         surgery_config=surgery_config,
+        show_plan=args.show_plan or args.verbose,
     )
 
     # Save config

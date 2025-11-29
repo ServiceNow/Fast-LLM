@@ -223,8 +223,17 @@ def apriel2_config_stochastic():
                             },
                             "mamba": {
                                 "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 32,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
                                 "conv_bias": True,
                                 "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
                             },
                         },
                     },
@@ -270,13 +279,31 @@ def apriel2_config_multi_mixer():
                             },
                             "mamba_v1": {
                                 "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 32,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
                                 "conv_bias": True,
                                 "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
                             },
                             "mamba_v2": {
                                 "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 32,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
                                 "conv_bias": True,
                                 "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
                             },
                         },
                     },
@@ -337,11 +364,161 @@ def apriel2_config_all_mixers():
                             },
                             "mamba": {
                                 "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 32,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
                                 "conv_bias": True,
                                 "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
                             },
                             "gated_delta_net": {
                                 "type": "gated_delta_net",
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        },
+    )
+
+
+@pytest.fixture
+def apriel2_config_comprehensive():
+    """Comprehensive Apriel2 config combining all features for thorough testing.
+
+    This config exercises:
+    - Pattern decoder with 6 different block types
+    - Pure attention (full context)
+    - Pure sliding window attention
+    - Pure mamba
+    - Pure gated delta net
+    - Stochastic mixer: attention + mamba
+    - Stochastic mixer: swa + gated_delta_net
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "pattern",
+            "num_blocks": 6,
+            "pattern": [
+                "attn",          # 0: pure full attention
+                "swa",           # 1: pure sliding window attention
+                "mamba",         # 2: pure mamba
+                "gdn",           # 3: pure gated delta net
+                "stoch_attn_mamba",   # 4: stochastic attention + mamba
+                "stoch_swa_gdn",      # 5: stochastic swa + gated delta net
+            ],
+            "blocks": {
+                "attn": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "swa": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                        "sliding_window": 512,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "mamba": {
+                    "mixer": {
+                        "type": "mamba",
+                        "d_inner": 128,
+                        "d_state": 16,
+                        "dt_rank": 4,
+                        "d_xb": 16,
+                        "d_conv": 4,
+                        "repeat_kv_before_conv": True,
+                        "conv_bias": True,
+                        "dt_proj_bias": True,
+                        "dt_min": 0.001,
+                        "dt_max": 0.1,
+                        "dt_init_floor": 1e-4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "gdn": {
+                    "mixer": {
+                        "type": "gated_delta_net",
+                        "num_value_heads": 4,
+                        "num_key_heads": 2,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                        "conv_kernel_size": 4,
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "stoch_attn_mamba": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                            },
+                            "mamba": {
+                                "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 16,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
+                                "conv_bias": True,
+                                "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "stoch_swa_gdn": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "swa",
+                        "mixers": {
+                            "swa": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "sliding_window": 256,
+                            },
+                            "gated_delta_net": {
+                                "type": "gated_delta_net",
+                                "num_value_heads": 4,
+                                "num_key_heads": 2,
+                                "key_head_dim": 16,
+                                "value_head_dim": 16,
+                                "conv_kernel_size": 4,
                             },
                         },
                     },
