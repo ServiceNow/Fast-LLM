@@ -4,8 +4,8 @@
 # where different layers use different mixer types.
 #
 # Usage:
-#   python convert_from_llava.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
-#       --config examples/heterogeneous_pattern.yaml
+#   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
+#       --surgery examples/heterogeneous_pattern.yaml
 
 decoder:
   type: pattern

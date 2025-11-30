@@ -18,6 +18,17 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(autouse=True)
+def set_default_device():
+    """Set default device to CUDA for all tests (Mamba requires CUDA)."""
+    if torch.cuda.is_available():
+        torch.set_default_device("cuda")
+        yield
+        torch.set_default_device("cpu")
+    else:
+        yield
+
+
 # =============================================================================
 # Llava Source Model Fixtures (Pixtral-based, matching Apriel 1.5 structure)
 # =============================================================================

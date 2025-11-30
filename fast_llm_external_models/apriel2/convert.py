@@ -1,13 +1,16 @@
-"""Convert Llava HF checkpoint to Apriel2 HF format.
+"""Convert HuggingFace checkpoints to Apriel2 HF format.
 
-This module provides declarative, plan-based conversion from Llava/Pixtral models to Apriel2.
+This module provides declarative, plan-based conversion from various source formats to Apriel2.
 
 The converter handles:
-- Config conversion: Llava config -> Apriel2 config (1-to-1 mapping)
-- Weight conversion: Llava state_dict -> Apriel2 state_dict via expression plans
+- Config conversion: Source config -> Apriel2 config
+- Weight conversion: Source state_dict -> Apriel2 state_dict via expression plans
 
 For architecture modifications (adding stochastic mixers, hybridization, etc.),
 pass a surgery config to compose the conversion with a surgery plan.
+
+Supported source formats:
+- llava: Llava/Pixtral models
 """
 
 import argparse
@@ -16,8 +19,8 @@ import logging
 import shutil
 import sys
 from pathlib import Path
+from typing import Callable
 
-import torch
 import yaml
 from tqdm import tqdm
 
@@ -25,158 +28,53 @@ from tqdm import tqdm
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from fast_llm_external_models.apriel2.expr_plan import (
+from fast_llm_external_models.apriel2.conversion import (
     DEFAULT_MAX_SHARD_SIZE,
+    ExprPlan,
     SafetensorLoader,
     ShardedSafetensorWriter,
     StreamingExecutor,
     compose,
-    plan_llava_to_apriel2,
     plan_surgery,
 )
+
+# Import source-specific converters
+from fast_llm_external_models.apriel2.conversion import llava as llava_converter
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Config Conversion
+# Source Format Registry
 # =============================================================================
 
+# Registry of supported source formats
+# Each entry maps format name to (config_converter, plan_builder)
+SOURCE_FORMATS: dict[str, tuple[Callable[[dict], dict], Callable[[dict], ExprPlan]]] = {
+    "llava": (llava_converter.convert_config, llava_converter.plan_llava_to_apriel2),
+}
 
-def convert_config(llava_config: dict) -> dict:
-    """Convert Llava config to Apriel2 format.
 
-    This is a pure 1-to-1 mapping - no architecture modifications.
-    The resulting config has attention-only decoder matching the source structure.
+def detect_source_format(config: dict) -> str | None:
+    """Auto-detect source format from config.
 
-    Args:
-        llava_config: Source Llava/Pixtral config dict.
-
-    Returns:
-        Apriel2 config dict with equivalent architecture.
+    Returns format name if detected, None otherwise.
     """
-    text_config = llava_config["text_config"]
+    model_type = config.get("model_type", "")
 
-    # Get token IDs - prefer top-level, fall back to text_config
-    bos_token_id = llava_config.get("bos_token_id") or text_config.get("bos_token_id")
-    eos_token_id = llava_config.get("eos_token_id") or text_config.get("eos_token_id")
-    pad_token_id = llava_config.get("pad_token_id") or text_config.get("pad_token_id")
+    # Llava/Pixtral detection
+    if model_type in ("llava", "pixtral") or "text_config" in config:
+        return "llava"
 
-    # Build decoder config (attention-only, matching source)
-    hidden_size = text_config["hidden_size"]
-    num_heads = text_config["num_attention_heads"]
-    num_kv_heads = text_config["num_key_value_heads"]
-    rope_theta = text_config["rope_theta"]
-
-    decoder_config = {
-        "type": "fixed",
-        "num_blocks": text_config["num_hidden_layers"],
-        "block": {
-            "mixer": {
-                "type": "attention",
-                "heads": num_heads,
-                "head_groups": num_kv_heads,
-                "head_size": hidden_size // num_heads,
-                "add_linear_biases": False,
-                "rotary": {"type": "default", "theta": rope_theta},
-            },
-            "mlp": {
-                "type": "mlp",
-                "intermediate_size": text_config["intermediate_size"],
-                "activation": text_config["hidden_act"],
-                "gated": True,
-                "add_linear_biases": False,
-            },
-            "normalization": {
-                "type": "rms_norm",
-                "epsilon": text_config["rms_norm_eps"],
-            },
-        },
-    }
-
-    apriel2_config = {
-        "architectures": ["Apriel2ForConditionalGeneration"],
-        "model_type": "apriel2",
-        "auto_map": {
-            "AutoConfig": "configuration_apriel2.Apriel2Config",
-            "AutoModel": "modeling_apriel2.Apriel2Model",
-            "AutoModelForCausalLM": "modeling_apriel2.Apriel2ForConditionalGeneration",
-        },
-        "hidden_size": hidden_size,
-        "vocab_size": text_config["vocab_size"],
-        "bos_token_id": bos_token_id,
-        "eos_token_id": eos_token_id,
-        "pad_token_id": pad_token_id,
-        "tie_word_embeddings": text_config["tie_word_embeddings"],
-        "use_cache": text_config.get("use_cache", True),
-        "image_token_index": llava_config["image_token_index"],
-        "decoder": decoder_config,
-        "embeddings": {
-            "max_position_embeddings": text_config["max_position_embeddings"],
-        },
-        "head": {
-            "normalization": {
-                "type": "rms_norm",
-                "epsilon": text_config["rms_norm_eps"],
-            },
-        },
-        "vision_encoder": _convert_vision_config(llava_config),
-    }
-
-    return apriel2_config
+    return None
 
 
-def _convert_vision_config(llava_config: dict) -> dict:
-    """Convert Llava vision_config to Apriel2 vision_encoder format."""
-    vision_config = llava_config["vision_config"]
-    text_config = llava_config["text_config"]
-
-    hidden_size = vision_config["hidden_size"]
-    num_heads = vision_config["num_attention_heads"]
-    num_layers = vision_config["num_hidden_layers"]
-    intermediate_size = vision_config["intermediate_size"]
-    rope_theta = vision_config["rope_theta"]
-    patch_size = vision_config["patch_size"]
-    num_channels = vision_config["num_channels"]
-
-    return {
-        "hidden_size": hidden_size,
-        "patch_convolution": {
-            "patch_height": patch_size,
-            "patch_width": patch_size,
-            "input_channels": num_channels,
-            "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-        },
-        "encoder": {
-            "type": "fixed",
-            "num_blocks": num_layers,
-            "block": {
-                "mixer": {
-                    "type": "attention",
-                    "heads": num_heads,
-                    "head_groups": num_heads,
-                    "head_size": hidden_size // num_heads,
-                    "add_linear_biases": False,
-                    "causal": False,
-                    "rotary": {"type": "default_2d", "theta": rope_theta},
-                },
-                "mlp": {
-                    "type": "mlp",
-                    "intermediate_size": intermediate_size,
-                    "activation": vision_config["hidden_act"],
-                    "gated": True,
-                    "add_linear_biases": False,
-                },
-                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-            },
-        },
-        "adapter": {
-            "type": "mlp",
-            "intermediate_size": text_config["hidden_size"],
-            "activation": llava_config["projector_hidden_act"],
-            "add_linear_biases": True,
-        },
-    }
+def get_converter(source_format: str) -> tuple[Callable[[dict], dict], Callable[[dict], ExprPlan]]:
+    """Get config converter and plan builder for a source format."""
+    if source_format not in SOURCE_FORMATS:
+        available = ", ".join(sorted(SOURCE_FORMATS.keys()))
+        raise ValueError(f"Unknown source format: {source_format}. Available: {available}")
+    return SOURCE_FORMATS[source_format]
 
 
 # =============================================================================
@@ -185,31 +83,41 @@ def _convert_vision_config(llava_config: dict) -> dict:
 
 
 def build_plan(
-    llava_config: dict,
+    source_config: dict,
     surgery_config: dict | None = None,
-):
+    source_format: str | None = None,
+) -> tuple[ExprPlan, dict]:
     """Build conversion plan without executing.
 
     Args:
-        llava_config: Source Llava config dict.
+        source_config: Source model config dict.
         surgery_config: Optional target config for surgery (architecture modification).
+        source_format: Source format name (e.g., "llava"). Auto-detected if not specified.
 
     Returns:
         Tuple of (plan, final_config).
     """
-    # Build conversion plan (Llava -> Apriel2)
-    conversion_plan = plan_llava_to_apriel2(llava_config)
+    if source_format is None:
+        source_format = detect_source_format(source_config)
+    if source_format is None:
+        available = ", ".join(sorted(SOURCE_FORMATS.keys()))
+        raise ValueError(f"Unknown source format. Available: {available}")
+
+    config_converter, plan_builder = get_converter(source_format)
+
+    # Build conversion plan (Source -> Apriel2)
+    conversion_plan = plan_builder(source_config)
     logger.info(f"Built conversion plan: {conversion_plan.summary()['num_targets']} targets")
 
     # Get intermediate Apriel2 config
-    intermediate_config = convert_config(llava_config)
+    intermediate_config = config_converter(source_config)
 
     # Apply surgery if requested
     if surgery_config:
         surgery_plan = plan_surgery(intermediate_config, surgery_config)
         logger.info(f"Built surgery plan: {surgery_plan.summary()['num_targets']} targets")
 
-        # Compose: Llava -> Apriel2 -> Modified Apriel2
+        # Compose: Source -> Apriel2 -> Modified Apriel2
         full_plan = compose(conversion_plan, surgery_plan)
         logger.info(f"Composed plan: {full_plan.summary()['num_targets']} targets")
         final_config = surgery_config
@@ -220,17 +128,30 @@ def build_plan(
     return full_plan, final_config
 
 
+def print_plan(plan: ExprPlan, title: str = "CONVERSION PLAN", show_summary: bool = False) -> None:
+    """Print a conversion plan tree."""
+    print("\n" + "=" * 60)
+    print(title)
+    print("=" * 60)
+    print(plan.render_tree(collapse_layers=True))
+    print("=" * 60)
+    if show_summary:
+        summary = plan.summary()
+        print(f"\nSummary: {summary['num_targets']} targets, {summary['num_source_refs']} source refs")
+
+
 def convert(
-    llava_config: dict,
+    source_config: dict,
     source_files: list[Path],
     output_dir: Path,
     surgery_config: dict | None = None,
+    source_format: str | None = None,
     device: str = "cpu",
-    dtype: torch.dtype = torch.float32,
-    show_plan: bool = False,
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
+    seed: int = 0,
+    show_plan: bool = False,
 ) -> dict:
-    """Convert Llava checkpoint to Apriel2 using plan-based streaming.
+    """Convert checkpoint to Apriel2 using plan-based streaming.
 
     This conversion:
     1. Uses declarative plans that can be inspected and composed
@@ -239,36 +160,32 @@ def convert(
     4. Supports surgery (architecture modification) via plan composition
 
     Args:
-        llava_config: Source Llava config dict.
+        source_config: Source model config dict.
         source_files: List of source safetensor files.
         output_dir: Output directory for safetensor files.
         surgery_config: Optional target config for surgery (architecture modification).
-        device: Device for computation (default: cpu).
-        dtype: Data type for weights (default: float32).
-        show_plan: If True, print the plan tree before converting.
+        source_format: Source format name (e.g., "llava"). Auto-detected if not specified.
+        device: Device to load source tensors onto (default: cpu).
         max_shard_size: Maximum shard size in bytes (default: 5GB).
+        seed: Random seed for deterministic initialization (default: 0).
+        show_plan: If True, print the plan tree before converting.
 
     Returns:
         Final Apriel2 config dict.
     """
     # Build the plan
-    full_plan, final_config = build_plan(llava_config, surgery_config)
+    full_plan, final_config = build_plan(source_config, surgery_config, source_format)
 
-    # Show plan if requested
     if show_plan:
-        print("\n" + "=" * 60)
-        print("CONVERSION PLAN")
-        print("=" * 60)
-        print(full_plan.render_tree(collapse_layers=True))
-        print("=" * 60 + "\n")
+        print_plan(full_plan)
 
     # Execute with streaming I/O
     with SafetensorLoader(source_files, device) as loader:
-        executor = StreamingExecutor(full_plan, loader, device, dtype)
+        executor = StreamingExecutor(full_plan, loader)
 
         with ShardedSafetensorWriter(output_dir, max_shard_size=max_shard_size) as writer:
             for target_key, tensor in tqdm(
-                executor.execute(), desc="Converting", total=len(full_plan)
+                executor.execute(seed), desc="Converting", total=len(full_plan)
             ):
                 writer.add(target_key, tensor)
 
@@ -339,17 +256,24 @@ def resolve_input(input_path: str) -> Path:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert Llava HF checkpoint to Apriel2 HF format"
+        description="Convert HuggingFace checkpoint to Apriel2 HF format"
     )
     parser.add_argument(
         "input",
         type=str,
-        help="Path to input Llava checkpoint directory or HuggingFace model ID",
+        help="Path to input checkpoint directory or HuggingFace model ID",
     )
     parser.add_argument(
         "output_dir",
         type=Path,
         help="Path to output Apriel2 checkpoint directory",
+    )
+    parser.add_argument(
+        "--source-format",
+        "-f",
+        type=str,
+        choices=list(SOURCE_FORMATS.keys()),
+        help="Source model format (auto-detected if not specified)",
     )
     parser.add_argument(
         "--surgery",
@@ -374,6 +298,18 @@ def main():
         action="store_true",
         help="Print the conversion plan tree before executing",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for deterministic initialization (default: 0)",
+    )
+    parser.add_argument(
+        "--max-shard-size",
+        type=int,
+        default=DEFAULT_MAX_SHARD_SIZE,
+        help=f"Maximum shard size in bytes (default: {DEFAULT_MAX_SHARD_SIZE // (1024**3)}GB)",
+    )
 
     args = parser.parse_args()
 
@@ -392,7 +328,7 @@ def main():
     # Load config
     logger.info(f"Loading source config from {config_file}")
     with open(config_file) as f:
-        llava_config = json.load(f)
+        source_config = json.load(f)
 
     # Load surgery config if specified
     surgery_config = None
@@ -403,14 +339,8 @@ def main():
 
     # Dry-run mode: just build and show the plan, don't execute
     if args.dry_run:
-        plan, final_config = build_plan(llava_config, surgery_config)
-        print("\n" + "=" * 60)
-        print("CONVERSION PLAN (dry-run)")
-        print("=" * 60)
-        print(plan.render_tree(collapse_layers=True))
-        print("=" * 60)
-        summary = plan.summary()
-        print(f"\nSummary: {summary['num_targets']} targets, {summary['num_source_refs']} source refs")
+        plan, _ = build_plan(source_config, surgery_config, args.source_format)
+        print_plan(plan, title="CONVERSION PLAN (dry-run)", show_summary=True)
         print("Dry-run complete. No files written.")
         return
 
@@ -427,10 +357,13 @@ def main():
 
     # Convert using plan-based approach with streaming sharded output
     apriel2_config = convert(
-        llava_config,
+        source_config,
         safetensor_files,
         args.output_dir,
         surgery_config=surgery_config,
+        source_format=args.source_format,
+        max_shard_size=args.max_shard_size,
+        seed=args.seed,
         show_plan=args.show_plan or args.verbose,
     )
 

@@ -18,8 +18,8 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.convert_from_llava import convert_config
-from fast_llm_external_models.apriel2.expr_plan import (
+from fast_llm_external_models.apriel2.conversion import (
+    convert_llava_config as convert_config,
     execute,
     plan_llava_to_apriel2,
     plan_surgery,
@@ -113,7 +113,7 @@ class TestPlanConversion:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
         plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, source_weights)
+        apriel2_weights = execute(plan, source_weights, seed=0)
 
         # Should have same number of weights (all mapped)
         assert len(apriel2_weights) == len(source_weights)
@@ -126,7 +126,7 @@ class TestPlanConversion:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
         plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, source_weights)
+        apriel2_weights = execute(plan, source_weights, seed=0)
 
         # Check decoder weights
         assert any("model.decoder.blocks.0.mixer" in k for k in apriel2_weights.keys())
@@ -144,7 +144,7 @@ class TestPlanConversion:
             source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
         plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, source_weights)
+        apriel2_weights = execute(plan, source_weights, seed=0)
 
         # Check specific weights are identical
         source_embed = source_weights["language_model.model.embed_tokens.weight"]
@@ -171,11 +171,11 @@ class TestSurgery:
         # Convert via plan
         conversion_plan = plan_llava_to_apriel2(llava_config)
         apriel2_config = convert_config(llava_config)
-        apriel2_weights = execute(conversion_plan, source_weights)
+        apriel2_weights = execute(conversion_plan, source_weights, seed=0)
 
         # Surgery with same config = identity
         surgery_plan = plan_surgery(apriel2_config, apriel2_config)
-        result_weights = execute(surgery_plan, apriel2_weights)
+        result_weights = execute(surgery_plan, apriel2_weights, seed=0)
 
         # Weights should be identical
         assert "model.embed_tokens.weight" in result_weights
@@ -194,7 +194,7 @@ class TestSurgery:
 
         conversion_plan = plan_llava_to_apriel2(llava_config)
         source_config = convert_config(llava_config)
-        source_weights = execute(conversion_plan, source_weights)
+        source_weights = execute(conversion_plan, source_weights, seed=0)
 
         # Target config with stochastic mixer
         target_config = json.loads(json.dumps(source_config))  # Deep copy
@@ -211,7 +211,7 @@ class TestSurgery:
         }
 
         surgery_plan = plan_surgery(source_config, target_config)
-        result_weights = execute(surgery_plan, source_weights)
+        result_weights = execute(surgery_plan, source_weights, seed=0)
 
         # Should have weights for both sub-mixers
         attn_keys = [k for k in result_weights if ".mixers.attention." in k]
@@ -231,7 +231,7 @@ class TestSurgery:
 
         conversion_plan = plan_llava_to_apriel2(llava_config)
         source_config = convert_config(llava_config)
-        source_weights_converted = execute(conversion_plan, source_weights)
+        source_weights_converted = execute(conversion_plan, source_weights, seed=0)
         hidden_size = source_config["hidden_size"]
 
         # Target config with mamba
@@ -259,7 +259,7 @@ class TestSurgery:
         }
 
         surgery_plan = plan_surgery(source_config, target_config)
-        result_weights = execute(surgery_plan, source_weights_converted)
+        result_weights = execute(surgery_plan, source_weights_converted, seed=0)
 
         # Should have mamba weights
         mamba_keys = [k for k in result_weights if ".mixers.mamba." in k]
@@ -292,7 +292,7 @@ def _load_models_for_comparison(llava_pixtral_checkpoint, tmp_path):
 
     apriel2_config_dict = convert_config(llava_config)
     plan = plan_llava_to_apriel2(llava_config)
-    apriel2_weights = execute(plan, source_weights)
+    apriel2_weights = execute(plan, source_weights, seed=0)
 
     # Load Apriel2 model
     apriel2_config = Apriel2Config(**apriel2_config_dict)
@@ -465,7 +465,7 @@ class TestFullModelEquivalence:
 
         apriel2_config_dict = convert_config(llava_config)
         plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, source_weights)
+        apriel2_weights = execute(plan, source_weights, seed=0)
 
         apriel2_config = Apriel2Config(**apriel2_config_dict)
         model = Apriel2ForConditionalGeneration(apriel2_config)
@@ -499,7 +499,7 @@ class TestApriel15Conversion:
 
     def test_apriel_1_5_weight_conversion(self, apriel_1_5_checkpoint, tmp_path):
         """Test full weight conversion of Apriel 1.5."""
-        from fast_llm_external_models.apriel2.convert_from_llava import (
+        from fast_llm_external_models.apriel2.convert import (
             resolve_input,
             copy_model_files,
         )
@@ -527,7 +527,7 @@ class TestApriel15Conversion:
 
         # Convert via plan
         plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, all_weights)
+        apriel2_weights = execute(plan, all_weights, seed=0)
         save_file(apriel2_weights, output_dir / "model.safetensors")
 
         copy_model_files(output_dir)
