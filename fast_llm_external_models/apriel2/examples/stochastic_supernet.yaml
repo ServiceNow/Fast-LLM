@@ -1,7 +1,12 @@
-# Example: Stochastic supernet with attention + sliding window
+# Example: Stochastic supernet with attention + sliding window + gated delta net
 #
 # Converts a homogeneous attention model to a stochastic supernet
 # where each layer can sample from multiple mixer types during training.
+#
+# Includes:
+# - Full attention (direct weight transfer)
+# - Sliding window attention (transfer with window size override)
+# - Gated delta net (DIL initialization from attention weights)
 #
 # Usage:
 #   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
@@ -17,12 +22,25 @@ decoder:
       mixers:
         # Main attention mixer - inherits config and weights from source
         attention:
+          type: attention
           init: transfer
 
         # Sliding window - same architecture with window size override
         sliding_window:
+          type: attention
           init: transfer
-          window_size: 4096
+          sliding_window: 4096
+
+        # Gated delta net - DIL initialization maps Q/K/V/O -> GDN projections
+        # GDN dimensions are derived from source attention:
+        #   num_value_heads <- heads (40 for Apriel 1.5)
+        #   num_key_heads <- head_groups (8 for Apriel 1.5)
+        #   key_head_dim <- head_size (128 for Apriel 1.5)
+        #   value_head_dim <- head_size (128 for Apriel 1.5)
+        gated_delta_net:
+          type: gated_delta_net
+          init: transfer
+          conv_kernel_size: 4  # Only required param - rest derived from source
 
     # MLP and normalization transfer from source
     mlp:
