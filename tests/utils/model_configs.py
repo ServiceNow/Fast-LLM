@@ -470,7 +470,10 @@ _update_and_add_testing_config(
     "qwen_2",
     # TODO: replace
     updates={
-        ("model", "base_model", "decoder", "block", "add_linear_biases"): "only_attn_qkv",
+        ("model", "base_model", "decoder", "block", "mixer", "query_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "key_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "value_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "dense_layer", "bias", "enabled"): False,
     },
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
