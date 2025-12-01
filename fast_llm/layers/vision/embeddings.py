@@ -3,16 +3,17 @@ import typing
 import torch
 
 from fast_llm.core.ops import split
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionKwargs
+from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionKwargs
 from fast_llm.tensor import TensorMeta
 
 
-class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
+class PatchEmbeddings[ConfigType: PatchEmbeddingsConfig](Block[ConfigType]):
     _config: ConfigType
 
     def __init__(
@@ -39,12 +40,11 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
         ).torch
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
-        self.convolution = self._config.convolution.get_layer(
-            TensorDim("input_channels", self._config.input_channels),
+        self.patch_embeddings = self._config.patch_embeddings.get_layer(
+            TensorDim("patch", self._config.input_channels * self._config.patch_height * self._config.patch_width),
             self._hidden_dim,
-            TensorDim("patch_height", self._config.patch_height),
-            TensorDim("patch_width", self._config.patch_width),
-            stride=(self._config.patch_height, self._config.patch_width),
+            default_weight_initialization=init_normal_(),
+            default_bias_initialization=init_normal_(),
             default_add_bias=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
@@ -66,9 +66,11 @@ class PatchConvolution[ConfigType: PatchConvolutionConfig](Block[ConfigType]):
             )
         if self._sequence_parallel:
             input_ = split(input_, group=self._parallel_dim.group, dim=0)
-        patch_embeddings = (
-            self.normalization(self.convolution(input_).flatten(1))
-            .view(-1, self._hidden_dim.size)
+
+        out = (
+            self.normalization(self.patch_embeddings(input_.flatten(1)))
             .unsqueeze(int(kwargs[AttentionKwargs.sequence_first]))
+            .to(self._residual_dtype)
         )
-        return patch_embeddings.to(self._residual_dtype)
+        self._debug(out, None, kwargs.get(VisionKwargs.hidden_dims), kwargs)
+        return out

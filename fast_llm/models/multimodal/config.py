@@ -17,7 +17,8 @@ from fast_llm.models.gpt.config import (
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat, LlavaHybridSSMCheckpointFormat
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel
+    from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
+    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalInferenceRunner, MultiModalModel
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
 logger = logging.getLogger(__name__)
@@ -54,10 +55,10 @@ class MultiModalModelConfig(GPTModelConfig):
         return MultiModalModel
 
     @classmethod
-    def get_inference_runner_class(cls) -> type["MultiModalModelInferenceRunner"]:
-        from fast_llm.models.multimodal.model import MultiModalModelInferenceRunner
+    def get_inference_runner_class(cls) -> type["MultiModalInferenceRunner"]:
+        from fast_llm.models.multimodal.model import MultiModalInferenceRunner
 
-        return MultiModalModelInferenceRunner
+        return MultiModalInferenceRunner
 
     @classmethod
     def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceMultiModalModelForCausalLM"]:

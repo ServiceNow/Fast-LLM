@@ -151,7 +151,7 @@ class TensorMeta(torch.Tensor):
         else:
             Assert.eq(tensor.shape, self.global_shape if global_ else self.shape, msg=self)
 
-    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
         """
         Reconstruct a global tensor from its distributed slices. Support lazy-loaded safetensor slices.
         Returns a view of the input tensor (or the input tensor itself) when possible.

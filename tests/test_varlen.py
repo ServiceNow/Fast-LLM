@@ -95,24 +95,6 @@ def generate_random_seq_len(seq_len, packages_num=2):
     assert len(lengths) == packages_num
     return lengths
 
-    # # split points exclude the final cumulative (seq_len)
-    # split_points = list(itertools.accumulate(lengths))[:-1]
-
-    # cu_seqlens = split_points + [seq_len]
-    # # cu_seqlens = split_points  # + [seq_len]
-
-    # # index: for each chunk, we emit 0,1,...,length-1
-    # index = []
-    # for length in lengths:
-    #     index.extend(range(length))
-
-    # # sanity check
-    # assert len(cu_seqlens) == packages_num
-    # assert sum(lengths) == seq_len
-    # assert len(index) == seq_len
-
-    # return cu_seqlens, index
-
 
 def _materialize_mixer_tensors(module: torch.nn.Module, distributed: Distributed, device: torch.device) -> None:
     """

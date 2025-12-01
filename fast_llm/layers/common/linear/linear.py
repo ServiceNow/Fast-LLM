@@ -81,8 +81,14 @@ class Linear(LinearBase):
 
     def forward_only(
         self, input_: torch.Tensor
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]]:
-        return linear_forward(input_, weight=self.weight, bias=self.bias, transposed_weight=self._transposed_weight)
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]]:
+        return linear_forward(
+            input_,
+            weight=self.weight,
+            bias=self.bias,
+            transposed_weight=self._transposed_weight,
+            input_requires_grad=input_.requires_grad,
+        )
 
     def backward(self, grad_output: torch.Tensor, context) -> torch.Tensor:  # noqa
         return linear_backward(grad_output, context)
@@ -114,6 +120,7 @@ class OutputParallelLinear(LinearBase):
             group=self._parallel_dim.group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
+            input_requires_grad=input_.requires_grad,
         )
 
     def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]):  # noqa
@@ -147,6 +154,7 @@ class InputParallelLinear(LinearBase):
             group=self._parallel_dim.group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
+            input_requires_grad=input_.requires_grad,
         )
 
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, tuple[typing.Any, ...]]:
@@ -158,6 +166,7 @@ class InputParallelLinear(LinearBase):
             group=group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
+            input_requires_grad=input_.requires_grad,
         )
         return output, self.bias if group else None, context
 
