@@ -10,6 +10,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
@@ -244,13 +245,19 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
     # Not really testing, anything, but handles dependencies more easily than a fixture.
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
-    run_test_script_for_all_models(
-        [
+    if torch.cuda.device_count() < 1:
+        pytest.skip(f"Not enough gpus to run the test")
+
+    distr_config = DistributedTestingConfig(
+        name=model_testing_config.name,
+        config_args=[
             "training.train_iters=1",
             f"training.export.format={model_testing_config.checkpoint_format.name}",
             "training.export.interval=1",
         ],
+        num_gpus=1,
     )
+    run_test_script_for_all_models(distr_config)
 
 
 @pytest.mark.slow
