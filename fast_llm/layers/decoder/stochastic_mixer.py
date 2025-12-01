@@ -14,6 +14,7 @@ from fast_llm.layers.decoder.config import (
     StochasticMixerKwargs,
     StochasticMixerSamplingStrategy,
 )
+from fast_llm.logging import get_model_debug_level
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         mixer_name = self._sample_mixer_name(kwargs)
 
-        if self._debug.enabled:
+        if get_model_debug_level() > 0:
             logger.debug(f"StochasticMixer selecting mixer {mixer_name}: {type(self.mixers[mixer_name]).__name__}")
 
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)

@@ -1,12 +1,7 @@
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.initialization import (
-    Initialization,
-    init_normal_,
-    init_uniform_centered_,
-    init_zeros_,
-)
+from fast_llm.engine.config_utils.initialization import Initialization, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.functional.config import ActivationType
@@ -14,7 +9,7 @@ from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.common.linear.convolution import CausalConv1d, Convolution2D
+    from fast_llm.layers.common.linear.convolution import CausalConv1d
     from fast_llm.layers.common.linear.linear import LinearBase
 
 
@@ -222,44 +217,3 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
         return CausalConv1d(
             weight, bias, activation=default_activation if self.activation is None else self.activation
         )
-
-
-@config_class()
-class Convolution2DConfig(AffineLinearBaseConfig):
-    def get_layer(
-        self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        kernel_dim_1: TensorDim,
-        kernel_dim_2: TensorDim,
-        *,
-        stride: tuple[int, int],
-        default_weight_initialization: Initialization | None = None,
-        default_bias_initialization: Initialization | None = None,
-        default_add_bias: bool = True,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-    ) -> "Convolution2D":
-        from fast_llm.layers.common.linear.convolution import Convolution2D
-
-        if default_weight_initialization is None:
-            default_weight_initialization = init_normal_()
-        if default_bias_initialization is None:
-            default_bias_initialization = init_normal_()
-
-        lr_scale = (combine_lr_scales(lr_scale, self.lr_scale),)
-        weight = self.weight.get_parameter(
-            (out_dim, in_dim, kernel_dim_1, kernel_dim_2),
-            default_initialization=default_weight_initialization,
-            lr_scale=lr_scale,
-            peft=peft,
-        )
-        bias = self.bias.get_parameter(
-            (out_dim,),
-            default_initialization=default_bias_initialization,
-            lr_scale=lr_scale,
-            default_enabled=default_add_bias,
-            peft=peft,
-        )
-
-        return Convolution2D(weight, bias, stride=stride)

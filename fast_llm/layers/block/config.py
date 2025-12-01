@@ -39,6 +39,8 @@ class BlockKwargs:
     grad_output = "grad_output"
     iteration = "iteration"
     device = "device"
+    hidden_states = "hidden_states"
+    output_hidden_states = "output_hidden_states"
 
 
 @config_class(registry=True)
