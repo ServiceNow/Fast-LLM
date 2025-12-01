@@ -538,6 +538,93 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
+    # Tests logit distillation.
+    "mistral",
+    "mistral_distill_logits",
+    updates={
+        ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("reference_models"): {
+            "teacher": {
+                "model": {
+                    "base_model": {
+                        "embeddings": {
+                            "vocab_size": MODEL_TEST_VOCAB_SIZE,
+                        },
+                        "decoder": {
+                            "block": {
+                                "mixer": {
+                                    "head_groups": 2,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=1.5,
+    # Micro-sequence mode not supported with reference models (see model.py:198)
+    skip_tests=("ms",),
+)
+
+_update_and_add_testing_config(
+    "mistral",
+    "mistral_distill_activations",
+    updates={
+        ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
+        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.05,
+        ("reference_models"): {
+            "teacher": {
+                "model": {
+                    "base_model": {
+                        "head": {
+                            "cross_entropy_implementation": "fused",
+                        },
+                        "embeddings": {
+                            "vocab_size": MODEL_TEST_VOCAB_SIZE,
+                        },
+                        "decoder": {
+                            "block": {
+                                "mixer": {
+                                    "head_groups": 2,
+                                },
+                            },
+                            "num_blocks": 2,
+                        },
+                        "hidden_size": 256,
+                    },
+                },
+            },
+        },
+    },
+    # Megatron doesn't support sliding windows.
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2,
+    # Micro-sequence mode not supported with reference models (see model.py:198)
+    skip_tests=("ms",),
+)
+
+_update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
