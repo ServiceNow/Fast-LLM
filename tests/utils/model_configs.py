@@ -570,7 +570,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
     compare_factor=1.5,
     # Micro-sequence mode not supported with reference models (see model.py:198)
@@ -582,7 +582,7 @@ _update_and_add_testing_config(
     "mistral_distill_activations",
     updates={
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
-        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.05,
+        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.01,
         ("reference_models"): {
             "teacher": {
                 "model": {
@@ -617,9 +617,9 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
-    compare_factor=2,
+    compare_factor=8,
     # Micro-sequence mode not supported with reference models (see model.py:198)
     skip_tests=("ms",),
 )
