@@ -196,7 +196,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             long_docs_filter = (
                 document_sizes + image_token_sizes + audio_token_sizes > self._parameters.sequence_length + 1
             )
-            ignored_documents = long_docs_filter.sum()
+            ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
@@ -520,10 +520,10 @@ class GPTSampledIndexedDataset(SampledDataset):
 
                 # Where are we currently in sample?
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + tokens_in_sample >= self._parameters.sequence_length + 1:
+                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
-                    if token_count >= token_start:
+                    if token_count > token_start:
                         # Add padding tokens to current sample
                         try:
                             token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
@@ -537,7 +537,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         continue
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size >= token_start:
+            if token_count + document_size > token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, text_size)
@@ -674,7 +674,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         mm_position, mm_type, source_idx = (
                             multimodal_positions[mm_idx]
                             if mm_idx < len(multimodal_positions)
-                            else (float("inf"), _, _)
+                            else (float("inf"), None, None)
                         )
 
                         # increment mm_idx until span is reached, track mm tokens before span
@@ -688,7 +688,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             mm_position, mm_type, source_idx = (
                                 multimodal_positions[mm_idx]
                                 if mm_idx < len(multimodal_positions)
-                                else (float("inf"), _, _)
+                                else (float("inf"), None, None)
                             )
 
                         # get all multimodal positions within span
@@ -702,7 +702,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             mm_position, mm_type, source_idx = (
                                 multimodal_positions[mm_idx]
                                 if mm_idx < len(multimodal_positions)
-                                else (float("inf"), _, _)
+                                else (float("inf"), None, None)
                             )
                         loss_masking_span[0] += mm_tokens_before_span  # increment by all mm tokens before span
                         loss_masking_span[1] += mm_tokens_before_span + mm_tokens_within_span

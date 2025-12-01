@@ -119,14 +119,14 @@ class AudioPreprocessor(Preprocessor):
         # print("Preprocessing Audio Mel Raw: ", audio_mel)
 
         # compute max pad
-        max_pad = math.ceil(
-            kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // self._config.aud_downsampling_k)
-        )
-        max_pad = 1
+        # max_pad = math.ceil(
+        #     kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // self._config.aud_downsampling_k)
+        # )  # max amount of audios that can fit in decoder (use for constant tensor size)
+        max_pad = 1  # pad to 1 audio if no audio
         max_pad = max(max_pad, curr_size)
 
         # add padding
-        padding_size = max_pad - curr_size
+        padding_size = max_pad - curr_size  # 0 if there is audio, 1 if there is no audio
         if padding_size > 0:
             padding = torch.zeros(
                 padding_size,
