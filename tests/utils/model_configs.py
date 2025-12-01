@@ -477,10 +477,10 @@ _update_and_add_testing_config(
     checkpoint_format=Qwen2CheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
