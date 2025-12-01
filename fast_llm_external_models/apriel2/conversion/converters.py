@@ -230,10 +230,10 @@ def _plan_non_decoder_weights(config: dict) -> ExprPlan:
         vision_config = config["vision_encoder"]
         vision = W("model", "vision_encoder")
 
-        patch_conv = vision / "patch_convolution" / "conv" / "weight"
-        mappings[patch_conv] = Ref(key=patch_conv)
-        patch_norm = vision / "patch_convolution" / "norm" / "weight"
-        mappings[patch_norm] = Ref(key=patch_norm)
+        patch_emb = vision / "embeddings" / "patch_embeddings" / "weight"
+        mappings[patch_emb] = Ref(key=patch_emb)
+        emb_norm = vision / "embeddings" / "normalization" / "weight"
+        mappings[emb_norm] = Ref(key=emb_norm)
 
         encoder_config = vision_config.get("encoder", {})
         num_vision_layers = encoder_config.get("num_blocks", 0)

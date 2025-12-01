@@ -9,7 +9,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionEncoderConfig
+from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.apriel2 import (
     Apriel2BaseModelConverter,
     Apriel2DecoderConverter,
@@ -26,6 +26,7 @@ from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat
 from fast_llm.models.multimodal.conversion.llava import (
     LlavaVisionAdapterConverter,
     LlavaVisionModelConverter,
+    PatchEmbeddingWeightConverter,
     PixtralAttentionConverter,
     PixtralBlockConverter,
     PixtralEncoderConverter,
@@ -150,27 +151,29 @@ class Apriel2VisionEncoderConverter(PixtralEncoderConverter):
         }
 
 
-class Apriel2PatchConvolutionConverter:
+class Apriel2EmbeddingsConverter:
+    """Converts between Fast-LLM PatchEmbeddingsConfig and Apriel2 HF embeddings format."""
+
     normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        patch_conv_config = config.get("patch_convolution", {})
-        Assert.eq(patch_conv_config.get("input_channels", 3), 3)
+        embeddings_config = config.get("embeddings", {})
+        Assert.eq(embeddings_config.get("input_channels", 3), 3)
         return {
             "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-            "patch_height": patch_conv_config.get("patch_height", config.get("patch_size", 16)),
-            "patch_width": patch_conv_config.get("patch_width", config.get("patch_size", 16)),
+            "patch_height": embeddings_config.get("patch_height", config.get("patch_size", 16)),
+            "patch_width": embeddings_config.get("patch_width", config.get("patch_size", 16)),
         }
 
     @classmethod
-    def export_config(cls, config: PatchConvolutionConfig) -> dict:
-        Assert.custom(isinstance, config, PatchConvolutionConfig)
+    def export_config(cls, config: PatchEmbeddingsConfig) -> dict:
+        Assert.custom(isinstance, config, PatchEmbeddingsConfig)
         Assert.eq(config.patch_height, config.patch_width)
-        Assert.incl(config.convolution.bias.enabled, (None, False))
+        Assert.incl(config.patch_embeddings.bias.enabled, (None, False))
 
         return {
-            "patch_convolution": {
+            "embeddings": {
                 "patch_height": config.patch_height,
                 "patch_width": config.patch_width,
                 "input_channels": config.input_channels,
@@ -182,16 +185,18 @@ class Apriel2PatchConvolutionConverter:
 
     @classmethod
     def get_converters(
-        cls, config: PatchConvolutionConfig, fast_llm_prefix: str, hf_prefix: str
+        cls, config: PatchEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
     ) -> list[WeightConverter]:
         return [
             *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
-                f"{hf_prefix}.conv",
+                f"{fast_llm_prefix}.patch_embeddings",
+                f"{hf_prefix}.patch_embeddings",
                 False,
+                PatchEmbeddingWeightConverter,
+                config,
             ),
             *cls.normalization_converter_class.get_converters(
-                config.normalization, f"{fast_llm_prefix}.normalization", f"{hf_prefix}.norm"
+                config.normalization, f"{fast_llm_prefix}.normalization", f"{hf_prefix}.normalization"
             ),
         ]
 
@@ -228,13 +233,11 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
     vision_adapter_converter_class: typing.ClassVar[type[Apriel2VisionAdapterConverter]] = (
         Apriel2VisionAdapterConverter
     )
-    patch_convolution_converter_class: typing.ClassVar[type[Apriel2PatchConvolutionConverter]] = (
-        Apriel2PatchConvolutionConverter
-    )
+    embeddings_converter_class: typing.ClassVar[type[Apriel2EmbeddingsConverter]] = Apriel2EmbeddingsConverter
     encoder_converter_class: typing.ClassVar[type[Apriel2VisionEncoderConverter]] = Apriel2VisionEncoderConverter
 
-    # HF path prefixes for Apriel2
-    hf_patch_conv_prefix: typing.ClassVar[str] = "model.vision_encoder.patch_convolution"
+    # HF path prefixes for Apriel2 (external HF model format)
+    hf_embeddings_prefix: typing.ClassVar[str] = "model.vision_encoder.embeddings"
     hf_encoder_prefix: typing.ClassVar[str] = "model.vision_encoder.encoder.blocks"
     hf_adapter_prefix: typing.ClassVar[str] = "model.vision_encoder.adapter"
 
@@ -242,7 +245,7 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
     def import_config(cls, config: dict) -> dict:
         vision_config = config.get("vision_encoder", {})
         return {
-            "patch_convolution": cls.patch_convolution_converter_class.import_config(vision_config),
+            "embeddings": cls.embeddings_converter_class.import_config(vision_config),
             "encoder": cls.encoder_converter_class.import_config(vision_config),
             "adapter": cls.vision_adapter_converter_class.import_config(vision_config),
             "hidden_size": vision_config.get("hidden_size", 1024),
@@ -253,7 +256,7 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
         Assert.custom(isinstance, config, VisionEncoderConfig)
 
         vision_config = safe_merge_dicts(
-            cls.patch_convolution_converter_class.export_config(config.patch_convolution),
+            cls.embeddings_converter_class.export_config(config.embeddings),
             cls.encoder_converter_class.export_config(config.encoder),
             {"hidden_size": config.hidden_size},
         )
@@ -266,8 +269,8 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
-            *cls.patch_convolution_converter_class.get_converters(
-                config.patch_convolution, "vision_encoder.patch_convolution", cls.hf_patch_conv_prefix
+            *cls.embeddings_converter_class.get_converters(
+                config.embeddings, "vision_encoder.embeddings", cls.hf_embeddings_prefix
             ),
             *cls.encoder_converter_class.get_converters(
                 config.encoder, "vision_encoder.encoder", cls.hf_encoder_prefix

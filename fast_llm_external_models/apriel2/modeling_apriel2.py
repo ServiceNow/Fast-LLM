@@ -1472,20 +1472,19 @@ class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
         )
 
 
-class Apriel2PatchConvolution(nn.Module):
+class Apriel2Embeddings(nn.Module):
     """Converts images to patch embeddings via 2D convolution."""
 
-    def __init__(self, vision_hidden_size: int, patch_conv_config: dict):
+    def __init__(self, vision_hidden_size: int, embeddings_config: dict):
         super().__init__()
 
         # Extract parameters from config dict
-        patch_height = patch_conv_config.get("patch_height", 16)
-        patch_width = patch_conv_config.get("patch_width", 16)
-        input_channels = patch_conv_config.get("input_channels", 3)  # RGB
+        patch_height = embeddings_config.get("patch_height", 16)
+        patch_width = embeddings_config.get("patch_width", 16)
+        input_channels = embeddings_config.get("input_channels", 3)  # RGB
 
-        # 2D convolution to create patch embeddings
-        # Mirrors Fast-LLM's convolution with stride = patch size
-        self.conv = nn.Conv2d(
+        # 2D convolution to create patch embeddings (internally named patch_embeddings to match Fast-LLM)
+        self.patch_embeddings = nn.Conv2d(
             in_channels=input_channels,
             out_channels=vision_hidden_size,
             kernel_size=(patch_height, patch_width),
@@ -1494,14 +1493,14 @@ class Apriel2PatchConvolution(nn.Module):
         )
 
         # Normalization layer
-        norm_config = patch_conv_config.get("normalization", {"type": "layer_norm"})
+        norm_config = embeddings_config.get("normalization", {"type": "layer_norm"})
         norm_type = norm_config.get("type", "layer_norm")
         norm_eps = norm_config.get("eps", 1e-5)
 
         if norm_type == "layer_norm":
-            self.norm = nn.LayerNorm(vision_hidden_size, eps=norm_eps)
+            self.normalization = nn.LayerNorm(vision_hidden_size, eps=norm_eps)
         elif norm_type == "rms_norm":
-            self.norm = MistralRMSNorm(vision_hidden_size, eps=norm_eps)
+            self.normalization = MistralRMSNorm(vision_hidden_size, eps=norm_eps)
         else:
             raise ValueError(f"Unknown normalization type: {norm_type}")
 
@@ -1513,7 +1512,7 @@ class Apriel2PatchConvolution(nn.Module):
             patch_embeddings: [batch, num_patches, hidden_size]
         """
         # Apply convolution: [batch, channels, height, width] -> [batch, hidden, num_patches_h, num_patches_w]
-        x = self.conv(pixel_values)
+        x = self.patch_embeddings(pixel_values)
 
         # Flatten spatial dimensions: [batch, hidden, num_patches_h, num_patches_w] -> [batch, hidden, num_patches]
         batch_size, hidden_size, h, w = x.shape
@@ -1523,22 +1522,22 @@ class Apriel2PatchConvolution(nn.Module):
         x = x.transpose(1, 2)
 
         # Apply normalization
-        x = self.norm(x)
+        x = self.normalization(x)
 
         return x
 
 
 class Apriel2VisionEncoder(nn.Module):
-    """Vision encoder with patch convolution, transformer blocks, and adapter."""
+    """Vision encoder with embeddings, transformer blocks, and adapter."""
 
     def __init__(self, vision_encoder_config: dict, text_config: Apriel2Config):
         super().__init__()
 
         self.hidden_size = vision_encoder_config.get("hidden_size", 1024)
 
-        # Build patch convolution
-        patch_conv_config = vision_encoder_config.get("patch_convolution", {})
-        self.patch_convolution = Apriel2PatchConvolution(self.hidden_size, patch_conv_config)
+        # Build embeddings layer
+        embeddings_config = vision_encoder_config.get("embeddings", {})
+        self.embeddings = Apriel2Embeddings(self.hidden_size, embeddings_config)
 
         # Build vision transformer encoder using shared BlockSequence abstraction
         encoder_config = vision_encoder_config.get("encoder", {})
@@ -1592,8 +1591,8 @@ class Apriel2VisionEncoder(nn.Module):
         Returns:
             image_features: [batch, num_patches, text_hidden_size]
         """
-        # Patch convolution: [batch, channels, height, width] -> [batch, num_patches, vision_hidden]
-        hidden_states = self.patch_convolution(pixel_values)
+        # Embeddings: [batch, channels, height, width] -> [batch, num_patches, vision_hidden]
+        hidden_states = self.embeddings(pixel_values)
 
         batch_size, num_patches = hidden_states.shape[:2]
 
@@ -1668,16 +1667,53 @@ class Apriel2Model(Apriel2TextModel):
         # Re-run post_init to handle any vision encoder initialization
         self.post_init()
 
-    def get_image_features(self, pixel_values):
-        """Extract and project image features."""
+    def get_image_features(self, pixel_values, image_sizes=None):
+        """Extract and project image features.
+
+        Args:
+            pixel_values: [num_images, channels, height, width] - batch of images (possibly padded)
+            image_sizes: Optional[num_images, 2] - actual (height, width) of each image for cropping
+
+        Returns:
+            image_features: [num_images, num_patches, hidden_size] or concatenated features
+        """
         if self.vision_encoder is None:
             raise ValueError("Cannot extract image features: vision_encoder is None")
-        return self.vision_encoder(pixel_values)
+
+        if image_sizes is None:
+            # No cropping needed - process as batch
+            return self.vision_encoder(pixel_values)
+
+        # Get patch size from embeddings layer to determine minimum valid image size
+        patch_height = self.vision_encoder.embeddings.patch_embeddings.kernel_size[0]
+        patch_width = self.vision_encoder.embeddings.patch_embeddings.kernel_size[1]
+
+        # Process each image individually with its actual size
+        all_features = []
+        for i, (image, (height, width)) in enumerate(zip(pixel_values, image_sizes)):
+            height, width = int(height), int(width)
+            # Skip images that are too small to produce any patches
+            if height < patch_height or width < patch_width:
+                continue
+            # Crop to actual image size
+            cropped = image[:, :height, :width]
+            # Process single image - add batch dim
+            features = self.vision_encoder(cropped.unsqueeze(0))
+            # Remove batch dim and add to list
+            all_features.append(features.squeeze(0))
+
+        if not all_features:
+            # No valid images - return empty tensor
+            return torch.zeros(0, 0, self.config.hidden_size, device=pixel_values.device)
+
+        # Concatenate all features along patch dimension
+        return torch.cat(all_features, dim=0).unsqueeze(0)  # [1, total_patches, hidden]
 
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
+        image_sizes: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Apriel2Cache] = None,
@@ -1691,8 +1727,8 @@ class Apriel2Model(Apriel2TextModel):
     ) -> Union[tuple, BaseModelOutputWithPast]:
         # If pixel_values provided, we need to merge vision and text embeddings
         if pixel_values is not None and input_ids is not None:
-            # Encode and project images
-            image_features = self.get_image_features(pixel_values)
+            # Encode and project images (with optional cropping based on image_sizes)
+            image_features = self.get_image_features(pixel_values, image_sizes)
 
             # Get text embeddings (use inherited embed_tokens)
             inputs_embeds = self.embed_tokens(input_ids)
@@ -1785,6 +1821,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
         self,
         input_ids: Optional[torch.LongTensor] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
+        image_sizes: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Apriel2Cache] = None,
@@ -1804,6 +1841,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
         outputs = self.model(
             input_ids=input_ids,
             pixel_values=pixel_values,
+            image_sizes=image_sizes,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,

@@ -26,9 +26,9 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
         (W("language_model", "model", "norm", "weight"), W("model", "norm", "weight")),
         (
             W("vision_tower", "patch_conv", "weight"),
-            W("model", "vision_encoder", "patch_convolution", "conv", "weight"),
+            W("model", "vision_encoder", "embeddings", "patch_embeddings", "weight"),
         ),
-        (W("vision_tower", "ln_pre", "weight"), W("model", "vision_encoder", "patch_convolution", "norm", "weight")),
+        (W("vision_tower", "ln_pre", "weight"), W("model", "vision_encoder", "embeddings", "normalization", "weight")),
         (
             W("multi_modal_projector", "linear_1", "weight"),
             W("model", "vision_encoder", "adapter", "linear_1", "weight"),

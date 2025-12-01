@@ -1409,7 +1409,7 @@ class TestEndToEndConversion:
             # Vision encoder config (passthrough)
             "vision_encoder": {
                 "hidden_size": llava_config["vision_config"]["hidden_size"],
-                "patch_convolution": {
+                "embeddings": {
                     "patch_height": llava_config["vision_config"]["patch_size"],
                     "patch_width": llava_config["vision_config"]["patch_size"],
                     "input_channels": llava_config["vision_config"]["num_channels"],

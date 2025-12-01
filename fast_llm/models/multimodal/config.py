@@ -67,7 +67,9 @@ class MultiModalModelConfig(GPTModelConfig):
 
     @classmethod
     def get_huggingface_model_for_causal_lm_class(cls):
-        raise NotImplementedError("HuggingFace wrapper not implemented for multimodal models")
+        from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
+
+        return HuggingfaceMultiModalModelForCausalLM
 
 
 @config_class()

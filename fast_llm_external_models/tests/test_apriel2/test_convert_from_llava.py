@@ -65,7 +65,7 @@ class TestConvertConfig:
 
         # Check vision encoder
         assert "vision_encoder" in result
-        assert "patch_convolution" in result["vision_encoder"]
+        assert "embeddings" in result["vision_encoder"]
         assert "encoder" in result["vision_encoder"]
         assert "adapter" in result["vision_encoder"]
 
@@ -351,7 +351,7 @@ class TestComponentEquivalence:
 
         source_conv = source_model.model.vision_tower.patch_conv
         source_norm = source_model.model.vision_tower.ln_pre
-        target_patch = target_model.model.vision_encoder.patch_convolution
+        target_embeddings = target_model.model.vision_encoder.embeddings
 
         torch.manual_seed(42)
         pixel_values = torch.randn(1, 3, 32, 32)
@@ -362,7 +362,7 @@ class TestComponentEquivalence:
             source_out = source_out.flatten(2).transpose(1, 2)
             source_out = source_norm(source_out)
 
-            target_out = target_patch(pixel_values)
+            target_out = target_embeddings(pixel_values)
 
         assert torch.allclose(source_out, target_out, atol=1e-5, rtol=1e-5)
 

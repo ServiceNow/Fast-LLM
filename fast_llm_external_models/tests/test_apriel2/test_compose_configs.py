@@ -61,7 +61,7 @@ class TestComposeConfigsLaws:
             },
             "vision_encoder": {
                 "hidden_size": 128,
-                "patch_convolution": {
+                "embeddings": {
                     "patch_height": 16,
                     "patch_width": 16,
                     "input_channels": 3,

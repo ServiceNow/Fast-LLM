@@ -99,7 +99,7 @@ def _convert_vision_config(llava_config: dict) -> dict:
 
     return {
         "hidden_size": hidden_size,
-        "patch_convolution": {
+        "embeddings": {
             "patch_height": patch_size,
             "patch_width": patch_size,
             "input_channels": num_channels,
