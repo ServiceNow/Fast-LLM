@@ -21,7 +21,8 @@ from fast_llm.models.multimodal.conversion.config import (
 )
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel
+    from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
+    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalInferenceRunner, MultiModalModel
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
 logger = logging.getLogger(__name__)
