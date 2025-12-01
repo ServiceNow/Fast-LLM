@@ -167,7 +167,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             # Drop the placeholder batch dimension, remove patch padding.
             input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))
 
-        return self._forward(
+        out = self._forward(
             input_,
             token_ids,
             kwargs.get(LanguageModelKwargs.position_ids),
@@ -175,6 +175,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             kwargs.get(LanguageModelKwargs.mask_inputs),
             embedding_map,
         )
+        self._debug(out, None, kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
+        return out
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (embeddings)

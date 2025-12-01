@@ -201,6 +201,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
                 AttentionKwargs.device: self._distributed.device,
+                BlockKwargs.hidden_states: {},
                 **reference_logits[i],
             }
 

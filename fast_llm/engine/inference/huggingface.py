@@ -6,8 +6,9 @@ import typing
 import torch
 import transformers.generation.utils
 import transformers.modeling_outputs
+import transformers.utils.generic
 
-from fast_llm.core.distributed import broadcast_object, broadcast_optional, safe_barrier
+from fast_llm.core.distributed import broadcast, broadcast_object, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
@@ -20,7 +21,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
+class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.generation.utils.GenerationMixin):
     config_class: typing.ClassVar[type[HuggingfaceModelConfig]] = HuggingfaceModelConfig
     runner_class: typing.ClassVar[type[InferenceRunner]] = InferenceRunner
     config: HuggingfaceModelConfig
@@ -112,40 +113,14 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
 
-
-class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.generation.utils.GenerationMixin):
-    def inner_forward(
-        self,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
-        past_key_values=None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
-        use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
-        # Meant to be overridden in derived classes
-        raise NotImplementedError()
-
     def forward(
         self,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
-        past_key_values=None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
-        use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
+        *args,
         coordinator_forward: bool = False,
         communication_timeout_sec: float = 600.0,
         continue_work: bool = True,
-    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast | None:
+        **kwargs,
+    ) -> tuple | transformers.utils.generic.ModelOutput | None:
         """
         Forward pass compatible with HuggingFace forward.
 
@@ -170,44 +145,37 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
 
         if coordinator_forward and distributed.world_group and distributed.tensor_group:
             assert distributed.tensor_group.rank() == 0
-            assert past_key_values is None and not use_cache
 
             # Some tasks may post-process too slowly, so waiting for the next batch or
             # the end of work can exceed the standard 60s timeout.
             safe_barrier(distributed.tensor_group, "forward_wait", timeout=communication_timeout_sec)
 
-            broadcast_optional(input_ids, distributed.tensor_group, 0)
-            broadcast_optional(attention_mask, distributed.tensor_group, 0)
-            broadcast_optional(position_ids, distributed.tensor_group, 0)
-            broadcast_optional(inputs_embeds, distributed.tensor_group, 0)
-            broadcast_optional(labels, distributed.tensor_group, 0)
-
+            # Broadcast all input arguments, handling tensor and non-tensor arguments separately
+            # TODO: Support nested tensor in arguments (ex. past_key_values)
+            # TODO: Bypassed if passed as positional argument.
+            assert kwargs.get("past_key_values") is None and not kwargs.get("use_cache")
+            broadcast_kwargs = {**kwargs, **{i: arg for i, arg in enumerate(args)}, "continue_work": continue_work}
+            tensor_kwargs = {key: value for key, value in broadcast_kwargs if torch.is_tensor(value)}
             broadcast_object(
-                (past_key_values, use_cache, output_attentions, output_hidden_states, return_dict, continue_work),
+                [(key, tensor.shape, tensor.dtype) for key, tensor in tensor_kwargs.items()],
+                distributed.tensor_group,
+                0,
+            )
+            for tensor in tensor_kwargs.values():
+                broadcast(tensor.to(distributed.device), 0, distributed.tensor_group)
+            non_tensor_kwargs = {key: value for key, value in broadcast_kwargs if key not in tensor_kwargs}
+            broadcast_object(
+                non_tensor_kwargs,
                 distributed.tensor_group,
                 0,
             )
 
         if not coordinator_forward or continue_work:
-            return self.inner_forward(
-                input_ids,
-                attention_mask,
-                position_ids,
-                past_key_values,
-                inputs_embeds,
-                labels,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
-            )
+            return self.inner_forward(*args, **kwargs)
 
         return None
 
-    def worker_forward(
-        self,
-        communication_timeout_sec: float = 600.0,
-    ):
+    def worker_forward(self, communication_timeout_sec: float = 600.0):
         """
         Run the forward loop on worker ranks in coordinated mode.
 
@@ -239,30 +207,28 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
             # the end of work can exceed the standard 60s timeout.
             safe_barrier(distributed.tensor_group, "forward_wait", timeout=communication_timeout_sec)
 
-            input_ids = broadcast_optional(None, distributed.tensor_group, 0)
-            attention_mask = broadcast_optional(None, distributed.tensor_group, 0)
-            position_ids = broadcast_optional(None, distributed.tensor_group, 0)
-            inputs_embeds = broadcast_optional(None, distributed.tensor_group, 0)
-            labels = broadcast_optional(None, distributed.tensor_group, 0)
+            broadcast_kwargs = {}
+            for key, shape, dtype in broadcast_object(None, distributed.tensor_group, 0):
+                tensor = torch.empty(shape, dtype=dtype, device=distributed.device)
+                broadcast(tensor, 0, distributed.tensor_group)
+                broadcast_kwargs[key] = tensor
 
-            past_key_values, use_cache, output_attentions, output_hidden_states, return_dict, continue_work = (
-                broadcast_object(None, distributed.tensor_group, 0)
+            broadcast_kwargs.update(
+                broadcast_object(
+                    None,
+                    distributed.tensor_group,
+                    0,
+                )
             )
 
-            if not continue_work:
+            if not broadcast_kwargs.pop("continue_work"):
                 break
 
+            arg_kwargs = {key: value for key, value in broadcast_kwargs.items() if isinstance(key, int)}
+
             self.inner_forward(
-                input_ids,
-                attention_mask,
-                position_ids,
-                past_key_values,
-                inputs_embeds,
-                labels,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
+                *(arg_kwargs[i] for i in range(len(arg_kwargs))),
+                **{key: value for key, value in broadcast_kwargs.items() if key not in arg_kwargs},
             )
 
         safe_barrier(distributed.world_group, "forward_work_end")
@@ -274,3 +240,7 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
             return
         self.forward(coordinator_forward=True, continue_work=False)
         safe_barrier(distributed.world_group, "forward_work_end")
+
+    def inner_forward(*args, **kwargs) -> tuple | transformers.utils.generic.ModelOutput:
+        # Meant to be overridden in derived classes
+        raise NotImplementedError()
