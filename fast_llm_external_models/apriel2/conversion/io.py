@@ -1,4 +1,31 @@
-"""I/O utilities for safetensor files."""
+"""Streaming I/O for safetensor files.
+
+This module provides memory-efficient reading and writing of sharded safetensor
+files, following HuggingFace conventions.
+
+Classes
+=======
+
+**SafetensorLoader**
+    Context manager for streaming reads from sharded safetensors. Pre-builds a
+    key index for O(1) lookups. With memory-mapped files, repeated loads of
+    the same key return the same data pointer (no additional memory).
+
+**ShardedSafetensorWriter**
+    Context manager for streaming writes to sharded safetensors. Automatically
+    flushes to a new shard when the size threshold is reached. Produces
+    HuggingFace-compatible output with index.json for sharded models.
+
+Usage
+=====
+
+    with SafetensorLoader(source_files) as loader:
+        with ShardedSafetensorWriter(output_dir) as writer:
+            executor = StreamingExecutor(plan, loader)
+            for key, tensor in executor.execute(seed=42):
+                writer.add(key, tensor)
+    # Output: model-00001-of-NNNNN.safetensors, ..., model.safetensors.index.json
+"""
 
 from __future__ import annotations
 

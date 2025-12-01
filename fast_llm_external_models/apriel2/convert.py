@@ -7,10 +7,15 @@ The converter handles:
 - Weight conversion: Source state_dict -> Apriel2 state_dict via expression plans
 
 For architecture modifications (adding stochastic mixers, hybridization, etc.),
-pass a surgery config to compose the conversion with a surgery plan.
+pass one or more surgery configs. Multiple surgeries are chained in order:
+
+    convert input output -s surgery1.yaml -s surgery2.yaml -s surgery3.yaml
+
+This produces: Source -> Apriel2 -> surgery1 -> surgery2 -> surgery3
 
 Supported source formats:
 - llava: Llava/Pixtral models
+- apriel2: Apriel2 models (surgery-only mode - no conversion, just apply surgeries)
 """
 
 import argparse
@@ -35,6 +40,7 @@ from fast_llm_external_models.apriel2.conversion import (
     ShardedSafetensorWriter,
     StreamingExecutor,
     compose,
+    compose_configs,
     plan_surgery,
 )
 
@@ -48,10 +54,26 @@ logger = logging.getLogger(__name__)
 # Source Format Registry
 # =============================================================================
 
+
+def _identity_config(config: dict) -> dict:
+    """Identity config converter for Apriel2 source."""
+    return config
+
+
+def _identity_plan(config: dict) -> ExprPlan:
+    """Identity plan builder for Apriel2 source (surgery-only mode).
+
+    Creates a plan that references all keys as-is, which will be composed
+    with surgery plans to perform modifications.
+    """
+    return plan_surgery(config, config)
+
+
 # Registry of supported source formats
 # Each entry maps format name to (config_converter, plan_builder)
 SOURCE_FORMATS: dict[str, tuple[Callable[[dict], dict], Callable[[dict], ExprPlan]]] = {
     "llava": (llava_converter.convert_config, llava_converter.plan_llava_to_apriel2),
+    "apriel2": (_identity_config, _identity_plan),
 }
 
 
@@ -65,6 +87,10 @@ def detect_source_format(config: dict) -> str | None:
     # Llava/Pixtral detection
     if model_type in ("llava", "pixtral") or "text_config" in config:
         return "llava"
+
+    # Apriel2 detection - check for Apriel2-specific structure
+    if model_type == "apriel2" or "decoder" in config:
+        return "apriel2"
 
     return None
 
@@ -84,14 +110,15 @@ def get_converter(source_format: str) -> tuple[Callable[[dict], dict], Callable[
 
 def build_plan(
     source_config: dict,
-    surgery_config: dict | None = None,
+    surgery_configs: list[dict] | None = None,
     source_format: str | None = None,
 ) -> tuple[ExprPlan, dict]:
     """Build conversion plan without executing.
 
     Args:
         source_config: Source model config dict.
-        surgery_config: Optional target config for surgery (architecture modification).
+        surgery_configs: Optional list of surgery configs to chain. Each surgery is
+            applied in order: Source -> Apriel2 -> surgery[0] -> surgery[1] -> ...
         source_format: Source format name (e.g., "llava"). Auto-detected if not specified.
 
     Returns:
@@ -106,26 +133,26 @@ def build_plan(
     config_converter, plan_builder = get_converter(source_format)
 
     # Build conversion plan (Source -> Apriel2)
-    conversion_plan = plan_builder(source_config)
-    logger.info(f"Built conversion plan: {conversion_plan.summary()['num_targets']} targets")
+    current_plan = plan_builder(source_config)
+    logger.info(f"Built conversion plan: {current_plan.summary()['num_targets']} targets")
 
     # Get intermediate Apriel2 config
-    intermediate_config = config_converter(source_config)
+    current_config = config_converter(source_config)
 
-    # Apply surgery if requested
-    if surgery_config:
-        surgery_plan = plan_surgery(intermediate_config, surgery_config)
-        logger.info(f"Built surgery plan: {surgery_plan.summary()['num_targets']} targets")
+    # Apply surgery chain if requested
+    if surgery_configs:
+        for i, surgery_config in enumerate(surgery_configs, 1):
+            surgery_plan = plan_surgery(current_config, surgery_config)
+            logger.info(f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets")
 
-        # Compose: Source -> Apriel2 -> Modified Apriel2
-        full_plan = compose(conversion_plan, surgery_plan)
-        logger.info(f"Composed plan: {full_plan.summary()['num_targets']} targets")
-        final_config = surgery_config
-    else:
-        full_plan = conversion_plan
-        final_config = intermediate_config
+            # Compose: current -> surgery
+            current_plan = compose(current_plan, surgery_plan)
+            logger.info(f"Composed plan [{i}/{len(surgery_configs)}]: {current_plan.summary()['num_targets']} targets")
 
-    return full_plan, final_config
+            # Compose configs: merge surgery spec into current config
+            current_config = compose_configs(current_config, surgery_config)
+
+    return current_plan, current_config
 
 
 def print_plan(plan: ExprPlan, title: str = "CONVERSION PLAN", show_summary: bool = False) -> None:
@@ -144,7 +171,7 @@ def convert(
     source_config: dict,
     source_files: list[Path],
     output_dir: Path,
-    surgery_config: dict | None = None,
+    surgery_configs: list[dict] | None = None,
     source_format: str | None = None,
     device: str = "cpu",
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
@@ -157,13 +184,13 @@ def convert(
     1. Uses declarative plans that can be inspected and composed
     2. Loads weights on-demand and releases them when done (memory efficient)
     3. Writes output in shards to bound memory usage
-    4. Supports surgery (architecture modification) via plan composition
+    4. Supports surgery chains (multiple architecture modifications) via plan composition
 
     Args:
         source_config: Source model config dict.
         source_files: List of source safetensor files.
         output_dir: Output directory for safetensor files.
-        surgery_config: Optional target config for surgery (architecture modification).
+        surgery_configs: Optional list of surgery configs to chain.
         source_format: Source format name (e.g., "llava"). Auto-detected if not specified.
         device: Device to load source tensors onto (default: cpu).
         max_shard_size: Maximum shard size in bytes (default: 5GB).
@@ -174,7 +201,7 @@ def convert(
         Final Apriel2 config dict.
     """
     # Build the plan
-    full_plan, final_config = build_plan(source_config, surgery_config, source_format)
+    full_plan, final_config = build_plan(source_config, surgery_configs, source_format)
 
     if show_plan:
         print_plan(full_plan)
@@ -279,7 +306,10 @@ def main():
         "--surgery",
         "-s",
         type=Path,
-        help="Path to YAML config for post-conversion surgery (optional)",
+        action="append",
+        dest="surgeries",
+        metavar="YAML",
+        help="Path to YAML surgery config. Can be specified multiple times to chain surgeries.",
     )
     parser.add_argument(
         "--verbose",
@@ -330,16 +360,19 @@ def main():
     with open(config_file) as f:
         source_config = json.load(f)
 
-    # Load surgery config if specified
-    surgery_config = None
-    if args.surgery:
-        logger.info(f"Loading surgery config from {args.surgery}")
-        with open(args.surgery) as f:
-            surgery_config = yaml.safe_load(f)
+    # Load surgery configs if specified
+    surgery_configs = None
+    if args.surgeries:
+        surgery_configs = []
+        for surgery_path in args.surgeries:
+            logger.info(f"Loading surgery config from {surgery_path}")
+            with open(surgery_path) as f:
+                surgery_configs.append(yaml.safe_load(f))
+        logger.info(f"Loaded {len(surgery_configs)} surgery config(s)")
 
     # Dry-run mode: just build and show the plan, don't execute
     if args.dry_run:
-        plan, _ = build_plan(source_config, surgery_config, args.source_format)
+        plan, _ = build_plan(source_config, surgery_configs, args.source_format)
         print_plan(plan, title="CONVERSION PLAN (dry-run)", show_summary=True)
         print("Dry-run complete. No files written.")
         return
@@ -360,7 +393,7 @@ def main():
         source_config,
         safetensor_files,
         args.output_dir,
-        surgery_config=surgery_config,
+        surgery_configs=surgery_configs,
         source_format=args.source_format,
         max_shard_size=args.max_shard_size,
         seed=args.seed,

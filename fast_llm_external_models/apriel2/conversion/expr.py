@@ -1,14 +1,51 @@
 """Expression-based plan system for weight transformations.
 
-Core expression types (Pydantic discriminated union):
-- Ref(key): Reference to a source tensor
-- Slice(expr, slices): Slice an expression
-- Concat(exprs, dim): Concatenate expressions along a dimension
-- Init(shape, init_type): Random/constant initialization
-- Reshape(expr, shape): Reshape an expression
+This module defines the core expression types and plan class for declarative
+weight transformations. Expressions are Pydantic models (JSON-serializable,
+immutable, type-safe) that form an AST describing how to compute target tensors.
 
-Weight path utilities:
-- W: Builder for structured weight key paths
+Expression Types
+================
+
+**Ref(key)**
+    Reference to a source tensor by key. The fundamental leaf node.
+
+**Slice(expr, slices)**
+    Slice an expression along dimensions. Used for extracting subsets
+    (e.g., taking first N rows of a weight matrix).
+
+**Concat(exprs, dim)**
+    Concatenate multiple expressions along a dimension. Used for building
+    composite tensors (e.g., Mamba's fused in_proj from Q/K/V slices).
+
+**Init(shape, init_type)**
+    Random or constant initialization. Types include: zeros, ones, kaiming,
+    normal, s4d (Mamba A_log), dt_bias (Mamba dt_proj.bias).
+
+**Reshape(expr, shape)**
+    Reshape an expression. Used for layout transformations.
+
+Plan Composition
+================
+
+Plans compose via the `|` operator:
+
+    full_plan = plan_a | plan_b  # plan_a produces B, plan_b consumes B
+
+Composition works by substitution: Ref expressions in plan_b are replaced
+with their producing expressions from plan_a. This is declarative composition
+(substitution), not operational composition (function application).
+
+Weight Paths
+============
+
+The `W` class builds structured weight key paths:
+
+    layer = W("model", "decoder", "blocks", 0)
+    q_weight = layer / "mixer" / "self_attn" / "q_proj" / "weight"
+    # Result: "model.decoder.blocks.0.mixer.self_attn.q_proj.weight"
+
+W is a string subclass, so it can be used directly as a dict key.
 """
 
 from __future__ import annotations
@@ -53,13 +90,11 @@ class W(str):
         return super().__new__(cls, ".".join(cleaned))
 
     def __truediv__(self, other) -> "W":
-        """Join with another path segment via /."""
         if isinstance(other, (list, tuple)):
             return W(self, *other)
         return W(self, other)
 
     def __rtruediv__(self, other) -> "W":
-        """Support other / W."""
         return W(other, self)
 
     @classmethod
@@ -68,7 +103,6 @@ class W(str):
         source: type[Any],
         handler: GetCoreSchemaHandler,
     ) -> CoreSchema:
-        """Parse as a string, then call cls(value) which runs __new__."""
         return core_schema.no_info_after_validator_function(
             cls,
             core_schema.str_schema(),
@@ -80,7 +114,6 @@ class W(str):
         schema: CoreSchema,
         handler: Callable[[CoreSchema], JsonSchemaValue],
     ) -> JsonSchemaValue:
-        """Emit as a string in JSON schema."""
         json_schema = handler(schema)
         json_schema["type"] = "string"
         return json_schema
@@ -92,8 +125,6 @@ class W(str):
 
 
 class EvalKwargs(TypedDict):
-    """Keyword arguments for expression evaluation."""
-
     device: torch.device
     dtype: torch.dtype
     generator: torch.Generator
@@ -113,7 +144,6 @@ class Ref(BaseModel):
     def evaluate(self, sources: dict[W, Tensor], **kwargs: Unpack[EvalKwargs]) -> Tensor:
         if self.key not in sources:
             raise KeyError(f"Source key not found: {self.key}")
-        # Preserve source device/dtype - no conversion
         return sources[self.key].clone()
 
     def __repr__(self) -> str:
@@ -121,11 +151,7 @@ class Ref(BaseModel):
 
 
 class Slice(BaseModel):
-    """Slice an expression along dimensions.
-
-    slices is a tuple of (start, stop, step) tuples, one per dimension.
-    None values mean "use default" (0, size, 1).
-    """
+    """Slice an expression. slices: tuple of (start, stop, step) per dimension."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -155,8 +181,6 @@ class Slice(BaseModel):
 
 
 class Concat(BaseModel):
-    """Concatenate multiple expressions along a dimension."""
-
     model_config = ConfigDict(frozen=True)
 
     type: Literal["concat"] = "concat"
@@ -179,15 +203,8 @@ class Concat(BaseModel):
 
 
 class Init(BaseModel):
-    """Initialize a tensor with random or constant values.
-
-    init_type can be:
-    - "zeros": All zeros
-    - "ones": All ones
-    - "kaiming": Kaiming uniform initialization
-    - "normal": Normal distribution with std=0.02
-    - "s4d": S4D real initialization for Mamba A_log (log of 1..d_state expanded)
-    - "dt_bias": Special dt_proj.bias initialization (log-space from dt_min/dt_max)
+    """Initialize a tensor. init_type: zeros, ones, kaiming, normal, s4d, dt_bias,
+    identity_conv, scaled_identity_conv, slow_decay.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -198,7 +215,7 @@ class Init(BaseModel):
     init_params: dict[str, Any] | None = None
 
     def find_refs(self) -> set[W]:
-        return set()  # Init has no dependencies
+        return set()
 
     def evaluate(self, sources: dict[W, Tensor], **kwargs: Unpack[EvalKwargs]) -> Tensor:
         device, dtype, gen = kwargs["device"], kwargs["dtype"], kwargs["generator"]
@@ -212,12 +229,10 @@ class Init(BaseModel):
         elif self.init_type == "kaiming":
             tensor = torch.empty(self.shape, device=device, dtype=dtype)
             if len(self.shape) >= 2:
-                # Kaiming uniform for weight matrices
                 fan_in = self.shape[1]
                 bound = math.sqrt(1.0 / fan_in)
                 tensor.uniform_(-bound, bound, generator=gen)
             else:
-                # For 1D, use normal init
                 tensor.normal_(0, 0.02, generator=gen)
             return tensor
 
@@ -227,63 +242,51 @@ class Init(BaseModel):
             return tensor
 
         elif self.init_type == "s4d":
-            # S4D real initialization for Mamba A_log
-            # Shape should be (d_inner, d_state)
+            # S4D real init for Mamba A_log: log(1..d_state) expanded to (d_inner, d_state)
             if len(self.shape) != 2:
-                raise ValueError(f"S4D init requires 2D shape, got {self.shape}")
+                raise ValueError(f"s4d requires 2D shape, got {self.shape}")
             d_inner, d_state = self.shape
             A = torch.arange(1, d_state + 1, device=device, dtype=torch.float32)
             A = A.unsqueeze(0).expand(d_inner, -1).contiguous()
             return torch.log(A).to(dtype)
 
         elif self.init_type == "dt_bias":
-            # Special dt_proj.bias initialization
-            # Log-space initialization from dt_min/dt_max for good training dynamics
+            # Mamba dt_proj.bias: inverse-softplus of log-uniform samples in [dt_min, dt_max]
             if not self.init_params:
-                raise ValueError("dt_bias init requires init_params with dt_min, dt_max, dt_init_floor")
+                raise ValueError("dt_bias requires init_params: dt_min, dt_max, dt_init_floor")
             dt_min = self.init_params["dt_min"]
             dt_max = self.init_params["dt_max"]
             dt_init_floor = self.init_params["dt_init_floor"]
 
             if len(self.shape) != 1:
-                raise ValueError(f"dt_bias init requires 1D shape, got {self.shape}")
+                raise ValueError(f"dt_bias requires 1D shape, got {self.shape}")
             d_inner = self.shape[0]
 
-            # Random dt values in [dt_min, dt_max] log-space
             tensor = torch.empty(d_inner, device=device, dtype=dtype)
             tensor.uniform_(generator=gen)
             dt = torch.exp(tensor * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min))
             dt = dt.clamp(min=dt_init_floor)
-            # Inverse softplus to get the bias that produces these dt values
             inv_dt = dt + torch.log(-torch.expm1(-dt))
             return inv_dt
 
         elif self.init_type == "identity_conv":
-            # Identity kernel for depthwise conv: delta at last position
-            # Shape: (channels, 1, kernel_size)
+            # Delta at last position: identity for causal depthwise conv
             if len(self.shape) != 3 or self.shape[1] != 1:
                 raise ValueError(f"identity_conv requires shape (C, 1, K), got {self.shape}")
-            channels, _, kernel_size = self.shape
             tensor = torch.zeros(self.shape, device=device, dtype=dtype)
-            tensor[:, 0, -1] = 1.0  # Delta at last position (current timestep)
+            tensor[:, 0, -1] = 1.0
             return tensor
 
         elif self.init_type == "scaled_identity_conv":
-            # Scaled identity kernel for depthwise conv followed by SiLU
-            # Uses 0.5 at last position to stay in SiLU's linear regime
-            # Shape: (channels, 1, kernel_size)
+            # 0.5 at last position: identity scaled for SiLU's linear regime
             if len(self.shape) != 3 or self.shape[1] != 1:
                 raise ValueError(f"scaled_identity_conv requires shape (C, 1, K), got {self.shape}")
-            channels, _, kernel_size = self.shape
             tensor = torch.zeros(self.shape, device=device, dtype=dtype)
-            tensor[:, 0, -1] = 0.5  # Scaled delta for SiLU linearity
+            tensor[:, 0, -1] = 0.5
             return tensor
 
         elif self.init_type == "slow_decay":
-            # Small A_log for slow decay in GatedDeltaNet
-            # exp(A_log) ≈ 0.1, giving ~10 step half-life
-            # With dt_bias=0: g = -exp(A_log) * softplus(0) ≈ -0.1 * 0.693 ≈ -0.07
-            # exp(g) ≈ 0.93 per step
+            # GDN A_log: log(0.1) gives ~10-step half-life
             A = torch.full(self.shape, 0.1, device=device, dtype=torch.float32)
             return torch.log(A).to(dtype)
 
@@ -297,8 +300,6 @@ class Init(BaseModel):
 
 
 class Reshape(BaseModel):
-    """Reshape an expression to a new shape."""
-
     model_config = ConfigDict(frozen=True)
 
     type: Literal["reshape"] = "reshape"
@@ -316,18 +317,15 @@ class Reshape(BaseModel):
         return f"Reshape({self.expr}, {self.shape})"
 
 
-# Discriminated union type for all expressions
 Expr = Annotated[
     Union[Ref, Slice, Concat, Init, Reshape],
     Field(discriminator="type"),
 ]
 
-# Rebuild models to resolve forward references
 Slice.model_rebuild()
 Concat.model_rebuild()
 Reshape.model_rebuild()
 
-# TypeAdapter for deserializing Expr from dict/JSON
 ExprAdapter: TypeAdapter[Expr] = TypeAdapter(Expr)
 
 
@@ -341,17 +339,15 @@ def slice_spec(
     stop: int | None = None,
     step: int | None = None,
 ) -> tuple[int | None, int | None, int | None]:
-    """Create a slice specification tuple."""
     return (start, stop, step)
 
 
 def full_slice() -> tuple[int | None, int | None, int | None]:
-    """Create a full slice (equivalent to :)."""
+    """Equivalent to `:`."""
     return (None, None, None)
 
 
 def make_slice(expr: Expr, dim_slices: list[tuple[int | None, int | None, int | None]]) -> Slice:
-    """Convenience function to create a Slice expression."""
     return Slice(expr=expr, slices=tuple(dim_slices))
 
 
@@ -361,18 +357,7 @@ def make_slice(expr: Expr, dim_slices: list[tuple[int | None, int | None, int | 
 
 
 def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
-    """Substitute Ref expressions with their bindings.
-
-    This is the core of composition: replace Ref(key=x) with the expression
-    that produces x in the source plan.
-
-    Args:
-        expr: Expression to transform.
-        bindings: Map from ref keys to their producing expressions.
-
-    Returns:
-        New expression with substitutions applied.
-    """
+    """Replace Ref(key) with bindings[key]. Core of plan composition."""
     match expr:
         case Ref(key=key):
             return bindings.get(key, expr)
@@ -389,22 +374,15 @@ def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
 
 
 def fuse(expr: Expr) -> Expr:
-    """Apply fusion/optimization rules to an expression.
-
-    Current rules:
-    - Flatten nested Concat with same dim
-    - Collapse nested Reshape
-    """
+    """Flatten nested Concat, collapse nested Reshape."""
     match expr:
         case Ref():
             return expr
 
         case Slice(expr=inner, slices=slices):
-            # Future: compose Slice(Slice(x, s1), s2) -> Slice(x, compose(s1, s2))
             return Slice(expr=fuse(inner), slices=slices)
 
         case Concat(exprs=exprs, dim=dim):
-            # Recursively fuse children, then flatten nested Concat with same dim
             flattened: list[Expr] = []
             for child in (fuse(e) for e in exprs):
                 match child:
@@ -419,7 +397,6 @@ def fuse(expr: Expr) -> Expr:
 
         case Reshape(expr=inner, shape=shape):
             fused_inner = fuse(inner)
-            # Reshape(Reshape(x, _), s2) -> Reshape(x, s2)
             match fused_inner:
                 case Reshape(expr=innermost):
                     return Reshape(expr=innermost, shape=shape)
@@ -438,17 +415,12 @@ def fuse(expr: Expr) -> Expr:
 class ExprPlan(BaseModel):
     """A plan mapping target keys to expressions over sources.
 
-    The plan is declarative: each target is defined as an expression.
-    Composition is achieved via the `|` operator or `compose()` function.
-
     Example:
         plan = ExprPlan(mappings={
             "out.weight": Ref(key="in.weight"),
             "out.bias": Init(shape=(10,), init_type="zeros"),
         })
-
-        # Compose plans with |
-        full_pipeline = plan1 | plan2 | plan3
+        full_pipeline = plan1 | plan2 | plan3  # compose with |
     """
 
     model_config = ConfigDict(frozen=True)
@@ -471,26 +443,21 @@ class ExprPlan(BaseModel):
         return key in self.mappings
 
     def __or__(self, other: "ExprPlan") -> "ExprPlan":
-        """Compose plans: self | other means self (A→B) then other (B→C) = (A→C)."""
         return compose(self, other)
 
     def __add__(self, other: "ExprPlan") -> "ExprPlan":
-        """Merge plans with disjoint targets: combine parallel sub-plans."""
         return merge(self, other)
 
     def source_keys(self) -> set[str]:
-        """Get all source keys referenced by this plan."""
         refs = set()
         for expr in self.mappings.values():
             refs.update(expr.find_refs())
         return refs
 
     def target_keys(self) -> set[str]:
-        """Get all target keys produced by this plan."""
         return set(self.mappings.keys())
 
     def summary(self) -> dict[str, Any]:
-        """Get a summary of this plan."""
         expr_counts: dict[str, int] = defaultdict(int)
         for expr in self.mappings.values():
             expr_counts[type(expr).__name__] += 1
@@ -505,7 +472,6 @@ class ExprPlan(BaseModel):
         }
 
     def fuse(self) -> "ExprPlan":
-        """Return a new plan with fusion optimizations applied."""
         return ExprPlan(
             mappings={k: fuse(v) for k, v in self.mappings.items()},
             source_format=self.source_format,
@@ -514,15 +480,7 @@ class ExprPlan(BaseModel):
         )
 
     def render_tree(self, collapse_layers: bool = True) -> str:
-        """Render the plan as a hierarchical tree.
-
-        Args:
-            collapse_layers: If True, collapse repeated layer patterns like
-                blocks.0, blocks.1, ... into blocks.[0..47].
-
-        Returns:
-            Tree-formatted string representation.
-        """
+        """If collapse_layers, blocks.0, blocks.1, ... becomes blocks.[0..N]."""
         from fast_llm_external_models.apriel2.conversion.render import render_tree
 
         return render_tree(self, collapse_layers=collapse_layers)
@@ -534,22 +492,9 @@ class ExprPlan(BaseModel):
 
 
 def compose(plan1: ExprPlan, plan2: ExprPlan) -> ExprPlan:
-    """Compose two plans: plan1 (A→B) + plan2 (B→C) = composed (A→C).
-
-    For each target in plan2, substitute its Ref expressions with
-    the corresponding expressions from plan1.
-
-    Args:
-        plan1: First plan (source format → intermediate format).
-        plan2: Second plan (intermediate format → target format).
-
-    Returns:
-        Composed plan (source format → target format).
-    """
-    # Build bindings from plan1's mappings
+    """plan1 (A→B) | plan2 (B→C) = (A→C). Substitutes plan2's Refs with plan1's expressions."""
     bindings = plan1.mappings
 
-    # Substitute in plan2
     composed_mappings = {}
     for target_key, expr in plan2.mappings.items():
         composed_mappings[target_key] = substitute(expr, bindings)
@@ -565,26 +510,11 @@ def compose(plan1: ExprPlan, plan2: ExprPlan) -> ExprPlan:
         },
     )
 
-    # Apply fusion optimizations
     return composed.fuse()
 
 
 def merge(plan1: ExprPlan, plan2: ExprPlan) -> ExprPlan:
-    """Merge two plans with disjoint targets.
-
-    Unlike compose (which chains A→B→C), merge combines parallel sub-plans
-    that produce different targets from the same source.
-
-    Args:
-        plan1: First plan.
-        plan2: Second plan (must have disjoint targets).
-
-    Returns:
-        Merged plan with all targets from both plans.
-
-    Raises:
-        ValueError: If plans have overlapping target keys.
-    """
+    """Combine parallel sub-plans with disjoint targets."""
     overlap = plan1.target_keys() & plan2.target_keys()
     if overlap:
         raise ValueError(f"Cannot merge plans with overlapping targets: {overlap}")

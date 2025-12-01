@@ -123,10 +123,12 @@ class TestApriel2Modeling:
         )
 
         # Logits should match between cached and non-cached
+        # Note: GPU execution with bfloat16/float16 has lower precision than CPU float32,
+        # so we use a looser tolerance here.
         assert torch.allclose(
             outputs_full.logits[:, split_pos, :],
             outputs_part2.logits[:, 0, :],
-            atol=1e-5
+            atol=1e-3
         ), f"Cache correctness failed for {config_name}: cached and non-cached logits differ"
 
         # 5. Generation - end-to-end validation

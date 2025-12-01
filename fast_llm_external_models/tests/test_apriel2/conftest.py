@@ -571,3 +571,678 @@ def sample_ssm_states():
     conv = torch.randn(batch_size, d_inner, d_conv)
     recurrent = torch.randn(batch_size, d_inner, 16)  # d_state=16
     return conv, recurrent
+
+
+# =============================================================================
+# Surgery Chain Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def additive_surgery_chain():
+    """Additive-only surgery chain that composes cleanly.
+
+    This chain exercises:
+    - Non-stochastic → stochastic transition
+    - Adding multiple mixer types (attention, sliding_window, GDN)
+    - Weight transfer via init: transfer
+
+    S1: attention → stochastic{attention}
+    S2: add sliding_window to stochastic
+    S3: add gated_delta_net to stochastic (DIL derivation)
+    """
+    return [
+        # S1: Convert to stochastic with attention
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                        },
+                    },
+                    "mlp": {"init": "transfer"},
+                    "normalization": {"init": "transfer"},
+                },
+            },
+        },
+        # S2: Add sliding_window
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "sliding_window": {
+                                "type": "attention",
+                                "init": "transfer",
+                                "sliding_window": 512,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S3: Add gated_delta_net (DIL)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "gdn": {
+                                "type": "gated_delta_net",
+                                "init": "transfer",
+                                "conv_kernel_size": 4,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    ]
+
+
+@pytest.fixture
+def comprehensive_torture_chain():
+    """Comprehensive torture chain exercising ALL conversion paths.
+
+    This is the REAL stress test. It exercises:
+    - Fixed → Pattern decoder transitions
+    - Per-layer heterogeneity
+    - All type conversions: FA ↔ SWA ↔ Mamba ↔ GDN
+    - Stochastic wrapping/unwrapping
+    - Both init: transfer and init: random
+    - Destructive operations (remove sub-mixers, collapse stochastic)
+
+    The model has 5 layers. Each step changes the architecture significantly.
+    """
+    # Mamba params - dimensions must be compatible with MIL conversion!
+    # Source attention: heads=8, head_groups=4, head_size=32, hidden_size=256
+    # - Q has shape [heads*head_size, hidden_size] = [256, 256]
+    # - K has shape [head_groups*head_size, hidden_size] = [128, 256]
+    # - V has shape [head_groups*head_size, hidden_size] = [128, 256]
+    # MIL requires: d_inner <= Q rows (256), d_xb <= K/V rows (128)
+    mamba_params = {
+        "d_inner": 256,  # Must be <= heads*head_size = 256
+        "d_xb": 64,      # Must be <= head_groups*head_size = 128
+        "dt_rank": 16,
+        "d_state": 16,
+        "d_conv": 4,
+        "repeat_kv_before_conv": True,
+        "conv_bias": True,
+        "dt_proj_bias": True,
+        "dt_min": 0.001,
+        "dt_max": 0.1,
+        "dt_init_floor": 1e-4,
+    }
+
+    return [
+        # =====================================================================
+        # STEP 1: Fixed attention → Pattern with FA/SWA alternating
+        # Layers: [attn, swa, attn, swa, attn]
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["attn", "swa", "attn", "swa", "attn"],
+                "blocks": {
+                    "attn": {
+                        "mixer": {"type": "attention", "init": "transfer"},
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "swa": {
+                        "mixer": {
+                            "type": "attention",
+                            "init": "transfer",
+                            "sliding_window": 512,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+        # =====================================================================
+        # STEP 2: Add stochastic wrappers with MIL/DIL conversions
+        # Layer 0: stochastic{attn, mamba:MIL}
+        # Layer 1: swa (unchanged)
+        # Layer 2: stochastic{attn, gdn:DIL}
+        # Layer 3: swa (unchanged)
+        # Layer 4: attn (unchanged)
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["stoch_am", "swa", "stoch_ag", "swa", "attn"],
+                "blocks": {
+                    "stoch_am": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "mamba": {
+                                    "type": "mamba",
+                                    "init": "transfer",  # MIL conversion
+                                    **mamba_params,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "swa": {
+                        "mixer": {
+                            "type": "attention",
+                            "init": "transfer",
+                            "sliding_window": 512,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "stoch_ag": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "gdn": {
+                                    "type": "gated_delta_net",
+                                    "init": "transfer",  # DIL conversion
+                                    "conv_kernel_size": 4,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "attn": {
+                        "mixer": {"type": "attention", "init": "transfer"},
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+        # =====================================================================
+        # STEP 3: Convert pure mixers to different types (MIL/DIL from SWA)
+        # Layer 0: stoch{attn, mamba} (unchanged)
+        # Layer 1: mamba (MIL from swa!)
+        # Layer 2: stoch{attn, gdn} (unchanged)
+        # Layer 3: gdn (DIL from swa!)
+        # Layer 4: attn (unchanged)
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["stoch_am", "mamba", "stoch_ag", "gdn", "attn"],
+                "blocks": {
+                    "stoch_am": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "mamba": {
+                        "mixer": {
+                            "type": "mamba",
+                            "init": "transfer",  # MIL from previous swa
+                            **mamba_params,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "stoch_ag": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "gdn": {
+                                    "type": "gated_delta_net",
+                                    "init": "transfer",
+                                    "conv_kernel_size": 4,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "gdn": {
+                        "mixer": {
+                            "type": "gated_delta_net",
+                            "init": "transfer",  # DIL from previous swa
+                            "conv_kernel_size": 4,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "attn": {
+                        "mixer": {"type": "attention", "init": "transfer"},
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+        # =====================================================================
+        # STEP 4: Add random-init sub-mixers to stochastic blocks
+        # Layer 0: stoch{attn, mamba, swa:RANDOM}
+        # Layer 1: mamba (unchanged)
+        # Layer 2: stoch{attn, gdn, mamba:RANDOM}
+        # Layer 3: gdn (unchanged)
+        # Layer 4: stoch{attn, swa:RANDOM} (wrap in stochastic!)
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["stoch_ams", "mamba", "stoch_agm", "gdn", "stoch_as"],
+                "blocks": {
+                    "stoch_ams": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "random",  # Random init!
+                                    "heads": 8,
+                                    "head_groups": 4,
+                                    "head_size": 32,
+                                    "sliding_window": 256,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "mamba": {
+                        "mixer": {"type": "mamba", "init": "transfer", **mamba_params},
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "stoch_agm": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "gdn": {
+                                    "type": "gated_delta_net",
+                                    "init": "transfer",
+                                    "conv_kernel_size": 4,
+                                },
+                                "mamba": {
+                                    "type": "mamba",
+                                    "init": "random",  # Random init!
+                                    **mamba_params,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "gdn": {
+                        "mixer": {
+                            "type": "gated_delta_net",
+                            "init": "transfer",
+                            "conv_kernel_size": 4,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "stoch_as": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "random",  # Random init!
+                                    "heads": 8,
+                                    "head_groups": 4,
+                                    "head_size": 32,
+                                    "sliding_window": 128,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+        # =====================================================================
+        # STEP 5: Destructive - collapse some stochastic, remove sub-mixers
+        # Layer 0: stoch{mamba, swa} (REMOVE attention!)
+        # Layer 1: attn (random init - type change from mamba!)
+        # Layer 2: gdn (collapse stochastic, keep gdn)
+        # Layer 3: swa (random init - type change from gdn!)
+        # Layer 4: stoch{attn, swa} (unchanged)
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["stoch_ms", "attn", "gdn", "swa", "stoch_as"],
+                "blocks": {
+                    "stoch_ms": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "mamba",  # Changed main!
+                            "mixers": {
+                                # attention REMOVED (null deletion would be explicit)
+                                "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "transfer",  # Now transfer from previous
+                                    "sliding_window": 256,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "attn": {
+                        "mixer": {
+                            "type": "attention",
+                            "init": "random",  # Can't transfer from mamba!
+                            "heads": 8,
+                            "head_groups": 4,
+                            "head_size": 32,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "gdn": {
+                        "mixer": {
+                            "type": "gated_delta_net",
+                            "init": "transfer",  # Transfer from stoch's gdn
+                            "conv_kernel_size": 4,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "swa": {
+                        "mixer": {
+                            "type": "attention",
+                            "init": "random",  # Can't transfer from gdn!
+                            "heads": 8,
+                            "head_groups": 4,
+                            "head_size": 32,
+                            "sliding_window": 512,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "stoch_as": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "transfer",
+                                    "sliding_window": 128,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+        # =====================================================================
+        # STEP 6: Build supernet where possible, preserve incompatible layers
+        # After step 5:
+        #   Layer 0: stoch{mamba (main), swa}
+        #   Layer 1: attention
+        #   Layer 2: gdn
+        #   Layer 3: swa
+        #   Layer 4: stoch{attention (main), swa}
+        # Layers 1,3,4 have attention-based sources → can MIL/DIL to full supernet
+        # Layers 0,2 have mamba/gdn sources → keep structure, just transfer
+        # =====================================================================
+        {
+            "decoder": {
+                "type": "pattern",
+                "pattern": ["stoch_ms", "supernet", "gdn", "supernet", "supernet"],
+                "blocks": {
+                    "stoch_ms": {
+                        # Layer 0: preserve stoch{mamba, swa}
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "mamba",
+                            "mixers": {
+                                "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "transfer",
+                                    "sliding_window": 256,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "gdn": {
+                        # Layer 2: preserve pure gdn
+                        "mixer": {
+                            "type": "gated_delta_net",
+                            "init": "transfer",
+                            "conv_kernel_size": 4,
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "supernet": {
+                        # Layers 1,3,4: full supernet via MIL/DIL from attention
+                        # NOTE: Explicit geometry required because this is a NEW block
+                        # and the default base (stoch_ms) is mamba-based, so geometry
+                        # can't be derived via cross-type composition.
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {
+                                    "type": "attention",
+                                    "init": "transfer",
+                                    "heads": 8,
+                                    "head_groups": 4,
+                                    "head_size": 32,
+                                },
+                                "swa": {
+                                    "type": "attention",
+                                    "init": "transfer",
+                                    "heads": 8,
+                                    "head_groups": 4,
+                                    "head_size": 32,
+                                    "sliding_window": 512,
+                                },
+                                "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
+                                "gdn": {
+                                    "type": "gated_delta_net",
+                                    "init": "transfer",
+                                    "num_value_heads": 8,
+                                    "num_key_heads": 4,
+                                    "key_head_dim": 32,
+                                    "value_head_dim": 32,
+                                    "conv_kernel_size": 4,
+                                },
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                },
+            },
+        },
+    ]
+
+
+@pytest.fixture
+def torture_surgery_chain():
+    """Full 10-step torture chain for testing config composition.
+
+    This chain exercises:
+    - Non-stochastic → stochastic → non-stochastic → stochastic transitions
+    - Accumulating mixers in stochastic wrappers
+    - Cross-type derivations (attention → GDN, attention → mamba)
+    - Top-level scalar overrides
+
+    Note: Steps S6-S10 involve "destructive" operations that break
+    the compatibility law for config composition.
+    """
+    return [
+        # S1: attention → stochastic{attention}
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                        },
+                    },
+                },
+            },
+        },
+        # S2: add sliding_window to stochastic
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "sliding_window": {"init": "transfer", "sliding_window": 2048},
+                        },
+                    },
+                },
+            },
+        },
+        # S3: add gated_delta_net to stochastic (DIL derivation)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "gdn": {
+                                "type": "gated_delta_net",
+                                "init": "transfer",
+                                "conv_kernel_size": 4,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S4: change main_mixer_name + add sampling_strategy
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "main_mixer_name": "sliding_window",
+                        "sampling_strategy": "weighted",
+                    },
+                },
+            },
+        },
+        # S5: add mamba (now 4 mixers!)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "mamba": {
+                                "type": "mamba",
+                                "init": "transfer",
+                                "d_state": 64,
+                                "d_conv": 4,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S6: collapse to plain sliding_window (non-stochastic) - DESTRUCTIVE
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "init": "transfer",
+                        "sliding_window": 4096,
+                    },
+                },
+            },
+        },
+        # S7: convert to gated_delta_net (DIL derivation from current attention)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "gated_delta_net",
+                        "init": "transfer",
+                        "conv_kernel_size": 8,
+                    },
+                },
+            },
+        },
+        # S8: wrap in stochastic{gdn, attention}
+        # NOTE: attention uses explicit geometry (init: random) because
+        # the current mixer is GDN - can't derive attention from GDN.
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "gdn",
+                        "mixers": {
+                            "gdn": {"init": "transfer"},
+                            "attention": {
+                                "type": "attention",
+                                "init": "random",
+                                "heads": 16,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "rope_theta": 10000.0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S9: override vocab_size (top-level scalar)
+        {
+            "vocab_size": 50000,
+        },
+        # S10: add mamba to current stochastic
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "mamba": {
+                                "type": "mamba",
+                                "init": "transfer",
+                                "d_state": 128,
+                                "d_conv": 8,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    ]

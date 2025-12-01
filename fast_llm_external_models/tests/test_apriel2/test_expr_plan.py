@@ -1456,7 +1456,7 @@ class TestEndToEndConversion:
             llava_config,
             safetensor_files,
             output_dir,
-            surgery_config=surgery_config,
+            surgery_configs=[surgery_config],
         )
 
         # Save config for model loading

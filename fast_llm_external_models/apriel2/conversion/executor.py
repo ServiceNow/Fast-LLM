@@ -1,4 +1,30 @@
-"""Plan execution with streaming I/O."""
+"""Plan execution for weight transformations.
+
+This module executes ExprPlan objects to produce transformed weights.
+Execution is streaming: tensors are loaded on-demand and yielded one at a time,
+enabling memory-efficient conversion of large models.
+
+Usage
+=====
+
+**In-memory execution** (for small models or testing):
+
+    target_weights = execute(plan, source_weights, seed=42)
+
+**Streaming execution** (for large models):
+
+    with SafetensorLoader(source_files) as loader:
+        executor = StreamingExecutor(plan, loader)
+        for key, tensor in executor.execute(seed=42):
+            # Process each tensor (e.g., write to sharded output)
+
+Reproducibility
+===============
+
+Random initialization (Init expressions) is deterministic given a seed.
+Each target key gets a unique sub-seed derived from the base seed and key name,
+so results are reproducible and independent of execution order.
+"""
 
 from __future__ import annotations
 
