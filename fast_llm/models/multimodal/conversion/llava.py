@@ -1,5 +1,7 @@
 import typing
 
+import torch
+
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
@@ -10,7 +12,7 @@ from fast_llm.layers.attention.rotary.config import Rotary2DConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig
-from fast_llm.layers.vision.config import PatchConvolutionConfig, VisionEncoderConfig
+from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBlockConverter,
@@ -24,6 +26,7 @@ from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, Mi
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
+from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, div, safe_merge_dicts
 
 
@@ -52,6 +55,8 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         config["attention_bias"] = False
         out = super().import_config(config)
         out["rotary"]["type"] = "default_2d"
+        out["causal"] = False
+        out["cross_document_attention"] = False
         return out
 
     @classmethod
@@ -60,6 +65,8 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         Assert.eq(config.softmax_scale_power, 0.5)
         Assert.is_(type(config.rotary), Rotary2DConfig)
         assert not config.add_linear_biases
+        assert not config.causal
+        assert not config.cross_document_attention
         Assert.eq(config.head_groups, config.heads)
         return {
             "num_attention_heads": config.heads,
@@ -85,7 +92,35 @@ class PixtralEncoderConverter(LlamaDecoderConverter):
     block_converter_class: typing.ClassVar[type[PixtralBlockConverter]] = PixtralBlockConverter
 
 
-class PixtralPatchConvolutionConverter:
+class PatchEmbeddingWeightConverter(WeightConverter):
+    _config: PatchEmbeddingsConfig
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        return tuple(
+            weight_[:].view(
+                *weight_[:].shape[:-1],
+                self._config.input_channels,
+                self._config.patch_height,
+                self._config.patch_width,
+            )
+            for weight_ in weight
+        )
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        return tuple(
+            weight_[:].view(
+                *weight_[:].shape[:-3],
+                self._config.input_channels * self._config.patch_height * self._config.patch_width,
+            )
+            for weight_ in weight
+        )
+
+
+class PixtralEmbeddingsConverter:
     normalization_converter_class: typing.ClassVar[type[PixtralNormalizationConverter]] = PixtralNormalizationConverter
 
     @classmethod
@@ -98,10 +133,10 @@ class PixtralPatchConvolutionConverter:
         }
 
     @classmethod
-    def export_config(cls, config: PatchConvolutionConfig) -> dict:
-        Assert.custom(isinstance, config, PatchConvolutionConfig)
+    def export_config(cls, config: PatchEmbeddingsConfig) -> dict:
+        Assert.custom(isinstance, config, PatchEmbeddingsConfig)
         Assert.eq(config.patch_height, config.patch_width)
-        Assert.incl(config.convolution.bias.enabled, (None, False))
+        Assert.incl(config.patch_embeddings.bias.enabled, (None, False))
 
         return safe_merge_dicts(
             {
@@ -113,14 +148,15 @@ class PixtralPatchConvolutionConverter:
 
     @classmethod
     def get_converters(
-        cls, config: PatchConvolutionConfig, fast_llm_prefix: str, hf_prefix: str
+        cls, config: PatchEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
     ) -> list[WeightConverter]:
         return [
             *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
+                f"{fast_llm_prefix}.patch_embeddings",
                 f"{hf_prefix}.patch_conv",
                 False,
-                WeightConverter,
+                PatchEmbeddingWeightConverter,
+                config,
             ),
             *cls.normalization_converter_class.get_converters(
                 config, f"{fast_llm_prefix}.normalization", f"{hf_prefix}.ln_pre"
@@ -172,9 +208,7 @@ class LlavaVisionAdapterConverter:
 
 class LlavaVisionModelConverter:
     vision_adapter_converter_class: typing.ClassVar[type[LlavaVisionAdapterConverter]] = LlavaVisionAdapterConverter
-    patch_convolution_converter_class: typing.ClassVar[type[PixtralPatchConvolutionConverter]] = (
-        PixtralPatchConvolutionConverter
-    )
+    embeddings_converter_class: typing.ClassVar[type[PixtralEmbeddingsConverter]] = PixtralEmbeddingsConverter
     encoder_converter_class: typing.ClassVar[type[PixtralEncoderConverter]] = PixtralEncoderConverter
     model_type: typing.ClassVar[str] = "pixtral"
 
@@ -182,7 +216,7 @@ class LlavaVisionModelConverter:
     def import_config(cls, config: dict) -> dict:
         Assert.eq(config["vision_config"]["model_type"], cls.model_type)
         return {
-            "patch_convolution": cls.patch_convolution_converter_class.import_config(config["vision_config"]),
+            "embeddings": cls.embeddings_converter_class.import_config(config["vision_config"]),
             "encoder": cls.encoder_converter_class.import_config(config["vision_config"]),
             "adapter": cls.vision_adapter_converter_class.import_config(config),
             "hidden_size": config["vision_config"]["hidden_size"],
@@ -193,7 +227,7 @@ class LlavaVisionModelConverter:
         Assert.custom(isinstance, config, VisionEncoderConfig)
         # TODO: ====== image_size? ======
         vision_config = safe_merge_dicts(
-            cls.patch_convolution_converter_class.export_config(config.patch_convolution),
+            cls.embeddings_converter_class.export_config(config.embeddings),
             cls.encoder_converter_class.export_config(config.encoder),
             {"hidden_size": config.hidden_size, "model_type": cls.model_type},
         )
@@ -210,8 +244,8 @@ class LlavaVisionModelConverter:
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
-            *cls.patch_convolution_converter_class.get_converters(
-                config.patch_convolution, "vision_encoder.patch_convolution", "model.vision_tower"
+            *cls.embeddings_converter_class.get_converters(
+                config.embeddings, "vision_encoder.embeddings", "model.vision_tower"
             ),
             *cls.encoder_converter_class.get_converters(
                 config.encoder, "vision_encoder.encoder", "model.vision_tower.transformer.layers"

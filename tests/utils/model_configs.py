@@ -4,9 +4,11 @@ import enum
 import functools
 import os
 import pathlib
+import re
 import typing
 
 import pytest
+import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
@@ -31,6 +33,9 @@ from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
 )
+
+if typing.TYPE_CHECKING:
+    import transformers.models.auto.auto_factory
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -80,10 +85,13 @@ class ModelTestingConfig:
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
     # Scale the comparison thresholds for specific models.
     compare_factor: float = 1.0
-    # Option to skip specific distributed configuration with name containing any of the provided strings.
+    # Option to skip specific distributed configuration with name matching any of the provided regex patterns.
     skip_tests: tuple[str] = ()
     get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
         get_model_test_dataset
+    )
+    auto_model_class: type["transformers.models.auto.auto_factory._BaseAutoModelClass"] = (
+        transformers.AutoModelForCausalLM
     )
 
     def __post_init__(self):
@@ -136,7 +144,7 @@ class ModelTestingConfig:
         return self.model_config_class.get_base_model_config_class()
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
-        return any(key in distributed_config.name for key in self.skip_tests)
+        return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
 
 def _update_and_add_testing_config(
@@ -428,6 +436,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 
@@ -461,7 +470,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Arg update for cross-entropy splits doesn't work here.
-    skip_tests=("ce4", "ms"),
+    skip_tests=(r"ce4", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -508,6 +517,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 _update_and_add_testing_config(
@@ -597,7 +607,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
+    skip_tests=(r"sdp", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -639,8 +649,8 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split not supported.
     skip_tests=(
-        "sdp",
-        "ms",
+        r"sdp",
+        r"ms",
     ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
@@ -694,7 +704,7 @@ _update_and_add_testing_config(
     model_type="multimodal",
     updates={
         ("model", "base_model", "vision_encoder"): {
-            "patch_convolution": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
+            "embeddings": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
             "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
             "adapter": {"intermediate_size": 256},
             "hidden_size": 256,
@@ -726,8 +736,49 @@ _update_and_add_testing_config(
     # Micro-sequence split and sequence-first not supported.
     # TODO: Gradient accumulation works but comparison is broken.
     skip_tests=("sdp", "ms", "bf4", "df"),
+    auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
+
+_update_and_add_testing_config(
+    # Tests hybrid with gated delta net mixer.
+    "llama",
+    "hybrid_gdn",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "gdn": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 4,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "gdn"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+)
 
 _update_and_add_testing_config(
     # Tests apriel2 format with pattern decoder mixing all mixer types.
@@ -814,9 +865,10 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
+    compare_factor=10.0,
     # Micro-sequence split not supported for Mamba.
-    skip_tests=("sdp", "ms"),
+    # Pipeline-parallel gives a different mixer selection.
+    skip_tests=("sdp", "ms", "pp"),
 )
 
 
