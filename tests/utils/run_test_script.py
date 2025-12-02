@@ -78,6 +78,7 @@ def _propagate_config_args_to_reference_models(config_args: list[str]) -> list[s
     # (batch is shared at the trainer level, not per-model)
     propagate_patterns = [
         ("model", "base_model", "sequence_first"),
+        ("model", "base_model", "embeddings", "vocab_parallel"),
     ]
 
     for arg in config_args:

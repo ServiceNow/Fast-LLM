@@ -570,19 +570,41 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,  # failing: tp2, stp2, stp2_ce4
     },
     compare_factor=1.5,
-    # Micro-sequence mode not supported with reference models (see model.py:198)
-    skip_tests=("ms",),
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
 )
 
 _update_and_add_testing_config(
-    "mistral",
+    "mistral_distill_logits",
+    "mistral_reverse_kl",
+    updates={
+        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,  # failing: fp16, tp2, stp2, stp2_ce4
+    },
+    compare_factor=2,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+)
+
+_update_and_add_testing_config(
+    "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
+        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
-        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.01,
+        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {
             "teacher": {
                 "model": {
@@ -599,7 +621,7 @@ _update_and_add_testing_config(
                                     "head_groups": 2,
                                 },
                             },
-                            "num_blocks": 2,
+                            "num_blocks": 2,  # number of blocks and hidden-size must match student
                         },
                         "hidden_size": 256,
                     },
@@ -617,11 +639,11 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
     compare_factor=8,
-    # Micro-sequence mode not supported with reference models (see model.py:198)
-    skip_tests=("ms",),
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "stp2_ce4"),
 )
 
 _update_and_add_testing_config(
