@@ -89,6 +89,12 @@ _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.it
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 
 
+class ReverseKLImpl(str, enum.Enum):
+    tp = "tp"
+    stp = "stp"
+    no_tp = "no_tp"
+
+
 class CrossEntropyImpl(str, enum.Enum):
     auto = "auto"
     torch = "torch"
