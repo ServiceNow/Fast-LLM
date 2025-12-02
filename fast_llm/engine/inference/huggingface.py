@@ -244,3 +244,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
     def inner_forward(*args, **kwargs) -> tuple | transformers.utils.generic.ModelOutput:
         # Meant to be overridden in derived classes
         raise NotImplementedError()
+
+    @classmethod
+    def can_generate(cls) -> bool:
+        return True
