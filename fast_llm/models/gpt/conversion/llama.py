@@ -207,10 +207,10 @@ class LlamaAttentionConverter:
         elif rope_type == "yarn":
             rotary_config.update(
                 {
-                    "attention_factor": config["attention_factor"],
-                    "beta_fast": config["beta_fast"],
-                    "beta_slow": config["beta_slow"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "attention_factor": config["rope_scaling"]["attention_factor"],
+                    "beta_fast": config["rope_scaling"]["beta_fast"],
+                    "beta_slow": config["rope_scaling"]["beta_slow"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         else:

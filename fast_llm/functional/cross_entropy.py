@@ -242,12 +242,11 @@ def _torch_reverse_kl_forward_backward(
     Reverse KL using PyTorch's native kl_div function.
     This is used for TP version where we split accross vocab dimantion. KL is additive over partitions of the vocab.
 
-    This works with sequence-tensor-parallel (distributing over the sequence dimention) as well as a non-TP case.
-    In sequence-tensor-parallel, where we split along sequence dim., we compute per split loss and then average the loss.
-
     Takes:
-        logits: [BxS, V]
-        target: [BxS, V]
+        logits: [BxS, V] or [B, S, V]
+        target: [BxS, V] or [B, S, V] (logits format)
+        loss_mask: [BxS] or [B, S] or None
+        ...
     """
     Assert.eq(
         teacher_softmax_temperature,
@@ -275,23 +274,16 @@ def _torch_reverse_kl_forward_backward(
             log_target=True,
         ).sum(dim=-1)
         if loss_mask is not None:
+            # loss mask is the same on all ranks for TP over vocab.
             valid = loss_mask.to(loss_terms.dtype)
             loss_terms = loss_terms * valid
-            valid_tokens = valid.sum()
+            valid_tokens = torch.tensor(valid.sum(), device=loss_terms.device, dtype=loss_terms.dtype)
         else:
-            valid_tokens = logits.shape[0] * logits.shape[1]
+            valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
         loss = loss_terms.sum()  # sums over batch and seq. len.
 
         if group is not None:
             all_reduce(loss, op=ReduceOp.SUM, group=group)
-            if loss_mask is not None:
-                valid_tokens_all = torch.as_tensor(valid_tokens, device=loss.device, dtype=loss.dtype)
-                all_reduce(valid_tokens_all, op=ReduceOp.SUM, group=group)
-                valid_tokens = valid_tokens_all
-            else:
-                valid_tokens = torch.as_tensor(valid_tokens * group.size(), device=loss.device, dtype=loss.dtype)
-        else:
-            valid_tokens = torch.as_tensor(valid_tokens, device=loss.device, dtype=loss.dtype)
         loss /= valid_tokens
 
         if grad_output is not None:
@@ -306,7 +298,6 @@ def _torch_reverse_kl_forward_backward(
 REVERSE_KL_IMPLEMENTATIONS = {
     ReverseKLImpl.no_tp: _torch_reverse_kl_forward_backward,
     ReverseKLImpl.tp: _torch_reverse_kl_forward_backward,
-    ReverseKLImpl.stp: _torch_reverse_kl_forward_backward,
 }
 
 
@@ -335,16 +326,15 @@ def reverse_kl_forward_backward(
     - Reverse KL: KL(q||p) = mode-seeking (focuses on target modes)
 
     Takes:
-        logits: [BxS, V], where V is local vocab size
-        target: [BxS, V] (logits format)
-        loss_mask: [BxS] or None
+        logits: [BxS, V] or [B, S, V], where V is local vocab size
+        target: [BxS, V] or [B, S, V] (logits format)
+        loss_mask: [BxS] or [B, S] or None
         ...
 
     Returns:
         loss: Reverse KL divergence loss
         grad: Gradients w.r.t. logits
     """
-    # TODO: should we except the possibility of B x S x V shapes?
 
     if logits.shape[-1] != vocab_size:
         reverse_kl_impl = ReverseKLImpl.tp
@@ -355,7 +345,6 @@ def reverse_kl_forward_backward(
         reverse_kl_impl = ReverseKLImpl.no_tp
 
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
-
     Assert.eq(target.shape, logits.shape)
     assert target.dtype.is_floating_point, target.dtype
     if loss_mask is not None:
