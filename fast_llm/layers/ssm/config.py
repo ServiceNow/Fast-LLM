@@ -193,7 +193,7 @@ class KimiDeltaAttentionConfig(MixerConfig):
 
     @property
     def layer_class(self) -> "type":
-        from kda import KimiDeltaAttention
+        from fast_llm.layers.ssm.kda import KimiDeltaAttention
 
         return KimiDeltaAttention
 
