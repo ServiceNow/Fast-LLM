@@ -180,11 +180,10 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # Compare student mixer output with the teacher’s stored activation and accumulate the loss.
             teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
-            # TODO: handle sequence-first?
             # TODO: un-scaled loss for reporting? Average loss over layers?
             # L2 loss
             activation_loss_factor = self._config.activation_distillation_factor
-            # (batch, sequence, hidden). Take the norm over hidden dim.
+            # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
             # TODO: handle possible padding?
             activation_loss = activation_loss_factor * torch.mean(
                 torch.norm(mixer_output - teacher_tensor, p=2, dim=(2))

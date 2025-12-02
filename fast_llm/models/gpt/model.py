@@ -170,7 +170,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         distillation_models = self._config.decoder.get_distillation_models()
         # TODO: Support multiple distillation models?
         assert len(distillation_models) <= 1
-        reference_logits: list[dict[str, typing.Any]] | None = None
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_meta = [
