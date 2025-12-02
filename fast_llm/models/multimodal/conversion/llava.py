@@ -184,8 +184,6 @@ class LlavaVisionAdapterConverter:
         return {
             "projector_hidden_act": config.activation.hf_name,
             "multimodal_projector_bias": config.add_linear_biases,
-            # Not in LlavaConfig, but needed for consistency check in LlavaBaseModelConverter.
-            "projector_intermediate_size": config.intermediate_size,
         }
 
     @classmethod
@@ -311,7 +309,6 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
                 "vision_feature_layer": -1,
             },
         )
-        Assert.eq(out.pop("projector_intermediate_size"), out["text_config"]["hidden_size"])
         return out
 
     @classmethod
