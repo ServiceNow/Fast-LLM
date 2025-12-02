@@ -640,7 +640,7 @@ class TestPlanBuilders:
             dt_min=0.001,
             dt_max=0.1,
             dt_init_floor=0.0001,
-            source_prefix=W("model.decoder.blocks.0.mixer.self_attn"),
+            source_prefix=W("model.decoder.blocks.0.mixer"),
             target_prefix=W("model.decoder.blocks.0.mixer"),
         )
 
@@ -1047,7 +1047,7 @@ class TestFullPipeline:
 
         # Verify key mappings worked
         assert "model.embed_tokens.weight" in result
-        assert any("mixer.self_attn" in k for k in result)
+        assert any("mixer.q_proj" in k for k in result)
 
 
 class TestExpressionRepr:
@@ -1308,6 +1308,7 @@ class TestEndToEndConversion:
                             "heads": num_heads,
                             "head_groups": num_kv_heads,
                             "head_size": head_size,
+                            "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
                         },
                         "mlp": {"type": "mlp", "intermediate_size": text_config["intermediate_size"]},
                         "normalization": {"type": "rms_norm", "epsilon": text_config["rms_norm_eps"]},
@@ -1358,6 +1359,7 @@ class TestEndToEndConversion:
                                     "heads": num_heads,
                                     "head_groups": num_kv_heads,
                                     "head_size": head_size,
+                                    "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
                                 },
                                 "mamba": {
                                     "type": "mamba",
@@ -1390,6 +1392,7 @@ class TestEndToEndConversion:
                                     "head_groups": num_kv_heads,
                                     "head_size": head_size,
                                     "sliding_window": 512,
+                                    "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
                                 },
                                 "gated_delta_net": {
                                     "type": "gated_delta_net",
@@ -1426,7 +1429,12 @@ class TestEndToEndConversion:
                             "head_size": llava_config["vision_config"]["hidden_size"] // llava_config["vision_config"]["num_attention_heads"],
                             "add_linear_biases": False,
                             "causal": False,
-                            "rotary": {"type": "default_2d", "theta": llava_config["vision_config"]["rope_theta"]},
+                            "rotary": {
+                                "type": "pixtral_2d",
+                                "theta": llava_config["vision_config"]["rope_theta"],
+                                "max_image_size": llava_config["vision_config"]["image_size"],
+                                "patch_size": llava_config["vision_config"]["patch_size"],
+                            },
                         },
                         "mlp": {
                             "type": "mlp",

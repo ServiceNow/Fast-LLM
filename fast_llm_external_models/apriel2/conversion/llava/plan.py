@@ -52,7 +52,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
         # Attention projections
         for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
             src = llava_layer / "self_attn" / proj / "weight"
-            tgt = apriel_layer / "mixer" / "self_attn" / proj / "weight"
+            tgt = apriel_layer / "mixer" / proj / "weight"
             mappings[tgt] = Ref(key=src)
 
         # MLP projections
@@ -75,7 +75,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
         # Attention projections
         for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
             src = llava_layer / "attention" / proj / "weight"
-            tgt = apriel_layer / "mixer" / "self_attn" / proj / "weight"
+            tgt = apriel_layer / "mixer" / proj / "weight"
             mappings[tgt] = Ref(key=src)
 
         # MLP projections (llava uses feed_forward, apriel uses mlp)

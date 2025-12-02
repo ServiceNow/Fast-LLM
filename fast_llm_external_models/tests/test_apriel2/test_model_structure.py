@@ -64,6 +64,15 @@ class TestStochasticMixerStructure:
         """Different configs create models with different parameter counts."""
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
 
+        rotary_config = {"type": "mistral_1d", "theta": 10000.0}
+        attn_config = {
+            "type": "attention",
+            "heads": 4,
+            "head_groups": 2,
+            "head_size": 16,
+            "rotary": rotary_config,
+        }
+
         config_tiny = Apriel2Config(
             vocab_size=100, hidden_size=64,
             num_attention_heads=4, num_key_value_heads=2,
@@ -71,7 +80,7 @@ class TestStochasticMixerStructure:
                 "type": "fixed",
                 "num_blocks": 2,
                 "block": {
-                    "mixer": {"type": "attention"},
+                    "mixer": attn_config,
                     "mlp": {"type": "mlp"},
                     "normalization": {"type": "rms_norm"},
                 },
@@ -86,13 +95,13 @@ class TestStochasticMixerStructure:
                 "num_blocks": 2,
                 "pattern": ["attn", "stoch"],
                 "blocks": {
-                    "attn": {"mixer": {"type": "attention"}},
+                    "attn": {"mixer": attn_config},
                     "stoch": {
                         "mixer": {
                             "type": "stochastic",
                             "main_mixer_name": "attention",
                             "mixers": {
-                                "attention": {"type": "attention"},
+                                "attention": attn_config,
                                 "mamba": {"type": "mamba", "conv_bias": True, "dt_proj_bias": True}
                             }
                         }

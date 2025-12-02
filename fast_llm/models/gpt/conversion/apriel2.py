@@ -29,22 +29,28 @@ from fast_llm.utils import Assert, safe_merge_dicts
 class Apriel2AttentionConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {
+        rotary = config["rotary"]
+        # Map Apriel2 HuggingFace rotary type to Fast-LLM internal type
+        if rotary.get("type") == "mistral_1d":
+            rotary = {**rotary, "type": "default"}
+        result = {
             "type": "attention",
-            "heads": config.get("heads", 32),
-            "head_groups": config.get("head_groups", config.get("heads", 32)),
-            "head_size": config.get("head_size", None),
-            "rotary": config.get("rotary", {"type": "default", "theta": 10000.0}),
-            "add_linear_biases": config.get("add_linear_biases", False),
-            "window_size": config.get("window_size", None),
+            "heads": config["heads"],
+            "head_groups": config["head_groups"],
+            "head_size": config["head_size"],
+            "rotary": rotary,
+            "add_linear_biases": config["add_linear_biases"],
         }
+        if "window_size" in config:
+            result["window_size"] = config["window_size"]
+        return result
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
         from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 
         if type(config.rotary) is DefaultRotaryConfig:
-            rotary_type = "default"
+            rotary_type = "mistral_1d"
         elif type(config.rotary) is Llama3RotaryConfig:
             rotary_type = "llama3"
         elif type(config.rotary) is YarnRotaryConfig:
@@ -102,14 +108,17 @@ class Apriel2AttentionConverter:
 class Apriel2MambaConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {
+        result = {
             "type": "mamba_2",
-            "state_size": config.get("state_size", 16),
-            "d_inner": config.get("d_inner"),
-            "d_xb": config.get("d_xb", None),
-            "dt_rank": config.get("dt_rank", "auto"),
-            "add_linear_biases": config.get("add_linear_biases", False),
+            "state_size": config["state_size"],
+            "d_inner": config["d_inner"],
+            "add_linear_biases": config["add_linear_biases"],
         }
+        if "d_xb" in config:
+            result["d_xb"] = config["d_xb"]
+        if "dt_rank" in config:
+            result["dt_rank"] = config["dt_rank"]
+        return result
 
     @classmethod
     def export_config(cls, config: Mamba2Config) -> dict:
@@ -187,8 +196,8 @@ class Apriel2StochasticMixerConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         mixers = {}
-        for name, sub_mixer_config in config.get("mixers", {}).items():
-            mixer_type = sub_mixer_config.get("type")
+        for name, sub_mixer_config in config["mixers"].items():
+            mixer_type = sub_mixer_config["type"]
             if mixer_type == "attention":
                 mixers[name] = Apriel2AttentionConverter.import_config(sub_mixer_config)
             elif mixer_type == "mamba":
@@ -196,12 +205,14 @@ class Apriel2StochasticMixerConverter:
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
-        return {
+        result = {
             "type": "stochastic",
             "mixers": mixers,
-            "main_mixer_name": config.get("main_mixer_name"),
-            "sampling_strategy": config.get("sampling_strategy", "uniform"),
+            "main_mixer_name": config["main_mixer_name"],
         }
+        if "sampling_strategy" in config:
+            result["sampling_strategy"] = config["sampling_strategy"]
+        return result
 
     @classmethod
     def export_config(cls, config: StochasticMixerConfig) -> dict:
@@ -256,8 +267,8 @@ class Apriel2StochasticMixerConverter:
 class Apriel2BlockConverter:
     @classmethod
     def import_config(cls, config: dict, block_config: dict) -> dict:
-        mixer_config = block_config.get("mixer", {})
-        mixer_type = mixer_config.get("type", "attention")
+        mixer_config = block_config["mixer"]
+        mixer_type = mixer_config["type"]
 
         if mixer_type == "attention":
             mixer = Apriel2AttentionConverter.import_config(mixer_config)
@@ -270,16 +281,16 @@ class Apriel2BlockConverter:
 
         from fast_llm.functional.config import ActivationType
 
-        mlp_config = block_config.get("mlp", {"type": "mlp"})
+        mlp_config = block_config["mlp"]
         mlp = {
             "type": "mlp",
-            "intermediate_size": mlp_config.get("intermediate_size"),
-            "activation": ActivationType.from_hf_name(mlp_config.get("activation", "silu")),
+            "intermediate_size": mlp_config["intermediate_size"],
+            "activation": ActivationType.from_hf_name(mlp_config["activation"]),
             "gated": True,
-            "add_linear_biases": mlp_config.get("add_linear_biases", False),
+            "add_linear_biases": mlp_config["add_linear_biases"],
         }
 
-        normalization = block_config.get("normalization", {"type": "rms_norm"})
+        normalization = block_config["normalization"]
 
         return {
             "mixer": mixer,
@@ -325,6 +336,7 @@ class Apriel2BlockConverter:
             "type": "mlp",
             "intermediate_size": config.mlp.intermediate_size,
             "activation": config.mlp.activation.value,
+            "add_linear_biases": config.mlp.add_linear_biases,
         }
 
         normalization = {"type": norm_type_str}
@@ -406,29 +418,29 @@ class Apriel2DecoderConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        decoder_config = config.get("decoder", {})
-        decoder_type = decoder_config.get("type", "fixed")
+        decoder_config = config["decoder"]
+        decoder_type = decoder_config["type"]
 
         if decoder_type == "fixed":
-            block_config = decoder_config.get("block", {})
+            block_config = decoder_config["block"]
             imported_block = cls.block_converter_class.import_config(config, block_config)
 
             return {
                 "type": "fixed",
-                "num_blocks": decoder_config.get("num_blocks", config.get("num_hidden_layers", 32)),
+                "num_blocks": decoder_config["num_blocks"],
                 "block": imported_block,
             }
 
         elif decoder_type == "pattern":
             blocks = {}
-            for name, block_config in decoder_config.get("blocks", {}).items():
+            for name, block_config in decoder_config["blocks"].items():
                 blocks[name] = cls.block_converter_class.import_config(config, block_config)
 
             return {
                 "type": "pattern",
                 "blocks": blocks,
-                "pattern": decoder_config.get("pattern", []),
-                "num_blocks": decoder_config.get("num_blocks", config.get("num_hidden_layers", 32)),
+                "pattern": decoder_config["pattern"],
+                "num_blocks": decoder_config["num_blocks"],
             }
 
         else:
@@ -545,7 +557,7 @@ class Apriel2BaseModelConverter:
             "decoder": cls.decoder_converter_class.import_config(config),
             "head": cls.head_converter_class.import_config(config),
             "hidden_size": config["hidden_size"],
-            "tied_embedding_weight": config.get("tie_word_embeddings", False),
+            "tied_embedding_weight": config["tie_word_embeddings"],
         }
 
     @classmethod

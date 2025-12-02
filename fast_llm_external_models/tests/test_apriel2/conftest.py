@@ -7,16 +7,6 @@ import pytest
 import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
 
-# Apriel 1.5 model ID on HuggingFace
-APRIEL_1_5_MODEL_ID = "ServiceNow-AI/Apriel-1.5-15b-Thinker"
-
-
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow (requires large model download)"
-    )
-
 
 @pytest.fixture(autouse=True)
 def set_default_device():
@@ -83,9 +73,113 @@ def create_llava_pixtral_model(
         vision_config=vision_config,
         image_token_index=10,
         projector_hidden_act="gelu",
+        # Use "full" to include all patches - Pixtral doesn't have CLS token
+        # so "default" (which removes first token) would drop a real patch
+        vision_feature_select_strategy="full",
+        # Use final layer output (-1) to match Apriel2's vision encoder behavior
+        # Llava default is -2 (second-to-last), but Apriel2 returns final output
+        vision_feature_layer=-1,
     )
 
     return LlavaForConditionalGeneration(config)
+
+
+@pytest.fixture
+def small_pixtral_model() -> LlavaForConditionalGeneration:
+    """Create a small Pixtral model for equivalence testing.
+
+    Uses smaller dimensions than create_llava_pixtral_model() defaults
+    for faster testing while still exercising all code paths.
+    """
+    model = create_llava_pixtral_model(
+        hidden_size=256,
+        num_heads=4,
+        num_kv_heads=2,
+        num_layers=2,
+        intermediate_size=512,
+        vocab_size=1000,
+        vision_hidden_size=128,
+        vision_num_heads=2,
+        vision_num_layers=2,
+    )
+    model.eval()
+    return model
+
+
+@pytest.fixture(params=["identity", "converted"])
+def model_pair(request, small_pixtral_model, tmp_path):
+    """Parameterized fixture providing source and target models for comparison.
+
+    Parameters:
+        identity: Target is identical copy of source (validates test infrastructure)
+        converted: Target is Apriel2 model converted from source (tests conversion)
+
+    Returns:
+        tuple: (source_model, target_model, expected_atol, variant_name)
+    """
+    import json
+    from safetensors import safe_open
+
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+    from fast_llm_external_models.apriel2.conversion import (
+        convert_llava_config,
+        execute,
+        plan_llava_to_apriel2,
+    )
+    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
+
+    source = small_pixtral_model
+
+    if request.param == "identity":
+        # Target is identical copy of source (sanity check)
+        target = create_llava_pixtral_model(
+            hidden_size=256,
+            num_heads=4,
+            num_kv_heads=2,
+            num_layers=2,
+            intermediate_size=512,
+            vocab_size=1000,
+            vision_hidden_size=128,
+            vision_num_heads=2,
+            vision_num_layers=2,
+        )
+        target.load_state_dict(source.state_dict())
+        target.eval()
+        expected_atol = 1e-6  # Should be essentially identical
+    else:
+        # Target is converted Apriel2 model
+        # Save source to checkpoint (save_pretrained applies key transformations)
+        source.save_pretrained(tmp_path)
+
+        # Load config and fix missing fields
+        with open(tmp_path / "config.json") as f:
+            llava_config = json.load(f)
+
+        llava_config["text_config"]["bos_token_id"] = 1
+        llava_config["text_config"]["eos_token_id"] = 2
+        llava_config["text_config"]["pad_token_id"] = None
+        llava_config["text_config"]["tie_word_embeddings"] = False
+
+        # Load weights from checkpoint
+        with safe_open(tmp_path / "model.safetensors", framework="pt") as f:
+            source_weights = {key: f.get_tensor(key) for key in f.keys()}
+
+        # Convert
+        apriel2_config_dict = convert_llava_config(llava_config)
+        plan = plan_llava_to_apriel2(llava_config)
+        apriel2_weights = execute(plan, source_weights, seed=0)
+
+        # Create and load Apriel2 model
+        apriel2_config = Apriel2Config(**apriel2_config_dict)
+        target = Apriel2ForConditionalGeneration(apriel2_config)
+        target.load_state_dict(apriel2_weights, strict=False)
+        target.eval()
+        # Strict tolerance for isolation tests: Each component receives identical
+        # inputs, so should produce identical outputs. Integration tests use
+        # looser tolerance to account for FP accumulation.
+        expected_atol = 1e-6
+
+    return source, target, expected_atol, request.param
 
 
 @pytest.fixture
@@ -139,34 +233,6 @@ def llava_pixtral_checkpoint(tmp_path: Path) -> Generator[Path, None, None]:
     yield tmp_path
 
 
-@pytest.fixture
-def apriel_1_5_config() -> dict:
-    """Download and return the Apriel 1.5 config from HuggingFace.
-
-    This is lightweight - only downloads config.json, not the weights.
-    """
-    import json
-
-    from huggingface_hub import hf_hub_download
-
-    config_path = hf_hub_download(APRIEL_1_5_MODEL_ID, "config.json")
-    with open(config_path) as f:
-        return json.load(f)
-
-
-@pytest.fixture
-def apriel_1_5_checkpoint() -> str:
-    """Return the HuggingFace model ID for Apriel 1.5.
-
-    This fixture returns the model ID (not a local path). The converter
-    can accept either a local path or an HF model ID.
-
-    Tests using this fixture should be marked with @pytest.mark.slow
-    to skip by default (run with: pytest -m slow).
-    """
-    return APRIEL_1_5_MODEL_ID
-
-
 # =============================================================================
 # Apriel2 Config Fixtures
 # =============================================================================
@@ -189,6 +255,7 @@ def apriel2_config_tiny():
                     "heads": 4,
                     "head_groups": 2,
                     "head_size": 16,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
                 },
                 "mlp": {"type": "mlp", "intermediate_size": 256},
                 "normalization": {"type": "rms_norm", "epsilon": 1e-5},
@@ -216,6 +283,7 @@ def apriel2_config_stochastic():
                         "heads": 4,
                         "head_groups": 2,
                         "head_size": 16,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
                     "mlp": {"type": "mlp", "intermediate_size": 256},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
@@ -231,6 +299,7 @@ def apriel2_config_stochastic():
                                 "head_groups": 2,
                                 "head_size": 16,
                                 "sliding_window": 4096,
+                                "rotary": {"type": "mistral_1d", "theta": 250000.0},
                             },
                             "mamba": {
                                 "type": "mamba",
@@ -280,6 +349,7 @@ def apriel2_config_multi_mixer():
                                 "head_groups": 2,
                                 "head_size": 16,
                                 "sliding_window": 2048,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "attn_large": {
                                 "type": "attention",
@@ -287,6 +357,7 @@ def apriel2_config_multi_mixer():
                                 "head_groups": 2,
                                 "head_size": 16,
                                 "sliding_window": 8192,
+                                "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "mamba_v1": {
                                 "type": "mamba",
@@ -351,6 +422,7 @@ def apriel2_config_all_mixers():
                         "heads": 4,
                         "head_groups": 2,
                         "head_size": 16,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
                     "mlp": {"type": "mlp", "intermediate_size": 256},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
@@ -365,6 +437,7 @@ def apriel2_config_all_mixers():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "swa": {
                                 "type": "attention",
@@ -372,6 +445,7 @@ def apriel2_config_all_mixers():
                                 "head_groups": 2,
                                 "head_size": 16,
                                 "sliding_window": 2048,
+                                "rotary": {"type": "mistral_1d", "theta": 1000000.0},
                             },
                             "mamba": {
                                 "type": "mamba",
@@ -436,6 +510,7 @@ def apriel2_config_comprehensive():
                         "heads": 4,
                         "head_groups": 2,
                         "head_size": 16,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
                     "mlp": {"type": "mlp", "intermediate_size": 256},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
@@ -447,6 +522,7 @@ def apriel2_config_comprehensive():
                         "head_groups": 2,
                         "head_size": 16,
                         "sliding_window": 512,
+                        "rotary": {"type": "mistral_1d", "theta": 100000.0},
                     },
                     "mlp": {"type": "mlp", "intermediate_size": 256},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
@@ -491,6 +567,7 @@ def apriel2_config_comprehensive():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "mamba": {
                                 "type": "mamba",
@@ -522,6 +599,7 @@ def apriel2_config_comprehensive():
                                 "head_groups": 2,
                                 "head_size": 16,
                                 "sliding_window": 256,
+                                "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "gated_delta_net": {
                                 "type": "gated_delta_net",
@@ -676,6 +754,10 @@ def comprehensive_torture_chain():
         "dt_max": 0.1,
         "dt_init_floor": 1e-4,
     }
+
+    # Rotary config for attention mixers that can't inherit from source
+    # (e.g., init: random, or cross-type from mamba/gdn)
+    rotary_config = {"type": "mistral_1d", "theta": 10000.0}
 
     return [
         # =====================================================================
@@ -860,6 +942,7 @@ def comprehensive_torture_chain():
                                     "head_groups": 4,
                                     "head_size": 32,
                                     "sliding_window": 256,
+                                    "rotary": rotary_config,
                                 },
                             },
                         },
@@ -914,6 +997,7 @@ def comprehensive_torture_chain():
                                     "head_groups": 4,
                                     "head_size": 32,
                                     "sliding_window": 128,
+                                    "rotary": rotary_config,
                                 },
                             },
                         },
@@ -960,6 +1044,7 @@ def comprehensive_torture_chain():
                             "heads": 8,
                             "head_groups": 4,
                             "head_size": 32,
+                            "rotary": rotary_config,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -981,6 +1066,7 @@ def comprehensive_torture_chain():
                             "head_groups": 4,
                             "head_size": 32,
                             "sliding_window": 512,
+                            "rotary": rotary_config,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1062,6 +1148,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
+                                    "rotary": rotary_config,
                                 },
                                 "swa": {
                                     "type": "attention",
@@ -1070,6 +1157,7 @@ def comprehensive_torture_chain():
                                     "head_groups": 4,
                                     "head_size": 32,
                                     "sliding_window": 512,
+                                    "rotary": rotary_config,
                                 },
                                 "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
                                 "gdn": {
@@ -1094,15 +1182,16 @@ def comprehensive_torture_chain():
 
 @pytest.fixture
 def torture_surgery_chain():
-    """Full 10-step torture chain for testing config composition.
+    """Full 11-step torture chain for testing config composition.
 
     This chain exercises:
     - Non-stochastic → stochastic → non-stochastic → stochastic transitions
     - Accumulating mixers in stochastic wrappers
     - Cross-type derivations (attention → GDN, attention → mamba)
+    - Partial rotary config override (theta only)
     - Top-level scalar overrides
 
-    Note: Steps S6-S10 involve "destructive" operations that break
+    Note: Steps S7-S11 involve "destructive" operations that break
     the compatibility law for config composition.
     """
     return [
@@ -1132,7 +1221,19 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S3: add gated_delta_net to stochastic (DIL derivation)
+        # S3: change rotary theta on sliding_window (tests partial rotary config override)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "sliding_window": {"rotary": {"theta": 500000.0}},
+                        },
+                    },
+                },
+            },
+        },
+        # S4: add gated_delta_net to stochastic (DIL derivation)
         {
             "decoder": {
                 "block": {
@@ -1148,7 +1249,7 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S4: change main_mixer_name + add sampling_strategy
+        # S5: change main_mixer_name + add sampling_strategy
         {
             "decoder": {
                 "block": {
@@ -1159,7 +1260,7 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S5: add mamba (now 4 mixers!)
+        # S6: add mamba (now 4 mixers!)
         {
             "decoder": {
                 "block": {
@@ -1176,7 +1277,7 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S6: collapse to plain sliding_window (non-stochastic) - DESTRUCTIVE
+        # S7: collapse to plain sliding_window (non-stochastic) - DESTRUCTIVE
         {
             "decoder": {
                 "block": {
@@ -1188,7 +1289,7 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S7: convert to gated_delta_net (DIL derivation from current attention)
+        # S8: convert to gated_delta_net (DIL derivation from current attention)
         {
             "decoder": {
                 "block": {
@@ -1200,7 +1301,7 @@ def torture_surgery_chain():
                 },
             },
         },
-        # S8: wrap in stochastic{gdn, attention}
+        # S9: wrap in stochastic{gdn, attention}
         # NOTE: attention uses explicit geometry (init: random) because
         # the current mixer is GDN - can't derive attention from GDN.
         {
@@ -1217,18 +1318,18 @@ def torture_surgery_chain():
                                 "heads": 16,
                                 "head_groups": 4,
                                 "head_size": 32,
-                                "rope_theta": 10000.0,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                         },
                     },
                 },
             },
         },
-        # S9: override vocab_size (top-level scalar)
+        # S10: override vocab_size (top-level scalar)
         {
             "vocab_size": 50000,
         },
-        # S10: add mamba to current stochastic
+        # S11: add mamba to current stochastic
         {
             "decoder": {
                 "block": {

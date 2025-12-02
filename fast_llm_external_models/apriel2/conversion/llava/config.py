@@ -36,7 +36,7 @@ def convert_config(llava_config: dict) -> dict:
                 "head_groups": num_kv_heads,
                 "head_size": hidden_size // num_heads,
                 "add_linear_biases": False,
-                "rotary": {"type": "default", "theta": rope_theta},
+                "rotary": {"type": "mistral_1d", "theta": rope_theta},
             },
             "mlp": {
                 "type": "mlp",
@@ -116,7 +116,14 @@ def _convert_vision_config(llava_config: dict) -> dict:
                     "head_size": hidden_size // num_heads,
                     "add_linear_biases": False,
                     "causal": False,
-                    "rotary": {"type": "default_2d", "theta": rope_theta},
+                    "rotary": {
+                        "type": "pixtral_2d",
+                        "theta": rope_theta,
+                        "patch_size": patch_size,
+                        # max_image_size determines the max 2D position table size
+                        # Pixtral default is 1024, but we use a larger value to be safe
+                        "max_image_size": vision_config.get("image_size", 4096),
+                    },
                 },
                 "mlp": {
                     "type": "mlp",

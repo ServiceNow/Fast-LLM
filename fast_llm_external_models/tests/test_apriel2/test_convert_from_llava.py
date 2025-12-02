@@ -3,10 +3,14 @@
 Tests cover:
 - Config conversion (Llava -> Apriel2)
 - Plan-based weight conversion
-- Forward pass equivalence between source and converted models
+- Surgery operations (Apriel2 -> Apriel2)
+- Weight loading verification
+- Plan key matching
+
+Note: Forward pass equivalence tests are in test_equivalence.py, which provides
+comprehensive component-by-component and integration testing with strict tolerances.
 
 Run with: pytest fast_llm_external_models/tests/test_apriel2/test_convert_from_llava.py
-Run slow tests: pytest -m slow ...
 """
 
 import json
@@ -35,16 +39,9 @@ from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditio
 class TestConvertConfig:
     """Test pure config conversion (no surgery)."""
 
-    @pytest.mark.parametrize(
-        "config_fixture",
-        [
-            "llava_pixtral_config",
-            pytest.param("apriel_1_5_config", marks=pytest.mark.slow),
-        ],
-    )
-    def test_basic_conversion(self, config_fixture, request):
+    def test_basic_conversion(self, llava_pixtral_config):
         """Test that Llava config converts to valid Apriel2 config."""
-        llava_config = request.getfixturevalue(config_fixture)
+        llava_config = llava_pixtral_config
         result = convert_config(llava_config)
 
         # Check model metadata
@@ -69,16 +66,9 @@ class TestConvertConfig:
         assert "encoder" in result["vision_encoder"]
         assert "adapter" in result["vision_encoder"]
 
-    @pytest.mark.parametrize(
-        "config_fixture",
-        [
-            "llava_pixtral_config",
-            pytest.param("apriel_1_5_config", marks=pytest.mark.slow),
-        ],
-    )
-    def test_config_can_be_instantiated(self, config_fixture, request):
+    def test_config_can_be_instantiated(self, llava_pixtral_config):
         """Test that converted config can create Apriel2Config object."""
-        llava_config = request.getfixturevalue(config_fixture)
+        llava_config = llava_pixtral_config
         result = convert_config(llava_config)
 
         # Should be able to instantiate
@@ -272,189 +262,12 @@ class TestSurgery:
 
 
 # =============================================================================
-# Forward Pass Equivalence Tests
+# Weight Loading Tests
 # =============================================================================
 
 
-def _load_models_for_comparison(llava_pixtral_checkpoint, tmp_path):
-    """Helper to load source Llava and converted Apriel2 models."""
-    from transformers import LlavaForConditionalGeneration
-
-    # Load source model
-    source_model = LlavaForConditionalGeneration.from_pretrained(llava_pixtral_checkpoint)
-    source_model.eval()
-
-    # Load and convert weights via plan
-    with open(llava_pixtral_checkpoint / "config.json") as f:
-        llava_config = json.load(f)
-    with safe_open(llava_pixtral_checkpoint / "model.safetensors", framework="pt") as f:
-        source_weights = {key: f.get_tensor(key) for key in f.keys()}
-
-    apriel2_config_dict = convert_config(llava_config)
-    plan = plan_llava_to_apriel2(llava_config)
-    apriel2_weights = execute(plan, source_weights, seed=0)
-
-    # Load Apriel2 model
-    apriel2_config = Apriel2Config(**apriel2_config_dict)
-    target_model = Apriel2ForConditionalGeneration(apriel2_config)
-    target_model.load_state_dict(apriel2_weights, strict=False)
-    target_model.eval()
-
-    return source_model, target_model, llava_config
-
-
-class TestComponentEquivalence:
-    """Test individual components produce identical outputs."""
-
-    def test_text_embedding_equivalence(self, llava_pixtral_checkpoint, tmp_path):
-        """Test text embedding layer produces identical outputs."""
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        source_embed = source_model.model.language_model.embed_tokens
-        target_embed = target_model.model.embed_tokens
-
-        torch.manual_seed(42)
-        input_ids = torch.randint(0, llava_config["text_config"]["vocab_size"], (2, 16))
-
-        with torch.no_grad():
-            source_out = source_embed(input_ids)
-            target_out = target_embed(input_ids)
-
-        assert torch.allclose(source_out, target_out, atol=1e-6, rtol=1e-5)
-
-    def test_lm_head_equivalence(self, llava_pixtral_checkpoint, tmp_path):
-        """Test LM head produces identical outputs."""
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        source_head = source_model.lm_head
-        target_head = target_model.lm_head
-
-        torch.manual_seed(42)
-        hidden_size = llava_config["text_config"]["hidden_size"]
-        hidden_states = torch.randn(2, 16, hidden_size)
-
-        with torch.no_grad():
-            source_out = source_head(hidden_states)
-            target_out = target_head(hidden_states)
-
-        assert torch.allclose(source_out, target_out, atol=1e-6, rtol=1e-5)
-
-    def test_vision_patch_embedding_equivalence(self, llava_pixtral_checkpoint, tmp_path):
-        """Test vision patch embedding produces identical outputs."""
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        source_conv = source_model.model.vision_tower.patch_conv
-        source_norm = source_model.model.vision_tower.ln_pre
-        target_embeddings = target_model.model.vision_encoder.embeddings
-
-        torch.manual_seed(42)
-        pixel_values = torch.randn(1, 3, 32, 32)
-
-        with torch.no_grad():
-            source_out = source_conv(pixel_values)
-            b, c, h, w = source_out.shape
-            source_out = source_out.flatten(2).transpose(1, 2)
-            source_out = source_norm(source_out)
-
-            target_out = target_embeddings(pixel_values)
-
-        assert torch.allclose(source_out, target_out, atol=1e-5, rtol=1e-5)
-
-    def test_multimodal_projector_equivalence(self, llava_pixtral_checkpoint, tmp_path):
-        """Test multimodal projector produces identical outputs."""
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        source_proj = source_model.model.multi_modal_projector
-        target_proj = target_model.model.vision_encoder.adapter
-
-        torch.manual_seed(42)
-        vision_hidden_size = llava_config["vision_config"]["hidden_size"]
-        vision_hidden = torch.randn(2, 16, vision_hidden_size)
-
-        with torch.no_grad():
-            source_out = source_proj(vision_hidden)
-            target_out = target_proj(vision_hidden)
-
-        assert torch.allclose(source_out, target_out, atol=1e-5, rtol=1e-5)
-
-
-class TestFullModelEquivalence:
-    """Test full model forward pass equivalence."""
-
-    def test_text_only_forward(self, llava_pixtral_checkpoint, tmp_path):
-        """Test text-only forward pass produces identical outputs."""
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        torch.manual_seed(42)
-        vocab_size = llava_config["text_config"]["vocab_size"]
-        input_ids = torch.randint(0, vocab_size, (2, 16))
-
-        with torch.no_grad():
-            source_out = source_model(input_ids)
-            target_out = target_model(input_ids)
-
-        assert torch.allclose(source_out.logits, target_out.logits, atol=1e-5, rtol=1e-5)
-
-    def test_multimodal_forward(self, llava_pixtral_checkpoint, tmp_path):
-        """Test multimodal forward pass works on both models.
-
-        Note: Full numerical equivalence is not tested due to architectural
-        differences in patch extraction between Pixtral and Apriel2.
-        """
-        source_model, target_model, llava_config = _load_models_for_comparison(
-            llava_pixtral_checkpoint, tmp_path
-        )
-
-        vision_config = llava_config["vision_config"]
-        image_token_index = llava_config["image_token_index"]
-        vocab_size = llava_config["text_config"]["vocab_size"]
-
-        torch.manual_seed(42)
-        batch_size = 1
-        image_size = 64
-        pixel_values = torch.randn(batch_size, 3, image_size, image_size)
-
-        with torch.no_grad():
-            source_features = source_model.get_image_features(pixel_values)
-            target_features = target_model.get_image_features(pixel_values)
-
-        source_patches = source_features[0].shape[0] if isinstance(source_features, list) else source_features.shape[1]
-        target_patches = target_features.shape[1]
-
-        # Test source model
-        source_input_ids = self._create_multimodal_input_ids(
-            vocab_size, image_token_index, source_patches, batch_size
-        )
-        with torch.no_grad():
-            source_out = source_model(input_ids=source_input_ids, pixel_values=pixel_values)
-        assert torch.isfinite(source_out.logits).all()
-
-        # Test target model
-        target_input_ids = self._create_multimodal_input_ids(
-            vocab_size, image_token_index, target_patches, batch_size
-        )
-        with torch.no_grad():
-            target_out = target_model(input_ids=target_input_ids, pixel_values=pixel_values)
-        assert torch.isfinite(target_out.logits).all()
-
-    def _create_multimodal_input_ids(self, vocab_size, image_token_index, num_patches, batch_size):
-        """Helper to create input_ids with image token placeholders."""
-        prefix = torch.randint(0, vocab_size, (batch_size, 5))
-        prefix = torch.where(prefix == image_token_index, torch.tensor(0), prefix)
-        image_tokens = torch.full((batch_size, num_patches), image_token_index)
-        suffix = torch.randint(0, vocab_size, (batch_size, 5))
-        suffix = torch.where(suffix == image_token_index, torch.tensor(0), suffix)
-        return torch.cat([prefix, image_tokens, suffix], dim=1)
+class TestWeightLoading:
+    """Test weight loading after conversion."""
 
     def test_model_can_load_converted_weights(self, llava_pixtral_checkpoint, tmp_path):
         """Test that converted weights can be loaded into Apriel2 model."""
@@ -475,71 +288,6 @@ class TestFullModelEquivalence:
         assert len(unexpected) == 0, f"Unexpected keys: {unexpected}"
         for key in missing:
             assert "cache" in key.lower() or "position" in key.lower() or "mask" in key.lower()
-
-
-# =============================================================================
-# Apriel 1.5 Full Conversion Tests (slow)
-# =============================================================================
-
-
-@pytest.mark.slow
-class TestApriel15Conversion:
-    """Test conversion with the real Apriel 1.5 checkpoint."""
-
-    def test_apriel_1_5_config_conversion(self, apriel_1_5_config):
-        """Test config conversion produces valid Apriel2 config."""
-        apriel2_config_dict = convert_config(apriel_1_5_config)
-
-        assert apriel2_config_dict["hidden_size"] == 5120
-        assert apriel2_config_dict["vocab_size"] == 131072
-        assert apriel2_config_dict["decoder"]["num_blocks"] == 48
-
-        config = Apriel2Config(**apriel2_config_dict)
-        assert config.hidden_size == 5120
-
-    def test_apriel_1_5_weight_conversion(self, apriel_1_5_checkpoint, tmp_path):
-        """Test full weight conversion of Apriel 1.5."""
-        from fast_llm_external_models.apriel2.convert import (
-            resolve_input,
-            copy_model_files,
-        )
-
-        output_dir = tmp_path / "apriel2_converted"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        input_path = resolve_input(apriel_1_5_checkpoint)
-
-        with open(input_path / "config.json") as f:
-            llava_config = json.load(f)
-
-        apriel2_config = convert_config(llava_config)
-
-        with open(output_dir / "config.json", "w") as f:
-            json.dump(apriel2_config, f, indent=2)
-
-        # Load source weights
-        safetensor_files = sorted(input_path.glob("*.safetensors"))
-        all_weights = {}
-        for model_file in safetensor_files:
-            with safe_open(model_file, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    all_weights[key] = f.get_tensor(key)
-
-        # Convert via plan
-        plan = plan_llava_to_apriel2(llava_config)
-        apriel2_weights = execute(plan, all_weights, seed=0)
-        save_file(apriel2_weights, output_dir / "model.safetensors")
-
-        copy_model_files(output_dir)
-
-        assert (output_dir / "config.json").exists()
-        assert (output_dir / "model.safetensors").exists()
-
-        with open(output_dir / "config.json") as f:
-            config = json.load(f)
-
-        assert config["model_type"] == "apriel2"
-        assert config["hidden_size"] == 5120
 
 
 # =============================================================================

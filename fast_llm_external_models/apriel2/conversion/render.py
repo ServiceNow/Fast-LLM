@@ -398,9 +398,8 @@ def render_tree(plan: ExprPlan, collapse_layers: bool = True) -> str:
         │   └── blocks/
         │       └── [0..47]/
         │           ├── mixer/
-        │           │   └── self_attn/
-        │           │       ├── q_proj/
-        │           │       │   └── weight ← ...layers.[0..47]...q_proj.weight
+        │           │   ├── q_proj/
+        │           │   │   └── weight ← ...layers.[0..47]...q_proj.weight
     """
     # Build tree
     tree = _build_plan_tree(plan)

@@ -241,7 +241,7 @@ def _plan_non_decoder_weights(config: dict) -> ExprPlan:
         for layer in range(num_vision_layers):
             block = vision / "encoder" / "blocks" / layer
             for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
-                key = block / "mixer" / "self_attn" / proj / "weight"
+                key = block / "mixer" / proj / "weight"
                 mappings[key] = Ref(key=key)
             for proj in ["gate_proj", "up_proj", "down_proj"]:
                 key = block / "mlp" / proj / "weight"
@@ -372,10 +372,7 @@ def _plan_mixer(
                     else:
                         source_mixer_base = source_layer / "mixer"
 
-                if matched_source_type in ("attention", "sliding_window"):
-                    source_prefix = source_mixer_base / "self_attn"
-                else:
-                    source_prefix = source_mixer_base
+                source_prefix = source_mixer_base
 
                 plan += _plan_mixer_transfer(
                     matched_source_type, sub_type,
@@ -392,8 +389,7 @@ def _plan_mixer(
                     target_prefix = target_layer / "mixer" / "mixers" / sub_name
                     plan += _plan_mixer_transfer(
                         sub_type, sub_type, sub_config, sub_config,
-                        source_prefix / "self_attn" if sub_type in ("attention", "sliding_window") else source_prefix,
-                        target_prefix, hidden_size,
+                        source_prefix, target_prefix, hidden_size,
                     )
 
         return plan
@@ -404,14 +400,9 @@ def _plan_mixer(
             return _plan_random_mixer(target_prefix, target_type, target_mixer, hidden_size)
 
         if source_type == "stochastic":
-            source_mixer_base = source_layer / "mixer" / "mixers" / main_name
+            source_prefix = source_layer / "mixer" / "mixers" / main_name
         else:
-            source_mixer_base = source_layer / "mixer"
-
-        if main_source_type in ("attention", "sliding_window"):
-            source_prefix = source_mixer_base / "self_attn"
-        else:
-            source_prefix = source_mixer_base
+            source_prefix = source_layer / "mixer"
 
         return _plan_mixer_transfer(
             main_source_type, target_type,
@@ -432,10 +423,9 @@ def _plan_mixer_transfer(
     """Transfer weights. Raises ValueError if no converter for this type pair."""
     # Attention → Attention
     if source_type in ("attention", "sliding_window") and target_type in ("attention", "sliding_window"):
-        target_attn = target_prefix / "self_attn"
         return ExprPlan(
             mappings={
-                target_attn / proj / "weight": Ref(key=source_prefix / proj / "weight")
+                target_prefix / proj / "weight": Ref(key=source_prefix / proj / "weight")
                 for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]
             }
         )
@@ -555,11 +545,10 @@ def _plan_random_mixer(
         q_size = heads * head_size
         kv_size = head_groups * head_size
 
-        attn = prefix / "self_attn"
-        mappings[attn / "q_proj" / "weight"] = Init(shape=(q_size, hidden_size), init_type="kaiming")
-        mappings[attn / "k_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
-        mappings[attn / "v_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
-        mappings[attn / "o_proj" / "weight"] = Init(shape=(hidden_size, q_size), init_type="kaiming")
+        mappings[prefix / "q_proj" / "weight"] = Init(shape=(q_size, hidden_size), init_type="kaiming")
+        mappings[prefix / "k_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
+        mappings[prefix / "v_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
+        mappings[prefix / "o_proj" / "weight"] = Init(shape=(hidden_size, q_size), init_type="kaiming")
 
     elif mixer_type == "mamba":
         d_inner = config["d_inner"]

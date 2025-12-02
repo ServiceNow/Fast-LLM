@@ -38,28 +38,34 @@ from fast_llm.utils import Assert, safe_merge_dicts
 class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        out = {
-            "rotary": config.get("rotary", {"type": "default_2d", "theta": 10000.0}),
-            "heads": config.get("heads", config.get("num_attention_heads", 16)),
-            "head_groups": config.get("head_groups", config.get("heads", 16)),
-            "head_size": config.get("head_size", 64),
-            "add_linear_biases": config.get("add_linear_biases", False),
-            "causal": config.get("causal", False),
+        rotary = config["rotary"].copy()
+        # Map Apriel2 HuggingFace rotary type to Fast-LLM internal type
+        if rotary.get("type") == "pixtral_2d":
+            rotary["type"] = "default_2d"
+        # Strip HF-specific fields not needed by Fast-LLM's Rotary2DConfig
+        # (Fast-LLM computes patch_positions dynamically from actual image patches)
+        rotary.pop("max_image_size", None)
+        rotary.pop("patch_size", None)
+        return {
+            "rotary": rotary,
+            "heads": config["heads"],
+            "head_groups": config["head_groups"],
+            "head_size": config["head_size"],
+            "add_linear_biases": config["add_linear_biases"],
+            "causal": config["causal"],
+            "cross_document_attention": config["cross_document_attention"],
         }
-        if isinstance(out["rotary"], dict) and out["rotary"].get("type") == "default":
-            out["rotary"]["type"] = "default_2d"
-        return out
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
         from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Rotary2DConfig
 
         if type(config.rotary) is Rotary2DConfig:
-            rotary_type = "default_2d"
+            rotary_type = "pixtral_2d"
         elif type(config.rotary) is DefaultRotaryConfig:
-            rotary_type = "default"
+            rotary_type = "mistral_1d"
         else:
-            rotary_type = "default_2d"
+            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
 
         return {
             "type": "attention",
@@ -68,6 +74,7 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
             "head_size": config.head_size,
             "add_linear_biases": config.add_linear_biases,
             "causal": config.causal,
+            "cross_document_attention": config.cross_document_attention,
             "rotary": {
                 "type": rotary_type,
                 "theta": config.rotary.theta,
@@ -84,18 +91,18 @@ class Apriel2VisionBlockConverter(PixtralBlockConverter):
 
     @classmethod
     def import_config(cls, config: dict, block_config: dict) -> dict:
-        mixer_config = block_config.get("mixer", {})
-        mlp_config = block_config.get("mlp", {})
-        norm_config = block_config.get("normalization", {"type": "rms_norm", "epsilon": 1e-5})
+        mixer_config = block_config["mixer"]
+        mlp_config = block_config["mlp"]
+        norm_config = block_config["normalization"]
 
         return {
             "mixer": cls.mixer_converter_class.import_config(mixer_config),
             "mlp": {
                 "type": "mlp",
-                "intermediate_size": mlp_config.get("intermediate_size", config.get("hidden_size", 1024) * 4),
-                "activation": ActivationType.from_hf_name(mlp_config.get("activation", "silu")),
-                "gated": mlp_config.get("gated", True),
-                "add_linear_biases": mlp_config.get("add_linear_biases", False),
+                "intermediate_size": mlp_config["intermediate_size"],
+                "activation": ActivationType.from_hf_name(mlp_config["activation"]),
+                "gated": mlp_config["gated"],
+                "add_linear_biases": mlp_config["add_linear_biases"],
             },
             "normalization": cls.normalization_converter_class.import_config(norm_config),
         }
@@ -126,9 +133,9 @@ class Apriel2VisionEncoderConverter(PixtralEncoderConverter):
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        encoder_config = config.get("encoder", {})
-        num_blocks = encoder_config.get("num_blocks", config.get("num_hidden_layers", 24))
-        block_config = encoder_config.get("block", {})
+        encoder_config = config["encoder"]
+        num_blocks = encoder_config["num_blocks"]
+        block_config = encoder_config["block"]
 
         return {
             "type": "fixed",
@@ -158,12 +165,12 @@ class Apriel2EmbeddingsConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        embeddings_config = config.get("embeddings", {})
-        Assert.eq(embeddings_config.get("input_channels", 3), 3)
+        embeddings_config = config["embeddings"]
+        Assert.eq(embeddings_config["input_channels"], 3)
         return {
-            "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-            "patch_height": embeddings_config.get("patch_height", config.get("patch_size", 16)),
-            "patch_width": embeddings_config.get("patch_width", config.get("patch_size", 16)),
+            "normalization": embeddings_config["normalization"],
+            "patch_height": embeddings_config["patch_height"],
+            "patch_width": embeddings_config["patch_width"],
         }
 
     @classmethod
@@ -204,12 +211,12 @@ class Apriel2EmbeddingsConverter:
 class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        adapter_config = config.get("adapter", {})
+        adapter_config = config["adapter"]
         return {
-            "intermediate_size": adapter_config.get("intermediate_size", config.get("hidden_size")),
-            "add_linear_biases": adapter_config.get("add_linear_biases", True),
-            "gated": False,
-            "activation": ActivationType.from_hf_name(adapter_config.get("activation", "gelu_pytorch_tanh")),
+            "intermediate_size": adapter_config["intermediate_size"],
+            "add_linear_biases": adapter_config["add_linear_biases"],
+            "gated": adapter_config["gated"],
+            "activation": ActivationType.from_hf_name(adapter_config["activation"]),
         }
 
     @classmethod
@@ -217,7 +224,6 @@ class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
         Assert.custom(isinstance, config, MLPConfig)
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
-        assert not config.gated
 
         return {
             "adapter": {
@@ -225,6 +231,7 @@ class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
                 "intermediate_size": config.intermediate_size,
                 "activation": config.activation.hf_name,
                 "add_linear_biases": config.add_linear_biases,
+                "gated": config.gated,
             },
         }
 
@@ -243,12 +250,12 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        vision_config = config.get("vision_encoder", {})
+        vision_config = config["vision_encoder"]
         return {
             "embeddings": cls.embeddings_converter_class.import_config(vision_config),
             "encoder": cls.encoder_converter_class.import_config(vision_config),
             "adapter": cls.vision_adapter_converter_class.import_config(vision_config),
-            "hidden_size": vision_config.get("hidden_size", 1024),
+            "hidden_size": vision_config["hidden_size"],
         }
 
     @classmethod
@@ -258,13 +265,19 @@ class Apriel2VisionModelConverter(LlavaVisionModelConverter):
         vision_config = safe_merge_dicts(
             cls.embeddings_converter_class.export_config(config.embeddings),
             cls.encoder_converter_class.export_config(config.encoder),
+            cls.vision_adapter_converter_class.export_config(config.adapter),
             {"hidden_size": config.hidden_size},
         )
 
-        return safe_merge_dicts(
-            {"vision_encoder": vision_config},
-            cls.vision_adapter_converter_class.export_config(config.adapter),
-        )
+        # Add patch_size and max_image_size to rotary config for pixtral_2d
+        patch_size = config.embeddings.patch_height
+        encoder_block = vision_config["encoder"]["block"]
+        rotary = encoder_block["mixer"]["rotary"]
+        if rotary["type"] == "pixtral_2d":
+            rotary["patch_size"] = patch_size
+            rotary["max_image_size"] = 1024  # Standard max image size for Pixtral
+
+        return {"vision_encoder": vision_config}
 
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
@@ -314,16 +327,16 @@ class Apriel2MultimodalBaseModelConverter:
     def import_config(cls, config: dict) -> dict:
         text_config = Apriel2BaseModelConverter.import_config(config)
         vision_config = (
-            cls.vision_model_converter_class.import_config(config) if config.get("vision_encoder") else None
+            cls.vision_model_converter_class.import_config(config) if "vision_encoder" in config else None
         )
 
-        return safe_merge_dicts(
+        result = safe_merge_dicts(
             text_config,
-            {
-                "vision_encoder": vision_config,
-                "image_token_index": config.get("image_token_index"),
-            },
+            {"vision_encoder": vision_config},
         )
+        if "image_token_index" in config:
+            result["image_token_index"] = config["image_token_index"]
+        return result
 
     @classmethod
     def export_config(cls, config: MultiModalBaseModelConfig) -> dict:

@@ -385,8 +385,8 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                 "head_groups": surgery.get("head_groups", head_groups),
                 "head_size": surgery.get("head_size", head_size),
             }
-            # Copy other attention fields
-            for key in ["sliding_window", "window_size", "rope_theta", "rope_scaling"]:
+            # Copy other attention fields (rotary is critical for position embeddings)
+            for key in ["sliding_window", "window_size", "rope_theta", "rope_scaling", "rotary"]:
                 if key in surgery:
                     result[key] = surgery[key]
                 elif key in source:

@@ -1150,6 +1150,7 @@ class TestInitSeparationOfConcerns:
                         "heads": 8,
                         "head_groups": 4,
                         "head_size": 32,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
                 },
             },
@@ -1160,7 +1161,7 @@ class TestInitSeparationOfConcerns:
 
         # Verify the plan has the expected target keys
         target_keys = set(str(k) for k in plan.mappings.keys())
-        assert any("mixer.self_attn.q_proj" in k for k in target_keys)
+        assert any("mixer.q_proj" in k for k in target_keys)
 
     def test_plan_surgery_transfer_fails_for_unsupported_type_pair(self, mamba_config):
         """plan_surgery with init: transfer should fail for mamba -> attention."""
@@ -1231,6 +1232,7 @@ class TestInitSeparationOfConcerns:
                                 "heads": 8,
                                 "head_groups": 4,
                                 "head_size": 32,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "swa": {
                                 "type": "attention",
@@ -1239,6 +1241,7 @@ class TestInitSeparationOfConcerns:
                                 "head_groups": 4,
                                 "head_size": 32,
                                 "sliding_window": 512,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                         },
                     },
@@ -1251,8 +1254,8 @@ class TestInitSeparationOfConcerns:
 
         # Verify both sub-mixers have target keys
         target_keys = set(str(k) for k in plan.mappings.keys())
-        assert any("mixers.attention.self_attn" in k for k in target_keys)
-        assert any("mixers.swa.self_attn" in k for k in target_keys)
+        assert any("mixers.attention.q_proj" in k for k in target_keys)
+        assert any("mixers.swa.q_proj" in k for k in target_keys)
 
     def test_mixed_init_modes_in_stochastic(self, base_config):
         """Stochastic mixer can have some sub-mixers transfer, others random."""
@@ -1286,7 +1289,7 @@ class TestInitSeparationOfConcerns:
 
         # Verify both sub-mixers have target keys
         target_keys = set(str(k) for k in plan.mappings.keys())
-        assert any("mixers.attention.self_attn" in k for k in target_keys)
+        assert any("mixers.attention.q_proj" in k for k in target_keys)
         assert any("mixers.gdn.gdn" in k for k in target_keys)
 
 

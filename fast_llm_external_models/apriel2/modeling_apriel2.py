@@ -18,10 +18,12 @@ from transformers.utils import logging
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 from fast_llm_external_models.apriel2.cache import Apriel2Cache
 from transformers.models.mistral.modeling_mistral import (
-    MistralAttention,
     MistralMLP,
     MistralRMSNorm,
+    apply_rotary_pos_emb,
 )
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.models.llama.modeling_llama import eager_attention_forward
 from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
 
 from transformers.utils.import_utils import is_torch_flex_attn_available
@@ -158,33 +160,43 @@ def apply_mask_to_padding_states(hidden_states, attention_mask):
 
 
 class Apriel2Attention(nn.Module):
+    """Multi-headed attention with support for GQA and configurable causality.
+
+    Config options (Fast-LLM naming):
+        heads: Number of query heads
+        head_groups: Number of key/value heads (for GQA)
+        head_size: Dimension per head
+        add_linear_biases: Whether to use biases in projections
+        causal: Whether to use causal masking
+        sliding_window: Optional sliding window size
+        rotary: Rotary embedding config dict
+    """
+
     def __init__(self, d_model: int, mixer_config: dict, layer_idx: int, config):
         super().__init__()
         self.config = config
         self.mixer_config = mixer_config
+        self.layer_idx = layer_idx
 
-        num_heads = mixer_config.get("heads", 32)
-        num_key_value_heads = mixer_config.get("head_groups", num_heads)
-        head_dim = mixer_config.get("head_size", d_model // num_heads)
-        rope_theta = (
-            mixer_config.get("rotary", {}).get("theta", 10000.0)
-            if isinstance(mixer_config.get("rotary"), dict)
-            else 10000.0
-        )
+        # Extract config using Fast-LLM naming
+        self.num_heads = mixer_config["heads"]
+        self.num_key_value_heads = mixer_config.get("head_groups", self.num_heads)
+        self.head_dim = mixer_config["head_size"]
+        self.hidden_size = d_model
 
-        attn_config = SimpleNamespace(
-            hidden_size=d_model,
-            num_attention_heads=num_heads,
-            num_key_value_heads=num_key_value_heads,
-            head_dim=head_dim,
-            max_position_embeddings=config.embeddings["max_position_embeddings"],
-            rope_theta=rope_theta,
-            attention_dropout=0.0,
-            sliding_window=mixer_config.get("sliding_window", None),
-            _attn_implementation=config._attn_implementation,
-        )
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.scaling = self.head_dim ** -0.5
+        self.is_causal = mixer_config.get("causal", True)
+        self.sliding_window = mixer_config.get("sliding_window")
 
-        self.self_attn = MistralAttention(attn_config, layer_idx)
+        # Whether to add biases to linear projections
+        add_bias = mixer_config.get("add_linear_biases", False)
+
+        # Projections (Fast-LLM weight names: q_proj, k_proj, v_proj, o_proj)
+        self.q_proj = nn.Linear(d_model, self.num_heads * self.head_dim, bias=add_bias)
+        self.k_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=add_bias)
+        self.v_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=add_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, d_model, bias=add_bias)
 
     @classmethod
     def setup(
@@ -205,29 +217,42 @@ class Apriel2Attention(nn.Module):
         Returns:
             ModuleDict containing 'rotary_emb'
         """
-        from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
+        rotary_config_dict = mixer_config["rotary"]
+        rotary_type = rotary_config_dict["type"]
+        rope_theta = rotary_config_dict["theta"]
+        num_heads = mixer_config["heads"]
+        head_dim = mixer_config["head_size"]
 
-        # Extract rotary embedding config from mixer config
-        num_heads = mixer_config.get("heads", 32)
-        head_dim = mixer_config.get("head_size", hidden_size // num_heads)
-        rope_theta = (
-            mixer_config.get("rotary", {}).get("theta", 10000.0)
-            if isinstance(mixer_config.get("rotary"), dict)
-            else 10000.0
-        )
+        if rotary_type == "pixtral_2d":
+            from transformers.models.pixtral.modeling_pixtral import PixtralRotaryEmbedding
 
-        rotary_config = SimpleNamespace(
-            max_position_embeddings=max_position_embeddings,
-            rope_theta=rope_theta,
-            head_dim=head_dim,
-            hidden_size=hidden_size,
-            num_attention_heads=num_heads,
-            partial_rotary_factor=1.0,
-        )
+            rotary_config = SimpleNamespace(
+                head_dim=head_dim,
+                rope_theta=rope_theta,
+                image_size=rotary_config_dict["max_image_size"],
+                patch_size=rotary_config_dict["patch_size"],
+            )
+            return nn.ModuleDict({
+                'rotary_emb': PixtralRotaryEmbedding(config=rotary_config)
+            })
 
-        return nn.ModuleDict({
-            'rotary_emb': MistralRotaryEmbedding(config=rotary_config)
-        })
+        elif rotary_type == "mistral_1d":
+            from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
+
+            rotary_config = SimpleNamespace(
+                max_position_embeddings=max_position_embeddings,
+                rope_theta=rope_theta,
+                head_dim=head_dim,
+                hidden_size=hidden_size,
+                num_attention_heads=num_heads,
+                partial_rotary_factor=1.0,
+            )
+            return nn.ModuleDict({
+                'rotary_emb': MistralRotaryEmbedding(config=rotary_config)
+            })
+
+        else:
+            raise ValueError(f"Unknown rotary type: {rotary_type}")
 
     def forward(
         self,
@@ -235,9 +260,45 @@ class Apriel2Attention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[tuple] = None,
+        past_key_values: Optional[Any] = None,
+        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-        return self.self_attn(hidden_states, position_embeddings, attention_mask, **kwargs)
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_values is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        # Select attention implementation
+        attention_interface = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,
+            **kwargs,
+        )
+
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, attn_weights
 
     def preprocess(
         self,
@@ -265,20 +326,18 @@ class Apriel2Attention(nn.Module):
             position_embeddings = (cos, sin)
 
         # Compute mask based on mixer config
-        is_causal = self.mixer_config.get('causal', True)
-        if is_causal and kwargs.get('cache_position') is not None:
+        if self.is_causal and kwargs.get('cache_position') is not None:
             # Causal attention - compute causal mask
-            sliding_window = self.mixer_config.get('sliding_window', None)
-            mask_function = create_causal_mask if sliding_window is None else create_sliding_window_causal_mask
+            mask_function = create_causal_mask if self.sliding_window is None else create_sliding_window_causal_mask
 
             # Build config for mask creation
             mask_config = SimpleNamespace(
                 hidden_size=self.config.hidden_size,
-                num_attention_heads=self.mixer_config.get('heads', 32),
-                num_key_value_heads=self.mixer_config.get('head_groups', self.mixer_config.get('heads', 32)),
-                head_dim=self.mixer_config.get('head_size', self.config.hidden_size // self.mixer_config.get('heads', 32)),
+                num_attention_heads=self.num_heads,
+                num_key_value_heads=self.num_key_value_heads,
+                head_dim=self.head_dim,
                 max_position_embeddings=self.config.embeddings["max_position_embeddings"],
-                sliding_window=sliding_window,
+                sliding_window=self.sliding_window,
                 _attn_implementation=getattr(self.config, '_attn_implementation', 'eager'),
             )
 
@@ -1519,7 +1578,11 @@ class Apriel2Embeddings(nn.Module):
         x = x.view(batch_size, hidden_size, h * w)
 
         # Transpose to sequence format: [batch, hidden, num_patches] -> [batch, num_patches, hidden]
-        x = x.transpose(1, 2)
+        # NOTE: .contiguous() is required to match Pixtral's numerical behavior.
+        # Pixtral concatenates patches before normalization, which makes the tensor contiguous.
+        # Without this, RMSNorm produces slightly different results (~4.7e-7) due to
+        # floating-point computation order differences on non-contiguous tensors.
+        x = x.transpose(1, 2).contiguous()
 
         # Apply normalization
         x = self.normalization(x)
@@ -1527,17 +1590,111 @@ class Apriel2Embeddings(nn.Module):
         return x
 
 
+def _generate_block_attention_mask(
+    patch_counts: list[int],
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:
+    """Generate block diagonal attention mask to isolate images.
+
+    Like Pixtral's generate_block_attention_mask: each image can only attend
+    to its own patches, preventing cross-image attention.
+
+    Args:
+        patch_counts: List of patch counts per image [n1, n2, ...]
+        hidden_states: Hidden states tensor for dtype/device [1, total_patches, hidden]
+
+    Returns:
+        attention_mask: [1, 1, total_patches, total_patches] with 0 for allowed, -inf for blocked
+    """
+    dtype = hidden_states.dtype
+    device = hidden_states.device
+    seq_len = hidden_states.shape[1]
+    d_min = torch.finfo(dtype).min
+
+    # Start with all blocked
+    mask = torch.full((seq_len, seq_len), fill_value=d_min, dtype=dtype, device=device)
+
+    # Unblock each image's diagonal block
+    block_end_idx = torch.tensor(patch_counts, device=device).cumsum(-1)
+    block_start_idx = torch.cat([torch.tensor([0], device=device), block_end_idx[:-1]])
+
+    for start, end in zip(block_start_idx, block_end_idx):
+        mask[start:end, start:end] = 0
+
+    return mask[None, None, :, :]
+
+
+def _compute_2d_position_ids(
+    patch_embeds_list: list[torch.Tensor],
+    max_patches_per_side: int,
+    patch_size: int,
+) -> torch.Tensor:
+    """Compute 2D position IDs for concatenated patches.
+
+    Like Pixtral's position_ids_in_meshgrid: computes position_id = h * max_width + w
+    for each patch, then concatenates across all images.
+
+    Args:
+        patch_embeds_list: List of patch embeddings [patches_i, hidden] per image
+        max_patches_per_side: Maximum patches per side for position encoding
+        patch_size: Size of each patch
+
+    Returns:
+        position_ids: [total_patches] tensor of position IDs
+    """
+    positions = []
+    for patch_embed in patch_embeds_list:
+        # Infer grid dimensions from number of patches
+        # This assumes patches are flattened from a grid
+        num_patches = patch_embed.shape[0]
+
+        # For now, assume square grid or use the stored dimensions
+        # We'll get actual h, w from the caller
+        height = width = int(num_patches ** 0.5)
+        if height * width != num_patches:
+            # Non-square: will be handled by caller passing dimensions
+            height = width = int(num_patches ** 0.5)
+
+        mesh = torch.meshgrid(
+            torch.arange(height, device=patch_embed.device),
+            torch.arange(width, device=patch_embed.device),
+            indexing="ij"
+        )
+        h_grid, w_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        ids = h_grid * max_patches_per_side + w_grid
+        positions.append(ids[:, 0])
+
+    return torch.cat(positions)
+
+
 class Apriel2VisionEncoder(nn.Module):
-    """Vision encoder with embeddings, transformer blocks, and adapter."""
+    """Vision encoder with embeddings, transformer blocks, and adapter.
+
+    Uses Pixtral-style processing: concatenates all image patches into one sequence
+    with block attention masks to isolate images. This matches Fast-LLM's approach.
+    """
 
     def __init__(self, vision_encoder_config: dict, text_config: Apriel2Config):
         super().__init__()
 
-        self.hidden_size = vision_encoder_config.get("hidden_size", 1024)
+        self.hidden_size = vision_encoder_config["hidden_size"]
 
         # Build embeddings layer
-        embeddings_config = vision_encoder_config.get("embeddings", {})
+        embeddings_config = vision_encoder_config["embeddings"]
         self.embeddings = Apriel2Embeddings(self.hidden_size, embeddings_config)
+
+        # Store patch size for 2D position_ids computation
+        self.patch_size = embeddings_config["patch_height"]
+
+        # Get max_patches_per_side from rotary config for position_ids computation
+        encoder_config = vision_encoder_config["encoder"]
+        block_config = encoder_config.get("block", encoder_config.get("blocks", {}).get(encoder_config.get("pattern", [""])[0], {}))
+        rotary_config = block_config["mixer"]["rotary"]
+        max_image_size = rotary_config["max_image_size"]
+        self.max_patches_per_side = max_image_size // self.patch_size
+
+        # Store attention implementation for choosing mask strategy
+        self._attn_implementation = getattr(text_config, "_attn_implementation", "eager")
 
         # Build vision transformer encoder using shared BlockSequence abstraction
         encoder_config = vision_encoder_config.get("encoder", {})
@@ -1550,7 +1707,7 @@ class Apriel2VisionEncoder(nn.Module):
             hidden_size=self.hidden_size,
             embeddings={"max_position_embeddings": 1024},  # Large enough for typical vision use cases
             head={"normalization": {"type": "rms_norm", "epsilon": norm_epsilon}},
-            _attn_implementation=getattr(text_config, "_attn_implementation", "eager"),
+            _attn_implementation=self._attn_implementation,
         )
 
         # Vision encoder block sequence
@@ -1585,34 +1742,74 @@ class Apriel2VisionEncoder(nn.Module):
             raise ValueError(f"Unknown adapter type: {adapter_type}")
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """
+        """Process images through vision encoder using Pixtral-style concatenation.
+
+        All image patches are concatenated into ONE sequence with block attention
+        masks to prevent cross-image attention. This matches Fast-LLM and Pixtral.
+
         Args:
-            pixel_values: [batch, channels, height, width]
+            pixel_values: [batch, channels, height, width] - batch of images
+
         Returns:
             image_features: [batch, num_patches, text_hidden_size]
         """
-        # Embeddings: [batch, channels, height, width] -> [batch, num_patches, vision_hidden]
-        hidden_states = self.embeddings(pixel_values)
+        batch_size = pixel_values.shape[0]
+        _, _, img_height, img_width = pixel_values.shape
+        height_patches = img_height // self.patch_size
+        width_patches = img_width // self.patch_size
+        num_patches_per_image = height_patches * width_patches
 
-        batch_size, num_patches = hidden_states.shape[:2]
+        # Process each image through embeddings independently, then concatenate
+        # This mirrors Pixtral's approach of processing conv independently
+        patch_embeds_list = []
+        for i in range(batch_size):
+            # [1, channels, H, W] -> [1, num_patches, hidden]
+            embed = self.embeddings(pixel_values[i : i + 1])
+            # [num_patches, hidden]
+            patch_embeds_list.append(embed.squeeze(0))
 
-        # Create position_ids for vision patches: [0, 1, 2, ..., num_patches-1]
-        position_ids = torch.arange(num_patches, device=hidden_states.device).unsqueeze(0).expand(batch_size, -1)
+        # Concatenate all patches into one sequence: [1, total_patches, hidden]
+        hidden_states = torch.cat(patch_embeds_list, dim=0).unsqueeze(0)
+
+        # Compute position IDs for each image (same 2D grid for each)
+        # position_id = h * max_patches_per_side + w
+        positions = []
+        for _ in range(batch_size):
+            mesh = torch.meshgrid(
+                torch.arange(height_patches, device=hidden_states.device),
+                torch.arange(width_patches, device=hidden_states.device),
+                indexing="ij"
+            )
+            h_grid, w_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+            ids = h_grid * self.max_patches_per_side + w_grid
+            positions.append(ids[:, 0])
+        position_ids = torch.cat(positions).unsqueeze(0)  # [1, total_patches]
+
+        # Generate block attention mask for non-flash attention
+        # For flash_attention_2, we rely on position_ids only (like Pixtral)
+        patch_counts = [num_patches_per_image] * batch_size
+        if self._attn_implementation == "flash_attention_2":
+            attention_mask = None
+        else:
+            attention_mask = _generate_block_attention_mask(patch_counts, hidden_states)
 
         # Forward through vision encoder block sequence
         hidden_states, _, _ = self.encoder(
             hidden_states,
-            attention_mask=None,  # Vision doesn't use causal masking
+            attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_values=None,  # Vision encoding doesn't use cache
+            past_key_values=None,
             output_attentions=False,
             output_hidden_states=False,
             use_cache=False,
             cache_position=None,
         )
 
-        # Adapter/projector: [batch, num_patches, vision_hidden] -> [batch, num_patches, text_hidden]
+        # Adapter/projector: [1, total_patches, vision_hidden] -> [1, total_patches, text_hidden]
         image_features = self.adapter(hidden_states)
+
+        # Reshape back to [batch, num_patches, text_hidden]
+        image_features = image_features.squeeze(0).view(batch_size, num_patches_per_image, -1)
 
         return image_features
 

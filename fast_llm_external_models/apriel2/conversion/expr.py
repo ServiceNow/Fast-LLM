@@ -42,8 +42,8 @@ Weight Paths
 The `W` class builds structured weight key paths:
 
     layer = W("model", "decoder", "blocks", 0)
-    q_weight = layer / "mixer" / "self_attn" / "q_proj" / "weight"
-    # Result: "model.decoder.blocks.0.mixer.self_attn.q_proj.weight"
+    q_weight = layer / "mixer" / "q_proj" / "weight"
+    # Result: "model.decoder.blocks.0.mixer.q_proj.weight"
 
 W is a string subclass, so it can be used directly as a dict key.
 """
@@ -71,8 +71,8 @@ class W(str):
 
     Usage:
         mixer = W("model", "decoder", "blocks", 0, "mixer")
-        q = mixer / "self_attn" / "q_proj" / "weight"
-        # Result: "model.decoder.blocks.0.mixer.self_attn.q_proj.weight"
+        q = mixer / "q_proj" / "weight"
+        # Result: "model.decoder.blocks.0.mixer.q_proj.weight"
 
         # Use directly - it's already a string!
         mappings[q] = Ref(key=source_q)
