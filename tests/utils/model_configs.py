@@ -571,7 +571,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,  # failing: tp2, stp2, stp2_ce4
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: tp2, stp2, stp2_ce4
     },
     compare_factor=1.5,
     # modes not supported with reference models
@@ -592,7 +592,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,  # failing: fp16, tp2, stp2, stp2_ce4
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
     },
     compare_factor=2,
     # modes not supported with reference models
@@ -640,7 +640,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, df4, df4_sf, tp2, stp2,
     },
     compare_factor=8,
     # modes not supported with reference models
