@@ -362,8 +362,7 @@ def _test_forward_return_hidden_states(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
 
-    # hidden_states include embeddings layer
-    assert len(res_fast_llm.hidden_states) - 1 == len(fast_llm_model.config.fast_llm_config.base_model.decoder)
+    assert len(res_fast_llm.hidden_states) == fast_llm_model.config.fast_llm_config.base_model.decoder.num_blocks
 
 
 @pytest.mark.extra_slow
