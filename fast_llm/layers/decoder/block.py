@@ -4,7 +4,7 @@ import typing
 
 import torch
 
-from fast_llm.core.distributed import set_generator
+from fast_llm.core.distributed import ReduceOp, all_reduce, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -140,13 +140,6 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
 
         hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
 
-        if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "mixer output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
-            )
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         self._debug(input_, "mixer_residual", kwargs.get(BlockKwargs.hidden_dims), kwargs)
@@ -177,7 +170,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             and self.training
             and (teacher_output := activation_targets.pop(self.module_name, None)) is not None
         ):
-            # Compare student mixer output with the teacher’s stored activation and accumulate the loss.
+            # Compare student mixer output with the teacher's stored activation and accumulate the loss.
             teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
             # TODO: un-scaled loss for reporting? Average loss over layers?
@@ -185,9 +178,19 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             activation_loss_factor = self._config.activation_distillation_factor
             # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
             # TODO: handle possible padding?
-            activation_loss = activation_loss_factor * torch.mean(
-                torch.norm(mixer_output - teacher_tensor, p=2, dim=(2))
-            )
+            local_loss_sum = torch.sum(torch.norm(mixer_output - teacher_tensor, p=2, dim=(2)))
+            # mixer_output.shape is (batch, sequence, hidden) or (sequence, batch, hidden)
+            # In either case, dims 0 and 1 are batch and sequence
+            total_count = mixer_output.shape[0] * mixer_output.shape[1]
+
+            # All-reduce across tensor-parallel group if sequence-parallel is enabled
+            if self._sequence_parallel and self._distributed.tensor_group is not None:
+                all_reduce(local_loss_sum, group=self._distributed.tensor_group, op=ReduceOp.SUM)
+                # Assume all ranks contribute the same count (not the case if padding)
+                total_count *= self._distributed.tensor_group.size()
+
+            activation_loss = activation_loss_factor * (local_loss_sum / total_count)
+
             # Backward hooks
             hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
             bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
