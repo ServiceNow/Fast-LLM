@@ -11,7 +11,6 @@ import pytest
 
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
-from tests.utils.dataset import get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import MODEL_CONFIGS, ModelTestingConfig
 
@@ -106,7 +105,7 @@ def do_run_test_script_for_all_models(
     runnable_type: str = "train",
 ):
     Assert.leq(distributed_testing_config.num_gpus, DistributedConfig.default_world_size)
-    get_model_test_dataset()
+    model_testing_config.get_dataset()
 
     # Propagate certain config args to reference models if they exist
     propagated_args = []

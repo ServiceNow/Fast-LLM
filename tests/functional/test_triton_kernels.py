@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import (
     MAX_DROPLESS_BLOCK_SIZE_ROW,
     ActivationType,
@@ -83,7 +84,7 @@ def test_triton_add():
 @requires_cuda
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "num_heads", "head_size"),
-    [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134)],
+    [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134), (2, 100000, 2, 4)],
 )
 def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     assert TritonConfig.TRITON_ENABLED
@@ -92,7 +93,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     y1 = apply_rotary_embeddings(
         x,
         DefaultRotaryConfig(triton=False)
-        .get_layer(None)
+        .get_layer(TensorDim("", head_size))
         ._get_frequencies(
             sequence_length,
             head_size,
@@ -104,7 +105,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
         triton_rotary_(
             convert_rotary_complex_to_real(x, head_size, 3),
             DefaultRotaryConfig(triton=True)
-            .get_layer(None)
+            .get_layer(TensorDim("", head_size))
             ._get_frequencies(sequence_length, head_size, device="cuda"),
         ),
         head_size,

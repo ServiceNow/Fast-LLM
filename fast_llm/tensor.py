@@ -76,6 +76,7 @@ class TensorMeta(torch.Tensor):
         self._reductions = reductions
         for dim, op in reductions:
             assert isinstance(dim, DistributedDim), dim
+        self._variable_shape = any(dim.variable_size for dim in self.dims)
 
     def __new__(
         cls,
@@ -142,14 +143,22 @@ class TensorMeta(torch.Tensor):
     def global_shape(self) -> torch.Size:
         return torch.Size([dim.global_size for dim in self.dims])
 
-    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def verify_shape(self, tensor: torch.Tensor, global_: bool = False):
+        if self._variable_shape:
+            for size, dim in zip(tensor.shape, self.dims, strict=True):
+                if not dim.variable_size:
+                    Assert.eq(size, dim.global_size if global_ else dim.size, msg=self)
+        else:
+            Assert.eq(tensor.shape, self.global_shape if global_ else self.shape, msg=self)
+
+    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
         """
         Reconstruct a global tensor from its distributed slices. Support lazy-loaded safetensor slices.
         Returns a view of the input tensor (or the input tensor itself) when possible.
         """
         if tensor.ndim == 0:
             tensor = tensor[None]
-        Assert.eq(tensor.shape, self.shape)
+        self.verify_shape(tensor, False)
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
         is_first_rank, modified = True, False
@@ -167,7 +176,7 @@ class TensorMeta(torch.Tensor):
                     tensor = tensor.clone()
                 tensor = reduce_op(tensor, distributed_dim.group, op=op)
                 is_first_rank, modified = is_first_rank and distributed_dim.group.rank() == 0, True
-        Assert.eq(tensor.shape, self.global_shape)
+        self.verify_shape(tensor, True)
         return tensor, is_first_rank
 
     def local_to_global_partial(self, tensor: torch.Tensor, fill_value: float | int = -1) -> torch.Tensor:
@@ -179,13 +188,13 @@ class TensorMeta(torch.Tensor):
         """
         if tensor.ndim == 0:
             tensor = tensor[None]
-        Assert.eq(tensor.shape, self.shape)
+        self.verify_shape(tensor, False)
         assert not self._reductions
         for dim, tensor_dim in enumerate(self.dims):
             if tensor_dim.is_parallel:
                 tensor = tensor_dim.local_to_global_partial(tensor, dim, fill_value)
 
-        Assert.eq(tensor.shape, self.global_shape)
+        self.verify_shape(tensor, True)
         return tensor
 
     def global_to_local(self, tensor: torch.Tensor | SafeTensorSlice) -> torch.Tensor:
@@ -198,12 +207,12 @@ class TensorMeta(torch.Tensor):
         assert not self._reductions
         if tensor.ndim == 0:
             tensor = tensor[None]
-        Assert.eq(tensor.shape, self.global_shape, msg=self)
+        self.verify_shape(tensor, True)
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
             tensor = tensor_dim.global_to_local(tensor, dim)
 
-        Assert.eq(tensor.shape, self.shape, msg=self)
+        self.verify_shape(tensor, False)
         return tensor
 
     @classmethod

@@ -93,7 +93,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )
@@ -101,7 +101,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mlp = self._config.mlp.get_layer(
             self._distributed_config,
             self._hidden_dim,
-            self._lr_scale,
+            lr_scale=self._lr_scale,
             peft=peft,
             return_bias=True,
         )
@@ -132,12 +132,10 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 dims = (TensorDim("stacked_input_output", 2),) + dims
             return TensorMeta.from_dims(dims, tensor_name=f"{self.module_name} output", dtype=input_.dtype)
         generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
-        if self._debug.enabled:
-            self._debug(None, "begin", kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(None, "begin", kwargs.get(BlockKwargs.hidden_dims), kwargs)
         fw_input = input_
         hidden_states = self.norm_1(input_)
-        if self._debug.enabled:
-            self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(hidden_states, "norm_1", kwargs.get(BlockKwargs.hidden_dims), kwargs)
         hidden_states, bias = self.mixer(hidden_states, kwargs)
 
         hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
@@ -151,23 +149,14 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             )
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug.enabled:
-            self._debug(input_, "mixer residual", kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(input_, "mixer_residual", kwargs.get(BlockKwargs.hidden_dims), kwargs)
         hidden_states = self.norm_2(input_)
-        if self._debug.enabled:
-            self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(hidden_states, "norm_2", kwargs.get(BlockKwargs.hidden_dims), kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
-        if self._debug.enabled:
-            self._debug(
-                hidden_states if bias is None else hidden_states + bias,
-                "MLP output",
-                kwargs[BlockKwargs.hidden_dims],
-                kwargs,
-            )
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug.enabled:
-            self._debug(None, "MLP residual", kwargs[BlockKwargs.hidden_dims], kwargs)
+        self._debug(hidden_states, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+
         if self._return_input:
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
@@ -217,9 +206,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             )
         )
 
-    def preprocess(self, batch: torch.Tensor, kwargs: dict[str, typing.Any]) -> None:
-        self.mixer.preprocess(batch, kwargs)
-        self.mlp.preprocess(batch, kwargs)
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        self.mixer.preprocess(kwargs)
+        self.mlp.preprocess(kwargs)
 
     # TODO: add layer_index
     _activation_distillation_loss_name = "activation_distillation_loss"

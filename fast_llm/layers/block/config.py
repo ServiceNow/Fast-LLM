@@ -43,6 +43,10 @@ class BlockKwargs:
     activation_distillation_storage = "activation_distillation_storage"
     activation_distillation_targets = "activation_distillation_targets"
     activation_distillation_total = "activation_distillation_total"
+    iteration = "iteration"
+    device = "device"
+    hidden_states = "hidden_states"
+    output_hidden_states = "output_hidden_states"
 
 
 @config_class(registry=True)
@@ -77,6 +81,7 @@ class BlockConfig(ModuleConfig):
         self,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
+        *,
         lr_scale: float | None,
         peft: PeftConfig | None,
     ) -> "BlockBase":

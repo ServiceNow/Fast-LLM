@@ -1,12 +1,15 @@
 import numpy as np
+import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
-from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.sample.token import TokenSample
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class GPTFimDataset(SampledDataset):
+class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType]):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
@@ -15,7 +18,7 @@ class GPTFimDataset(SampledDataset):
     def __init__(
         self,
         config: FimConfig,
-        dataset: SampledDataset,
+        dataset: SampledDataset[SampleType],
         sampling: GPTSamplingData,
     ):
         if sampling.parameters.use_loss_masking_spans:
@@ -26,7 +29,7 @@ class GPTFimDataset(SampledDataset):
         self._dataset = dataset
 
         self._seed = sampling.config.seed
-        self._tokenizer = sampling.tokenizer
+        self._tokenizer = self._config.tokenizer.get_tokenizer()
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
@@ -40,11 +43,18 @@ class GPTFimDataset(SampledDataset):
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, idx: int) -> np.ndarray:
-        fim_token_ids = self._fim(
-            self._dataset[idx].token_ids, np.random.RandomState(seed=(self._seed + idx) % MAX_SEED)
+    def __getitem__(self, index: int) -> SampleType:
+        # TODO: Use torch methods to avoid back and forth.
+        return LanguageModelSample(
+            TokenSample(
+                torch.from_numpy(
+                    self._fim(
+                        self._dataset[index].tokens.tokens.numpy(),
+                        np.random.RandomState(seed=(self._seed + index) % MAX_SEED),
+                    )
+                )
+            )
         )
-        return GPTSample(fim_token_ids)
 
     @property
     def name(self) -> str:
@@ -55,6 +65,7 @@ class GPTFimDataset(SampledDataset):
         # TODO: permute segments in sample_list, before concatenating.
         sample_len = sample.shape[0]
         eod = self._tokenizer.eod
+        # TODO: Available through `tokens.lengths`
         segment_breaks = np.argwhere(sample == eod)  # split sample by document
 
         if segment_breaks.shape != (0, 1):  # then there is an EOD token in this example
@@ -73,19 +84,19 @@ class GPTFimDataset(SampledDataset):
             permuted = self._fim_split_and_permute_sequence(sample[curr_start_position:], np_rng)
             new_samples.append(permuted)
 
-            sample = np.concatenate(new_samples)
+            fim_sample = np.concatenate(new_samples)
         else:
-            sample = self._fim_split_and_permute_sequence(sample, np_rng)
+            fim_sample = self._fim_split_and_permute_sequence(sample, np_rng)
 
         # Truncate or pad sequence to max-length
-        diff = sample.shape[0] - sample_len
+        diff = fim_sample.shape[0] - sample_len
         if diff > 0:  # too long
-            sample = sample[:sample_len]
+            fim_sample = fim_sample[:sample_len]
         elif diff < 0:  # too short
-            sample = np.concatenate([sample, np.full((-1 * diff), self._pad_tok_id)])
+            fim_sample = np.concatenate([fim_sample, np.full((-1 * diff), self._pad_tok_id)])  # noqa
 
-        assert sample.shape[0] == sample_len
-        return sample
+        assert fim_sample.shape[0] == sample_len
+        return fim_sample.astype(sample.dtype)
 
     def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         """
@@ -158,9 +169,10 @@ class GPTFimDataset(SampledDataset):
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix, end=False)], dtype=np.int64)
-        middle = np.array([*self._tokenizer.tokenize(middle, begin=False, end=False)], dtype=np.int64)
-        suffix = np.array([*self._tokenizer.tokenize(suffix, begin=False)], dtype=np.int64)
+        data_type = DataType.from_numpy(sequence.dtype)
+        prefix = self._tokenizer.tokenize(prefix, end=False, data_type=data_type).numpy()
+        middle = self._tokenizer.tokenize(middle, begin=False, end=False, data_type=data_type).numpy()
+        suffix = self._tokenizer.tokenize(suffix, begin=False, data_type=data_type).numpy()
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?
