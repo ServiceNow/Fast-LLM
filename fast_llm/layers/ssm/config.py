@@ -202,9 +202,11 @@ class KimiDeltaAttentionConfig(MixerConfig):
             if "epsilon" not in self.normalization._explicit_fields:
                 self.normalization.epsilon = 1.0e-5
             if "activation" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.activation = "sigmoid"
+                self.convolution_layer.activation = "silu"
             if "kernel_size" not in self.convolution_layer._explicit_fields:
                 self.convolution_layer.kernel_size = 4
+            if "activation" not in self.normalization._explicit_fields:
+                self.normalization.activation = "sigmoid"
 
         super()._validate()
 
