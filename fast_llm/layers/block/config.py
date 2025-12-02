@@ -42,7 +42,6 @@ class BlockKwargs:
     grad_output = "grad_output"
     activation_distillation_storage = "activation_distillation_storage"
     activation_distillation_targets = "activation_distillation_targets"
-    activation_distillation_total = "activation_distillation_total"
     iteration = "iteration"
     device = "device"
     hidden_states = "hidden_states"
