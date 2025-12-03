@@ -188,6 +188,37 @@ MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
 # Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
 init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
+base_model = {
+    "embeddings": {
+        "word_embeddings": init_1,
+        "position_embeddings": {"enabled": True, **init_1},
+        "num_position_embeddings": 512,
+        "vocab_size": MODEL_TEST_VOCAB_SIZE,
+    },
+    "decoder": {
+        "block": {
+            "mixer": {
+                "query_layer": {"weight": init_1},
+                "key_layer": {"weight": init_1},
+                "value_layer": {"weight": init_1},
+                "dense_layer": {"weight": init_2},
+                "heads": 8,
+                "head_groups": 8,
+                "head_size": 32,
+                # "cross_document_attention":False,
+            },
+            "mlp": {
+                "layer_1": {"weight": init_1},
+                "layer_2": {"weight": init_2},
+                "intermediate_size": 1024,
+            },
+        },
+        "num_blocks": 2,
+    },
+    "head": {"output_weight": init_1},
+    "hidden_size": 256,
+    "tied_embedding_weight": True,
+}
 
 MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
@@ -207,37 +238,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "timeout": 30,
         },
         "model": {
-            "base_model": {
-                "embeddings": {
-                    "word_embeddings": init_1,
-                    "position_embeddings": {"enabled": True, **init_1},
-                    "num_position_embeddings": 512,
-                    "vocab_size": MODEL_TEST_VOCAB_SIZE,
-                },
-                "decoder": {
-                    "block": {
-                        "mixer": {
-                            "query_layer": {"weight": init_1},
-                            "key_layer": {"weight": init_1},
-                            "value_layer": {"weight": init_1},
-                            "dense_layer": {"weight": init_2},
-                            "heads": 8,
-                            "head_groups": 8,
-                            "head_size": 32,
-                            # "cross_document_attention":False,
-                        },
-                        "mlp": {
-                            "layer_1": {"weight": init_1},
-                            "layer_2": {"weight": init_2},
-                            "intermediate_size": 1024,
-                        },
-                    },
-                    "num_blocks": 2,
-                },
-                "head": {"output_weight": init_1},
-                "hidden_size": 256,
-                "tied_embedding_weight": True,
-            },
+            "base_model": base_model,
             "multi_stage": {
                 "debug_param_init": _LOG_LEVEL,
                 "debug_layer_outputs": _LOG_LEVEL,
@@ -546,20 +547,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "head", "distillation_model"): "teacher",
         ("reference_models"): {
             "teacher": {
-                "model": {
-                    "base_model": {
-                        "embeddings": {
-                            "vocab_size": MODEL_TEST_VOCAB_SIZE,
-                        },
-                        "decoder": {
-                            "block": {
-                                "mixer": {
-                                    "head_groups": 2,
-                                },
-                            },
-                        },
-                    },
-                },
+                "model": {"base_model": base_model},
             },
         },
     },
@@ -608,25 +596,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {
             "teacher": {
-                "model": {
-                    "base_model": {
-                        "head": {
-                            "cross_entropy_implementation": "fused",
-                        },
-                        "embeddings": {
-                            "vocab_size": MODEL_TEST_VOCAB_SIZE,
-                        },
-                        "decoder": {
-                            "block": {
-                                "mixer": {
-                                    "head_groups": 2,
-                                },
-                            },
-                            "num_blocks": 2,  # number of blocks and hidden-size must match student
-                        },
-                        "hidden_size": 256,
-                    },
-                },
+                "model": {"base_model": base_model},
             },
         },
     },
