@@ -84,7 +84,7 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
 
 class Apriel2VisionBlockConverter(PixtralBlockConverter):
     mixer_converter_class: typing.ClassVar[type[Apriel2VisionAttentionConverter]] = Apriel2VisionAttentionConverter
-    hf_mixer_name: typing.ClassVar[str] = "mixer.self_attn"
+    hf_mixer_name: typing.ClassVar[str] = "mixer"
     hf_mlp_name: typing.ClassVar[str] = "mlp"
     hf_norm_1_name: typing.ClassVar[str] = "input_layernorm"
     hf_norm_2_name: typing.ClassVar[str] = "post_attention_layernorm"

@@ -246,7 +246,7 @@ class Apriel2StochasticMixerConverter:
             mixer_type = type(sub_mixer)
             if mixer_type is AttentionConfig:
                 converter_class = Apriel2AttentionConverter
-                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}.self_attn"
+                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
             elif mixer_type is Mamba2Config:
                 converter_class = Apriel2MambaConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
@@ -359,7 +359,7 @@ class Apriel2BlockConverter:
         mixer_type = type(config.mixer)
         if mixer_type is AttentionConfig:
             converter_class = Apriel2AttentionConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer.self_attn"
+            hf_mixer_prefix = f"{hf_prefix}.mixer"
         elif mixer_type is Mamba2Config:
             converter_class = Apriel2MambaConverter
             hf_mixer_prefix = f"{hf_prefix}.mixer"
