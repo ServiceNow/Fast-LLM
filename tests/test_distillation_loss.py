@@ -10,8 +10,8 @@ from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 
 
-def _mp_worker(rank: int, world_size: int, init_method: str, fn_name: str, fn_args: tuple):
-    fn = _WORKERS[fn_name]
+def _mp_worker(rank: int, world_size: int, init_method: str, fn_args: tuple):
+    fn = combined_worker
     dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, init_method=init_method)
     try:
         fn(rank, dist.group.WORLD, *fn_args)
@@ -29,7 +29,7 @@ def _spawn_dist(world_size: int, fn, *fn_args):
     try:
         mp.spawn(
             _mp_worker,
-            args=(world_size, init_method, fn.__name__, fn_args),
+            args=(world_size, init_method, fn_args),
             nprocs=world_size,
             join=True,
             start_method="spawn",
@@ -170,17 +170,14 @@ def _ce_vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
     torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-6)
 
 
-_WORKERS = {"_vocab_tp_worker": _vocab_tp_worker, "_ce_vocab_tp_worker": _ce_vocab_tp_worker}
+def combined_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
+    _vocab_tp_worker(rank, group, use_mask)
+    _ce_vocab_tp_worker(rank, group, use_mask)
 
 
 @pytest.mark.parametrize("use_mask", [True, False])
-def test_reverse_kl_vocab_tp_two_ranks(use_mask):
-    _spawn_dist(2, _vocab_tp_worker, use_mask)
-
-
-@pytest.mark.parametrize("use_mask", [True, False])
-def test_cross_entropy_vocab_tp_two_ranks(use_mask):
-    _spawn_dist(2, _ce_vocab_tp_worker, use_mask)
+def test_reverse_combined(use_mask):
+    _spawn_dist(2, combined_worker, use_mask)
 
 
 if __name__ == "__main__":
