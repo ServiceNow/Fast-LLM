@@ -168,7 +168,7 @@ class LlavaVisionAdapterConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "intermediate_size": config["vision_config"]["hidden_size"],
+            "intermediate_size": config["text_config"]["hidden_size"],
             "add_linear_biases": config["multimodal_projector_bias"],
             "gated": False,
             "activation": ActivationType.from_hf_name(config["projector_hidden_act"]),
