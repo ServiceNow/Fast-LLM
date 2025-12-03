@@ -40,7 +40,6 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
-    activation_distillation_storage = "activation_distillation_storage"
     activation_distillation_targets = "activation_distillation_targets"
     iteration = "iteration"
     device = "device"

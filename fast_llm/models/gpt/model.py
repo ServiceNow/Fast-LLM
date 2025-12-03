@@ -1,4 +1,5 @@
 import logging
+import re
 import typing
 
 import torch
@@ -157,7 +158,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
-        setup_activation_storage: bool = False,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
@@ -176,12 +176,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
             ]
 
+            # Set output_hidden_states in reference metadata before preprocessing if needed for distillation
+            if name in distillation_models:
+                reference_output_hidden_states = [r"decoder\.\d+\.mixer_output$"]
+                for _, ref_kwargs_meta in reference_preprocessed_meta:
+                    ref_kwargs_meta[BlockKwargs.output_hidden_states] = [
+                        re.compile(pattern) for pattern in reference_output_hidden_states
+                    ]
+
             reference_batch = reference_model.fast_llm_model.base_model.preprocess_batch(
                 batch,
                 reference_preprocessed_meta,
                 phase=PhaseType.inference,
                 iteration=iteration,
-                setup_activation_storage=name in distillation_models,
             )
 
             # TODO: Do things work with >1?
@@ -189,11 +196,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
-                if BlockKwargs.activation_distillation_storage in reference_kwargs:
-                    reference_logits[i][f"{name}_activations"] = reference_kwargs[
-                        BlockKwargs.activation_distillation_storage
-                    ]
-                    del reference_kwargs[BlockKwargs.activation_distillation_storage]
+                if BlockKwargs.hidden_states in reference_kwargs and reference_kwargs[BlockKwargs.hidden_states]:
+                    # Extract activations from hidden_states dict (stored by _debug method)
+                    # Format: {layer_name: (meta, tensor), ...}
+                    activations = {
+                        layer_name: tensor
+                        for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
+                    }
+                    reference_logits[i][f"{name}_activations"] = activations
 
         preprocessed = []
         presents = None
@@ -218,9 +228,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 **reference_logits[i],
             }
 
-            if setup_activation_storage:
-                # Teacher: add storage for activations
-                kwargs.setdefault(BlockKwargs.activation_distillation_storage, {})
             # Add activation-distillation targets
             assert len(distillation_models) <= 1
             for distillation_model in distillation_models:

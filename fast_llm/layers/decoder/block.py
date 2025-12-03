@@ -156,21 +156,21 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
 
     def activation_distillation_loss(self, hidden_states, bias, kwargs, losses):
         """
-        Maybe apply activation distillation loss and setup backward hooks
+        Maybe apply activation distillation loss and setup backward hooks.
         """
-        # Teacher populates mixer activations for distillation.
-        activation_storage = kwargs.get(BlockKwargs.activation_distillation_storage)
-        if activation_storage is not None:
-            mixer_output = hidden_states if bias is None else hidden_states + bias
-            activation_storage[self.module_name] = mixer_output.detach()
+        mixer_output = hidden_states if bias is None else hidden_states + bias
+
+        # Teacher: output mixer activations via _debug interface
+        self._debug(mixer_output.detach(), "mixer_output", kwargs.get(BlockKwargs.hidden_dims), kwargs)
+
         # Student gets teacher activations and computes the activation-level loss.
         activation_targets = kwargs.get(BlockKwargs.activation_distillation_targets)
+        key = f"{self.module_name}.mixer_output"
         if (
             activation_targets is not None
             and self.training
-            and (teacher_output := activation_targets.pop(self.module_name, None)) is not None
+            and (teacher_output := activation_targets.pop(key, None)) is not None
         ):
-            mixer_output = hidden_states if bias is None else hidden_states + bias
             # Compare student mixer output with the teacher's stored activation and accumulate the loss.
             teacher_tensor = teacher_output.detach().to(device=mixer_output.device, dtype=mixer_output.dtype)
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
