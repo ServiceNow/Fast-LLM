@@ -243,13 +243,13 @@ class LlavaVisionModelConverter:
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
             *cls.embeddings_converter_class.get_converters(
-                config.embeddings, "vision_encoder.embeddings", "model.vision_tower"
+                config.embeddings, "vision_encoder.embeddings", "vision_tower"
             ),
             *cls.encoder_converter_class.get_converters(
-                config.encoder, "vision_encoder.encoder", "model.vision_tower.transformer.layers"
+                config.encoder, "vision_encoder.encoder", "vision_tower.transformer.layers"
             ),
             *cls.vision_adapter_converter_class.get_converters(
-                config.adapter, "vision_encoder.adapter", "model.multi_modal_projector"
+                config.adapter, "vision_encoder.adapter", "multi_modal_projector"
             ),
         ]
 
