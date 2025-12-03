@@ -339,7 +339,7 @@ def reverse_kl_forward_backward(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # TODO: implement fused?
-    distillation_loss, distillation_grad = _torch_cross_entropy_forward_backward(
+    distillation_loss, distillation_grad = _torch_reverse_kl_forward_backward(
         logits=logits,
         target=target,
         loss_mask=loss_mask,

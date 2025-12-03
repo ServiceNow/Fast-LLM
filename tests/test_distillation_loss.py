@@ -64,8 +64,6 @@ def test_reverse_kl_no_tp(use_mask):
         group=None,
         target_format=TargetFormat.logits,
         sequence_parallel_logits=False,
-        group_size=None,
-        vocab_size=vocab_size,
     )
     _assert_loss_and_grad(logits, loss, grad)
 
@@ -108,8 +106,6 @@ def _vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
         group=group,
         target_format=TargetFormat.logits,
         sequence_parallel_logits=False,
-        group_size=world_size,
-        vocab_size=full_vocab,
     )
     _assert_loss_and_grad(logits, loss, grad)
 
@@ -122,8 +118,6 @@ def _vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
             group=None,
             target_format=TargetFormat.logits,
             sequence_parallel_logits=False,
-            group_size=None,
-            vocab_size=full_vocab,
         )
     else:
         ref_loss = torch.zeros_like(loss)
