@@ -144,12 +144,12 @@ def _fused_cross_entropy_forward_backward(
             all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
     else:
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
-
-    # shouldn't the predicted_logits be scaled by the number of ranks so that the average loss is correct? i.e.
-    # i.e. on each rank we calculate log Z - sum_i t_i * z_i, z_i is logit.
-    # then we average: 1/K sum_ranks (log Z - sum_i t_i * z_i)
-    # = log Z - 1/K sum_ranks (sum_i t_i * z_i)
-    # but sum_ranks (sum_i t_i * z_i) = sum_i t_i * z_i (over all vocab), so we need to divide predicted_logits by K to match?
+    if group is not None:
+        # this is needed because on each rank we calculate log Z - sum_i t_i * z_i, z_i is logit.
+        # then we average: 1/K sum_ranks (log Z - sum_i t_i * z_i)
+        # = log Z - 1/K sum_ranks (sum_i t_i * z_i)
+        # but sum_ranks (sum_i t_i * z_i) = sum_i t_i * z_i (over all vocab)
+        predicted_logits = predicted_logits * group.size()
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
     if loss_mask is not None:

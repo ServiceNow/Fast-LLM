@@ -6,8 +6,8 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from fast_llm.functional.config import TargetFormat
-from fast_llm.functional.cross_entropy import reverse_kl_forward_backward
+from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
+from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 
 
 def _mp_worker(rank: int, world_size: int, init_method: str, fn_name: str, fn_args: tuple):
@@ -131,14 +131,62 @@ def _vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
     torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-6)
 
 
-_WORKERS = {
-    "_vocab_tp_worker": _vocab_tp_worker,
-}
+def _ce_vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
+    torch.manual_seed(0)
+    world_size = dist.get_world_size(group)
+
+    batch_size, seq_len, vocab_per_rank = 2, 3, 5
+    full_vocab = vocab_per_rank * world_size
+    full_logits = torch.randn(batch_size, seq_len, full_vocab)
+    full_target = torch.randn(batch_size, seq_len, full_vocab)
+    full_mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]]) if use_mask else None
+
+    start = rank * vocab_per_rank
+    end = start + vocab_per_rank
+    logits = full_logits[:, :, start:end].clone().requires_grad_(True)
+    target = full_target[:, :, start:end].clone()
+    loss_mask = full_mask.clone() if full_mask is not None else None
+
+    loss, grad = cross_entropy_forward_backward(
+        logits=logits,
+        target=target,
+        loss_mask=loss_mask,
+        grad_output=None,
+        group=group,
+        implementation=CrossEntropyImpl.fused,
+        target_format=TargetFormat.logits,
+        logits_scale_factor=1.0,
+    )
+    _assert_loss_and_grad(logits, loss, grad)
+
+    if rank == 0:
+        ref_loss, _ = cross_entropy_forward_backward(
+            logits=full_logits.clone(),
+            target=full_target.clone(),
+            loss_mask=full_mask.clone() if full_mask is not None else None,
+            grad_output=None,
+            group=None,
+            implementation=CrossEntropyImpl.fused,
+            target_format=TargetFormat.logits,
+            logits_scale_factor=1.0,
+        )
+    else:
+        ref_loss = torch.zeros_like(loss)
+    dist.broadcast(ref_loss, src=0, group=group)
+    torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-6)
+
+
+_WORKERS = {"_vocab_tp_worker": _vocab_tp_worker, "_ce_vocab_tp_worker": _ce_vocab_tp_worker}
 
 
 @pytest.mark.parametrize("use_mask", [True, False])
 def test_reverse_kl_vocab_tp_two_ranks(use_mask):
     _spawn_dist(2, _vocab_tp_worker, use_mask)
+
+
+@pytest.mark.parametrize("use_mask", [True, False])
+def test_cross_entropy_vocab_tp_two_ranks(use_mask):
+    _spawn_dist(2, _ce_vocab_tp_worker, use_mask)
 
 
 if __name__ == "__main__":
