@@ -198,10 +198,10 @@ class LlamaAttentionConverter:
         elif rope_type == "llama3":
             rotary_config.update(
                 {
-                    "scale_factor": config["factor"],
-                    "low_frequency_factor": config["low_freq_factor"],
-                    "high_frequency_factor": config["high_freq_factor"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
+                    "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         elif rope_type == "yarn":
