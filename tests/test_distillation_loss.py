@@ -175,6 +175,7 @@ def combined_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
     _ce_vocab_tp_worker(rank, group, use_mask)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("use_mask", [True, False])
 def test_reverse_combined(use_mask):
     _spawn_dist(2, combined_worker, use_mask)
