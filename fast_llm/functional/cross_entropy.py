@@ -144,7 +144,7 @@ def _fused_cross_entropy_forward_backward(
             all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
     else:
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
-    if group is not None:
+    if group is not None and target_format != TargetFormat.labels:
         # this is needed because on each rank we calculate log Z - sum_i t_i * z_i, z_i is logit.
         # then we average: 1/K sum_ranks (log Z - sum_i t_i * z_i)
         # = log Z - 1/K sum_ranks (sum_i t_i * z_i)
