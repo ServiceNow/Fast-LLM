@@ -54,6 +54,11 @@ class ImagePatchConfig(Config):
         "If `image_break_token` is also defined, only `image_end_token` is added after the last row.",
         hint=FieldHint.optional,
     )
+    image_format: str = Field(
+        default="bytes",
+        desc="Format of the input images. 'bytes' expects raw image bytes, 'pil' expects PIL Image objects.",
+        hint=FieldHint.optional,
+    )
 
     @property
     def num_channels(self) -> int:
@@ -105,14 +110,24 @@ class ImagePatchConfig(Config):
         import torch
 
         if not torch.is_tensor(image):
+            import contextlib
+
             import numpy as np
             import PIL.Image
 
-            with PIL.Image.open(io.BytesIO(image)) as image:
-                if image.mode != "RGB":
-                    # Convert all images to RGB
-                    image = image.convert("RGB")
-                image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
+            # Load the image based on format
+            if self.image_format == "bytes":
+                image_ctx = PIL.Image.open(io.BytesIO(image))
+            elif self.image_format == "pil":
+                image_ctx = contextlib.nullcontext(image)
+            else:
+                raise ValueError(f"Unsupported image_format: {self.image_format}. Must be 'bytes' or 'pil'.")
+
+            # Convert to RGB and tensor
+            with image_ctx as pil_image:
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                image = torch.tensor(np.array(pil_image)).permute(2, 0, 1)  # HWC to CHW
                 Assert.eq(image.dtype, torch.uint8)
 
         if self.do_resize:
