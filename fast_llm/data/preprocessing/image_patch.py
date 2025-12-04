@@ -56,7 +56,8 @@ class ImagePatchConfig(Config):
     )
     image_format: str = Field(
         default="bytes",
-        desc="Format of the input images. 'bytes' expects raw image bytes, 'pil' expects PIL Image objects.",
+        desc="Format of the input images. 'bytes' expects raw image bytes, 'pil' expects PIL Image objects, "
+        "'dict' expects a dictionary with a 'bytes' key containing the image bytes.",
         hint=FieldHint.optional,
     )
 
@@ -120,8 +121,11 @@ class ImagePatchConfig(Config):
                 image_ctx = PIL.Image.open(io.BytesIO(image))
             elif self.image_format == "pil":
                 image_ctx = contextlib.nullcontext(image)
+            elif self.image_format == "dict":
+                image_bytes = image["bytes"]
+                image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
             else:
-                raise ValueError(f"Unsupported image_format: {self.image_format}. Must be 'bytes' or 'pil'.")
+                raise ValueError(f"Unsupported image_format: {self.image_format}. Must be 'bytes', 'pil', or 'dict'.")
 
             # Convert to RGB and tensor
             with image_ctx as pil_image:
