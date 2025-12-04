@@ -25,6 +25,11 @@ def convert_config(llava_config: dict) -> dict:
     num_heads = text_config["num_attention_heads"]
     num_kv_heads = text_config["num_key_value_heads"]
     rope_theta = text_config["rope_theta"]
+    # Use explicit head_dim if available (some models have head_dim != hidden_size // num_heads)
+    # Note: MistralConfig.head_dim is None by default, so we must check for None explicitly
+    head_dim = text_config.get("head_dim")
+    if head_dim is None:
+        head_dim = hidden_size // num_heads
 
     decoder_config = {
         "type": "fixed",
@@ -34,7 +39,7 @@ def convert_config(llava_config: dict) -> dict:
                 "type": "attention",
                 "heads": num_heads,
                 "head_groups": num_kv_heads,
-                "head_size": hidden_size // num_heads,
+                "head_size": head_dim,
                 "add_linear_biases": False,
                 "rotary": {"type": "mistral_1d", "theta": rope_theta},
             },
@@ -96,6 +101,11 @@ def _convert_vision_config(llava_config: dict) -> dict:
     rope_theta = vision_config["rope_theta"]
     patch_size = vision_config["patch_size"]
     num_channels = vision_config["num_channels"]
+    # Use explicit head_dim if available
+    # Note: head_dim may be None in HF configs, so check explicitly
+    head_dim = vision_config.get("head_dim")
+    if head_dim is None:
+        head_dim = hidden_size // num_heads
 
     return {
         "hidden_size": hidden_size,
@@ -113,7 +123,7 @@ def _convert_vision_config(llava_config: dict) -> dict:
                     "type": "attention",
                     "heads": num_heads,
                     "head_groups": num_heads,
-                    "head_size": hidden_size // num_heads,
+                    "head_size": head_dim,
                     "add_linear_biases": False,
                     "causal": False,
                     "rotary": {
