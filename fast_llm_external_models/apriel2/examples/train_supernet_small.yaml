@@ -1,0 +1,97 @@
+# Training config for small Apriel2 stochastic supernet (single GPU)
+#
+# This config loads a converted Apriel2 model and trains it on multimodal data.
+#
+# Prerequisites:
+#
+# 1. Convert a source model to Apriel2 format with reduced layers:
+#
+#    python -m fast_llm_external_models.apriel2.conversion.convert \
+#        mistral-community/pixtral-12b \
+#        /tmp/apriel2-supernet-small \
+#        --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet_small.yaml
+#
+# 2. Create a multimodal dataset with matching patch size (16x16):
+#
+#    python -c "
+#    from tests.utils.dataset import _get_test_dataset, DATASET_CACHE
+#    from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
+#    _get_test_dataset(
+#        DATASET_CACHE / 'apriel2_multimodal_dataset',
+#        seed=1234,
+#        vocab_size=131072,
+#        max_images=2,
+#        image_patch_config=ImagePatchConfig(
+#            height=16, width=16,
+#            max_image_height=64, max_image_width=64,
+#        ),
+#        splits={'training': 100},
+#    )
+#    "
+#
+# 3. Run training:
+#
+#    fast-llm train train_multimodal \
+#        -c fast_llm_external_models/apriel2/examples/train_supernet_small.yaml
+#
+# The trained model will be exported to:
+#    /tmp/apriel2-supernet-small-trained/export/apriel2/{iteration}/
+
+# Load pretrained model
+pretrained:
+  path: /tmp/apriel2-supernet-small
+  format: apriel2
+  model_weights: true
+  load_config: model
+
+# Model config (mostly loaded from pretrained, but we need to specify some fast-llm specific settings)
+model:
+  base_model:
+    head:
+      cross_entropy_implementation: torch
+  multi_stage:
+    zero_stage: 2  # ZeRO stage 2 for memory efficiency
+  distributed:
+    compute_dtype: bf16
+    seed: 42
+
+# Batch configuration (small for single GPU)
+batch:
+  sequence_length: 512  # Short sequences for testing
+  micro_batch_size: 1   # Small batch for single GPU
+  batch_size: 4         # Accumulate gradients
+
+# Data configuration (multimodal test dataset)
+data:
+  datasets:
+    training:
+      type: file
+      path: /tmp/fast_llm_tests/common/dataset/apriel2_multimodal_dataset/fast_llm_config_training.yaml
+
+# Optimizer configuration
+optimizer:
+  learning_rate:
+    base: 1.0e-05
+    decay_style: constant
+    warmup_iterations: 0
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+
+# Training configuration
+training:
+  train_iters: 10  # Just a few iterations for testing
+  num_workers: 2
+  logs:
+    interval: 1
+  checkpoint:
+    interval: null  # Disable checkpointing for quick test
+  export:
+    interval: 10    # Export at the end
+    format: apriel2 # Export back to Apriel2 HF format
+  test_iters: 0
+  evaluators: {}
+
+# Experiment directory
+run:
+  experiment_dir: /tmp/apriel2-supernet-small-trained
