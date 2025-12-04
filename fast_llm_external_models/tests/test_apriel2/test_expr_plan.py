@@ -729,25 +729,36 @@ class TestPlanBuilders:
         value_dim = 4 * 16  # 64
         conv_dim = 2 * key_dim + value_dim  # 192
 
-        # Check in_proj_qkvz is Concat of 4 head groups
+        # Check in_proj_qkvz uses FLAT layout: Concat([Q_all, K_all, V_all, Z_all])
         in_proj_qkvz = plan[W("in_proj_qkvz.weight")]
         assert isinstance(in_proj_qkvz, Concat)
-        assert len(in_proj_qkvz.exprs) == 4  # 4 head groups
+        assert len(in_proj_qkvz.exprs) == 4  # [Q_all, K_all, V_all, Z_all]
 
-        # Each group should be Concat of [Q_head, K_head, V_head, Z_head]
-        for g, group in enumerate(in_proj_qkvz.exprs):
-            assert isinstance(group, Concat), f"Group {g} should be Concat"
-            assert len(group.exprs) == 4, f"Group {g} should have 4 parts"
+        # Q_all: Concat of 4 head slices
+        q_all = in_proj_qkvz.exprs[0]
+        assert isinstance(q_all, Concat)
+        assert len(q_all.exprs) == 4  # 4 k_heads
+        for i, q_slice in enumerate(q_all.exprs):
+            assert isinstance(q_slice, Slice), f"Q slice {i} should be Slice"
 
-            # Q: Slice from q_proj for head g
-            assert isinstance(group.exprs[0], Slice)
-            # K: Slice from k_proj for head g
-            assert isinstance(group.exprs[1], Slice)
-            # V: Slice from v_proj (single head in MHA)
-            assert isinstance(group.exprs[2], Slice)
-            # Z: Init zeros
-            assert isinstance(group.exprs[3], Init)
-            assert group.exprs[3].init_type == "zeros"
+        # K_all: Concat of 4 head slices
+        k_all = in_proj_qkvz.exprs[1]
+        assert isinstance(k_all, Concat)
+        assert len(k_all.exprs) == 4  # 4 k_heads
+        for i, k_slice in enumerate(k_all.exprs):
+            assert isinstance(k_slice, Slice), f"K slice {i} should be Slice"
+
+        # V_all: Concat of 4 v_head slices (MHA: v_heads == k_heads)
+        v_all = in_proj_qkvz.exprs[2]
+        assert isinstance(v_all, Concat)
+        assert len(v_all.exprs) == 4  # 4 v_heads
+        for i, v_slice in enumerate(v_all.exprs):
+            assert isinstance(v_slice, Slice), f"V slice {i} should be Slice"
+
+        # Z_all: Init zeros
+        z_all = in_proj_qkvz.exprs[3]
+        assert isinstance(z_all, Init)
+        assert z_all.init_type == "zeros"
 
         # Check in_proj_ba: zeros, shape (2*num_v_heads, hidden_size)
         in_proj_ba = plan[W("in_proj_ba.weight")]
@@ -802,27 +813,33 @@ class TestPlanBuilders:
             target_prefix=W(""),
         )
 
-        # Check in_proj_qkvz is Concat of 2 head groups
+        # Check in_proj_qkvz uses FLAT layout: Concat([Q_all, K_all, V_all, Z_all])
         in_proj_qkvz = plan[W("in_proj_qkvz.weight")]
         assert isinstance(in_proj_qkvz, Concat)
-        assert len(in_proj_qkvz.exprs) == 2  # 2 k_head groups
+        assert len(in_proj_qkvz.exprs) == 4  # [Q_all, K_all, V_all, Z_all]
 
-        # Each group has 2 v_heads, so V should be Concat of 2 slices
-        for g, group in enumerate(in_proj_qkvz.exprs):
-            assert isinstance(group, Concat), f"Group {g} should be Concat"
-            assert len(group.exprs) == 4  # [Q, K, V_group, Z]
+        # Q_all: Concat of 2 k_head slices
+        q_all = in_proj_qkvz.exprs[0]
+        assert isinstance(q_all, Concat)
+        assert len(q_all.exprs) == 2  # 2 k_heads
 
-            # V_group should be Concat of 2 v_head slices (tiled from source)
-            v_group = group.exprs[2]
-            assert isinstance(v_group, Concat), f"V_group {g} should be Concat"
-            assert len(v_group.exprs) == 2  # 2 v_heads per group
+        # K_all: Concat of 2 k_head slices
+        k_all = in_proj_qkvz.exprs[1]
+        assert isinstance(k_all, Concat)
+        assert len(k_all.exprs) == 2  # 2 k_heads
 
-            # Both should be Slices (tiled from source heads via modulo)
-            for v_slice in v_group.exprs:
-                assert isinstance(v_slice, Slice)
+        # V_all: Concat of 4 v_head slices (4 v_heads total, 2 per k_head group)
+        v_all = in_proj_qkvz.exprs[2]
+        assert isinstance(v_all, Concat)
+        assert len(v_all.exprs) == 4  # 4 v_heads total
+
+        # Z_all: Init zeros
+        z_all = in_proj_qkvz.exprs[3]
+        assert isinstance(z_all, Init)
+        assert z_all.init_type == "zeros"
 
     def test_plan_dil_execution(self):
-        """DIL plan executes correctly with per-head-group interleaving."""
+        """DIL plan executes correctly with FLAT layout [Q_all | K_all | V_all | Z_all]."""
         # MHA case: 4 k_heads, 4 v_heads (1 v_head per group)
         plan = plan_attention_to_gated_delta_net(
             hidden_size=64,
@@ -842,7 +859,7 @@ class TestPlanBuilders:
         value_dim = 64
         head_k_dim = 16
         head_v_dim = 16
-        conv_dim = 192
+        conv_dim = 2 * key_dim + value_dim  # 192
 
         # Create attention weights with per-head distinctive values
         # Q: each head gets value (head_idx + 1)
@@ -869,23 +886,37 @@ class TestPlanBuilders:
 
         result = execute(plan, sources, seed=42)
 
-        # Verify in_proj_qkvz has per-head-group interleaved layout
+        # Verify in_proj_qkvz has FLAT layout: [Q_all | K_all | V_all | Z_all]
         in_proj_qkvz = result[W("in_proj_qkvz.weight")]
-        # Total: 4 groups * (16 + 16 + 16 + 16) = 256
+        # Total: key_dim + key_dim + value_dim + value_dim = 64 + 64 + 64 + 64 = 256
         assert in_proj_qkvz.shape == (256, 64)
 
-        # Check each group: [Q_h, K_h, V_h, Z_h]
-        group_size = 16 + 16 + 16 + 16  # 64 per group
-        for g in range(4):
-            base = g * group_size
-            # Q_h (rows 0-15 in group)
-            assert torch.allclose(in_proj_qkvz[base:base+16], torch.full((16, 64), float(g + 1)))
-            # K_h (rows 16-31 in group)
-            assert torch.allclose(in_proj_qkvz[base+16:base+32], torch.full((16, 64), float((g + 1) * 10)))
-            # V_h (rows 32-47 in group)
-            assert torch.allclose(in_proj_qkvz[base+32:base+48], torch.full((16, 64), float((g + 1) * 100)))
-            # Z_h (rows 48-63 in group) - zeros
-            assert torch.allclose(in_proj_qkvz[base+48:base+64], torch.zeros(16, 64))
+        # Q_all (rows 0-63): heads 0,1,2,3 concatenated
+        for h in range(4):
+            assert torch.allclose(
+                in_proj_qkvz[h*16:(h+1)*16],
+                torch.full((16, 64), float(h + 1))
+            )
+
+        # K_all (rows 64-127): heads 0,1,2,3 concatenated
+        for h in range(4):
+            assert torch.allclose(
+                in_proj_qkvz[key_dim + h*16:key_dim + (h+1)*16],
+                torch.full((16, 64), float((h + 1) * 10))
+            )
+
+        # V_all (rows 128-191): heads 0,1,2,3 concatenated
+        for h in range(4):
+            assert torch.allclose(
+                in_proj_qkvz[2*key_dim + h*16:2*key_dim + (h+1)*16],
+                torch.full((16, 64), float((h + 1) * 100))
+            )
+
+        # Z_all (rows 192-255): zeros
+        assert torch.allclose(
+            in_proj_qkvz[2*key_dim + value_dim:],
+            torch.zeros(value_dim, 64)
+        )
 
         # in_proj_ba should be zeros
         in_proj_ba = result[W("in_proj_ba.weight")]
@@ -918,7 +949,7 @@ class TestPlanBuilders:
         assert torch.allclose(norm_weight, torch.ones(16))
 
     def test_plan_dil_execution_gqa(self):
-        """DIL plan executes correctly with GQA (V heads tiled via modulo)."""
+        """DIL plan executes correctly with GQA and FLAT layout."""
         # GQA: 4 v_heads, 2 k_heads → 2 v_heads per group
         # Source: 4 Q heads, 2 KV heads
         plan = plan_attention_to_gated_delta_net(
@@ -960,40 +991,37 @@ class TestPlanBuilders:
 
         result = execute(plan, sources, seed=42)
 
-        # Verify in_proj_qkvz with GQA tiling
+        # Verify in_proj_qkvz with FLAT layout: [Q_all | K_all | V_all | Z_all]
         in_proj_qkvz = result[W("in_proj_qkvz.weight")]
-        # 2 groups * (16 + 16 + 32 + 32) = 2 * 96 = 192
-        v_per_group = 2
-        group_size = 16 + 16 + v_per_group * 16 + v_per_group * 16  # 96 per group
+        key_dim = 2 * 16  # 32
+        value_dim = 4 * 16  # 64
+        # Total: 32 + 32 + 64 + 64 = 192
         assert in_proj_qkvz.shape == (192, 64)
 
-        # Group 0: Q from head 0, K from kv_head 0, V from kv_heads 0,1 (tiled)
-        base = 0
-        # Q_0 (maps to source Q head 0)
-        assert torch.allclose(in_proj_qkvz[base:base+16], torch.full((16, 64), 1.0))
-        # K_0 (maps to source K head 0)
-        assert torch.allclose(in_proj_qkvz[base+16:base+32], torch.full((16, 64), 10.0))
-        # V_group_0: v_heads 0,1 → source v_heads 0,1 (via modulo)
-        # v_head 0 → src_v_head 0 (value 100)
-        assert torch.allclose(in_proj_qkvz[base+32:base+48], torch.full((16, 64), 100.0))
-        # v_head 1 → src_v_head 1 (value 200)
-        assert torch.allclose(in_proj_qkvz[base+48:base+64], torch.full((16, 64), 200.0))
-        # Z_group_0: zeros
-        assert torch.allclose(in_proj_qkvz[base+64:base+96], torch.zeros(32, 64))
+        # Q_all (rows 0-31): k_heads 0,1 (maps to source Q heads 0,1 via modulo)
+        # k_head 0 → source Q head 0 (value 1)
+        assert torch.allclose(in_proj_qkvz[0:16], torch.full((16, 64), 1.0))
+        # k_head 1 → source Q head 1 (value 2)
+        assert torch.allclose(in_proj_qkvz[16:32], torch.full((16, 64), 2.0))
 
-        # Group 1: Q from head 1, K from kv_head 1, V from kv_heads 2,3 (tiled to 0,1)
-        base = 96
-        # Q_1 (maps to source Q head 1)
-        assert torch.allclose(in_proj_qkvz[base:base+16], torch.full((16, 64), 2.0))
-        # K_1 (maps to source K head 1)
-        assert torch.allclose(in_proj_qkvz[base+16:base+32], torch.full((16, 64), 20.0))
-        # V_group_1: v_heads 2,3 → source v_heads 0,1 (via modulo, tiled)
-        # v_head 2 → src_v_head 0 (value 100)
-        assert torch.allclose(in_proj_qkvz[base+32:base+48], torch.full((16, 64), 100.0))
-        # v_head 3 → src_v_head 1 (value 200)
-        assert torch.allclose(in_proj_qkvz[base+48:base+64], torch.full((16, 64), 200.0))
-        # Z_group_1: zeros
-        assert torch.allclose(in_proj_qkvz[base+64:base+96], torch.zeros(32, 64))
+        # K_all (rows 32-63): k_heads 0,1 (maps to source K heads 0,1 via modulo)
+        # k_head 0 → source K head 0 (value 10)
+        assert torch.allclose(in_proj_qkvz[key_dim:key_dim+16], torch.full((16, 64), 10.0))
+        # k_head 1 → source K head 1 (value 20)
+        assert torch.allclose(in_proj_qkvz[key_dim+16:key_dim+32], torch.full((16, 64), 20.0))
+
+        # V_all (rows 64-127): 4 v_heads, tiled from 2 source KV heads via modulo
+        # v_head 0 → src_v_head 0 (value 100)
+        assert torch.allclose(in_proj_qkvz[2*key_dim:2*key_dim+16], torch.full((16, 64), 100.0))
+        # v_head 1 → src_v_head 1 (value 200)
+        assert torch.allclose(in_proj_qkvz[2*key_dim+16:2*key_dim+32], torch.full((16, 64), 200.0))
+        # v_head 2 → src_v_head 0 (value 100, tiled)
+        assert torch.allclose(in_proj_qkvz[2*key_dim+32:2*key_dim+48], torch.full((16, 64), 100.0))
+        # v_head 3 → src_v_head 1 (value 200, tiled)
+        assert torch.allclose(in_proj_qkvz[2*key_dim+48:2*key_dim+64], torch.full((16, 64), 200.0))
+
+        # Z_all (rows 128-191): zeros
+        assert torch.allclose(in_proj_qkvz[2*key_dim+value_dim:], torch.zeros(value_dim, 64))
 
 
 class TestFullPipeline:
