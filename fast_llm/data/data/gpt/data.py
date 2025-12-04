@@ -10,7 +10,8 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.data_loader_wrapper import DistributedDataLoaderWrapper
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.dataset.abstract import SampledDataset, SampledIterableDataset
+from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract_iterable import SampledIterableDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
