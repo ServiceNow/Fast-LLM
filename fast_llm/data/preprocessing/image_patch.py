@@ -80,7 +80,7 @@ class ImagePatchConfig(Config):
         Assert.gt(self.max_patches_width, 0)
 
     def get_patches_from_images(
-        self, images: list["torch.Tensor|bytes"], token_data_type: DataType = DataType.int64
+        self, images: list["torch.Tensor|bytes|dict"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
@@ -106,7 +106,7 @@ class ImagePatchConfig(Config):
             )
 
     def _get_patches_from_image(
-        self, image: "torch.Tensor|bytes", token_data_type: DataType = DataType.int64
+        self, image: "torch.Tensor|bytes|dict", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import torch
 
@@ -115,6 +115,7 @@ class ImagePatchConfig(Config):
 
             import numpy as np
             import PIL.Image
+            import PIL.PngImagePlugin
 
             # Load the image based on format
             # Set a larger limit for decompression to handle images with large ICC profiles
