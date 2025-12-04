@@ -4,6 +4,7 @@ import math
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -11,12 +12,14 @@ if typing.TYPE_CHECKING:
     import torch
 
 
-@config_class()
-class ImagePatchConfig(Config):
+@config_class(dynamic_type={PreprocessingConfig: "image_patch"})
+class ImagePatchConfig(PreprocessingConfig):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
     """
+
+    _abstract = False
 
     height: int = Field(
         default=16,

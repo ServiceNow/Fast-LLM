@@ -4,6 +4,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Configurable, Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -101,6 +102,8 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
     # Constant strings for alignment safety.
     header: typing.ClassVar[bytes]
     footer: typing.ClassVar[bytes]
+    # Additional information about how the dataset was prepared.
+    preprocessing: PreprocessingConfig = Field()
 
     @property
     def reader_class(self) -> "type[MemmapReader]":

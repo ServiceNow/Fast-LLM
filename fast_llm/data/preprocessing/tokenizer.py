@@ -1,7 +1,8 @@
 import pathlib
 import typing
 
-from fast_llm.config import Config, Configurable, Field, FieldHint, config_class
+from fast_llm.config import Configurable, Field, FieldHint, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -11,12 +12,14 @@ if typing.TYPE_CHECKING:
     import torch
 
 
-@config_class()
-class TokenizerConfig(Config):
+@config_class(dynamic_type={PreprocessingConfig: "tokenizer"})
+class TokenizerConfig(PreprocessingConfig):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
     """
+
+    _abstract = False
 
     path: pathlib.Path = Field(
         default=None,

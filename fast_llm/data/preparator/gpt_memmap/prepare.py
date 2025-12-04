@@ -198,11 +198,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
-        # TODO: ======= Extract so we can use elsewhere? (ex. inference) ======
         text = sample[self._source_schema.text]
         all_spans = []
         if self._source_schema.has_loss_masking_span:
-            # TODO: ====== What is the exact input format? ======
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (SpanType.loss_masking, (begin, last + 1))
@@ -213,7 +211,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             all_spans.extend(loss_masking_spans)
 
         if self._source_schema.has_preference_spans:
-            # TODO: ===== Was `self._config.dataset.field` (bug?) ======
             full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
             full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
             # compute chosen span
