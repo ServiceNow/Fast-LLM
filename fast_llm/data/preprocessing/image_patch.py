@@ -117,15 +117,25 @@ class ImagePatchConfig(Config):
             import PIL.Image
 
             # Load the image based on format
-            if self.image_format == "bytes":
-                image_ctx = PIL.Image.open(io.BytesIO(image))
-            elif self.image_format == "pil":
-                image_ctx = contextlib.nullcontext(image)
-            elif self.image_format == "dict":
-                image_bytes = image["bytes"]
-                image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
-            else:
-                raise ValueError(f"Unsupported image_format: {self.image_format}. Must be 'bytes', 'pil', or 'dict'.")
+            # Set a larger limit for decompression to handle images with large ICC profiles
+            PIL.Image.MAX_IMAGE_PIXELS = None
+            original_max_text_chunk = PIL.PngImagePlugin.MAX_TEXT_CHUNK
+            PIL.PngImagePlugin.MAX_TEXT_CHUNK = 10 * (1024**2)  # 10 MB
+
+            try:
+                if self.image_format == "bytes":
+                    image_ctx = PIL.Image.open(io.BytesIO(image))
+                elif self.image_format == "pil":
+                    image_ctx = contextlib.nullcontext(image)
+                elif self.image_format == "dict":
+                    image_bytes = image["bytes"]
+                    image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
+                else:
+                    raise ValueError(
+                        f"Unsupported image_format: {self.image_format}. Must be 'bytes', 'pil', or 'dict'."
+                    )
+            finally:
+                PIL.PngImagePlugin.MAX_TEXT_CHUNK = original_max_text_chunk
 
             # Convert to RGB and tensor
             with image_ctx as pil_image:
