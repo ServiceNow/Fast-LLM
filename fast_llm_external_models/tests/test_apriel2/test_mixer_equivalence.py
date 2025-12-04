@@ -68,10 +68,64 @@ def gdn_config(request):
     return request.param
 
 
-@pytest.fixture(params=[True, False])
-def use_fast_path(request):
-    """Whether to use fast path (CUDA kernels) or slow path (pure PyTorch)."""
+# =============================================================================
+# Test Mode Fixtures (bundle device/dtype/attn_impl/tolerance coherently)
+# =============================================================================
+
+
+@pytest.fixture(
+    params=[
+        "precise",
+        # "fast" mode (bf16/sdpa) is skipped: small tensor sizes in these tests
+        # make GPU overhead dominate, and precise mode is sufficient for correctness.
+        pytest.param("fast", marks=pytest.mark.skip(reason="Small tensors; precise mode sufficient")),
+    ]
+)
+def test_mode(request):
+    """Test configuration mode: 'precise' (fp32/eager) or 'fast' (bf16/sdpa)."""
     return request.param
+
+
+@pytest.fixture
+def test_dtype(test_mode):
+    """Dtype derived from test_mode: fp32 for precise, bf16 for fast."""
+    return torch.float32 if test_mode == "precise" else torch.bfloat16
+
+
+@pytest.fixture
+def attn_impl(test_mode):
+    """Attention implementation derived from test_mode.
+
+    Uses PyTorch's SDPA (scaled_dot_product_attention) for fast mode, which
+    provides fused kernels without the special initialization flash_attention_2 needs.
+    """
+    return "eager" if test_mode == "precise" else "sdpa"
+
+
+@pytest.fixture
+def tolerance(test_mode):
+    """Tolerance (rtol, atol) derived from test_mode.
+
+    bf16 has ~3 decimal digits precision, so needs looser tolerance.
+    """
+    if test_mode == "precise":
+        return (1e-4, 1e-4)
+    else:
+        return (1e-2, 1e-2)
+
+
+@pytest.fixture(autouse=True)
+def override_dtype_for_test_mode(test_mode):
+    """Override default dtype based on test_mode.
+
+    This runs after conftest's set_default_dtype and temporarily changes
+    the dtype for tests that use test_mode.
+    """
+    dtype = torch.float32 if test_mode == "precise" else torch.bfloat16
+    old_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    yield
+    torch.set_default_dtype(old_dtype)
 
 
 # =============================================================================
@@ -235,7 +289,7 @@ class TestApriel2AttentionVsMistral:
     """Test equivalence between Apriel2Attention and MistralAttention."""
 
     @pytest.fixture
-    def mistral_config(self, hidden_size, attention_config):
+    def mistral_config(self, hidden_size, attention_config, attn_impl):
         """Create MistralConfig for testing."""
         from transformers import MistralConfig
 
@@ -250,8 +304,7 @@ class TestApriel2AttentionVsMistral:
             rope_theta=10000.0,
             attention_dropout=0.0,
         )
-        # Set attn implementation to eager for testing (sdpa/flash require specific setup)
-        config._attn_implementation = "eager"
+        config._attn_implementation = attn_impl
         return config
 
     @pytest.fixture
@@ -270,7 +323,7 @@ class TestApriel2AttentionVsMistral:
         }
 
     @pytest.fixture
-    def apriel2_config(self, hidden_size, apriel2_mixer_config):
+    def apriel2_config(self, hidden_size, apriel2_mixer_config, attn_impl):
         """Create Apriel2Config for testing."""
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
 
@@ -287,8 +340,7 @@ class TestApriel2AttentionVsMistral:
             },
             embeddings={"max_position_embeddings": 4096},
         )
-        # Set attn implementation to eager for testing
-        config._attn_implementation = "eager"
+        config._attn_implementation = attn_impl
         return config
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
@@ -300,13 +352,13 @@ class TestApriel2AttentionVsMistral:
         batch_size,
         seq_len,
         hidden_size,
-        use_fast_path,
+        tolerance,
     ):
         """Test that Apriel2Attention produces same output as MistralAttention."""
         from transformers.models.mistral.modeling_mistral import MistralAttention, MistralRotaryEmbedding
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
-        # Create models (uses default device/dtype from conftest fixtures)
+        # Create models (uses default device/dtype from fixtures)
         mistral_attn = MistralAttention(mistral_config, layer_idx=0)
         apriel2_attn = Apriel2Attention(hidden_size, apriel2_mixer_config, layer_idx=0, config=apriel2_config)
 
@@ -349,11 +401,12 @@ class TestApriel2AttentionVsMistral:
                 position_embeddings=position_embeddings,
             )[0]
 
+        rtol, atol = tolerance
         assert_close(
             apriel2_out,
             mistral_out,
-            rtol=1e-4,
-            atol=1e-4,
+            rtol=rtol,
+            atol=atol,
             msg=f"Apriel2Attention vs MistralAttention mismatch "
             f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
@@ -373,7 +426,7 @@ class TestApriel2AttentionVsPixtral:
     """
 
     @pytest.fixture
-    def pixtral_config(self, attention_config):
+    def pixtral_config(self, attention_config, attn_impl):
         """Create PixtralVisionConfig for testing."""
         from transformers.models.pixtral.configuration_pixtral import PixtralVisionConfig
 
@@ -387,7 +440,7 @@ class TestApriel2AttentionVsPixtral:
             num_hidden_layers=1,
             rope_theta=10000.0,
         )
-        config._attn_implementation = "eager"
+        config._attn_implementation = attn_impl
         return config
 
     @pytest.fixture
@@ -414,7 +467,8 @@ class TestApriel2AttentionVsPixtral:
         attention_config,
         batch_size,
         seq_len,
-        use_fast_path,
+        attn_impl,
+        tolerance,
     ):
         """Test that Apriel2Attention (non-causal) produces same output as PixtralAttention.
 
@@ -442,7 +496,7 @@ class TestApriel2AttentionVsPixtral:
             },
             embeddings={"max_position_embeddings": 4096},
         )
-        apriel2_config._attn_implementation = "eager"
+        apriel2_config._attn_implementation = attn_impl
 
         # Create models (uses default device/dtype from conftest fixtures)
         pixtral_attn = PixtralAttention(pixtral_config)
@@ -490,11 +544,12 @@ class TestApriel2AttentionVsPixtral:
                 position_embeddings=position_embeddings,
             )[0]
 
+        rtol, atol = tolerance
         assert_close(
             apriel2_out,
             pixtral_out,
-            rtol=1e-4,
-            atol=1e-4,
+            rtol=rtol,
+            atol=atol,
             msg=f"Apriel2Attention (non-causal) vs PixtralAttention mismatch "
             f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
@@ -559,6 +614,7 @@ class TestApriel2GDNVsQwen3Next:
         batch_size,
         seq_len,
         seed,
+        tolerance,
     ):
         """Test that Apriel2GatedDeltaNet produces same output as Qwen3NextGatedDeltaNet."""
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
@@ -594,11 +650,12 @@ class TestApriel2GDNVsQwen3Next:
             qwen_out = qwen_gdn(hidden_states)
             apriel2_out = apriel2_gdn(hidden_states)[0]
 
+        rtol, atol = tolerance
         assert_close(
             apriel2_out,
             qwen_out,
-            rtol=2e-4,
-            atol=2e-4,
+            rtol=rtol,
+            atol=atol,
             msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet mismatch "
             f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
