@@ -429,7 +429,7 @@ class Apriel2BlockConverter:
             "add_linear_biases": config.mlp.add_linear_biases,
         }
 
-        normalization = {"type": norm_type_str}
+        normalization = {"type": norm_type_str, "epsilon": config.normalization.epsilon}
 
         return {
             "mixer": mixer,
@@ -608,13 +608,22 @@ class Apriel2HeadConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {"normalization": cls.normalization_converter_class.import_config(config)}
+        norm_config = config["head"]["normalization"]
+        return {"normalization": {"type": "rms_norm", "epsilon": norm_config["epsilon"]}}
 
     @classmethod
     def export_config(cls, config) -> dict:
         from fast_llm.layers.language_model.config import LanguageModelHeadConfig
+
         Assert.custom(isinstance, config, LanguageModelHeadConfig)
-        return cls.normalization_converter_class.export_config(config.normalization)
+        return {
+            "head": {
+                "normalization": {
+                    "type": "rms_norm",
+                    "epsilon": config.normalization.epsilon,
+                }
+            }
+        }
 
     @classmethod
     def get_converters(

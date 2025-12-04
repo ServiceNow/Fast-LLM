@@ -142,7 +142,11 @@ def plan_attention_to_gated_delta_net(
     source_prefix: W,
     target_prefix: W,
 ) -> ExprPlan:
-    """DIL: Q/K/V→in_proj_qkvz (tiled for GQA), O→out_proj, Z/ba/conv/A_log/dt_bias/norm→init."""
+    """DIL: Q/K/V→in_proj_qkvz (tiled for GQA), O→out_proj, Z/ba/conv/A_log/dt_bias/norm→init.
+
+    Produces FLAT layout for in_proj_qkvz: [Q_all | K_all | V_all | Z_all]
+    This matches Apriel2/Fast-LLM's expected layout.
+    """
     key_dim = num_k_heads * head_k_dim
     value_dim = num_v_heads * head_v_dim
     v_heads_per_group = num_v_heads // num_k_heads
@@ -152,27 +156,34 @@ def plan_attention_to_gated_delta_net(
     k_ref = Ref(key=source_prefix / "k_proj" / "weight")
     v_ref = Ref(key=source_prefix / "v_proj" / "weight")
 
-    # Build per-group [Q_g, K_g, V_group_g, Z_group_g] for in_proj_qkvz
-    group_exprs: list[Expr] = []
+    # Build FLAT layout: [Q_all | K_all | V_all | Z_all]
+    # Collect slices for each projection type across all heads
+    q_slices: list[Expr] = []
+    k_slices: list[Expr] = []
+    v_slices: list[Expr] = []
+
     for g in range(num_k_heads):
         # Q_g from teacher Q head (g mod source_num_q_heads)
         q_head_idx = g % source_num_q_heads
         q_row_start = q_head_idx * source_head_dim
-        q_rows = Slice(
-            expr=q_ref,
-            slices=((q_row_start, q_row_start + head_k_dim, None), (None, None, None)),
+        q_slices.append(
+            Slice(
+                expr=q_ref,
+                slices=((q_row_start, q_row_start + head_k_dim, None), (None, None, None)),
+            )
         )
 
         # K_g from teacher KV head (g mod source_num_kv_heads)
         k_head_idx = g % source_num_kv_heads
         k_row_start = k_head_idx * source_head_dim
-        k_rows = Slice(
-            expr=k_ref,
-            slices=((k_row_start, k_row_start + head_k_dim, None), (None, None, None)),
+        k_slices.append(
+            Slice(
+                expr=k_ref,
+                slices=((k_row_start, k_row_start + head_k_dim, None), (None, None, None)),
+            )
         )
 
         # V_group_g: tile v_heads_per_group from source KV heads
-        v_slices: list[Expr] = []
         for j in range(v_heads_per_group):
             v_head_idx = g * v_heads_per_group + j
             src_v_head_idx = v_head_idx % source_num_kv_heads
@@ -183,13 +194,22 @@ def plan_attention_to_gated_delta_net(
                     slices=((v_row_start, v_row_start + head_v_dim, None), (None, None, None)),
                 )
             )
-        v_group: Expr = Concat(exprs=tuple(v_slices), dim=0) if len(v_slices) > 1 else v_slices[0]
 
-        z_group = Init(shape=(v_heads_per_group * head_v_dim, hidden_size), init_type="zeros")
-        group_block = Concat(exprs=(q_rows, k_rows, v_group, z_group), dim=0)
-        group_exprs.append(group_block)
+    # Z is zeros - flat layout [Z_all]
+    z_all = Init(shape=(value_dim, hidden_size), init_type="zeros")
 
-    in_proj_qkvz_expr: Expr = Concat(exprs=tuple(group_exprs), dim=0)
+    # Concatenate: [Q_all | K_all | V_all | Z_all]
+    in_proj_qkvz_expr: Expr = Concat(
+        exprs=(
+            Concat(exprs=tuple(q_slices), dim=0),
+            Concat(exprs=tuple(k_slices), dim=0),
+            Concat(exprs=tuple(v_slices), dim=0),
+            z_all,
+        ),
+        dim=0,
+    )
+
+    # BA uses flat layout: [b_all | a_all]
     in_proj_ba_expr = Init(shape=(2 * num_v_heads, hidden_size), init_type="zeros")  # b=a=0 → β=0.5
     out_proj_expr = Ref(key=source_prefix / "o_proj" / "weight")
     conv_weight_expr = Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv")

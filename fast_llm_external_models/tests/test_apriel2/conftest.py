@@ -12,11 +12,21 @@ from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConf
 def set_default_device():
     """Set default device to CUDA for all tests (Mamba requires CUDA)."""
     if torch.cuda.is_available():
+        old_device = torch.get_default_device()
         torch.set_default_device("cuda")
         yield
-        torch.set_default_device("cpu")
+        torch.set_default_device(old_device)
     else:
         yield
+
+
+@pytest.fixture(autouse=True)
+def set_default_dtype():
+    """Set default dtype to float32 for numerical comparison tests."""
+    old_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float32)
+    yield
+    torch.set_default_dtype(old_dtype)
 
 
 # =============================================================================

@@ -126,6 +126,7 @@ def _convert_vision_config(llava_config: dict) -> dict:
                     "head_size": head_dim,
                     "add_linear_biases": False,
                     "causal": False,
+                    "cross_document_attention": False,
                     "rotary": {
                         "type": "pixtral_2d",
                         "theta": rope_theta,
@@ -150,5 +151,6 @@ def _convert_vision_config(llava_config: dict) -> dict:
             "intermediate_size": text_config["hidden_size"],
             "activation": llava_config["projector_hidden_act"],
             "add_linear_biases": True,
+            "gated": False,
         },
     }
