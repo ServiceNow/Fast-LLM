@@ -13,13 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from transformers.models.pixtral.modeling_pixtral import PixtralRotaryEmbedding, apply_rotary_pos_emb
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.attention import Attention
 from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
-from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, RotaryConfig, Rotary2DConfig
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Rotary2DConfig, RotaryConfig
 from fast_llm.layers.attention.rotary.rotary import (
     Rotary,
     convert_rotary_complex_to_real,
@@ -28,7 +29,6 @@ from fast_llm.layers.attention.rotary.rotary import (
 from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.utils import Assert
 from tests.utils.utils import requires_cuda
-from transformers.models.pixtral.modeling_pixtral import PixtralRotaryEmbedding, apply_rotary_pos_emb
 
 
 def apply_rotary_pos_emb_interleaved(q, k, cos, sin, unsqueeze_dim=1):
