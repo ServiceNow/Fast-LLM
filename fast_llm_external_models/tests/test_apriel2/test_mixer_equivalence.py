@@ -38,22 +38,26 @@ def hidden_size(request):
     return request.param
 
 
-@pytest.fixture(params=[
-    (8, 8, 32),    # MHA: 8 heads, 8 kv heads, 32 head_dim
-    (8, 4, 32),    # GQA: 8 heads, 4 kv heads, 32 head_dim
-    (8, 2, 64),    # GQA: 8 heads, 2 kv heads, 64 head_dim
-    (4, 1, 64),    # MQA: 4 heads, 1 kv head, 64 head_dim
-])
+@pytest.fixture(
+    params=[
+        (8, 8, 32),  # MHA: 8 heads, 8 kv heads, 32 head_dim
+        (8, 4, 32),  # GQA: 8 heads, 4 kv heads, 32 head_dim
+        (8, 2, 64),  # GQA: 8 heads, 2 kv heads, 64 head_dim
+        (4, 1, 64),  # MQA: 4 heads, 1 kv head, 64 head_dim
+    ]
+)
 def attention_config(request):
     """Attention head configurations: (num_heads, num_kv_heads, head_dim)."""
     return request.param
 
 
-@pytest.fixture(params=[
-    (8, 4, 32, 32),    # 8 value heads, 4 key heads, 32 key_dim, 32 value_dim
-    (8, 2, 64, 64),    # 8 value heads, 2 key heads, 64 key_dim, 64 value_dim
-    (4, 2, 32, 64),    # 4 value heads, 2 key heads, 32 key_dim, 64 value_dim
-])
+@pytest.fixture(
+    params=[
+        (8, 4, 32, 32),  # 8 value heads, 4 key heads, 32 key_dim, 32 value_dim
+        (8, 2, 64, 64),  # 8 value heads, 2 key heads, 64 key_dim, 64 value_dim
+        (4, 2, 32, 64),  # 4 value heads, 2 key heads, 32 key_dim, 64 value_dim
+    ]
+)
 def gdn_config(request):
     """GDN configurations: (value_heads, key_heads, key_head_dim, value_head_dim)."""
     return request.param
@@ -79,17 +83,17 @@ def copy_attention_weights(src: nn.Module, dst: nn.Module):
         dst.o_proj.weight.copy_(src.o_proj.weight)
 
         # Copy biases if present
-        if hasattr(src.q_proj, 'bias') and src.q_proj.bias is not None:
-            if hasattr(dst.q_proj, 'bias') and dst.q_proj.bias is not None:
+        if hasattr(src.q_proj, "bias") and src.q_proj.bias is not None:
+            if hasattr(dst.q_proj, "bias") and dst.q_proj.bias is not None:
                 dst.q_proj.bias.copy_(src.q_proj.bias)
-        if hasattr(src.k_proj, 'bias') and src.k_proj.bias is not None:
-            if hasattr(dst.k_proj, 'bias') and dst.k_proj.bias is not None:
+        if hasattr(src.k_proj, "bias") and src.k_proj.bias is not None:
+            if hasattr(dst.k_proj, "bias") and dst.k_proj.bias is not None:
                 dst.k_proj.bias.copy_(src.k_proj.bias)
-        if hasattr(src.v_proj, 'bias') and src.v_proj.bias is not None:
-            if hasattr(dst.v_proj, 'bias') and dst.v_proj.bias is not None:
+        if hasattr(src.v_proj, "bias") and src.v_proj.bias is not None:
+            if hasattr(dst.v_proj, "bias") and dst.v_proj.bias is not None:
                 dst.v_proj.bias.copy_(src.v_proj.bias)
-        if hasattr(src.o_proj, 'bias') and src.o_proj.bias is not None:
-            if hasattr(dst.o_proj, 'bias') and dst.o_proj.bias is not None:
+        if hasattr(src.o_proj, "bias") and src.o_proj.bias is not None:
+            if hasattr(dst.o_proj, "bias") and dst.o_proj.bias is not None:
                 dst.o_proj.bias.copy_(src.o_proj.bias)
 
 
@@ -100,8 +104,7 @@ def assert_close(a: torch.Tensor, b: torch.Tensor, rtol: float = 1e-4, atol: flo
         max_diff = diff.max().item()
         mean_diff = diff.mean().item()
         raise AssertionError(
-            f"{msg}\nMax diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}, "
-            f"rtol={rtol}, atol={atol}"
+            f"{msg}\nMax diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}, " f"rtol={rtol}, atol={atol}"
         )
 
 
@@ -185,34 +188,26 @@ class TestApriel2AttentionVsMistral:
         from transformers.models.mistral.modeling_mistral import MistralAttention, MistralRotaryEmbedding
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
-        device = torch.device("cuda")
-        dtype = torch.float32  # Use float32 for numerical comparison
-
-        # Create models
-        mistral_attn = MistralAttention(mistral_config, layer_idx=0).to(device, dtype)
-        apriel2_attn = Apriel2Attention(
-            hidden_size, apriel2_mixer_config, layer_idx=0, config=apriel2_config
-        ).to(device, dtype)
+        # Create models (uses default device/dtype from conftest fixtures)
+        mistral_attn = MistralAttention(mistral_config, layer_idx=0)
+        apriel2_attn = Apriel2Attention(hidden_size, apriel2_mixer_config, layer_idx=0, config=apriel2_config)
 
         # Copy weights
         copy_attention_weights(mistral_attn, apriel2_attn)
 
         # Create input
         torch.manual_seed(42)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         # Create position_ids
-        position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
 
         # Create causal mask
-        causal_mask = torch.triu(
-            torch.full((seq_len, seq_len), float("-inf"), device=device, dtype=dtype),
-            diagonal=1
-        ).unsqueeze(0).unsqueeze(0)
+        causal_mask = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1).unsqueeze(0).unsqueeze(0)
 
         # Compute position embeddings using Mistral's rotary embedding
         # Use the same position embeddings for both to ensure equivalence test is fair
-        mistral_rotary = MistralRotaryEmbedding(config=mistral_config).to(device, dtype)
+        mistral_rotary = MistralRotaryEmbedding(config=mistral_config)
         position_embeddings = mistral_rotary(hidden_states, position_ids)
 
         mistral_attn.eval()
@@ -234,10 +229,12 @@ class TestApriel2AttentionVsMistral:
             )[0]
 
         assert_close(
-            apriel2_out, mistral_out,
-            rtol=1e-4, atol=1e-4,
+            apriel2_out,
+            mistral_out,
+            rtol=1e-4,
+            atol=1e-4,
             msg=f"Apriel2Attention vs MistralAttention mismatch "
-                f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})"
+            f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
 
 
@@ -303,15 +300,12 @@ class TestApriel2AttentionVsPixtral:
         This test creates 1D position embeddings in the format both implementations expect,
         allowing us to verify the core attention mechanism is equivalent.
         """
-        from transformers.models.pixtral.modeling_pixtral import PixtralAttention
+        from transformers.models.pixtral.modeling_pixtral import PixtralAttention, PixtralRotaryEmbedding
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
 
         num_heads, _, head_dim = attention_config
         hidden_size = num_heads * head_dim
-
-        device = torch.device("cuda")
-        dtype = torch.float32
 
         # Create Apriel2 config
         apriel2_config = Apriel2TextConfig(
@@ -329,37 +323,30 @@ class TestApriel2AttentionVsPixtral:
         )
         apriel2_config._attn_implementation = "eager"
 
-        # Create models
-        pixtral_attn = PixtralAttention(pixtral_config).to(device, dtype)
+        # Create models (uses default device/dtype from conftest fixtures)
+        pixtral_attn = PixtralAttention(pixtral_config)
         apriel2_attn = Apriel2Attention(
             hidden_size, apriel2_mixer_config_noncausal, layer_idx=0, config=apriel2_config
-        ).to(device, dtype)
+        )
 
         # Copy weights
         copy_attention_weights(pixtral_attn, apriel2_attn)
 
         # Create input
         torch.manual_seed(42)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         # For 2D rotary, we need position_ids that represent 2D positions
         # Simulate a small image grid
-        grid_size = int(seq_len ** 0.5)
+        grid_size = int(seq_len**0.5)
         if grid_size * grid_size != seq_len:
             pytest.skip(f"seq_len {seq_len} is not a perfect square for 2D position test")
 
-        # Create position embeddings that both implementations can use
-        # Pixtral expects (cos, sin) with shape [batch, seq_len, head_dim]
-        # We create simple rotary embeddings that both can consume
-        position_ids = torch.arange(seq_len, device=device)
-        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim, 2, device=device, dtype=dtype) / head_dim))
-        freqs = torch.outer(position_ids.float(), inv_freq)
-        cos = freqs.cos().unsqueeze(0)  # [1, seq_len, head_dim/2]
-        sin = freqs.sin().unsqueeze(0)  # [1, seq_len, head_dim/2]
-        # Duplicate for full head_dim
-        cos = torch.cat([cos, cos], dim=-1)  # [1, seq_len, head_dim]
-        sin = torch.cat([sin, sin], dim=-1)  # [1, seq_len, head_dim]
-        position_embeddings = (cos, sin)
+        rotary_emb = PixtralRotaryEmbedding(config=pixtral_config)
+        position_ids = torch.arange(seq_len)
+        cos, sin = rotary_emb(hidden_states, position_ids)
+        # Add batch dimension for compatibility with both Pixtral and Apriel2 (Mistral) conventions
+        position_embeddings = (cos.unsqueeze(0), sin.unsqueeze(0))
 
         pixtral_attn.eval()
         apriel2_attn.eval()
@@ -380,10 +367,12 @@ class TestApriel2AttentionVsPixtral:
             )[0]
 
         assert_close(
-            apriel2_out, pixtral_out,
-            rtol=1e-4, atol=1e-4,
+            apriel2_out,
+            pixtral_out,
+            rtol=1e-4,
+            atol=1e-4,
             msg=f"Apriel2Attention (non-causal) vs PixtralAttention mismatch "
-                f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})"
+            f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
 
 
@@ -417,7 +406,7 @@ class TestApriel2GDNVsQwen3Next:
             num_key_value_heads=2,
             head_dim=64,
             # Explicitly set dtype to avoid torch.get_current_dtype() fallback
-            torch_dtype=torch.float32,
+            torch_dtype=torch.get_default_dtype(),
         )
 
     @pytest.fixture
@@ -457,21 +446,16 @@ class TestApriel2GDNVsQwen3Next:
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
-        device = torch.device("cuda")
-        dtype = torch.float32
         seq_len = 32  # Fixed for this test
-
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
 
-        # Create models
-        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).to(device, dtype)
-        apriel2_gdn = Apriel2GatedDeltaNet(
-            hidden_size, apriel2_gdn_config, layer_idx=0
-        ).to(device, dtype)
+        # Create models (uses default device/dtype from conftest fixtures)
+        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0)
+        apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, apriel2_gdn_config, layer_idx=0)
 
         # Create input
         torch.manual_seed(42)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         qwen_gdn.eval()
         apriel2_gdn.eval()
@@ -481,9 +465,9 @@ class TestApriel2GDNVsQwen3Next:
             qwen_out = qwen_gdn(hidden_states)
             apriel2_out = apriel2_gdn(hidden_states)[0]
 
-        assert apriel2_out.shape == qwen_out.shape, (
-            f"Shape mismatch: Apriel2 {apriel2_out.shape} vs Qwen3Next {qwen_out.shape}"
-        )
+        assert (
+            apriel2_out.shape == qwen_out.shape
+        ), f"Shape mismatch: Apriel2 {apriel2_out.shape} vs Qwen3Next {qwen_out.shape}"
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
     @pytest.mark.parametrize("seq_len", [1, 16, 32, 64])
@@ -498,26 +482,21 @@ class TestApriel2GDNVsQwen3Next:
         """Test Apriel2GatedDeltaNet forward pass with various sequence lengths."""
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
-        device = torch.device("cuda")
-        dtype = torch.float32
-
-        # Create model
-        apriel2_gdn = Apriel2GatedDeltaNet(
-            hidden_size, apriel2_gdn_config, layer_idx=0
-        ).to(device, dtype)
+        # Create model (uses default device/dtype from conftest fixtures)
+        apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, apriel2_gdn_config, layer_idx=0)
 
         # Create input
         torch.manual_seed(42)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         apriel2_gdn.eval()
 
         with torch.no_grad():
             output = apriel2_gdn(hidden_states)[0]
 
-        assert output.shape == hidden_states.shape, (
-            f"Output shape {output.shape} doesn't match input shape {hidden_states.shape}"
-        )
+        assert (
+            output.shape == hidden_states.shape
+        ), f"Output shape {output.shape} doesn't match input shape {hidden_states.shape}"
         assert not output.isnan().any(), "Output contains NaN"
         assert not output.isinf().any(), "Output contains Inf"
 
@@ -546,9 +525,6 @@ class TestFastVsSlowPath:
         hidden_size = 256
         seq_len = 32
 
-        device = torch.device("cuda")
-        dtype = torch.float32
-
         gdn_config_dict = {
             "type": "gdn",
             "value_heads": value_heads,
@@ -559,15 +535,13 @@ class TestFastVsSlowPath:
             "norm_eps": 1e-5,
         }
 
-        # Create model
+        # Create model (uses default device/dtype from conftest fixtures)
         torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(
-            hidden_size, gdn_config_dict, layer_idx=0
-        ).to(device, dtype)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_config_dict, layer_idx=0)
 
         # Create input
         torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         model.eval()
 
@@ -581,11 +555,7 @@ class TestFastVsSlowPath:
             model._chunk_gated_delta_rule = torch_chunk_gated_delta_rule
             slow_out = model(hidden_states)[0].clone()
 
-        assert_close(
-            fast_out, slow_out,
-            rtol=1e-3, atol=1e-3,
-            msg="Fast path vs slow path mismatch for GDN"
-        )
+        assert_close(fast_out, slow_out, rtol=1e-3, atol=1e-3, msg="Fast path vs slow path mismatch for GDN")
 
 
 # =============================================================================
@@ -606,9 +576,6 @@ class TestDeterminism:
         hidden_size = 256
         batch_size = 2
         seq_len = 32
-
-        device = torch.device("cuda")
-        dtype = torch.float32
 
         mixer_config = {
             "type": "attention",
@@ -635,21 +602,19 @@ class TestDeterminism:
         )
         config._attn_implementation = "eager"
 
-        # Create model with fixed seed
+        # Create model with fixed seed (uses default device/dtype from conftest fixtures)
         torch.manual_seed(42)
-        model = Apriel2Attention(
-            hidden_size, mixer_config, layer_idx=0, config=config
-        ).to(device, dtype)
+        model = Apriel2Attention(hidden_size, mixer_config, layer_idx=0, config=config)
         model.eval()
 
         # Create input with fixed seed
         torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
-        position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
 
         # Get rotary embeddings
         rotary_resources = Apriel2Attention.setup(mixer_config, hidden_size, 4096)
-        rotary_emb = rotary_resources["rotary_emb"].to(device, dtype)
+        rotary_emb = rotary_resources["rotary_emb"]
         position_embeddings = rotary_emb(hidden_states, position_ids)
 
         # Run twice
@@ -669,9 +634,6 @@ class TestDeterminism:
         batch_size = 2
         seq_len = 32
 
-        device = torch.device("cuda")
-        dtype = torch.float32
-
         gdn_config_dict = {
             "type": "gdn",
             "value_heads": value_heads,
@@ -682,16 +644,14 @@ class TestDeterminism:
             "norm_eps": 1e-5,
         }
 
-        # Create model with fixed seed
+        # Create model with fixed seed (uses default device/dtype from conftest fixtures)
         torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(
-            hidden_size, gdn_config_dict, layer_idx=0
-        ).to(device, dtype)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_config_dict, layer_idx=0)
         model.eval()
 
         # Create input with fixed seed
         torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device=device, dtype=dtype)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         # Run twice
         with torch.no_grad():
