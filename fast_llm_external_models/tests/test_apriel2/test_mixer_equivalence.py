@@ -1,18 +1,23 @@
 """Tests for numerical equivalence between Apriel2 mixers and reference implementations.
 
 Tests forward-pass equivalence between:
-1. Apriel2Attention vs MistralAttention
+1. Apriel2Attention vs MistralAttention (using conversion machinery)
 2. Apriel2Attention vs PixtralAttention (non-causal)
-3. Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet
+3. Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet (using conversion machinery)
 
-Covers various input shapes, hyperparameters, and fast/slow paths.
+Uses the apriel2/conversion module for weight transformations rather than hand-rolled copying.
 """
 
 import pytest
 import torch
 import torch.nn as nn
-from typing import Optional
-from unittest.mock import patch
+
+from fast_llm_external_models.apriel2.conversion import (
+    ExprPlan,
+    Ref,
+    W,
+    execute,
+)
 
 
 # =============================================================================
@@ -74,29 +79,6 @@ def use_fast_path(request):
 # =============================================================================
 
 
-def copy_attention_weights(src: nn.Module, dst: nn.Module):
-    """Copy attention weights from src to dst, handling different naming conventions."""
-    with torch.no_grad():
-        dst.q_proj.weight.copy_(src.q_proj.weight)
-        dst.k_proj.weight.copy_(src.k_proj.weight)
-        dst.v_proj.weight.copy_(src.v_proj.weight)
-        dst.o_proj.weight.copy_(src.o_proj.weight)
-
-        # Copy biases if present
-        if hasattr(src.q_proj, "bias") and src.q_proj.bias is not None:
-            if hasattr(dst.q_proj, "bias") and dst.q_proj.bias is not None:
-                dst.q_proj.bias.copy_(src.q_proj.bias)
-        if hasattr(src.k_proj, "bias") and src.k_proj.bias is not None:
-            if hasattr(dst.k_proj, "bias") and dst.k_proj.bias is not None:
-                dst.k_proj.bias.copy_(src.k_proj.bias)
-        if hasattr(src.v_proj, "bias") and src.v_proj.bias is not None:
-            if hasattr(dst.v_proj, "bias") and dst.v_proj.bias is not None:
-                dst.v_proj.bias.copy_(src.v_proj.bias)
-        if hasattr(src.o_proj, "bias") and src.o_proj.bias is not None:
-            if hasattr(dst.o_proj, "bias") and dst.o_proj.bias is not None:
-                dst.o_proj.bias.copy_(src.o_proj.bias)
-
-
 def assert_close(a: torch.Tensor, b: torch.Tensor, rtol: float = 1e-4, atol: float = 1e-4, msg: str = ""):
     """Assert two tensors are close with detailed error message."""
     if not torch.allclose(a, b, rtol=rtol, atol=atol):
@@ -106,6 +88,142 @@ def assert_close(a: torch.Tensor, b: torch.Tensor, rtol: float = 1e-4, atol: flo
         raise AssertionError(
             f"{msg}\nMax diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}, " f"rtol={rtol}, atol={atol}"
         )
+
+
+def plan_mistral_attention_to_apriel2() -> ExprPlan:
+    """Build plan for MistralAttention -> Apriel2Attention weight renaming.
+
+    Both use q_proj/k_proj/v_proj/o_proj naming, so this is identity mapping.
+    """
+    return ExprPlan(
+        mappings={
+            W("q_proj", "weight"): Ref(key=W("q_proj", "weight")),
+            W("k_proj", "weight"): Ref(key=W("k_proj", "weight")),
+            W("v_proj", "weight"): Ref(key=W("v_proj", "weight")),
+            W("o_proj", "weight"): Ref(key=W("o_proj", "weight")),
+        }
+    )
+
+
+def plan_qwen3next_gdn_to_apriel2(
+    num_k_heads: int,
+    num_v_heads: int,
+    head_k_dim: int,
+    head_v_dim: int,
+) -> ExprPlan:
+    """Build plan for Qwen3NextGatedDeltaNet -> Apriel2GatedDeltaNet weight conversion.
+
+    Qwen3Next uses GROUPED layout: for each key_head group, [Q_g | K_g | V_group | Z_group]
+    Apriel2/Fast-LLM uses FLAT layout: [Q_all | K_all | V_all | Z_all]
+
+    This plan rearranges in_proj_qkvz weights from grouped to flat layout.
+    Other weights are direct copies (with conv1d -> convolution rename).
+    """
+    from fast_llm_external_models.apriel2.conversion import Concat, Slice
+
+    # Dimensions
+    key_dim = num_k_heads * head_k_dim
+    value_dim = num_v_heads * head_v_dim
+    v_per_group = (num_v_heads // num_k_heads) * head_v_dim
+    group_size = head_k_dim * 2 + v_per_group * 2  # Q + K + V_group + Z_group
+
+    qkvz_ref = Ref(key=W("in_proj_qkvz", "weight"))
+
+    # Extract Q, K, V, Z from each group and concatenate by type
+    q_slices = []
+    k_slices = []
+    v_slices = []
+    z_slices = []
+
+    for g in range(num_k_heads):
+        base = g * group_size
+        # Q_g: [base, base + head_k_dim)
+        q_slices.append(Slice(expr=qkvz_ref, slices=((base, base + head_k_dim, None), (None, None, None))))
+        # K_g: [base + head_k_dim, base + 2*head_k_dim)
+        k_slices.append(
+            Slice(expr=qkvz_ref, slices=((base + head_k_dim, base + 2 * head_k_dim, None), (None, None, None)))
+        )
+        # V_group_g: [base + 2*head_k_dim, base + 2*head_k_dim + v_per_group)
+        v_slices.append(
+            Slice(
+                expr=qkvz_ref,
+                slices=((base + 2 * head_k_dim, base + 2 * head_k_dim + v_per_group, None), (None, None, None)),
+            )
+        )
+        # Z_group_g: [base + 2*head_k_dim + v_per_group, base + group_size)
+        z_slices.append(
+            Slice(
+                expr=qkvz_ref,
+                slices=((base + 2 * head_k_dim + v_per_group, base + group_size, None), (None, None, None)),
+            )
+        )
+
+    # Concatenate: [Q_all | K_all | V_all | Z_all]
+    in_proj_qkvz_expr = Concat(
+        exprs=(
+            Concat(exprs=tuple(q_slices), dim=0),
+            Concat(exprs=tuple(k_slices), dim=0),
+            Concat(exprs=tuple(v_slices), dim=0),
+            Concat(exprs=tuple(z_slices), dim=0),
+        ),
+        dim=0,
+    )
+
+    # Similarly rearrange in_proj_ba: grouped [b_group | a_group] -> flat [b_all | a_all]
+    ba_ref = Ref(key=W("in_proj_ba", "weight"))
+    ba_per_group = (num_v_heads // num_k_heads) * 2  # b + a for the group
+
+    b_slices = []
+    a_slices = []
+    for g in range(num_k_heads):
+        base = g * ba_per_group
+        b_slices.append(
+            Slice(expr=ba_ref, slices=((base, base + num_v_heads // num_k_heads, None), (None, None, None)))
+        )
+        a_slices.append(
+            Slice(expr=ba_ref, slices=((base + num_v_heads // num_k_heads, base + ba_per_group, None), (None, None, None)))
+        )
+
+    in_proj_ba_expr = Concat(
+        exprs=(
+            Concat(exprs=tuple(b_slices), dim=0),
+            Concat(exprs=tuple(a_slices), dim=0),
+        ),
+        dim=0,
+    )
+
+    return ExprPlan(
+        mappings={
+            W("in_proj_qkvz", "weight"): in_proj_qkvz_expr,
+            W("in_proj_ba", "weight"): in_proj_ba_expr,
+            W("out_proj", "weight"): Ref(key=W("out_proj", "weight")),
+            W("convolution", "weight"): Ref(key=W("conv1d", "weight")),  # rename
+            W("dt_bias"): Ref(key=W("dt_bias")),
+            W("A_log"): Ref(key=W("A_log")),
+            W("norm", "weight"): Ref(key=W("norm", "weight")),
+        }
+    )
+
+
+def extract_module_weights(module: nn.Module) -> dict[W, torch.Tensor]:
+    """Extract weights from a module as a dict with W keys."""
+    weights = {}
+    for name, param in module.named_parameters():
+        # Convert "a.b.c" to W("a", "b", "c")
+        parts = name.split(".")
+        key = W(*parts)
+        weights[key] = param.data
+    return weights
+
+
+def load_weights_into_module(module: nn.Module, weights: dict[W, torch.Tensor]):
+    """Load weights from a dict with W keys into a module."""
+    with torch.no_grad():
+        for name, param in module.named_parameters():
+            parts = name.split(".")
+            key = W(*parts)
+            if key in weights:
+                param.copy_(weights[key])
 
 
 # =============================================================================
@@ -192,8 +310,11 @@ class TestApriel2AttentionVsMistral:
         mistral_attn = MistralAttention(mistral_config, layer_idx=0)
         apriel2_attn = Apriel2Attention(hidden_size, apriel2_mixer_config, layer_idx=0, config=apriel2_config)
 
-        # Copy weights
-        copy_attention_weights(mistral_attn, apriel2_attn)
+        # Use conversion machinery to transfer weights
+        plan = plan_mistral_attention_to_apriel2()
+        source_weights = extract_module_weights(mistral_attn)
+        target_weights = execute(plan, source_weights, seed=42)
+        load_weights_into_module(apriel2_attn, target_weights)
 
         # Create input
         torch.manual_seed(42)
@@ -329,8 +450,11 @@ class TestApriel2AttentionVsPixtral:
             hidden_size, apriel2_mixer_config_noncausal, layer_idx=0, config=apriel2_config
         )
 
-        # Copy weights
-        copy_attention_weights(pixtral_attn, apriel2_attn)
+        # Use conversion machinery to transfer weights (Pixtral uses same naming as Mistral)
+        plan = plan_mistral_attention_to_apriel2()
+        source_weights = extract_module_weights(pixtral_attn)
+        target_weights = execute(plan, source_weights, seed=42)
+        load_weights_into_module(apriel2_attn, target_weights)
 
         # Create input
         torch.manual_seed(42)
@@ -424,34 +548,36 @@ class TestApriel2GDNVsQwen3Next:
             "norm_eps": 1e-5,
         }
 
-    def _copy_gdn_weights(self, src: nn.Module, dst: nn.Module):
-        """Copy GDN weights from Qwen3Next to Apriel2 format."""
-        with torch.no_grad():
-            # The weight layouts differ between Qwen3Next and Apriel2
-            # Qwen3Next: q_proj, k_proj, v_proj, g_proj (gate), o_proj
-            # Apriel2: in_proj_qkvz, in_proj_ba, out_proj, convolution, etc.
-            # This requires careful weight remapping - for now we verify shapes only
-            pass
-
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
-    def test_gdn_shapes_match(
+    def test_forward_equivalence(
         self,
         qwen3_config,
         apriel2_gdn_config,
         hidden_size,
         gdn_config,
         batch_size,
+        seq_len,
     ):
-        """Test that Apriel2GatedDeltaNet produces same output shapes as Qwen3NextGatedDeltaNet."""
+        """Test that Apriel2GatedDeltaNet produces same output as Qwen3NextGatedDeltaNet."""
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
-        seq_len = 32  # Fixed for this test
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
 
         # Create models (uses default device/dtype from conftest fixtures)
         qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0)
         apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, apriel2_gdn_config, layer_idx=0)
+
+        # Use conversion machinery to transfer weights (handles layout differences)
+        plan = plan_qwen3next_gdn_to_apriel2(
+            num_k_heads=key_heads,
+            num_v_heads=value_heads,
+            head_k_dim=key_head_dim,
+            head_v_dim=value_head_dim,
+        )
+        source_weights = extract_module_weights(qwen_gdn)
+        target_weights = execute(plan, source_weights, seed=42)
+        load_weights_into_module(apriel2_gdn, target_weights)
 
         # Create input
         torch.manual_seed(42)
@@ -465,40 +591,14 @@ class TestApriel2GDNVsQwen3Next:
             qwen_out = qwen_gdn(hidden_states)
             apriel2_out = apriel2_gdn(hidden_states)[0]
 
-        assert (
-            apriel2_out.shape == qwen_out.shape
-        ), f"Shape mismatch: Apriel2 {apriel2_out.shape} vs Qwen3Next {qwen_out.shape}"
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
-    @pytest.mark.parametrize("seq_len", [1, 16, 32, 64])
-    def test_gdn_forward_with_cache(
-        self,
-        apriel2_gdn_config,
-        hidden_size,
-        gdn_config,
-        batch_size,
-        seq_len,
-    ):
-        """Test Apriel2GatedDeltaNet forward pass with various sequence lengths."""
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
-
-        # Create model (uses default device/dtype from conftest fixtures)
-        apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, apriel2_gdn_config, layer_idx=0)
-
-        # Create input
-        torch.manual_seed(42)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-
-        apriel2_gdn.eval()
-
-        with torch.no_grad():
-            output = apriel2_gdn(hidden_states)[0]
-
-        assert (
-            output.shape == hidden_states.shape
-        ), f"Output shape {output.shape} doesn't match input shape {hidden_states.shape}"
-        assert not output.isnan().any(), "Output contains NaN"
-        assert not output.isinf().any(), "Output contains Inf"
+        assert_close(
+            apriel2_out,
+            qwen_out,
+            rtol=2e-4,
+            atol=2e-4,
+            msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet mismatch "
+            f"(batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
+        )
 
 
 # =============================================================================
