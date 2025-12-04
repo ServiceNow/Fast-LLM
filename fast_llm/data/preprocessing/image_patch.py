@@ -58,6 +58,18 @@ class ImagePatchConfig(PreprocessingConfig):
         hint=FieldHint.optional,
     )
 
+    def check_compatibility(self, preprocessing: typing.Self) -> None:
+        Assert.eq(self.height, preprocessing.height)
+        Assert.eq(self.width, preprocessing.width)
+        Assert.eq(self.do_resize, preprocessing.do_resize)
+        Assert.leq(self.max_image_height, preprocessing.max_image_height)
+        Assert.leq(self.max_image_width, preprocessing.max_image_width)
+        # None is used in the trainer to mark unknown value, so we can't do an equality check. TODO: Distinguish.
+        if preprocessing.image_break_token is not None:
+            Assert.eq(self.image_break_token, preprocessing.image_break_token)
+        if preprocessing.image_end_token is not None:
+            Assert.eq(self.image_end_token, preprocessing.image_end_token)
+
     @property
     def num_channels(self) -> int:
         # assume 3 channels (RGB) for all images

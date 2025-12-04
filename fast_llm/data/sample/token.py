@@ -166,4 +166,5 @@ class TokenWriter(MemmapWriter):
             num_documents=len(self._size_cumsum) - 1,
             num_tokens=self._size_cumsum[-1],
             data_type=DataType.from_torch(self._data_type),
+            preprocessing_config=self._preprocessing_config,
         )

@@ -15,6 +15,7 @@ from fast_llm.data.dataset.config import MemmapDatasetConfig, SampledDatasetConf
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER, LegacyMemmapDataset
 from fast_llm.data.dataset.sampled import logger
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
@@ -122,8 +123,8 @@ class MegatronDatasetConfig[SampleType: LanguageModelSample](MemmapDatasetConfig
         hint=FieldHint.core,
     )
 
-    def build(self) -> "LegacyMemmapDataset[SampleType]":
-        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path)
+    def build(self, preprocessing: PreprocessingConfig) -> "LegacyMemmapDataset[SampleType]":
+        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path, preprocessing)
 
 
 class MegatronMemmapDataset(LegacyMemmapDataset):

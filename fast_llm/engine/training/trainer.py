@@ -12,6 +12,7 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import allreduce_scalar, safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -239,6 +240,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
                 for eval_sampling_params in self._evaluator_runner.get_sampling_parameters()
             },
+            self._get_preprocessing_config(),
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
@@ -261,9 +263,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         pass
 
     def _get_sampling_parameters(
-        self, parameters: dict[str, typing.Any], _return_dict: bool = False
+        self, parameters: dict[str, typing.Any], *, _return_dict: bool = False
     ) -> SamplingParameters | dict[str, typing.Any]:
         return parameters if _return_dict else SamplingParameters(**parameters)
+
+    def _get_preprocessing_config(self, *, _return_dict: bool = False) -> PreprocessingConfig | dict[str, typing.Any]:
+        return {} if _return_dict else NullPreprocessingConfig()
 
     @property
     def _consumed_samples(self) -> int:

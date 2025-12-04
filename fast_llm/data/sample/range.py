@@ -135,4 +135,5 @@ class RangeWriter(MemmapWriter):
             end=end,
             num_documents=len(self._count_cumsum) - 1,
             num_ranges=self._count_cumsum[-1],
+            preprocessing_config=self._preprocessing_config,
         )

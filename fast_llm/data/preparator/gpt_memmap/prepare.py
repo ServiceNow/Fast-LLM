@@ -27,6 +27,8 @@ from fast_llm.data.dataset.config import (
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import Tokenizer
 from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
@@ -194,6 +196,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
+            LanguageModelPreprocessingConfig(
+                tokenizer=self._config.tokenizer,
+                vocab_size=self._tokenizer.vocab_size,
+                image_patches=(
+                    self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
+                ),
+                has_loss_masking_spans=self._source_schema.has_loss_masking_span,
+                has_preference_spans=self._source_schema.has_preference_spans,
+            ),
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 

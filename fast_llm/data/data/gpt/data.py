@@ -13,6 +13,7 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -47,6 +48,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self,
         distributed: "Distributed",
         sampling_parameters: dict[str, GPTSamplingParameters],
+        preprocessing: LanguageModelPreprocessingConfig,
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
@@ -54,7 +56,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
-        super().setup(distributed, sampling_parameters, cache_directory)
+        super().setup(distributed, sampling_parameters, preprocessing, cache_directory)
 
         # Check and raise an error if a used dataset is not defined.
         for dataset_name in self._sampling_parameters.keys():
@@ -81,6 +83,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 sampling = GPTSamplingData(
                     config=self._config.sampling,
                     parameters=sampling_parameters,
+                    preprocessing=preprocessing,
                     cache_directory=self._cache_directory,
                     distributed=distributed,
                     dataset_name=dataset_name,

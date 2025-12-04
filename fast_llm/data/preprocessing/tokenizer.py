@@ -1,3 +1,4 @@
+import functools
 import pathlib
 import typing
 
@@ -69,9 +70,12 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
 
-    @property
+    @functools.cached_property
     def vocab_size(self) -> int:
-        return len(self.tokenizer)
+        out = len(self.tokenizer)
+        if self._config.max_vocab_size is not None:
+            out = min(out, self._config.max_vocab_size)
+        return out
 
     @property
     def vocab(self) -> dict[str, int]:

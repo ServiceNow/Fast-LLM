@@ -300,4 +300,5 @@ class PatchWriter(MemmapWriter):
             num_patch_groups=self._group_count_cumsum[-1],
             patch_shape=self._patch_shape,
             data_type=DataType.from_torch(self._data_type),
+            preprocessing_config=self._preprocessing_config,
         )

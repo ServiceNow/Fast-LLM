@@ -4,7 +4,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Configurable, Field, config_class
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -195,11 +195,16 @@ class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](Mem
 
 
 class MemmapWriter(abc.ABC):
-    def __init__(self, stream: io.BufferedWriter | pathlib.Path):
+    def __init__(
+        self, stream: io.BufferedWriter | pathlib.Path, preprocessing_config: PreprocessingConfig | None = None
+    ):
         self._owns_stream = isinstance(stream, pathlib.Path)
         if self._owns_stream:
             stream = stream.open("wb")
         self._stream = stream
+        self._preprocessing_config = (
+            NullPreprocessingConfig() if preprocessing_config is None else preprocessing_config
+        )
 
     def __enter__(self):
         self._begin = self._stream.tell()
@@ -230,8 +235,13 @@ class MemmapWriter(abc.ABC):
         pass
 
     @classmethod
-    def write_dataset(cls, stream: io.BufferedWriter, documents: typing.Iterable[Sample]) -> MemmapReaderConfig:
-        with cls(stream) as writer:
+    def write_dataset(
+        cls,
+        stream: io.BufferedWriter,
+        documents: typing.Iterable[Sample],
+        preprocessing_config: PreprocessingConfig | None = None,
+    ) -> MemmapReaderConfig:
+        with cls(stream, preprocessing_config) as writer:
             for document in documents:
                 writer.write(document)
         return writer.get_config()
