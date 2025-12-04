@@ -549,6 +549,7 @@ class TestApriel2GDNVsQwen3Next:
         }
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456, 789, 1337])
     def test_forward_equivalence(
         self,
         qwen3_config,
@@ -557,6 +558,7 @@ class TestApriel2GDNVsQwen3Next:
         gdn_config,
         batch_size,
         seq_len,
+        seed,
     ):
         """Test that Apriel2GatedDeltaNet produces same output as Qwen3NextGatedDeltaNet."""
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
@@ -564,7 +566,8 @@ class TestApriel2GDNVsQwen3Next:
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
 
-        # Create models (uses default device/dtype from conftest fixtures)
+        # Create models with different random seeds for weight initialization
+        torch.manual_seed(seed)
         qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0)
         apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, apriel2_gdn_config, layer_idx=0)
 
@@ -576,11 +579,11 @@ class TestApriel2GDNVsQwen3Next:
             head_v_dim=value_head_dim,
         )
         source_weights = extract_module_weights(qwen_gdn)
-        target_weights = execute(plan, source_weights, seed=42)
+        target_weights = execute(plan, source_weights, seed=seed)
         load_weights_into_module(apriel2_gdn, target_weights)
 
-        # Create input
-        torch.manual_seed(42)
+        # Create input with same seed for reproducibility
+        torch.manual_seed(seed)
         hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
         qwen_gdn.eval()
