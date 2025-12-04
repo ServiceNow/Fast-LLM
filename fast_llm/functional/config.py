@@ -39,6 +39,7 @@ class ActivationType(enum.StrEnum):
     An enum for the available activation types for the MLP layer.
     """
 
+    gelu_gaussian = "gelu_gaussian"
     gelu = "gelu"
     silu = "silu"
     relu = "relu"
@@ -67,6 +68,7 @@ def _set_activation_fn_map() -> None:
     global _ACTIVATION_FN_MAP
 
     _ACTIVATION_FN_MAP = {
+        ActivationType.gelu_gaussian: torch.nn.functional.gelu,
         ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ActivationType.silu: torch.nn.functional.silu,
         ActivationType.relu: torch.nn.functional.relu,
@@ -78,6 +80,7 @@ def _set_activation_fn_map() -> None:
 _ACTIVATION_FN_MAP: dict[ActivationType, typing.Callable[["torch.Tensor"], "torch.Tensor"]] = {}
 
 _ACTIVATION_HF_NAMES = {
+    ActivationType.gelu_gaussian: "gelu",
     ActivationType.gelu: "gelu_pytorch_tanh",
     ActivationType.silu: "silu",
     ActivationType.relu: "relu",
@@ -86,7 +89,7 @@ _ACTIVATION_HF_NAMES = {
 }
 # gelu and gelu_pytorch_tanh both map to our standard gelu
 _ACTIVATION_HF_NAMES_INV = {
-    "gelu": ActivationType.gelu,
+    "gelu": ActivationType.gelu_gaussian,
     "gelu_pytorch_tanh": ActivationType.gelu,
     "silu": ActivationType.silu,
     "relu": ActivationType.relu,
