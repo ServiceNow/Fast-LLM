@@ -822,6 +822,13 @@ _update_and_add_testing_config(
                                 "head_size": 32,
                                 "add_linear_biases": False,
                             },
+                            "gdn": {
+                                "type": "gdn",
+                                "value_heads": 4,
+                                "key_heads": 4,
+                                "key_head_dim": 16,
+                                "value_head_dim": 16,
+                            },
                             "mamba": {
                                 "type": "mamba_2",
                                 "d_inner": 512,
@@ -847,9 +854,19 @@ _update_and_add_testing_config(
                         "add_linear_biases": False,
                     },
                 },
+                "gdn": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 4,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                    },
+                },
             },
-            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa"],
-            "num_blocks": 4,
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "stochastic"],
+            "num_blocks": 6,
         },
     },
     megatron_args=None,
@@ -865,7 +882,8 @@ _update_and_add_testing_config(
     compare_factor=10.0,
     # Micro-sequence split not supported for Mamba.
     # Pipeline-parallel gives a different mixer selection.
-    skip_tests=("sdp", "ms", "pp"),
+    # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
+    skip_tests=("sdp", "ms", "pp", r"^tp2$"),
 )
 
 
@@ -907,7 +925,8 @@ _update_and_add_testing_config(
     },
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
-    skip_tests=("sdp", "ms", "bf4", "df"),
+    # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
+    skip_tests=("sdp", "ms", "bf4", "df", r"^tp2$"),
 )
 
 

@@ -9,7 +9,7 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
-from fast_llm.layers.ssm.config import Mamba2Config
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, Mamba2Config
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
@@ -192,6 +192,85 @@ class Apriel2MambaConverter:
         ]
 
 
+class Apriel2GatedDeltaNetConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        result = {
+            "type": "gdn",
+            "value_heads": config["value_heads"],
+            "key_heads": config["key_heads"],
+            "key_head_dim": config["key_head_dim"],
+            "value_head_dim": config["value_head_dim"],
+        }
+        if "convolution_layer" in config:
+            result["convolution_layer"] = config["convolution_layer"]
+        return result
+
+    @classmethod
+    def export_config(cls, config: GatedDeltaNetConfig) -> dict:
+        return {
+            "type": "gdn",
+            "value_heads": config.value_heads,
+            "key_heads": config.key_heads,
+            "key_head_dim": config.key_head_dim,
+            "value_head_dim": config.value_head_dim,
+            "convolution_layer": {
+                "kernel_size": config.convolution_layer.kernel_size,
+            },
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: GatedDeltaNetConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_qkvz",
+                f"{hf_prefix}.in_proj_qkvz",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.in_proj_ba",
+                f"{hf_prefix}.in_proj_ba",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.convolution",
+                f"{hf_prefix}.convolution",
+                config.convolution_layer.bias.enabled,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.out_proj",
+                f"{hf_prefix}.out_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.dt_bias",
+                f"{hf_prefix}.dt_bias",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.A_log",
+                f"{hf_prefix}.A_log",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.norm",
+                f"{hf_prefix}.norm",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
 class Apriel2StochasticMixerConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -202,6 +281,8 @@ class Apriel2StochasticMixerConverter:
                 mixers[name] = Apriel2AttentionConverter.import_config(sub_mixer_config)
             elif mixer_type == "mamba":
                 mixers[name] = Apriel2MambaConverter.import_config(sub_mixer_config)
+            elif mixer_type == "gdn":
+                mixers[name] = Apriel2GatedDeltaNetConverter.import_config(sub_mixer_config)
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
@@ -223,6 +304,8 @@ class Apriel2StochasticMixerConverter:
                 mixers[name] = Apriel2AttentionConverter.export_config(sub_mixer)
             elif mixer_type is Mamba2Config:
                 mixers[name] = Apriel2MambaConverter.export_config(sub_mixer)
+            elif mixer_type is GatedDeltaNetConfig:
+                mixers[name] = Apriel2GatedDeltaNetConverter.export_config(sub_mixer)
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
@@ -250,6 +333,9 @@ class Apriel2StochasticMixerConverter:
             elif mixer_type is Mamba2Config:
                 converter_class = Apriel2MambaConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
+            elif mixer_type is GatedDeltaNetConfig:
+                converter_class = Apriel2GatedDeltaNetConverter
+                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
             converters.extend(
@@ -276,6 +362,8 @@ class Apriel2BlockConverter:
             mixer = Apriel2MambaConverter.import_config(mixer_config)
         elif mixer_type == "stochastic":
             mixer = Apriel2StochasticMixerConverter.import_config(mixer_config)
+        elif mixer_type == "gdn":
+            mixer = Apriel2GatedDeltaNetConverter.import_config(mixer_config)
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
 
@@ -314,6 +402,8 @@ class Apriel2BlockConverter:
             mixer = Apriel2MambaConverter.export_config(config.mixer)
         elif mixer_type is StochasticMixerConfig:
             mixer = Apriel2StochasticMixerConverter.export_config(config.mixer)
+        elif mixer_type is GatedDeltaNetConfig:
+            mixer = Apriel2GatedDeltaNetConverter.export_config(config.mixer)
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
 
@@ -365,6 +455,9 @@ class Apriel2BlockConverter:
             hf_mixer_prefix = f"{hf_prefix}.mixer"
         elif mixer_type is StochasticMixerConfig:
             converter_class = Apriel2StochasticMixerConverter
+            hf_mixer_prefix = f"{hf_prefix}.mixer"
+        elif mixer_type is GatedDeltaNetConfig:
+            converter_class = Apriel2GatedDeltaNetConverter
             hf_mixer_prefix = f"{hf_prefix}.mixer"
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")

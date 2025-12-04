@@ -2,10 +2,10 @@
 #
 # Converts attention-only model to a hybrid with:
 # - First 8 layers: pure attention (keep for long-range)
-# - Middle 32 layers: stochastic mixer with attention + gated_delta_net (DIL converted)
+# - Middle 32 layers: stochastic mixer with attention + gdn (DIL converted)
 # - Last 8 layers: pure attention (keep for output quality)
 #
-# The gated_delta_net branches are initialized from attention weights via DIL.
+# The gdn branches are initialized from attention weights via DIL.
 
 decoder:
   type: pattern
@@ -73,7 +73,7 @@ decoder:
         init: transfer
 
     hybrid:
-      # Stochastic mixer with attention (transferred) and gated_delta_net (DIL)
+      # Stochastic mixer with attention (transferred) and gdn (DIL)
       mixer:
         type: stochastic
         main_mixer_name: attention
@@ -82,13 +82,13 @@ decoder:
             type: attention
             init: transfer
             # Full attention for global context
-          gated_delta_net:
-            type: gated_delta_net
+          gdn:
+            type: gdn
             init: transfer  # Uses DIL conversion from attention
             conv_kernel_size: 4  # required, no default
             # GDN dimensions can be configured or derived from source
-            # num_value_heads: 32  # defaults to source heads
-            # num_key_heads: 8     # defaults to source head_groups
+            # value_heads: 32  # defaults to source heads
+            # key_heads: 8     # defaults to source head_groups
             # key_head_dim: 64     # defaults to source head_size
             # value_head_dim: 64   # defaults to source head_size
       mlp:

@@ -24,7 +24,16 @@ from transformers.models.mistral.modeling_mistral import (
 )
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import eager_attention_forward
-from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
+# GDN implementation - matches Fast-LLM's gdn.py exactly
+try:
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+except ImportError:
+    chunk_gated_delta_rule = None
+
+try:
+    from fla.modules.fused_norm_gate import rms_norm_gated
+except ImportError:
+    rms_norm_gated = None
 
 from transformers.utils.import_utils import is_torch_flex_attn_available
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
@@ -368,7 +377,7 @@ def get_mixer_class(mixer_type: str) -> type:
         return Apriel2Attention
     elif mixer_type == "mamba":
         return Apriel2Mamba
-    elif mixer_type == "gated_delta_net":
+    elif mixer_type == "gdn":
         return Apriel2GatedDeltaNet
     elif mixer_type == "kimi_linear_attention":
         return KimiLinearAttention
@@ -391,7 +400,7 @@ def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, a
             raise ValueError("Stochastic mixers cannot contain nested stochastic mixers")
         return mixer_class(mixer_config, config, layer_idx)
     else:
-        # mamba, gated_delta_net, kimi_linear_attention all have same signature
+        # mamba, gdn, kimi_linear_attention all have same signature
         return mixer_class(hidden_size, mixer_config, layer_idx=layer_idx)
 
 
@@ -715,8 +724,143 @@ class Apriel2Mamba(nn.Module):
         return ssm_state, conv_state
 
 
+def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
+    """L2 normalization matching Fast-LLM's implementation."""
+    return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
+
+
+def torch_chunk_gated_delta_rule(
+    query,
+    key,
+    value,
+    g,
+    beta,
+    chunk_size=64,
+    initial_state=None,
+    output_final_state=False,
+    use_qk_l2norm_in_kernel=False,
+):
+    """Pure PyTorch fallback for chunk_gated_delta_rule - matches Fast-LLM's gdn.py."""
+    initial_dtype = query.dtype
+    if use_qk_l2norm_in_kernel:
+        query = _l2norm(query, dim=-1, eps=1e-6)
+        key = _l2norm(key, dim=-1, eps=1e-6)
+    query, key, value, beta, g = (
+        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
+    )
+
+    batch_size, num_heads, sequence_length, k_head_dim = key.shape
+    v_head_dim = value.shape[-1]
+    pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
+    query = F.pad(query, (0, 0, 0, pad_size))
+    key = F.pad(key, (0, 0, 0, pad_size))
+    value = F.pad(value, (0, 0, 0, pad_size))
+    beta = F.pad(beta, (0, pad_size))
+    g = F.pad(g, (0, pad_size))
+    total_sequence_length = sequence_length + pad_size
+    scale = 1 / (query.shape[-1] ** 0.5)
+    query = query * scale
+
+    v_beta = value * beta.unsqueeze(-1)
+    k_beta = key * beta.unsqueeze(-1)
+    # reshape to chunks
+    query, key, value, k_beta, v_beta = (
+        x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)
+    )
+    g = g.reshape(g.shape[0], g.shape[1], -1, chunk_size)
+    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
+
+    # chunk decay
+    g = g.cumsum(dim=-1)
+    decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
+    attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
+    for i in range(1, chunk_size):
+        row = attn[..., i, :i].clone()
+        sub = attn[..., :i, :i].clone()
+        attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
+    attn = attn + torch.eye(chunk_size, dtype=attn.dtype, device=attn.device)
+    value = attn @ v_beta
+    k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
+    last_recurrent_state = (
+        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
+        if initial_state is None
+        else initial_state.to(value)
+    )
+    core_attn_out = torch.zeros_like(value)
+    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
+
+    # for each chunk
+    for i in range(0, total_sequence_length // chunk_size):
+        q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
+        attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
+        v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
+        v_new = v_i - v_prime
+        attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
+        core_attn_out[:, :, i] = attn_inter + attn @ v_new
+        last_recurrent_state = (
+            last_recurrent_state * g[:, :, i, -1, None, None].exp()
+            + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+        )
+
+    if not output_final_state:
+        last_recurrent_state = None
+    core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
+    core_attn_out = core_attn_out[:, :, :sequence_length]
+    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
+    return core_attn_out, last_recurrent_state
+
+
+class GatedRMSNormalization(nn.Module):
+    """
+    Gated RMS normalization layer matching Fast-LLM's implementation.
+    Uses fla.modules.fused_norm_gate.rms_norm_gated when available.
+    """
+
+    def __init__(self, hidden_size: int, eps: float = 1e-5):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.eps = eps
+
+    def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        if rms_norm_gated is not None:
+            return self._forward_fla(input_, gate)
+        else:
+            return self._forward_local(input_, gate)
+
+    def _forward_fla(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return rms_norm_gated(
+            input_,
+            gate,
+            self.weight,
+            None,
+            activation="silu",
+            eps=self.eps,
+            residual=None,
+            prenorm=False,
+            residual_in_fp32=False,
+        )
+
+    def _forward_local(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        """Pure PyTorch fallback for gated RMS normalization."""
+        input_dtype = input_.dtype
+        hidden_states = input_.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+        hidden_states = self.weight * hidden_states.to(input_dtype)
+        return hidden_states * F.silu(gate)
+
+
 class Apriel2GatedDeltaNet(nn.Module):
-    """Wrapper around Qwen3NextGatedDeltaNet to match apriel2 interface."""
+    """
+    Gated Delta Net implementation matching Fast-LLM's gdn.py exactly.
+
+    Weight names and config parameters match Fast-LLM:
+    - in_proj_qkvz, in_proj_ba, convolution, out_proj, dt_bias, A_log, norm
+    - value_heads, key_heads, key_head_dim, value_head_dim
+
+    Uses Fast-LLM's flat QKVZ layout: [Q_all | K_all | V_all | Z_all]
+    Uses fla.ops.gated_delta_rule.chunk_gated_delta_rule when available.
+    """
 
     def __init__(
         self,
@@ -728,47 +872,88 @@ class Apriel2GatedDeltaNet(nn.Module):
     ):
         super().__init__()
         self.layer_idx = layer_idx
+        self.hidden_size = d_model
 
-        # Store config for cache allocation
-        self.num_v_heads = config_dict.get("num_value_heads", 32)
-        self.num_k_heads = config_dict.get("num_key_heads", 8)
-        self.head_k_dim = config_dict.get("key_head_dim", 64)
-        self.head_v_dim = config_dict.get("value_head_dim", 64)
+        # Config params - match Fast-LLM naming (value_heads, key_heads, etc.)
+        self.value_heads = config_dict.get("value_heads", 32)
+        self.key_heads = config_dict.get("key_heads", 8)
+        self.key_head_dim = config_dict.get("key_head_dim", 64)
+        self.value_head_dim = config_dict.get("value_head_dim", 64)
         self.conv_kernel_size = config_dict.get("conv_kernel_size", 4)
+        self.norm_eps = config_dict.get("norm_eps", 1e-5)
 
         # Derived dimensions
-        self.key_dim = self.head_k_dim * self.num_k_heads
-        self.value_dim = self.head_v_dim * self.num_v_heads
-        self.conv_dim = self.key_dim * 2 + self.value_dim
+        self.key_dim = self.key_head_dim * self.key_heads
+        self.value_dim = self.value_head_dim * self.value_heads
+        self.conv_dim = self.key_dim * 2 + self.value_dim  # Q, K, V (no Z in conv)
+        self.qkvz_dim = self.key_dim * 2 + self.value_dim * 2  # Q, K, V, Z
+        self.value_heads_per_key = self.value_heads // self.key_heads
 
-        # Map config_dict to Qwen3NextConfig format
-        config = SimpleNamespace(
-            hidden_size=d_model,
-            linear_num_value_heads=self.num_v_heads,
-            linear_num_key_heads=self.num_k_heads,
-            linear_key_head_dim=self.head_k_dim,
-            linear_value_head_dim=self.head_v_dim,
-            linear_conv_kernel_dim=self.conv_kernel_size,
-            hidden_act=config_dict.get("activation", "silu"),
-            rms_norm_eps=config_dict.get("norm_eps", 1e-5),
+        # Projection layers - names match Fast-LLM exactly
+        self.in_proj_qkvz = nn.Linear(d_model, self.qkvz_dim, bias=False, device=device, dtype=dtype)
+        self.in_proj_ba = nn.Linear(d_model, self.value_heads * 2, bias=False, device=device, dtype=dtype)
+        self.out_proj = nn.Linear(self.value_dim, d_model, bias=False, device=device, dtype=dtype)
+
+        # Convolution - named 'convolution' to match Fast-LLM
+        self.convolution = nn.Conv1d(
+            in_channels=self.conv_dim,
+            out_channels=self.conv_dim,
+            bias=False,
+            kernel_size=self.conv_kernel_size,
+            groups=self.conv_dim,
+            padding=self.conv_kernel_size - 1,
+            device=device,
             dtype=dtype,
         )
 
-        self.gdn = Qwen3NextGatedDeltaNet(config, layer_idx)
+        # Learnable parameters - match Fast-LLM initialization
+        self.dt_bias = nn.Parameter(torch.ones(self.value_heads, device=device, dtype=dtype))
+        self.A_log = nn.Parameter(torch.zeros(self.value_heads, device=device, dtype=dtype).uniform_(0, 16).log())
+
+        # Normalization layer - named 'norm' with 'weight' param to match Fast-LLM
+        self.norm = GatedRMSNormalization(self.value_head_dim, eps=self.norm_eps)
+
+        # Select kernel implementation - fla if available, else torch fallback
+        self._chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
+
+        if chunk_gated_delta_rule is None:
+            logger.warning(
+                "GatedDeltaNet fast path not available. Install fla library for optimized kernels. "
+                "Falling back to PyTorch implementation."
+            )
+
+    def _fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
+        """
+        Split QKVZ and BA tensors using Fast-LLM's flat layout.
+
+        Fast-LLM layout: [Q_all_heads | K_all_heads | V_all_heads | Z_all_heads]
+        """
+        # Split QKVZ - flat layout matching Fast-LLM
+        qkv_sizes = (
+            self.key_dim,   # Q: key_heads * key_head_dim
+            self.key_dim,   # K: key_heads * key_head_dim
+            self.value_dim, # V: value_heads * value_head_dim
+            self.value_dim, # Z: value_heads * value_head_dim
+        )
+        query, key, value, z = torch.split(mixed_qkvz, qkv_sizes, dim=-1)
+
+        # Reshape to head format: [batch, seq, heads, head_dim]
+        query = query.reshape(*query.shape[:-1], self.key_heads, self.key_head_dim)
+        key = key.reshape(*key.shape[:-1], self.key_heads, self.key_head_dim)
+        value = value.reshape(*value.shape[:-1], self.value_heads, self.value_head_dim)
+        z = z.reshape(*z.shape[:-1], self.value_heads, self.value_head_dim)
+
+        # Split BA - flat layout: [beta_all | alpha_all]
+        beta, alpha = torch.split(mixed_ba, (self.value_heads, self.value_heads), dim=-1)
+
+        return query, key, value, z, beta, alpha
 
     def _ensure_cache_initialized(self, past_key_values, batch_size, device, dtype):
-        """Initialize cache if it doesn't exist for this layer.
-
-        Qwen3NextGatedDeltaNet expects cache to be pre-initialized when has_previous_state is True.
-        This ensures the cache exists before the underlying implementation accesses it.
-        """
+        """Initialize cache if it doesn't exist for this layer."""
         if past_key_values is None:
             return
 
-        # Check if this layer's cache needs initialization
-        # For stochastic mixers, set_active_mixer routes access to the correct sub-cache
         if past_key_values.conv_states[self.layer_idx] is None:
-            # Allocate conv_state: (batch, conv_dim, conv_kernel_size)
             conv_state = torch.zeros(
                 batch_size, self.conv_dim, self.conv_kernel_size,
                 device=device, dtype=dtype
@@ -776,29 +961,140 @@ class Apriel2GatedDeltaNet(nn.Module):
             past_key_values.conv_states[self.layer_idx] = conv_state
 
         if past_key_values.recurrent_states[self.layer_idx] is None:
-            # Allocate recurrent_state: (batch, num_v_heads, head_v_dim, head_k_dim)
             recurrent_state = torch.zeros(
-                batch_size, self.num_v_heads, self.head_v_dim, self.head_k_dim,
+                batch_size, self.value_heads, self.key_head_dim, self.value_head_dim,
                 device=device, dtype=dtype
             )
             past_key_values.recurrent_states[self.layer_idx] = recurrent_state
 
     def forward(self, hidden_states: torch.Tensor, past_key_values=None, attention_mask=None, **kwargs):
         cache_position = kwargs.get("cache_position", None)
+        batch_size, seq_len, _ = hidden_states.shape
 
-        # Ensure cache is initialized before calling underlying implementation
-        # This is needed because Qwen3NextGatedDeltaNet expects cache to exist when has_previous_state is True
-        self._ensure_cache_initialized(
-            past_key_values,
-            batch_size=hidden_states.shape[0],
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
+        # Get conv and recurrent state from cache if available
+        conv_state = None
+        recurrent_state = None
+        if past_key_values is not None:
+            conv_state = past_key_values.conv_states[self.layer_idx]
+            recurrent_state = past_key_values.recurrent_states[self.layer_idx]
+
+        # Check if using precomputed states (single token decode with cache)
+        # Must check that conv_state exists for THIS layer (not just overall has_previous_state)
+        use_precomputed_states = (
+            past_key_values is not None
+            and conv_state is not None
+            and seq_len == 1
+            and cache_position is not None
         )
 
-        output = self.gdn(
-            hidden_states, cache_params=past_key_values, cache_position=cache_position, attention_mask=attention_mask
+        # Project to QKVZ and BA
+        mixed_qkvz = self.in_proj_qkvz(hidden_states)
+        mixed_ba = self.in_proj_ba(hidden_states)
+
+        # Split into components using Fast-LLM's flat layout
+        query, key, value, z, beta, alpha = self._fix_query_key_value_ordering(mixed_qkvz, mixed_ba)
+
+        # Flatten QKV for convolution (no Z in conv)
+        query_flat = query.reshape(batch_size, seq_len, -1)
+        key_flat = key.reshape(batch_size, seq_len, -1)
+        value_flat = value.reshape(batch_size, seq_len, -1)
+        mixed_qkv = torch.cat([query_flat, key_flat, value_flat], dim=-1)
+        mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, conv_dim, seq]
+
+        # Apply causal convolution
+        if use_precomputed_states:
+            # Single token update - use cached conv state
+            # torch_causal_conv1d_update expects [batch, conv_dim] not [batch, conv_dim, 1]
+            mixed_qkv = torch_causal_conv1d_update(
+                mixed_qkv.squeeze(2),  # [batch, conv_dim, 1] -> [batch, conv_dim]
+                conv_state,
+                self.convolution.weight.squeeze(1),
+                None,  # bias
+                "silu",
+            ).unsqueeze(2)  # [batch, conv_dim] -> [batch, conv_dim, 1]
+        else:
+            # Prefill - store padded state for future decoding
+            if past_key_values is not None:
+                # Pad to kernel size and store for future decoding
+                padded = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
+                past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size:]
+            # Apply convolution
+            mixed_qkv = F.silu(self.convolution(mixed_qkv)[:, :, :seq_len])
+
+        mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
+
+        # Split back after convolution
+        query_flat, key_flat, value_flat = torch.split(
+            mixed_qkv, (self.key_dim, self.key_dim, self.value_dim), dim=-1
         )
+        query = query_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
+        key = key_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
+        value = value_flat.reshape(batch_size, seq_len, self.value_heads, self.value_head_dim)
+
+        # Compute gating - match Fast-LLM exactly
+        beta_gate = beta.sigmoid()
+        g = -self.A_log.float().exp() * F.softplus(alpha.float() + self.dt_bias)
+
+        # Expand K heads to V heads if grouped query attention
+        if self.value_heads_per_key > 1:
+            query = query.repeat_interleave(self.value_heads_per_key, dim=2)
+            key = key.repeat_interleave(self.value_heads_per_key, dim=2)
+
+        # Run gated delta rule
+        if not use_precomputed_states:
+            # Chunked mode for prefill
+            output, last_recurrent_state = self._chunk_gated_delta_rule(
+                query, key, value, g=g, beta=beta_gate,
+                initial_state=None,
+                output_final_state=past_key_values is not None,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            # Recurrent mode for single token decode
+            output, last_recurrent_state = self._recurrent_gated_delta_rule(
+                query, key, value, g, beta_gate, recurrent_state
+            )
+
+        # Update recurrent state in cache
+        if past_key_values is not None:
+            past_key_values.recurrent_states[self.layer_idx] = last_recurrent_state
+
+        # Apply gated normalization
+        z_shape_og = z.shape
+        output = output.reshape(-1, output.shape[-1])
+        z_flat = z.reshape(-1, z.shape[-1])
+        output = self.norm(output, z_flat)
+        output = output.reshape(z_shape_og)
+        output = output.reshape(output.shape[0], output.shape[1], -1)
+
+        # Output projection
+        output = self.out_proj(output)
+
         return (output,)
+
+    def _recurrent_gated_delta_rule(self, query, key, value, g, beta, state):
+        """Single-step recurrent update for cached inference."""
+        # L2 normalize query and key
+        query = _l2norm(query, dim=-1, eps=1e-6)
+        key = _l2norm(key, dim=-1, eps=1e-6)
+
+        # Reshape for computation: [batch, heads, 1, dim] -> [batch, heads, dim]
+        query = query.squeeze(2)
+        key = key.squeeze(2)
+        value = value.squeeze(2)
+        g = g.squeeze(1)
+        beta = beta.squeeze(1)
+
+        # Update state: S = exp(g) * S + beta * k^T @ v
+        decay = g.exp().unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
+        k_outer_v = torch.einsum('bhk,bhv->bhkv', key * beta.unsqueeze(-1), value)
+        state = decay * state + k_outer_v
+
+        # Output: o = q @ S
+        output = torch.einsum('bhk,bhkv->bhv', query, state)
+        output = output.unsqueeze(2)  # [batch, heads, 1, v_dim]
+
+        return output, state
 
     @classmethod
     def setup(

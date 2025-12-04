@@ -16,7 +16,7 @@ class TestStochasticMixerStructure:
 
         assert hasattr(stochastic_layer.mixer, 'mixers'), "Stochastic mixer should have 'mixers' attribute"
         assert set(stochastic_layer.mixer.mixers.keys()) == {
-            'attention', 'swa', 'mamba', 'gated_delta_net'
+            'attention', 'swa', 'mamba', 'gdn'
         }, "Stochastic mixer should contain all 4 configured mixer types"
 
         # Verify each mixer is the correct type
@@ -27,7 +27,7 @@ class TestStochasticMixerStructure:
         assert isinstance(stochastic_layer.mixer.mixers['attention'], Apriel2Attention)
         assert isinstance(stochastic_layer.mixer.mixers['swa'], Apriel2Attention)  # SWA is Apriel2Attention with sliding_window
         assert isinstance(stochastic_layer.mixer.mixers['mamba'], Apriel2Mamba)
-        assert isinstance(stochastic_layer.mixer.mixers['gated_delta_net'], Apriel2GatedDeltaNet)
+        assert isinstance(stochastic_layer.mixer.mixers['gdn'], Apriel2GatedDeltaNet)
 
     def test_main_mixer_is_configured(self, apriel2_config_all_mixers):
         """Verify main_mixer_name is set correctly."""
@@ -44,7 +44,7 @@ class TestStochasticMixerStructure:
 
         assert isinstance(layer_cache, dict), "Stochastic layer cache should be a dict"
         assert set(layer_cache.keys()) == {
-            'attention', 'swa', 'mamba', 'gated_delta_net'
+            'attention', 'swa', 'mamba', 'gdn'
         }, "Cache should have slots for all 4 mixers"
 
     def test_attention_mixers_use_attention_cache(self, apriel2_config_all_mixers):
@@ -58,7 +58,7 @@ class TestStochasticMixerStructure:
 
         # SSM-based mixers use SSMCache
         assert isinstance(layer_cache['mamba'], _SSMCache)
-        assert isinstance(layer_cache['gated_delta_net'], _SSMCache)
+        assert isinstance(layer_cache['gdn'], _SSMCache)
 
     def test_parameter_counts_differ_by_config(self):
         """Different configs create models with different parameter counts."""

@@ -38,7 +38,7 @@ Key Design Decisions
     When converting between mixer types (e.g., attention → mamba), geometric
     parameters are derived where possible:
     - attention.heads → mamba dimensions (MIL conversion)
-    - attention.heads → gated_delta_net heads (DIL conversion)
+    - attention.heads → gdn heads (DIL conversion)
 
 Module Structure
 ================

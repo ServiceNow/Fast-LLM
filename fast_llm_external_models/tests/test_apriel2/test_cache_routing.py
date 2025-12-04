@@ -107,7 +107,7 @@ class TestMixerSwitching:
         assert layer_cache['attention'].key is not None, "Attention cache should have KV states"
         assert layer_cache['swa'].key is None, "SWA cache should be empty"
         assert layer_cache['mamba'].conv is None, "Mamba cache should be empty"
-        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should be empty"
+        assert layer_cache['gdn'].conv is None, "GatedDeltaNet cache should be empty"
         attn_seq_len_1 = layer_cache['attention'].key.shape[-2]
 
         # Forward 2: Switch to mamba (new token)
@@ -121,7 +121,7 @@ class TestMixerSwitching:
         assert layer_cache['attention'].key.shape[-2] == attn_seq_len_1, "Attention seq_len should not change"
         assert layer_cache['mamba'].conv is not None, "Mamba cache should now have SSM states"
         assert layer_cache['swa'].key is None, "SWA cache should still be empty"
-        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should still be empty"
+        assert layer_cache['gdn'].conv is None, "GatedDeltaNet cache should still be empty"
 
         # Forward 3: Switch to swa
         stochastic_layer.mixer.main_mixer_name = "swa"
@@ -132,10 +132,10 @@ class TestMixerSwitching:
         assert layer_cache['attention'].key is not None, "Attention cache should be preserved"
         assert layer_cache['mamba'].conv is not None, "Mamba cache should be preserved"
         assert layer_cache['swa'].key is not None, "SWA cache should now have KV states"
-        assert layer_cache['gated_delta_net'].conv is None, "GatedDeltaNet cache should still be empty"
+        assert layer_cache['gdn'].conv is None, "GatedDeltaNet cache should still be empty"
 
         # Forward 4: Switch to gated_delta_net
-        stochastic_layer.mixer.main_mixer_name = "gated_delta_net"
+        stochastic_layer.mixer.main_mixer_name = "gdn"
         outputs4 = model(new_token, past_key_values=cache, use_cache=True)
         cache = outputs4.past_key_values
 
@@ -143,7 +143,7 @@ class TestMixerSwitching:
         assert layer_cache['attention'].key is not None, "Attention cache should be preserved"
         assert layer_cache['mamba'].conv is not None, "Mamba cache should be preserved"
         assert layer_cache['swa'].key is not None, "SWA cache should be preserved"
-        assert layer_cache['gated_delta_net'].conv is not None, "GatedDeltaNet cache should now have SSM states"
+        assert layer_cache['gdn'].conv is not None, "GatedDeltaNet cache should now have SSM states"
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="SSM mixers require CUDA")
     def test_cache_isolation_between_attention_and_ssm(self, apriel2_config_all_mixers, device):

@@ -197,18 +197,16 @@ def plan_attention_to_gated_delta_net(
     dt_bias_expr = Init(shape=(num_v_heads,), init_type="zeros")
     norm_weight_expr = Init(shape=(head_v_dim,), init_type="ones")
 
-    # Apriel2GatedDeltaNet wraps actual GDN in self.gdn; Qwen3NextGatedDeltaNet has bias=False
-    gdn = target_prefix / "gdn"
+    # Apriel2GatedDeltaNet is now inlined (no .gdn wrapper), uses 'convolution' to match Fast-LLM
     return ExprPlan(
         mappings={
-            gdn / "in_proj_qkvz" / "weight": in_proj_qkvz_expr,
-            gdn / "in_proj_ba" / "weight": in_proj_ba_expr,
-            gdn / "out_proj" / "weight": out_proj_expr,
-            gdn / "conv1d" / "weight": conv_weight_expr,
-            # gdn / "conv1d" / "bias": Init(shape=(conv_dim,), init_type="zeros"),  # GDN conv1d has no bias
-            gdn / "A_log": A_log_expr,
-            gdn / "dt_bias": dt_bias_expr,
-            gdn / "norm" / "weight": norm_weight_expr,
+            target_prefix / "in_proj_qkvz" / "weight": in_proj_qkvz_expr,
+            target_prefix / "in_proj_ba" / "weight": in_proj_ba_expr,
+            target_prefix / "out_proj" / "weight": out_proj_expr,
+            target_prefix / "convolution" / "weight": conv_weight_expr,
+            target_prefix / "A_log": A_log_expr,
+            target_prefix / "dt_bias": dt_bias_expr,
+            target_prefix / "norm" / "weight": norm_weight_expr,
         }
     )
 
@@ -482,12 +480,12 @@ def _plan_mixer_transfer(
         )
 
     # Attention → GatedDeltaNet (DIL)
-    if source_type in ("attention", "sliding_window") and target_type == "gated_delta_net":
+    if source_type in ("attention", "sliding_window") and target_type == "gdn":
         source_heads = source_config["heads"]
         source_kv_heads = source_config["head_groups"]
         source_head_size = source_config["head_size"]
-        num_v_heads = target_config.get("num_value_heads", source_heads)
-        num_k_heads = target_config.get("num_key_heads", source_kv_heads)
+        num_v_heads = target_config.get("value_heads", source_heads)
+        num_k_heads = target_config.get("key_heads", source_kv_heads)
         head_k_dim = target_config.get("key_head_dim", source_head_size)
         head_v_dim = target_config.get("value_head_dim", source_head_size)
         conv_kernel_size = target_config["conv_kernel_size"]
@@ -506,20 +504,19 @@ def _plan_mixer_transfer(
             target_prefix=target_prefix,
         )
 
-    # GatedDeltaNet → GatedDeltaNet
-    if source_type == "gated_delta_net" and target_type == "gated_delta_net":
+    # GatedDeltaNet → GatedDeltaNet (no .gdn wrapper, uses 'convolution' to match Fast-LLM)
+    if source_type == "gdn" and target_type == "gdn":
         return ExprPlan(
             mappings={
                 target_prefix / name: Ref(key=source_prefix / name)
                 for name in [
-                    "gdn.in_proj_qkvz.weight",
-                    "gdn.in_proj_ba.weight",
-                    "gdn.out_proj.weight",
-                    "gdn.conv1d.weight",
-                    # "gdn.conv1d.bias",  # GDN conv1d has no bias (Qwen3NextGatedDeltaNet uses bias=False)
-                    "gdn.A_log",
-                    "gdn.dt_bias",
-                    "gdn.norm.weight",
+                    "in_proj_qkvz.weight",
+                    "in_proj_ba.weight",
+                    "out_proj.weight",
+                    "convolution.weight",
+                    "A_log",
+                    "dt_bias",
+                    "norm.weight",
                 ]
             }
         )
@@ -582,27 +579,26 @@ def _plan_random_mixer(
         mappings[prefix / "A_log"] = Init(shape=(d_inner, d_state), init_type="s4d")
         mappings[prefix / "D"] = Init(shape=(d_inner,), init_type="ones")
 
-    elif mixer_type == "gated_delta_net":
-        num_v_heads = config["num_value_heads"]
-        num_k_heads = config["num_key_heads"]
+    elif mixer_type == "gdn":
+        num_v_heads = config["value_heads"]
+        num_k_heads = config["key_heads"]
         head_k_dim = config["key_head_dim"]
         head_v_dim = config["value_head_dim"]
         conv_kernel_size = config.get("conv_kernel_size", 4)
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
-        q_dim = head_k_dim * num_v_heads
         conv_dim = key_dim * 2 + value_dim
-        gdn = prefix / "gdn"
-        qkvz_size = q_dim + key_dim + value_dim * 2
-        mappings[gdn / "in_proj_qkvz" / "weight"] = Init(shape=(qkvz_size, hidden_size), init_type="kaiming")
-        mappings[gdn / "in_proj_ba" / "weight"] = Init(shape=(key_dim * 2, hidden_size), init_type="zeros")
-        mappings[gdn / "out_proj" / "weight"] = Init(shape=(hidden_size, value_dim), init_type="kaiming")
-        mappings[gdn / "conv1d" / "weight"] = Init(
+        # No .gdn wrapper, uses 'convolution' to match Fast-LLM naming
+        qkvz_size = key_dim * 2 + value_dim * 2  # Q, K both key_dim; V, Z both value_dim
+        mappings[prefix / "in_proj_qkvz" / "weight"] = Init(shape=(qkvz_size, hidden_size), init_type="kaiming")
+        mappings[prefix / "in_proj_ba" / "weight"] = Init(shape=(num_v_heads * 2, hidden_size), init_type="zeros")
+        mappings[prefix / "out_proj" / "weight"] = Init(shape=(hidden_size, value_dim), init_type="kaiming")
+        mappings[prefix / "convolution" / "weight"] = Init(
             shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"
         )
-        mappings[gdn / "A_log"] = Init(shape=(num_v_heads,), init_type="slow_decay")
-        mappings[gdn / "dt_bias"] = Init(shape=(num_v_heads,), init_type="zeros")
-        mappings[gdn / "norm" / "weight"] = Init(shape=(value_dim,), init_type="ones")
+        mappings[prefix / "A_log"] = Init(shape=(num_v_heads,), init_type="slow_decay")
+        mappings[prefix / "dt_bias"] = Init(shape=(num_v_heads,), init_type="zeros")
+        mappings[prefix / "norm" / "weight"] = Init(shape=(head_v_dim,), init_type="ones")
 
     return ExprPlan(mappings=mappings)
 

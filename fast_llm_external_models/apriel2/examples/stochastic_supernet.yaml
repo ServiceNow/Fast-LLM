@@ -33,12 +33,12 @@ decoder:
 
         # Gated delta net - DIL initialization maps Q/K/V/O -> GDN projections
         # GDN dimensions are derived from source attention:
-        #   num_value_heads <- heads (40 for Apriel 1.5)
-        #   num_key_heads <- head_groups (8 for Apriel 1.5)
+        #   value_heads <- heads (40 for Apriel 1.5)
+        #   key_heads <- head_groups (8 for Apriel 1.5)
         #   key_head_dim <- head_size (128 for Apriel 1.5)
         #   value_head_dim <- head_size (128 for Apriel 1.5)
-        gated_delta_net:
-          type: gated_delta_net
+        gdn:
+          type: gdn
           init: transfer
           conv_kernel_size: 4  # Only required param - rest derived from source
 

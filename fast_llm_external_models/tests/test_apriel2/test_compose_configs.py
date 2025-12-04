@@ -122,7 +122,7 @@ class TestComposeConfigsLaws:
             "decoder": {
                 "block": {
                     "mixer": {
-                        "type": "gated_delta_net",
+                        "type": "gdn",
                         "init": "transfer",  # For weight handling
                         "conv_kernel_size": 4,
                     },
@@ -132,10 +132,10 @@ class TestComposeConfigsLaws:
         result = compose_configs(source_config, surgery)
 
         mixer = result["decoder"]["block"]["mixer"]
-        assert mixer["type"] == "gated_delta_net"
+        assert mixer["type"] == "gdn"
         # Derived from source attention geometry
-        assert mixer["num_value_heads"] == 8  # from heads
-        assert mixer["num_key_heads"] == 4  # from head_groups
+        assert mixer["value_heads"] == 8  # from heads
+        assert mixer["key_heads"] == 4  # from head_groups
         assert mixer["key_head_dim"] == 32  # from head_size
         assert mixer["value_head_dim"] == 32  # from head_size
         assert mixer["conv_kernel_size"] == 4  # from surgery
@@ -177,7 +177,7 @@ class TestComposeConfigsLaws:
                         "mixers": {
                             "attention": {"init": "transfer"},  # Inherits from source attention
                             "sliding_window": {"init": "transfer", "sliding_window": 512},
-                            "gdn": {"type": "gated_delta_net", "init": "transfer", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
                         },
                     },
                 },
@@ -200,9 +200,9 @@ class TestComposeConfigsLaws:
         assert mixers["sliding_window"]["sliding_window"] == 512
 
         # GDN derives from source attention geometry
-        assert mixers["gdn"]["type"] == "gated_delta_net"
-        assert mixers["gdn"]["num_value_heads"] == 8
-        assert mixers["gdn"]["num_key_heads"] == 4
+        assert mixers["gdn"]["type"] == "gdn"
+        assert mixers["gdn"]["value_heads"] == 8
+        assert mixers["gdn"]["key_heads"] == 4
         assert mixers["gdn"]["conv_kernel_size"] == 4
 
     def test_null_deletion(self, source_config):
@@ -224,7 +224,7 @@ class TestComposeConfigsLaws:
                         "main_mixer_name": "attention",
                         "mixers": {
                             "attention": {"init": "transfer"},
-                            "gdn": {"type": "gated_delta_net", "init": "random", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "random", "conv_kernel_size": 4},
                         },
                     },
                     "mlp": {"init": "transfer"},
@@ -294,7 +294,7 @@ class TestComposeConfigsRealYAML:
         assert mixer["type"] == "stochastic"
         assert "attention" in mixer["mixers"]
         assert "sliding_window" in mixer["mixers"]
-        assert "gated_delta_net" in mixer["mixers"]
+        assert "gdn" in mixer["mixers"]
 
         # Verify sub-mixer configs are complete (inherited from source)
         attn = mixer["mixers"]["attention"]
@@ -302,9 +302,9 @@ class TestComposeConfigsRealYAML:
         assert "head_groups" in attn
         assert "head_size" in attn
 
-        gdn = mixer["mixers"]["gated_delta_net"]
-        assert "num_value_heads" in gdn
-        assert "num_key_heads" in gdn
+        gdn = mixer["mixers"]["gdn"]
+        assert "value_heads" in gdn
+        assert "key_heads" in gdn
         assert "conv_kernel_size" in gdn
 
         # Should be instantiatable
@@ -465,7 +465,7 @@ class TestMonoidLaws:
                 "block": {
                     "mixer": {
                         "mixers": {
-                            "gdn": {"type": "gated_delta_net", "init": "transfer", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
                         },
                     },
                 },
@@ -505,7 +505,7 @@ class TestMonoidLaws:
                 "block": {
                     "mixer": {
                         "mixers": {
-                            "gdn": {"type": "gated_delta_net", "init": "transfer", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
                         },
                     },
                 },
@@ -623,7 +623,7 @@ class TestCompositionTortureTest:
         assert mixer["mixers"]["attention"]["heads"] == 16
         assert mixer["mixers"]["sliding_window"]["heads"] == 16
         assert mixer["mixers"]["sliding_window"]["sliding_window"] == 512
-        assert mixer["mixers"]["gdn"]["num_value_heads"] == 16
+        assert mixer["mixers"]["gdn"]["value_heads"] == 16
 
     def test_no_init_keys_in_result(self, complete_config, additive_surgery_chain):
         """Verify no 'init' keys leak through."""

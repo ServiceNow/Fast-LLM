@@ -430,7 +430,7 @@ class TestPlanCompositionTorture:
         assert mixer["mixers"]["attention"]["type"] == "attention"
         assert mixer["mixers"]["sliding_window"]["type"] == "attention"
         assert mixer["mixers"]["sliding_window"]["sliding_window"] == 512
-        assert mixer["mixers"]["gdn"]["type"] == "gated_delta_net"
+        assert mixer["mixers"]["gdn"]["type"] == "gdn"
 
         # Verify model works
         config = Apriel2Config(**current_config)
@@ -1010,7 +1010,7 @@ class TestPlanCompositionWithRealYAML:
         assert mixer["type"] == "stochastic"
         assert "attention" in mixer["mixers"]
         assert "sliding_window" in mixer["mixers"]
-        assert "gated_delta_net" in mixer["mixers"]
+        assert "gdn" in mixer["mixers"]
 
 
 class TestInitSeparationOfConcerns:
@@ -1270,10 +1270,10 @@ class TestInitSeparationOfConcerns:
                             "attention": {"type": "attention", "init": "transfer"},
                             # This must be random (no gdn->attention transfer on source)
                             "gdn": {
-                                "type": "gated_delta_net",
+                                "type": "gdn",
                                 "init": "random",
-                                "num_value_heads": 8,
-                                "num_key_heads": 4,
+                                "value_heads": 8,
+                                "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
                                 "conv_kernel_size": 4,
@@ -1290,7 +1290,7 @@ class TestInitSeparationOfConcerns:
         # Verify both sub-mixers have target keys
         target_keys = set(str(k) for k in plan.mappings.keys())
         assert any("mixers.attention.q_proj" in k for k in target_keys)
-        assert any("mixers.gdn.gdn" in k for k in target_keys)
+        assert any("mixers.gdn.in_proj_qkvz" in k for k in target_keys)
 
 
 class TestMarkovianProperty:
@@ -1437,10 +1437,10 @@ class TestMarkovianProperty:
                     "mixer": {
                         "mixers": {
                             "gdn": {
-                                "type": "gated_delta_net",
+                                "type": "gdn",
                                 "init": "transfer",
-                                "num_value_heads": 8,
-                                "num_key_heads": 4,
+                                "value_heads": 8,
+                                "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
                                 "conv_kernel_size": 4,
@@ -1546,10 +1546,10 @@ class TestMarkovianProperty:
                     "mixer": {
                         "mixers": {
                             "gdn": {
-                                "type": "gated_delta_net",
+                                "type": "gdn",
                                 "init": "random",
-                                "num_value_heads": 8,
-                                "num_key_heads": 4,
+                                "value_heads": 8,
+                                "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
                                 "conv_kernel_size": 4,

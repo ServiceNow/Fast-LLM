@@ -730,7 +730,7 @@ class TestPlanBuilders:
         conv_dim = 2 * key_dim + value_dim  # 192
 
         # Check in_proj_qkvz is Concat of 4 head groups
-        in_proj_qkvz = plan[W("gdn.in_proj_qkvz.weight")]
+        in_proj_qkvz = plan[W("in_proj_qkvz.weight")]
         assert isinstance(in_proj_qkvz, Concat)
         assert len(in_proj_qkvz.exprs) == 4  # 4 head groups
 
@@ -750,36 +750,36 @@ class TestPlanBuilders:
             assert group.exprs[3].init_type == "zeros"
 
         # Check in_proj_ba: zeros, shape (2*num_v_heads, hidden_size)
-        in_proj_ba = plan[W("gdn.in_proj_ba.weight")]
+        in_proj_ba = plan[W("in_proj_ba.weight")]
         assert isinstance(in_proj_ba, Init)
         assert in_proj_ba.shape == (2 * 4, 64)  # (8, 64)
         assert in_proj_ba.init_type == "zeros"
 
         # Check out_proj: direct Ref to o_proj
-        out_proj = plan[W("gdn.out_proj.weight")]
+        out_proj = plan[W("out_proj.weight")]
         assert isinstance(out_proj, Ref)
         assert "o_proj" in out_proj.key
 
         # Check conv1d: scaled identity kernel (0.5 for SiLU linearity)
-        conv1d = plan[W("gdn.conv1d.weight")]
+        conv1d = plan[W("convolution.weight")]
         assert isinstance(conv1d, Init)
         assert conv1d.shape == (conv_dim, 1, 4)
         assert conv1d.init_type == "scaled_identity_conv"
 
         # Check A_log: slow decay
-        a_log = plan[W("gdn.A_log")]
+        a_log = plan[W("A_log")]
         assert isinstance(a_log, Init)
         assert a_log.shape == (4,)  # num_v_heads
         assert a_log.init_type == "slow_decay"
 
         # Check dt_bias: zeros
-        dt_bias = plan[W("gdn.dt_bias")]
+        dt_bias = plan[W("dt_bias")]
         assert isinstance(dt_bias, Init)
         assert dt_bias.shape == (4,)  # num_v_heads
         assert dt_bias.init_type == "zeros"
 
         # Check norm.weight: ones
-        norm_weight = plan[W("gdn.norm.weight")]
+        norm_weight = plan[W("norm.weight")]
         assert isinstance(norm_weight, Init)
         assert norm_weight.shape == (16,)  # head_v_dim
         assert norm_weight.init_type == "ones"
@@ -803,7 +803,7 @@ class TestPlanBuilders:
         )
 
         # Check in_proj_qkvz is Concat of 2 head groups
-        in_proj_qkvz = plan[W("gdn.in_proj_qkvz.weight")]
+        in_proj_qkvz = plan[W("in_proj_qkvz.weight")]
         assert isinstance(in_proj_qkvz, Concat)
         assert len(in_proj_qkvz.exprs) == 2  # 2 k_head groups
 
@@ -870,7 +870,7 @@ class TestPlanBuilders:
         result = execute(plan, sources, seed=42)
 
         # Verify in_proj_qkvz has per-head-group interleaved layout
-        in_proj_qkvz = result[W("gdn.in_proj_qkvz.weight")]
+        in_proj_qkvz = result[W("in_proj_qkvz.weight")]
         # Total: 4 groups * (16 + 16 + 16 + 16) = 256
         assert in_proj_qkvz.shape == (256, 64)
 
@@ -888,32 +888,32 @@ class TestPlanBuilders:
             assert torch.allclose(in_proj_qkvz[base+48:base+64], torch.zeros(16, 64))
 
         # in_proj_ba should be zeros
-        in_proj_ba = result[W("gdn.in_proj_ba.weight")]
+        in_proj_ba = result[W("in_proj_ba.weight")]
         assert in_proj_ba.shape == (8, 64)
         assert torch.allclose(in_proj_ba, torch.zeros(8, 64))
 
         # out_proj should be 4.0 (direct copy)
-        assert torch.allclose(result[W("gdn.out_proj.weight")], torch.full((64, 64), 4.0))
+        assert torch.allclose(result[W("out_proj.weight")], torch.full((64, 64), 4.0))
 
         # conv1d should be scaled identity kernel (0.5 at last position)
-        conv1d = result[W("gdn.conv1d.weight")]
+        conv1d = result[W("convolution.weight")]
         assert conv1d.shape == (conv_dim, 1, 4)
         expected_conv = torch.zeros(conv_dim, 1, 4)
         expected_conv[:, 0, -1] = 0.5  # Scaled for SiLU linearity
         assert torch.allclose(conv1d, expected_conv)
 
         # A_log should be log(0.1) ≈ -2.3
-        a_log = result[W("gdn.A_log")]
+        a_log = result[W("A_log")]
         assert a_log.shape == (4,)
         assert torch.allclose(a_log, torch.full((4,), -2.302585), atol=1e-5)
 
         # dt_bias should be zeros
-        dt_bias = result[W("gdn.dt_bias")]
+        dt_bias = result[W("dt_bias")]
         assert dt_bias.shape == (4,)
         assert torch.allclose(dt_bias, torch.zeros(4))
 
         # norm.weight should be ones
-        norm_weight = result[W("gdn.norm.weight")]
+        norm_weight = result[W("norm.weight")]
         assert norm_weight.shape == (16,)
         assert torch.allclose(norm_weight, torch.ones(16))
 
@@ -961,7 +961,7 @@ class TestPlanBuilders:
         result = execute(plan, sources, seed=42)
 
         # Verify in_proj_qkvz with GQA tiling
-        in_proj_qkvz = result[W("gdn.in_proj_qkvz.weight")]
+        in_proj_qkvz = result[W("in_proj_qkvz.weight")]
         # 2 groups * (16 + 16 + 32 + 32) = 2 * 96 = 192
         v_per_group = 2
         group_size = 16 + 16 + v_per_group * 16 + v_per_group * 16  # 96 per group
@@ -1122,10 +1122,10 @@ class TestInitModeSemantics:
                 "num_blocks": 1,
                 "block": {
                     "mixer": {
-                        "type": "gated_delta_net",
+                        "type": "gdn",
                         "init": "transfer",  # explicitly request transfer
-                        "num_value_heads": 4,
-                        "num_key_heads": 2,
+                        "value_heads": 4,
+                        "key_heads": 2,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
                         "conv_kernel_size": 4,
@@ -1177,10 +1177,10 @@ class TestInitModeSemantics:
                 "num_blocks": 1,
                 "block": {
                     "mixer": {
-                        "type": "gated_delta_net",
+                        "type": "gdn",
                         "init": "random",  # random init - no converter needed
-                        "num_value_heads": 4,
-                        "num_key_heads": 2,
+                        "value_heads": 4,
+                        "key_heads": 2,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
                         "conv_kernel_size": 4,
@@ -1338,9 +1338,9 @@ class TestEndToEndConversion:
                     # Pure GatedDeltaNet (DIL conversion from attention)
                     "gdn": {
                         "mixer": {
-                            "type": "gated_delta_net",
-                            "num_value_heads": num_heads,
-                            "num_key_heads": num_kv_heads,
+                            "type": "gdn",
+                            "value_heads": num_heads,
+                            "key_heads": num_kv_heads,
                             "key_head_dim": head_size,
                             "value_head_dim": head_size,
                             "conv_kernel_size": 4,
@@ -1394,10 +1394,10 @@ class TestEndToEndConversion:
                                     "sliding_window": 512,
                                     "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
                                 },
-                                "gated_delta_net": {
-                                    "type": "gated_delta_net",
-                                    "num_value_heads": num_heads,
-                                    "num_key_heads": num_kv_heads,
+                                "gdn": {
+                                    "type": "gdn",
+                                    "value_heads": num_heads,
+                                    "key_heads": num_kv_heads,
                                     "key_head_dim": head_size,
                                     "value_head_dim": head_size,
                                     "conv_kernel_size": 4,

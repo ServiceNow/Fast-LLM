@@ -461,8 +461,8 @@ def apriel2_config_all_mixers():
                                 "dt_max": 0.1,
                                 "dt_init_floor": 1e-4,
                             },
-                            "gated_delta_net": {
-                                "type": "gated_delta_net",
+                            "gdn": {
+                                "type": "gdn",
                             },
                         },
                     },
@@ -547,9 +547,9 @@ def apriel2_config_comprehensive():
                 },
                 "gdn": {
                     "mixer": {
-                        "type": "gated_delta_net",
-                        "num_value_heads": 4,
-                        "num_key_heads": 2,
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 2,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
                         "conv_kernel_size": 4,
@@ -601,10 +601,10 @@ def apriel2_config_comprehensive():
                                 "sliding_window": 256,
                                 "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
-                            "gated_delta_net": {
-                                "type": "gated_delta_net",
-                                "num_value_heads": 4,
-                                "num_key_heads": 2,
+                            "gdn": {
+                                "type": "gdn",
+                                "value_heads": 4,
+                                "key_heads": 2,
                                 "key_head_dim": 16,
                                 "value_head_dim": 16,
                                 "conv_kernel_size": 4,
@@ -709,7 +709,7 @@ def additive_surgery_chain():
                     "mixer": {
                         "mixers": {
                             "gdn": {
-                                "type": "gated_delta_net",
+                                "type": "gdn",
                                 "init": "transfer",
                                 "conv_kernel_size": 4,
                             },
@@ -831,7 +831,7 @@ def comprehensive_torture_chain():
                             "mixers": {
                                 "attention": {"type": "attention", "init": "transfer"},
                                 "gdn": {
-                                    "type": "gated_delta_net",
+                                    "type": "gdn",
                                     "init": "transfer",  # DIL conversion
                                     "conv_kernel_size": 4,
                                 },
@@ -889,7 +889,7 @@ def comprehensive_torture_chain():
                             "mixers": {
                                 "attention": {"type": "attention", "init": "transfer"},
                                 "gdn": {
-                                    "type": "gated_delta_net",
+                                    "type": "gdn",
                                     "init": "transfer",
                                     "conv_kernel_size": 4,
                                 },
@@ -900,7 +900,7 @@ def comprehensive_torture_chain():
                     },
                     "gdn": {
                         "mixer": {
-                            "type": "gated_delta_net",
+                            "type": "gdn",
                             "init": "transfer",  # DIL from previous swa
                             "conv_kernel_size": 4,
                         },
@@ -961,7 +961,7 @@ def comprehensive_torture_chain():
                             "mixers": {
                                 "attention": {"type": "attention", "init": "transfer"},
                                 "gdn": {
-                                    "type": "gated_delta_net",
+                                    "type": "gdn",
                                     "init": "transfer",
                                     "conv_kernel_size": 4,
                                 },
@@ -977,7 +977,7 @@ def comprehensive_torture_chain():
                     },
                     "gdn": {
                         "mixer": {
-                            "type": "gated_delta_net",
+                            "type": "gdn",
                             "init": "transfer",
                             "conv_kernel_size": 4,
                         },
@@ -1051,7 +1051,7 @@ def comprehensive_torture_chain():
                     },
                     "gdn": {
                         "mixer": {
-                            "type": "gated_delta_net",
+                            "type": "gdn",
                             "init": "transfer",  # Transfer from stoch's gdn
                             "conv_kernel_size": 4,
                         },
@@ -1126,7 +1126,7 @@ def comprehensive_torture_chain():
                     "gdn": {
                         # Layer 2: preserve pure gdn
                         "mixer": {
-                            "type": "gated_delta_net",
+                            "type": "gdn",
                             "init": "transfer",
                             "conv_kernel_size": 4,
                         },
@@ -1161,10 +1161,10 @@ def comprehensive_torture_chain():
                                 },
                                 "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
                                 "gdn": {
-                                    "type": "gated_delta_net",
+                                    "type": "gdn",
                                     "init": "transfer",
-                                    "num_value_heads": 8,
-                                    "num_key_heads": 4,
+                                    "value_heads": 8,
+                                    "key_heads": 4,
                                     "key_head_dim": 32,
                                     "value_head_dim": 32,
                                     "conv_kernel_size": 4,
@@ -1240,7 +1240,7 @@ def torture_surgery_chain():
                     "mixer": {
                         "mixers": {
                             "gdn": {
-                                "type": "gated_delta_net",
+                                "type": "gdn",
                                 "init": "transfer",
                                 "conv_kernel_size": 4,
                             },
@@ -1294,7 +1294,7 @@ def torture_surgery_chain():
             "decoder": {
                 "block": {
                     "mixer": {
-                        "type": "gated_delta_net",
+                        "type": "gdn",
                         "init": "transfer",
                         "conv_kernel_size": 8,
                     },

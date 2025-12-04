@@ -228,11 +228,11 @@ class GatedDeltaNetConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "type": "gated_delta_net",
-            "value_heads": config["linear_attn_config"]["gdn_value_head_dim"],
+            "type": "gdn",
+            "value_heads": config["linear_attn_config"]["gdn_num_value_heads"],
             "key_heads": config["linear_attn_config"]["gdn_num_key_heads"],
             "key_head_dim": config["linear_attn_config"]["gdn_key_head_dim"],
-            "value_head_dim": config["linear_attn_config"]["value_head_dim"],
+            "value_head_dim": config["linear_attn_config"]["gdn_value_head_dim"],
             "convolution_layer": {
                 "kernel_size": config["linear_attn_config"]["gdn_linear_conv_kernel_size"],
             },

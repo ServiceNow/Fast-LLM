@@ -29,7 +29,7 @@ When applying a surgery spec to a complete config:
 **Cross-Type Derivation**
     When changing mixer types, geometric parameters are derived where possible:
     - attention → sliding_window: preserve heads, head_groups, head_size
-    - attention → gated_delta_net: heads → num_value_heads, head_groups → num_key_heads
+    - attention → gdn: heads → value_heads, head_groups → key_heads
     - attention → mamba: derive d_inner, d_xb, dt_rank from hidden_size
 
 **Stochastic Mixer Composition**
@@ -396,12 +396,12 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                 result["init"] = surgery["init"]
             return result
 
-        elif target_type == "gated_delta_net":
+        elif target_type == "gdn":
             # Attention → GDN: derive GDN dims from attention geometry
             result = {
-                "type": "gated_delta_net",
-                "num_value_heads": surgery.get("num_value_heads", heads),
-                "num_key_heads": surgery.get("num_key_heads", head_groups),
+                "type": "gdn",
+                "value_heads": surgery.get("value_heads", heads),
+                "key_heads": surgery.get("key_heads", head_groups),
                 "key_head_dim": surgery.get("key_head_dim", head_size),
                 "value_head_dim": surgery.get("value_head_dim", head_size),
                 "conv_kernel_size": surgery.get("conv_kernel_size", 4),
