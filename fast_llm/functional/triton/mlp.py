@@ -48,7 +48,10 @@ def triton_mlp_activation_forward_kernel(
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
 
     # Triton doesn't like enums, so we use str instead of ActivationType.
-    if activation_type == "gelu":
+    if activation_type == "gelu_gaussian":
+        # Standard GELU: 0.5 * x * (1 + erf(x / sqrt(2)))
+        out = 0.5 * input_ * (1.0 + tl.erf(input_ * 0.7071067811865476))
+    elif activation_type == "gelu":
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         out = input_ * 0.5 * (1.0 + tanh)
@@ -99,7 +102,15 @@ def triton_mlp_activation_backward_kernel(
     output_grad = tl.load(grad_output_ptr + output_offsets, mask=mask).to(tl.float32)
 
     # Triton doesn't like enums, so we use str instead of ActivationType.
-    if activation_type == "gelu":
+    if activation_type == "gelu_gaussian":
+        # Standard GELU derivative
+        # d/dx GELU(x) = 0.5 * (1 + erf(x/sqrt(2))) + x * exp(-x^2/2) / sqrt(2*pi)
+        erf_val = tl.erf(input_ * 0.7071067811865476)
+        exp_term = tl.exp(-0.5 * input_ * input_)
+        grad = 0.5 * (1.0 + erf_val) + input_ * exp_term * 0.3989422804014327  # 1/sqrt(2*pi)
+        if gated or recompute:
+            out = 0.5 * input_ * (1.0 + erf_val)
+    elif activation_type == "gelu":
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         grad = 0.5 * input_ * ((1 - tanh * tanh) * (0.79788456 + 0.1070322243 * input_ * input_)) + 0.5 * (1 + tanh)

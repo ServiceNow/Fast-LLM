@@ -81,7 +81,14 @@ def test_dpo_loss():
 @requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
-    "activation", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
+    "activation",
+    [
+        ActivationType.gelu_gaussian,
+        ActivationType.gelu,
+        ActivationType.silu,
+        ActivationType.relu,
+        ActivationType.squared_relu,
+    ],
 )
 def test_mlp_recomputation(gated, activation):
     tokens = 1024

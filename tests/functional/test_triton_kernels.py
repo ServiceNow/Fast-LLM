@@ -169,6 +169,7 @@ def test_triton_normalization(has_bias, zero_centered):
 @pytest.mark.parametrize(
     "activation",
     [
+        ActivationType.gelu_gaussian,
         ActivationType.gelu,
         ActivationType.silu,
         ActivationType.relu,
