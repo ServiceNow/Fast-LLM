@@ -143,6 +143,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 backend=self._config.distributed.backend,
                 rank=self._config.distributed.rank,
                 world_size=self._config.distributed.world_size,
+                timeout=datetime.timedelta(hours=1),
             )
 
         # Prepare output directory
@@ -321,9 +322,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     ) -> None:
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
-            # Use monitored_barrier to ensure all ranks are ready with a 1h timeout
-            gather_timeout = datetime.timedelta(hours=1)
-            torch.distributed.monitored_barrier(timeout=gather_timeout, wait_all_ranks=True)
             if self._config.distributed.rank == 0:
                 all_dataset_and_reader_configs = [None] * self._config.distributed.world_size
                 torch.distributed.gather_object(dataset_and_reader_configs, all_dataset_and_reader_configs, dst=0)
