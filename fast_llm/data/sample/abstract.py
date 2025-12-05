@@ -109,8 +109,8 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
     def reader_class(self) -> "type[MemmapReader]":
         raise NotImplementedError()
 
-    def get_reader(self, buffer: memoryview) -> "MemmapReader":
-        return self.reader_class(self, buffer)
+    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None) -> "MemmapReader":
+        return self.reader_class(self, buffer, model_preprocessing)
 
     @property
     def expected_buffer_size(self) -> int:
@@ -156,16 +156,17 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     def reader_class(self) -> "type[MemmapIndexedDatasetReader]":
         raise NotImplementedError()
 
-    def get_reader(
-        self,
-        buffer: memoryview,
-    ) -> "MemmapIndexedDatasetReader":
-        return self.reader_class(self, buffer)
+    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig) -> "MemmapIndexedDatasetReader":
+        return self.reader_class(self, buffer, model_preprocessing)
 
 
 class MemmapReader[ConfigType: MemmapReaderConfig](Configurable[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
         super().__init__(config)
+        # Note: This is the requirement at reading time (ex. from the model),
+        # which may differ from how the dataset was actually preprocessed (`config.preprocessing`)
+        # Compatibility checked in `MemmapDataset`.
+        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
         buffer_begin = self._config.begin + len(self._config.header)
         buffer_end = self._config.end - len(self._config.footer)
         Assert.eq(buffer[self._config.begin : buffer_begin].tobytes(), self._config.header)

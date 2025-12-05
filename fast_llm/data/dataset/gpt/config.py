@@ -7,29 +7,16 @@ import yaml
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
+from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.fim import GPTFimDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
-    from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
     from fast_llm.data.sample.language_model import LanguageModelSample
-
-
-@dataclasses.dataclass(kw_only=True)
-class GPTSamplingParameters(SamplingParameters):
-    """
-    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
-    """
-
-    # TODO: ====== Get these to memmap dataset (currently ignored) ======
-    vocab_size: int | None = None
-    use_loss_masking_spans: bool = False
-    use_preference_loss_spans: bool = False
-    use_images: bool = False
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -39,7 +26,6 @@ class GPTSamplingData(SamplingData):
     usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
     """
 
-    parameters: GPTSamplingParameters
     preprocessing: LanguageModelPreprocessingConfig
 
 
@@ -52,7 +38,7 @@ class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConf
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: GPTSamplingData) -> GPTRandomSampledDataset[SampleType]:
+    def build_and_sample(self, sampling: GPTSamplingData) -> "GPTRandomSampledDataset[SampleType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
 
         return GPTRandomSampledDataset[SampleType](sampling, self.name)

@@ -44,7 +44,7 @@ def get_megatron_test_dataset(prefix: pathlib.Path = MEGATRON_DATASET_PREFIX):
         and prefix.with_suffix(".bin").is_file()
         and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
     ):
-        _, _, hf_path = get_common_test_dataset()
+        _, _, hf_path, _ = get_common_test_dataset()
         hf_dataset = datasets.load_from_disk(hf_path)["train"]
         tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
         samples = [

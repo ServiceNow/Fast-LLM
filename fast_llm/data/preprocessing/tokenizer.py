@@ -39,8 +39,6 @@ class TokenizerConfig(PreprocessingConfig):
     )
 
     def get_tokenizer(self) -> "Tokenizer":
-        from fast_llm.data.preprocessing.tokenizer import Tokenizer
-
         return Tokenizer(self)
 
 
@@ -90,14 +88,20 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     ) -> "torch.Tensor":
         import torch
 
-        tokens = torch.tensor(
-            ([self.bod_id] if begin else [])
-            + self.tokenizer.encode(text, add_special_tokens=False)
-            + ([self.eod_id] if end else []),
-            dtype=data_type.torch,
-        )
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        if begin:
+            tokens.insert(0, self.bod_id)
+        if end:
+            tokens.append(self.eod_id)
+
         if self._config.max_vocab_size is not None:
-            tokens %= self._config.max_vocab_size
+            # In some cases creating a tensor before restricting the vocab size may cause an overflow.
+            (
+                torch.tensor(tokens, dtype=torch.int64 if len(self.tokenizer) > torch.iinfo().max else data_type.torch)
+                % self._config.max_vocab_size
+            ).to(data_type.torch)
+        else:
+            tokens = torch.tensor(tokens, dtype=data_type.torch)
         return tokens
 
     def tokenize_with_spans(

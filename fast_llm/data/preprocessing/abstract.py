@@ -1,5 +1,6 @@
 import logging
 import typing
+import warnings
 
 from fast_llm.config import Config, config_class
 
@@ -37,4 +38,5 @@ class NullPreprocessingConfig(PreprocessingConfig):
     _abstract = False
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
-        logger.warning("Dataset preprocessing config not specified, could not check compatibility with the model.")
+        if not isinstance(preprocessing, NullPreprocessingConfig):
+            warnings.warn(f"Preprocessing configuration not specified, could not check compatibility with the model.")

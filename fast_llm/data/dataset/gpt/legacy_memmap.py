@@ -105,7 +105,7 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
                 )
 
         # read preference spans
-        if has_preference_spans:
+        if self._preprocessing.use_preference_spans:
             assert has_preference_spans
             self._chosen_spans = []
             self._rejected_spans = []
@@ -173,20 +173,17 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
             token_ids = token_ids.to(torch.int64)
         if self._preprocessing.use_loss_masking_spans:
             assert self._spans is not None
-            # Convert to in range format (begin, end).
-            sample_spans = RangeSample(
-                [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
-            ).crop(begin, end)
+            if hasattr(self, "_spans"):
+                # Convert to in range format (begin, end).
+                sample_spans = RangeSample(
+                    [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
+                ).crop(begin, end)
+            else:
+                sample_spans = RangeSample([], end - begin)
         else:
             sample_spans = None
 
         if self._preprocessing.use_preference_spans:
-            if not self._has_preference_spans:
-                raise ValueError("No preference spans found in memmap dataset.")
-            elif self._has_preference_spans and self._chosen_spans is None:
-                raise ValueError("Failed to read chosen spans from memmap dataset.")
-            elif self._has_preference_spans and self._rejected_spans is None:
-                raise ValueError("Failed to read rejected spans from memmap dataset.")
             # Convert to in range format (begin, end).
             chosen_spans = RangeSample(
                 [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],

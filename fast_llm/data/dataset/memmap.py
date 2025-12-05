@@ -42,11 +42,8 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
                 json.loads(stream.read(int.from_bytes(stream.read(4), signed=False)).decode("utf-8"))
             )
 
-        reader_config.preprocessing.check_compatibility(self._preprocessing)
-
         self._memmap = np.memmap(self._path, mode="r")
-        # TODO: ====== Forward preprocessing config so the reader reads just what we need.
-        self._reader = reader_config.get_reader(memoryview(self._memmap))
+        self._reader = reader_config.get_reader(memoryview(self._memmap), self._preprocessing)
 
     def __getstate__(self) -> tuple[str, pathlib.Path, dict, MemmapIndexDatasetReaderConfig]:
         # We pass the reader config to force its import in data loader workers.

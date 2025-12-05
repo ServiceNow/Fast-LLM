@@ -10,7 +10,8 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
@@ -30,7 +31,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
 
     _datasets: dict[str, SampledDataset]
-    _sampling_parameters: dict[str, GPTSamplingParameters]
+    _sampling_parameters: dict[str, SamplingParameters]
     _is_setup: bool = False
 
     def __init__(
@@ -47,7 +48,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     def setup(
         self,
         distributed: "Distributed",
-        sampling_parameters: dict[str, GPTSamplingParameters],
+        sampling_parameters: dict[str, SamplingParameters],
         preprocessing: LanguageModelPreprocessingConfig,
         cache_directory: pathlib.Path,
         timeout: float | None = None,

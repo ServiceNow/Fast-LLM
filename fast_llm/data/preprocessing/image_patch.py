@@ -59,6 +59,7 @@ class ImagePatchConfig(PreprocessingConfig):
     )
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
+        Assert.custom(isinstance, preprocessing, ImagePatchConfig)
         Assert.eq(self.height, preprocessing.height)
         Assert.eq(self.width, preprocessing.width)
         Assert.eq(self.do_resize, preprocessing.do_resize)
@@ -74,6 +75,10 @@ class ImagePatchConfig(PreprocessingConfig):
     def num_channels(self) -> int:
         # assume 3 channels (RGB) for all images
         return 3
+
+    @functools.cached_property
+    def patch_shape(self) -> tuple[int, int, int]:
+        return self.num_channels, self.height, self.width
 
     @functools.cached_property
     def max_patches_height(self) -> int:

@@ -8,10 +8,11 @@ from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfig, ShufflingType
-from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParameters
+from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfig, SamplingParameters, ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.dataset.sampled import SampledIndexedDataset
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
@@ -25,10 +26,10 @@ def get_sampling_data(
     cache_directory: pathlib.Path | None = None,
     phase=PhaseType.training,
     sequence_length: int = 512,
-    vocab_size: int | None = None,
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
+    preprocessing: LanguageModelPreprocessingConfig,
 ) -> GPTSamplingData:
     # Config with convenient defaults.
     distributed = Distributed(DistributedConfig(), use_cpu=True)
@@ -38,12 +39,12 @@ def get_sampling_data(
             gpu=gpu,
             shuffle=shuffle,
         ),
-        parameters=GPTSamplingParameters(
+        parameters=SamplingParameters(
             num_samples=num_samples,
             sequence_length=sequence_length,
-            vocab_size=vocab_size,
             truncate_documents=truncate_documents,
         ),
+        preprocessing=preprocessing,
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
@@ -65,8 +66,8 @@ def get_test_data_and_compare_samples(
     shuffle: ShufflingType = ShufflingType.epoch,
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
-    vocab_size: int | None = None,
     expected_samples: dict[str, list[list[int]]] | list[list[int]],
+    preprocessing: LanguageModelPreprocessingConfig,
 ) -> GPTData:
     distributed_config = DistributedConfig(seed=87522)
     distributed = Distributed(distributed_config, use_cpu=True)
@@ -74,11 +75,7 @@ def get_test_data_and_compare_samples(
         samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
 
     sampling_parameters = {
-        dataset_name: GPTSamplingParameters(
-            num_samples=num_samples,
-            sequence_length=sequence_length,
-            vocab_size=vocab_size,
-        )
+        dataset_name: SamplingParameters(num_samples=num_samples, sequence_length=sequence_length)
         for dataset_name, num_samples in samples_per_dataset.items()
     }
 
@@ -88,7 +85,7 @@ def get_test_data_and_compare_samples(
     assert "sampling" not in config
     config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
-    data.setup(distributed, sampling_parameters, cache_directory)
+    data.setup(distributed, sampling_parameters, preprocessing, cache_directory)
     with NoAutoValidate():
         batch_config = GPTBatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)

@@ -1,13 +1,15 @@
 import io
+import logging
 import pathlib
 import tempfile
 import typing
+import warnings
 
 import torch
 
 from fast_llm.config import Field, config_class
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-from fast_llm.data.preprocessing.image_patch import ImageNormalizationConfig
+from fast_llm.data.preprocessing.image_patch import ImageNormalizationConfig, ImagePatchConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
@@ -18,10 +20,13 @@ from fast_llm.data.sample.abstract import (
     NullReaderConfig,
     Sample,
 )
-from fast_llm.data.sample.patch import PatchBatch, PatchSample, PatchWriter
-from fast_llm.data.sample.range import RangeBatch, RangeSample, RangeWriter
+from fast_llm.data.sample.patch import EmptyPatchReader, PatchBatch, PatchReaderConfig, PatchSample, PatchWriter
+from fast_llm.data.sample.range import EmptyRangeReader, RangeBatch, RangeReaderConfig, RangeSample, RangeWriter
 from fast_llm.data.sample.token import TokenBatch, TokenReaderConfig, TokenSample, TokenWriter
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 class LanguageModelSample(Sample):
@@ -139,8 +144,45 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
     def _validate(self) -> None:
         super()._validate()
-        # Dynamic type supported for backward compatibility.
-        Assert.custom(isinstance, self.preprocessing, (LanguageModelPreprocessingConfig, NullPreprocessingConfig))
+        if isinstance(self.preprocessing, NullPreprocessingConfig):
+            # Address missing config, mostly for backward compatibility.
+            # TODO: We can't tell which dataset this comes from.
+            logger.warning(
+                f"Preprocessing configuration not specified for dataset reader, generating partial configuration from known parameters."
+            )
+            if isinstance(self.image_patches, PatchReaderConfig):
+                Assert.eq(len(patch_shape := self.image_patches.patch_shape), 3)
+                image_patches = ImagePatchConfig(height=patch_shape[1], width=patch_shape[2])
+            else:
+                image_patches = NullPreprocessingConfig()
+            self.preprocessing = LanguageModelPreprocessingConfig(
+                vocab_size=0,
+                image_patches=image_patches,
+                use_loss_masking_spans=isinstance(self.loss_masking_spans, RangeReaderConfig),
+                use_preference_spans=isinstance(self.chosen_spans, RangeReaderConfig),
+            )
+        # TODO: Avoid duplicated information.
+        Assert.custom(
+            isinstance,
+            self.loss_masking_spans,
+            RangeReaderConfig if self.preprocessing.use_loss_masking_spans else NullReaderConfig,
+        )
+        Assert.custom(
+            isinstance,
+            self.chosen_spans,
+            RangeReaderConfig if self.preprocessing.use_preference_spans else NullReaderConfig,
+        )
+        Assert.custom(
+            isinstance,
+            self.rejected_spans,
+            RangeReaderConfig if self.preprocessing.use_preference_spans else NullReaderConfig,
+        )
+        if self.preprocessing.use_image_patches:
+            Assert.custom(isinstance, self.image_patches, PatchReaderConfig)
+            Assert.eq(self.image_patches.patch_shape, self.preprocessing.image_patches.patch_shape)
+            Assert.eq(self.image_patches.data_type, DataType.uint8)
+        else:
+            Assert.custom(isinstance, self.image_patches, NullReaderConfig)
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -169,17 +211,59 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
 
 class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    _model_preprocessing: LanguageModelPreprocessingConfig
+
+    def __init__(
+        self,
+        config: ConfigType,
+        buffer: memoryview,
+        model_preprocessing: LanguageModelPreprocessingConfig | None = None,
+    ):
+        super().__init__(config, buffer, model_preprocessing)
+        self._config.preprocessing.check_compatibility(self._model_preprocessing)
         # Using `buffer` and not `self._buffer` because nested offsets (`begin`, `end`) are global.
         self._tokens = self._config.tokens.get_reader(buffer)
-        self._loss_masking_spans = self._config.loss_masking_spans.get_reader(buffer)
-        self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
-        self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
-        self._image_patches = self._config.image_patches.get_reader(buffer)
 
-        if self._image_patches is not None:
-            # TODO: Make this configurable.
+        if self._model_preprocessing.use_loss_masking_spans:
+            if isinstance(self._config.loss_masking_spans, NullReaderConfig):
+                # TODO: We can't tell which dataset this comes from.
+                warnings.warn(
+                    f"The model uses loss masking spans, but the dataset does not specify any."
+                    " Assuming empty span lists."
+                )
+                self._loss_masking_spans = EmptyRangeReader(
+                    RangeReaderConfig(begin=0, end=0, num_documents=0, num_ranges=0), buffer
+                )
+            else:
+                self._loss_masking_spans = self._config.loss_masking_spans.get_reader(buffer)
+
+        if self._model_preprocessing.use_preference_spans:
+            self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
+            self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
+
+        if self._model_preprocessing.use_image_patches:
+            model_image_preprocessing: ImagePatchConfig = self._model_preprocessing.image_patches
+            if isinstance(self._config.image_patches, NullReaderConfig):
+                warnings.warn(
+                    f"The model uses image patches, but the dataset does not specify any."
+                    " Assuming empty patch lists."
+                )
+                self._image_patches = EmptyPatchReader(
+                    PatchReaderConfig(
+                        begin=0,
+                        end=0,
+                        num_documents=0,
+                        num_patches=0,
+                        num_patch_groups=0,
+                        patch_shape=model_image_preprocessing.patch_shape,
+                        data_type=DataType.uint8,
+                    ),
+                    buffer,
+                )
+            else:
+                self._image_patches = self._config.image_patches.get_reader(buffer)
+
+            # TODO: Make this configurable. (Add to `model_preprocessing`?)
             self._image_normalization_config = ImageNormalizationConfig()
 
     @property
@@ -187,16 +271,28 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         return self._config.tokens.num_tokens
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
-        if self._image_patches is None:
-            image_patches = None
-        else:
+        if self._model_preprocessing.use_image_patches:
             image_patches = self._image_patches.get_document(index, begin, end)
             image_patches.patches = self._image_normalization_config.normalize(image_patches.patches)
+        else:
+            image_patches = None
         return LanguageModelSample(
             self._tokens.get_document(index, begin, end),
-            None if self._loss_masking_spans is None else self._loss_masking_spans.get_document(index, begin, end),
-            None if self._chosen_spans is None else self._chosen_spans.get_document(index, begin, end),
-            None if self._rejected_spans is None else self._rejected_spans.get_document(index, begin, end),
+            (
+                self._loss_masking_spans.get_document(index, begin, end)
+                if self._model_preprocessing.use_loss_masking_spans
+                else None
+            ),
+            (
+                self._chosen_spans.get_document(index, begin, end)
+                if self._model_preprocessing.use_preference_spans
+                else None
+            ),
+            (
+                self._rejected_spans.get_document(index, begin, end)
+                if self._model_preprocessing.use_preference_spans
+                else None
+            ),
             image_patches,
         )
 
@@ -334,7 +430,7 @@ class LanguageModelWriter(MemmapWriter):
             chosen_spans=chosen_spans,
             rejected_spans=rejected_spans,
             image_patches=image_patches,
-            preprocessing_config=self._preprocessing_config,
+            preprocessing=self._preprocessing_config,
         )
 
 

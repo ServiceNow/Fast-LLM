@@ -1,5 +1,6 @@
 import collections
 import enum
+import functools
 import json
 import logging
 import math
@@ -196,17 +197,21 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
-            LanguageModelPreprocessingConfig(
-                tokenizer=self._config.tokenizer,
-                vocab_size=self._tokenizer.vocab_size,
-                image_patches=(
-                    self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
-                ),
-                has_loss_masking_spans=self._source_schema.has_loss_masking_span,
-                has_preference_spans=self._source_schema.has_preference_spans,
-            ),
+            self._preprocessing_config,
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
+
+    @functools.cached_property
+    def _preprocessing_config(self) -> LanguageModelPreprocessingConfig:
+        return LanguageModelPreprocessingConfig(
+            tokenizer=self._config.tokenizer,
+            vocab_size=self._tokenizer.vocab_size,
+            image_patches=(
+                self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
+            ),
+            use_loss_masking_spans=self._source_schema.has_loss_masking_span,
+            use_preference_spans=self._source_schema.has_preference_spans,
+        )
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
         text = sample[self._source_schema.text]
@@ -385,9 +390,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             }
         )
 
-    @classmethod
     def _split_and_blend_dataset_configs(
-        cls,
+        self,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
@@ -422,14 +426,16 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
-                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
+                        self._preprocessing_config
+                    )
                     sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
                     Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
                     begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
                     end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
                     if end_index > begin_index:
                         datasets_in_split.append(
-                            DatasetSliceConfig[cls._sample_type].from_dict(
+                            DatasetSliceConfig[self._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
@@ -451,7 +457,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             elif len(datasets_in_split) == 1:
                 dataset_splits[split_name] = datasets_in_split[0]
             else:
-                dataset_splits[split_name] = BlendedDatasetConfig[cls._sample_type].from_dict(
+                dataset_splits[split_name] = BlendedDatasetConfig[self._sample_type].from_dict(
                     {
                         "type": "blended",
                         "datasets": datasets_in_split,

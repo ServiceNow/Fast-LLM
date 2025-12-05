@@ -95,7 +95,7 @@ class ModelTestingConfig:
     )
 
     def __post_init__(self):
-        _, config, _ = self.get_dataset(config_only=True)
+        _, config, _, _ = self.get_dataset(config_only=True)
         self.config_dict["data"]["datasets"] = config
 
     @functools.cached_property
