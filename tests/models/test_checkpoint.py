@@ -5,7 +5,6 @@ import shutil
 import pytest
 import safetensors.torch
 import torch
-import transformers
 import yaml
 
 from fast_llm.engine.checkpoint.config import (
@@ -325,36 +324,58 @@ def test_huggingface_model(model_testing_config, get_convert_path):
             format=DistributedCheckpointFormat,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     test_input = torch.randint(
         0,
-        model_ref.config.fast_llm_config.base_model.embeddings.vocab_size,
+        384,
         size=(4, 100),
         dtype=torch.int64,
         device="cuda",
     )
-    output_ref = model_ref(test_input)
-    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path)
+    kwargs = {}
+    if model_testing_config.model_type == "multimodal":
+        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).cuda()
+        kwargs["image_sizes"] = torch.tensor(
+            [
+                [20, 20],  # Full image, 25 patches
+                [12, 12],  # Smaller, 9 patches
+                [9, 15],  # Cropped to patch size, 6 patches
+                [5, 20],  # Cropped in one dim, 5 patches
+                [7, 5],  # Single patch
+                [2, 3],  # Cropped out (0 patch)
+            ]
+        )
+        image_token_index = model_ref.fast_llm_base_model.config.image_token_index
+        # First sample has one image at the beginning.
+        test_input[0, :25] = image_token_index
+        # Second sample has one image in the middle
+        test_input[1, 30:39] = image_token_index
+        # Third sample has no image.
+        # Fourth sample has four images.
+        # First one has discontinuous embedding (ex. image break token)
+        test_input[3, :3] = image_token_index
+        test_input[3, 7:10] = image_token_index
+        # Second and third one next to each other.
+        test_input[3, 28:34] = image_token_index
+        # Last one cropped out.
+
+    output_ref = model_ref(test_input, **kwargs)
+    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=hf_path,
             format=model_testing_config.checkpoint_format,
             load_config=ModelConfigType.model,
         )
-    )
+    ).eval()
     errors = []
-    auto_model = (
-        transformers.AutoModel
-        if model_testing_config.name in ("diffusion_llama", "dream")
-        else transformers.AutoModelForCausalLM
-    )
-    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda()
+    model_as_hf = model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
-        output = model(test_input)
+        output = model(test_input, **kwargs)
         # TODO: Make a generic comparison util.
         CompareConfig().compare_tensors(
             {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},

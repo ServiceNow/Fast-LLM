@@ -44,6 +44,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         *,
         # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
+        output_dim: TensorDim | None = None,
         lr_scale: float | None,
         peft: PeftConfig | None,
         return_bias: bool = True,
@@ -55,6 +56,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             config,
             distributed_config,
             hidden_dim=hidden_dim,
+            output_dim=output_dim,
             lr_scale=lr_scale,
             peft=peft,
             return_bias=return_bias,
@@ -74,8 +76,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             dropless_moe = False
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
 
-        if self._debug.enabled:
-            self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
+        self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
 
     def _get_intermediate_dims(self) -> tuple[TensorDim, TensorDim]:
         intermediate_1_dim, intermediate_2_dim = super()._get_intermediate_dims()
@@ -88,12 +89,16 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> tuple[torch.Tensor, None]:
+        if isinstance(input_, TensorMeta):
+            return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
-        if self._debug.enabled:
-            self._debug(
-                logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
-            )
+        logit_dims = (
+            kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,)
+            if BlockKwargs.hidden_dims in kwargs
+            else None
+        )
+        self._debug(logits, "Router logits", logit_dims, kwargs)
 
         # Apply z_loss if applicable
         if self._config.z_loss_coefficient > 0.0:
@@ -121,19 +126,12 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         else:
             raise NotImplementedError(self._config.routing)
 
-        if self._debug.enabled:
-            # To log all ranks set `global_=False`
-            self._debug(
-                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
-            )
-            self._debug(
-                top_experts,
-                "Router top experts",
-                kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
-                kwargs,
-            )
+        self._debug(scores, "router_scores", logit_dims, kwargs)
+        self._debug(top_experts, "router_top_experts", logit_dims, kwargs)
 
-        return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
+        out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+        return out, None
 
     def _forward_dropless(
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor

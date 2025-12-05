@@ -11,7 +11,6 @@ import pytest
 
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
-from tests.utils.dataset import get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import MODEL_CONFIGS, ModelTestingConfig
 
@@ -65,6 +64,40 @@ def run_test_script_base_path(model_testing_config, result_path, request):
     return result_path / "models" / model_testing_config.name
 
 
+def _propagate_config_args_to_reference_models(config_args: list[str]) -> list[str]:
+    """
+    Propagate certain model config args to reference models.
+
+    Some config args that affect model behavior need to be applied to both
+    the main model and reference models to ensure compatibility.
+    """
+    propagated_args = []
+    # Patterns that should be propagated to reference models
+    # Only model-level configs should be propagated, not batch-level configs
+    # (batch is shared at the trainer level, not per-model)
+    propagate_patterns = [
+        ("model", "base_model", "sequence_first"),
+        ("model", "base_model", "embeddings", "vocab_parallel"),
+    ]
+
+    for arg in config_args:
+        if "=" not in arg:
+            continue
+        key, value = arg.split("=", 1)
+        key_tuple = tuple(key.split("."))
+
+        # Check if this arg should be propagated
+        for pattern in propagate_patterns:
+            if key_tuple == pattern:
+                # Add the reference model version of this arg
+                # For each reference model (we check if they exist in the config)
+                ref_key = f"reference_models.teacher.{key}"
+                propagated_args.append(f"{ref_key}={value}")
+                break
+
+    return propagated_args
+
+
 def do_run_test_script_for_all_models(
     distributed_testing_config: DistributedTestingConfig,
     model_testing_config: ModelTestingConfig,
@@ -72,13 +105,20 @@ def do_run_test_script_for_all_models(
     runnable_type: str = "train",
 ):
     Assert.leq(distributed_testing_config.num_gpus, DistributedConfig.default_world_size)
-    get_model_test_dataset()
+    model_testing_config.get_dataset()
+
+    # Propagate certain config args to reference models if they exist
+    propagated_args = []
+    if "reference_models" in str(model_testing_config.config_dict):
+        propagated_args = _propagate_config_args_to_reference_models(distributed_testing_config.config_args)
+
     args = [
         "fast-llm",
         runnable_type,
         model_testing_config.model_type,
         *model_testing_config.config_args,
         *distributed_testing_config.config_args,
+        *propagated_args,
         f"model.distributed.world_size={distributed_testing_config.num_gpus}",
         f"model.distributed.local_world_size={distributed_testing_config.num_gpus}",
         f"run.experiment_dir={base_path/distributed_testing_config.name}",

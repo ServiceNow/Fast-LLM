@@ -13,6 +13,7 @@ from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig, MultiTokenPredictionConfig
 from fast_llm.models.gpt.conversion.config import (
+    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     AutoGPTHuggingfaceCheckpointFormat,
     DiffusionDreamCheckpointFormat,
@@ -47,12 +48,6 @@ class GPTBatchConfig(BatchConfig):
         desc="Number of tokens in a micro-sequence (must divide the sequence length).",
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
-    )
-    # TODO: Find a better place for these?
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
-        hint=FieldHint.feature,
     )
     use_loss_masking_spans: bool = Field(
         default=False,
@@ -117,6 +112,7 @@ class GPTModelConfig(FastLLMModelConfig):
         DiffusionDreamCheckpointFormat,
         DiffusionLlamaCheckpointFormat,
         AprielHybridSSMCheckpointFormat,
+        Apriel2CheckpointFormat,
     )
 
     @classmethod
@@ -171,6 +167,7 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             prediction_heads = 1
 
         expected_names = {name for name in (head.distillation_model, head.dpo_reference_model) if name is not None}
+        expected_names.update(self.model.base_model.decoder.get_distillation_models())
         Assert.eq(self.reference_models.keys(), expected_names)
 
         for reference_model in self.reference_models.values():

@@ -3,15 +3,19 @@ import dataclasses
 import enum
 import functools
 import os
+import pathlib
+import re
 import typing
 
 import pytest
+import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
+    Apriel2CheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
@@ -21,12 +25,17 @@ from fast_llm.models.gpt.conversion.config import (
     MTPLlamaCheckpointFormat,
     Qwen2CheckpointFormat,
 )
+from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
+from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
 )
+
+if typing.TYPE_CHECKING:
+    import transformers.models.auto.auto_factory
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -76,8 +85,18 @@ class ModelTestingConfig:
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
     # Scale the comparison thresholds for specific models.
     compare_factor: float = 1.0
-    # Option to skip specific distributed configuration with name containing any of the provided strings.
+    # Option to skip specific distributed configuration with name matching any of the provided regex patterns.
     skip_tests: tuple[str] = ()
+    get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
+        get_model_test_dataset
+    )
+    auto_model_class: type["transformers.models.auto.auto_factory._BaseAutoModelClass"] = (
+        transformers.AutoModelForCausalLM
+    )
+
+    def __post_init__(self):
+        _, config, _ = self.get_dataset(config_only=True)
+        self.config_dict["data"]["datasets"] = config
 
     @functools.cached_property
     def config_args(self):
@@ -125,7 +144,7 @@ class ModelTestingConfig:
         return self.model_config_class.get_base_model_config_class()
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
-        return any(key in distributed_config.name for key in self.skip_tests)
+        return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
 
 def _update_and_add_testing_config(
@@ -205,6 +224,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                             "heads": 8,
                             "head_groups": 8,
                             "head_size": 32,
+                            # "cross_document_attention":False,
                         },
                         "mlp": {
                             "layer_1": {"weight": init_1},
@@ -231,27 +251,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
-        "data": {
-            "datasets": {
-                "training": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "end": 0.969,
-                },
-                "validation": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.969,
-                    "end": 0.999,
-                },
-                "test": {
-                    "dataset": {"type": "memmap", "path": MODEL_DATASET_PREFIX},
-                    "type": "slice",
-                    "begin": 0.999,
-                    "end": 1,
-                },
-            }
-        },
+        "data": {},
         "optimizer": {"learning_rate": {"base": 0.0001}},
     },
     megatron_args=[
@@ -279,7 +279,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
         f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
-        f"--data-path={MODEL_DATASET_PREFIX}",
         "--split=1,0,0",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
@@ -437,6 +436,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 
@@ -470,7 +470,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Arg update for cross-entropy splits doesn't work here.
-    skip_tests=("ce4", "ms"),
+    skip_tests=(r"ce4", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -514,6 +514,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    auto_model_class=transformers.AutoModel,
 )
 
 _update_and_add_testing_config(
@@ -535,6 +536,86 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+)
+
+_mistral_base_model = MODEL_CONFIGS["mistral"].config_dict["model"]["base_model"]
+
+_update_and_add_testing_config(
+    # Tests logit distillation.
+    "mistral",
+    "mistral_distill_logits",
+    updates={
+        ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("reference_models"): {
+            "teacher": {
+                "model": {"base_model": copy.deepcopy(_mistral_base_model)},
+            },
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: tp2, stp2, stp2_ce4
+    },
+    compare_factor=1.5,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+)
+
+_update_and_add_testing_config(
+    "mistral_distill_logits",
+    "mistral_reverse_kl",
+    updates={
+        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
+    },
+    compare_factor=2,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+)
+
+_update_and_add_testing_config(
+    "mistral_distill_logits",
+    "mistral_distill_activations",
+    updates={
+        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
+        ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
+        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
+        ("reference_models"): {
+            "teacher": {
+                "model": {"base_model": copy.deepcopy(_mistral_base_model)},
+            },
+        },
+    },
+    # Megatron doesn't support sliding windows.
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, df4, df4_sf, tp2, stp2,
+    },
+    compare_factor=8,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "stp2_ce4"),
 )
 
 _update_and_add_testing_config(
@@ -603,7 +684,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
+    skip_tests=(r"sdp", r"ms"),
 )
 
 _update_and_add_testing_config(
@@ -646,8 +727,8 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split not supported.
     skip_tests=(
-        "sdp",
-        "ms",
+        r"sdp",
+        r"ms",
     ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
@@ -681,6 +762,46 @@ _update_and_add_testing_config(
     megatron_args=None,
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sdp", "ms"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests vision multimodal.
+    "llama",
+    "llava",
+    model_type="multimodal",
+    updates={
+        ("model", "base_model", "vision_encoder"): {
+            "embeddings": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
+            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
+            "adapter": {"intermediate_size": 256},
+            "hidden_size": 256,
+        },
+        ("model", "base_model", "decoder", "num_blocks"): 1,
+        # Extend the vocab size to ensure the token id is not in the mock dataset.
+        ("model", "base_model", "embeddings", "vocab_size"): 386,
+        ("model", "base_model", "image_token_index"): 384,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
+        ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
+        # Pixtal doesn't support GQA
+        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
+    },
+    get_dataset=get_multimodal_test_dataset,
+    megatron_args=None,
+    checkpoint_format=LlavaCheckpointFormat,
+    groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
@@ -689,9 +810,143 @@ _update_and_add_testing_config(
         # TODO: Implement
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=2.0,
+    compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sdp", "ms"),
+    # TODO: Gradient accumulation works but comparison is broken.
+    skip_tests=("sdp", "ms", "bf4", "df"),
+    auto_model_class=transformers.AutoModelForImageTextToText,
+)
+
+
+_update_and_add_testing_config(
+    # Tests hybrid with gated delta net mixer.
+    "llama",
+    "hybrid_gdn",
+    updates={
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "t": copy.deepcopy(_llama_block),
+                "gdn": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "gdn",
+                        "value_heads": 4,
+                        "key_heads": 4,
+                        "key_head_dim": 16,
+                        "value_head_dim": 16,
+                    },
+                },
+            },
+            "num_blocks": 2,
+            "pattern": ["t", "gdn"],
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+)
+
+_update_and_add_testing_config(
+    # Tests apriel2 format with pattern decoder mixing all mixer types.
+    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
+    "llama",
+    "apriel2",
+    updates={
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "attn_full": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
+                "mamba": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "mamba_2",
+                        "d_inner": 512,
+                        "state_size": 16,
+                        "dt_rank": 16,
+                        "d_xb": 256,
+                        "add_linear_biases": False,
+                    },
+                },
+                "stochastic": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "stochastic",
+                        "mixers": {
+                            "attn": {
+                                "type": "attention",
+                                "rotary": {"type": "default", "theta": 10000},
+                                "heads": 8,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "add_linear_biases": False,
+                            },
+                            "mamba": {
+                                "type": "mamba_2",
+                                "d_inner": 512,
+                                "state_size": 16,
+                                "dt_rank": 16,
+                                "d_xb": 256,
+                                "add_linear_biases": False,
+                            },
+                        },
+                        "sampling_strategy": "uniform",
+                        "main_mixer_name": "attn",
+                    },
+                },
+                "attn_swa": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "window_size": 128,
+                        "add_linear_biases": False,
+                    },
+                },
+            },
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa"],
+            "num_blocks": 4,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Apriel2CheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=10.0,
+    # Micro-sequence split not supported for Mamba.
+    # Pipeline-parallel gives a different mixer selection.
+    skip_tests=("sdp", "ms", "pp"),
 )
 
 

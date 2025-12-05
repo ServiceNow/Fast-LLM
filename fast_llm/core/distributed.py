@@ -91,6 +91,22 @@ def allreduce_scalar(
         return value
 
 
+def all_gather_scalar(
+    value: float | int,
+    dtype: torch.dtype = torch.float64,
+    group: torch.distributed.ProcessGroup | None = None,
+    timeout: float | None = None,
+):
+    if group:
+        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
+        add_ephemeral_timeout(group, timeout)
+        output_tensor = value.new_empty((group.size(),))
+        torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
+        return output_tensor.tolist()
+    else:
+        return value
+
+
 def broadcast_scalar(
     value: float | int,
     dtype: torch.dtype = torch.float64,
@@ -127,32 +143,6 @@ def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None
         output_tensor = torch.empty(size, dtype=torch.uint8, device=torch.cuda.current_device())
         broadcast(output_tensor, src, group)
         return _tensor_to_object(output_tensor)
-
-
-def broadcast_optional(tensor: torch.Tensor | None, group: ProcessGroup = None, src: int = 0) -> torch.Tensor:
-    """
-    Broadcasts an optional tensor of size, shape, and dtype unknown in advance.
-    Returns the tensor on all ranks or None if no tensor was sent.
-    """
-    assert group is not None
-
-    if group.rank() == src:
-        has_tensor = tensor is not None
-        if has_tensor:
-            meta = (has_tensor, tensor.shape, tensor.dtype)
-        else:
-            meta = (has_tensor, None, None)
-        broadcast_object(meta, group, src)
-        if has_tensor:
-            broadcast(tensor.to(torch.cuda.current_device()), src, group)
-        return tensor
-    else:
-        has_tensor, shape, dtype = broadcast_object(None, group, src)
-        if not has_tensor:
-            return None
-        output_tensor = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
-        broadcast(output_tensor, src, group)
-        return output_tensor
 
 
 def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:

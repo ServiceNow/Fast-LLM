@@ -27,10 +27,13 @@ def wrap_forward_backward[
       and returns the `input_` gradient.
     """
 
+    # We want to run the backward pass even if the input doesn't require grads.
+    in_ = torch.empty(0, requires_grad=True)
+
     class Function(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *args):
-            outputs = forward(*args)
+            outputs = forward(*args[:-1])
             Assert.custom(isinstance, outputs, tuple)
             # No need to call `save_for_backward`, we don't want the safety checks anyway.
             ctx.context = outputs[-1]
@@ -44,13 +47,13 @@ def wrap_forward_backward[
         def backward(ctx, *grad_outputs):
             grad_input = backward(*grad_outputs, ctx.context)
             if not isinstance(grad_input, tuple):
-                assert isinstance(grad_input, torch.Tensor)
+                assert isinstance(grad_input, torch.Tensor) or grad_input is None
                 grad_input = (grad_input,)
             return *grad_input, *[None for _ in range(ctx.nargs - len(grad_input))]
 
     def call(*args, **kwargs):
         # TODO: Any way to validate kwargs without making function wrappers?
-        return Function.apply(*args, *kwargs.values())
+        return Function.apply(*args, *kwargs.values(), in_)
 
     return call
 

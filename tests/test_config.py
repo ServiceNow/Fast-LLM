@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
@@ -60,7 +60,7 @@ def test_validate_example_config():
     GPTTrainerConfig.from_dict(fast_llm_config_dict)
 
 
-@pytest.mark.parametrize("cls", (GPTSamplingConfig, GPTModelConfig))
+@pytest.mark.parametrize("cls", (SamplingConfig, GPTModelConfig))
 def test_serialize_default_config_updates(cls):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
@@ -236,13 +236,23 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
             tp,
             rank,
         )
-        _check_dim(
-            tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
-            DistributedDimNames.tensor_and_sequence_data,
-            dp_rank % sdp * tp + tp_rank,
-            tp * sdp,
-            rank,
-        )
+        if not pipeline_first:
+            _check_dim(
+                tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
+                DistributedDimNames.tensor_and_sequence_data,
+                dp_rank % sdp * tp + tp_rank,
+                tp * sdp,
+                rank,
+            )
+            _check_dim(
+                tp_dp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_data),
+                DistributedDimNames.tensor_and_data,
+                dp_rank * tp + tp_rank,
+                tp * dp,
+                rank,
+            )
+            all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
+            all_global_ranks["tp_dp"].add(tuple(tp_dp_dim.global_ranks))
         _check_dim(
             sdp_dim := config.get_distributed_dim(DistributedDimNames.sequence_data),
             DistributedDimNames.sequence_data,
@@ -273,7 +283,6 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
         )
         all_global_ranks["world"].add(tuple(world_dim.global_ranks))
         all_global_ranks["tp"].add(tuple(tp_dim.global_ranks))
-        all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
         all_global_ranks["sdp"].add(tuple(sdp_dim.global_ranks))
         all_global_ranks["bdp"].add(tuple(bdp_dim.global_ranks))
         all_global_ranks["dp"].add(tuple(dp_dim.global_ranks))

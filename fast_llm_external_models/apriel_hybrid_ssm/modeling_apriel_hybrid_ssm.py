@@ -1199,18 +1199,18 @@ class AprielHybridSSMModel(MistralModel):
         super().__init__(config_copy, **kwargs)
         self.config = config
         blocks = []
-        logger.info(f"Loading hyubrid model with the following layout: {config.hybrid_block_layout}")
-        for layer_idx, type in enumerate(config.hybrid_block_layout):
-            if type == "m2d":
+        logger.info(f"Loading hybrid model with the following layout: {config.hybrid_block_layout}")
+        for layer_idx, block_type in enumerate(config.hybrid_block_layout):
+            if block_type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx))
-            elif type == "m2":
+            elif block_type == "m2":
                 blocks.append(AprielSSMM2DecoderLayer(config, layer_idx))
-            elif type == "t":
+            elif block_type == "t":
                 blocks.append(MistralDecoderLayer(config, layer_idx))
-            elif type == "i":
+            elif block_type == "i":
                 blocks.append(AprielHybridIdentity(config))
             else:
-                raise ValueError(f"Invalid block type: {type}")
+                raise ValueError(f"Invalid block type: {block_type}")
         self.layers = nn.ModuleList(blocks)
 
         # Initialize weights and apply final processing
