@@ -84,15 +84,9 @@ _ACTIVATION_HF_NAMES = {
     ActivationType.squared_relu: "relu2",
     ActivationType.identity: "identity",
 }
+_ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 # gelu and gelu_pytorch_tanh both map to our standard gelu
-_ACTIVATION_HF_NAMES_INV = {
-    "gelu": ActivationType.gelu,
-    "gelu_pytorch_tanh": ActivationType.gelu,
-    "silu": ActivationType.silu,
-    "relu": ActivationType.relu,
-    "relu2": ActivationType.squared_relu,
-    "identity": ActivationType.identity,
-}
+_ACTIVATION_HF_NAMES_INV["gelu"] = ActivationType.gelu
 
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 
