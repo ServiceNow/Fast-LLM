@@ -199,6 +199,9 @@ class Apriel2Attention(nn.Module):
         self.is_causal = mixer_config.get("causal", True)
         self.window_size = mixer_config.get("window_size")
 
+        # cross_document_attention: if False, use cu_seqlens to isolate sequences (e.g., images)
+        self.cross_document_attention = mixer_config.get("cross_document_attention", True)
+
         # Whether to add biases to linear projections
         add_bias = mixer_config.get("add_linear_biases", False)
 
@@ -313,26 +316,57 @@ class Apriel2Attention(nn.Module):
         **kwargs: Unpack[BlockSequenceKwargs],
     ) -> PreprocessingOutput:
         """
-        Compute attention preprocessing: position embeddings and causal masks.
+        Compute attention preprocessing: position embeddings and masks.
 
         Args:
             hidden_states: Current hidden states (for shape/device)
             resources: ModuleDict of resources from setup() (contains 'rotary_emb')
-            **kwargs: Metadata (position_ids, attention_mask, cache_position, etc.)
+            **kwargs: Metadata including:
+                - position_ids: Position IDs for rotary embedding
+                - sequence_lengths: [n1, n2, ...] for sequence isolation
+                - attention_mask, cache_position, past_key_values, etc.
 
         Returns:
-            PreprocessingOutput with position_embeddings and attention_mask
+            PreprocessingOutput with position_embeddings, attention_mask, and flash_attn_kwargs
         """
+        position_ids = kwargs.get("position_ids")
+
         # Compute position embeddings using rotary_emb from resources
         position_embeddings = None
-        if resources is not None and "rotary_emb" in resources:
-            position_ids = kwargs["position_ids"]
+        if resources is not None and "rotary_emb" in resources and position_ids is not None:
             rotary_emb = resources["rotary_emb"]
             cos, sin = rotary_emb(hidden_states, position_ids)
             position_embeddings = (cos, sin)
 
-        # Compute mask based on mixer config
-        if self.is_causal and kwargs.get("cache_position") is not None:
+        # Handle sequence isolation (cross_document_attention=False)
+        sequence_lengths = kwargs.get("sequence_lengths")
+        flash_attn_kwargs = {}
+        mask = kwargs.get("attention_mask")
+
+        if not self.cross_document_attention and sequence_lengths is not None:
+            # Compute cu_seqlens for flash attention or block diagonal mask for others
+            attn_impl = getattr(self.config, "_attn_implementation", "eager")
+
+            if attn_impl == "flash_attention_2":
+                # Flash attention: use cu_seqlens for varlen attention
+                cu_seqlens = torch.tensor(
+                    [0] + list(torch.cumsum(torch.tensor(sequence_lengths), dim=0).tolist()),
+                    dtype=torch.int32,
+                    device=hidden_states.device,
+                )
+                max_seqlen = max(sequence_lengths)
+                flash_attn_kwargs = {
+                    "cu_seq_lens_q": cu_seqlens,
+                    "cu_seq_lens_k": cu_seqlens,
+                    "max_length_q": max_seqlen,
+                    "max_length_k": max_seqlen,
+                }
+                mask = None  # Flash varlen doesn't use attention_mask
+            else:
+                # Non-flash: use block diagonal mask
+                mask = _generate_block_attention_mask(sequence_lengths, hidden_states)
+
+        elif self.is_causal and kwargs.get("cache_position") is not None:
             # Causal attention - compute causal mask
             mask_function = create_causal_mask if self.window_size is None else create_sliding_window_causal_mask
 
@@ -353,16 +387,14 @@ class Apriel2Attention(nn.Module):
                 attention_mask=kwargs.get("attention_mask"),
                 cache_position=kwargs["cache_position"],
                 past_key_values=kwargs.get("past_key_values"),
-                position_ids=kwargs["position_ids"],
+                position_ids=position_ids,
             )
-        else:
-            # Non-causal attention (vision) - pass through original mask
-            mask = kwargs.get("attention_mask")
 
-        # Return computed tensors (not modules!)
+        # Return computed tensors
         return {
             "position_embeddings": position_embeddings,
             "attention_mask": mask,
+            **flash_attn_kwargs,
         }
 
 
@@ -1970,8 +2002,10 @@ def _compute_2d_position_ids(
 class Apriel2VisionEncoder(nn.Module):
     """Vision encoder with embeddings, transformer blocks, and adapter.
 
-    Uses Pixtral-style processing: concatenates all image patches into one sequence
-    with block attention masks to isolate images. This matches Fast-LLM's approach.
+    Uses Pixtral-style processing: concatenates all image patches into one sequence.
+    Computes position_ids for 2D rotary embeddings and sequence_lengths for image
+    isolation - these are passed to encoder blocks. Mixer-specific handling (rotary
+    cos/sin, cu_seqlens) is delegated to each mixer's preprocess() method.
     """
 
     def __init__(self, vision_encoder_config: dict, text_config: Apriel2Config):
@@ -1983,23 +2017,13 @@ class Apriel2VisionEncoder(nn.Module):
         embeddings_config = vision_encoder_config["embeddings"]
         self.embeddings = Apriel2Embeddings(self.hidden_size, embeddings_config)
 
-        # Store patch size for 2D position_ids computation
+        # Store patch size for computing patch grid dimensions
         self.patch_size = embeddings_config["patch_height"]
 
-        # Get max_patches_per_side from rotary config for position_ids computation
-        encoder_config = vision_encoder_config["encoder"]
-        block_config = encoder_config.get(
-            "block", encoder_config.get("blocks", {}).get(encoder_config.get("pattern", [""])[0], {})
-        )
-        rotary_config = block_config["mixer"]["rotary"]
-        max_image_size = rotary_config["max_image_size"]
-        self.max_patches_per_side = max_image_size // self.patch_size
-
-        # Store cross_document_attention setting - False means images should NOT attend to each other
-        self.cross_document_attention = block_config["mixer"]["cross_document_attention"]
-
-        # Store attention implementation for choosing mask strategy
-        self._attn_implementation = getattr(text_config, "_attn_implementation", "eager")
+        # Get max_image_size for 2D position encoding (vision encoder owns this)
+        # Priority: encoder-level config > rotary config in any attention block > default
+        self.max_image_size = self._get_max_image_size(vision_encoder_config)
+        self.max_patches_per_side = self.max_image_size // self.patch_size
 
         # Build vision transformer encoder using shared BlockSequence abstraction
         encoder_config = vision_encoder_config.get("encoder", {})
@@ -2012,11 +2036,10 @@ class Apriel2VisionEncoder(nn.Module):
             hidden_size=self.hidden_size,
             embeddings={"max_position_embeddings": 1024},  # Large enough for typical vision use cases
             head={"normalization": {"type": "rms_norm", "epsilon": norm_epsilon}},
-            _attn_implementation=self._attn_implementation,
+            _attn_implementation=getattr(text_config, "_attn_implementation", "eager"),
         )
 
-        # Vision encoder block sequence
-        # Non-causal behavior determined by mixer config (vision attention has causal=False)
+        # Vision encoder block sequence - supports any mixer type
         self.encoder = Apriel2BlockSequence(
             sequence_config=encoder_config,
             hidden_size=self.hidden_size,
@@ -2046,11 +2069,53 @@ class Apriel2VisionEncoder(nn.Module):
         else:
             raise ValueError(f"Unknown adapter type: {adapter_type}")
 
+    def _get_max_image_size(self, config: dict) -> int:
+        """Extract max_image_size from config with fallback chain.
+
+        This is a vision encoder concern - determines 2D position encoding grid size.
+
+        Priority:
+        1. Encoder-level config: config["max_image_size"]
+        2. From any attention block's rotary config (for backward compatibility)
+        3. Default: 4096 (supports up to ~292x292 patches with patch_size=14)
+        """
+        # Priority 1: encoder-level config
+        if "max_image_size" in config:
+            return config["max_image_size"]
+
+        # Priority 2: search through blocks for rotary config
+        encoder_config = config.get("encoder", {})
+        for block_config in self._iter_block_configs(encoder_config):
+            mixer_config = block_config.get("mixer", {})
+            rotary_config = mixer_config.get("rotary", {})
+            if "max_image_size" in rotary_config:
+                return rotary_config["max_image_size"]
+
+        # Default fallback
+        return 4096
+
+    def _iter_block_configs(self, encoder_config: dict):
+        """Iterate over all block configs in encoder (handles fixed/pattern types)."""
+        seq_type = encoder_config.get("type", "fixed")
+
+        if seq_type == "fixed":
+            block_config = encoder_config.get("block", {})
+            if block_config:
+                yield block_config
+        elif seq_type == "pattern":
+            blocks_config = encoder_config.get("blocks", {})
+            for block_config in blocks_config.values():
+                yield block_config
+
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Process images through vision encoder using Pixtral-style concatenation.
 
-        All image patches are concatenated into ONE sequence with block attention
-        masks to prevent cross-image attention. This matches Fast-LLM and Pixtral.
+        All image patches are concatenated into ONE sequence. Vision encoder computes:
+        - position_ids: 2D position encoding (row * max_patches_per_side + col)
+        - sequence_lengths: patches per image (for image isolation)
+
+        These are passed to encoder blocks. Mixer-specific handling (rotary cos/sin,
+        cu_seqlens/masks) is delegated to each mixer's preprocess() method.
 
         Args:
             pixel_values: [batch, channels, height, width] - batch of images
@@ -2076,8 +2141,8 @@ class Apriel2VisionEncoder(nn.Module):
         # Concatenate all patches into one sequence: [1, total_patches, hidden]
         hidden_states = torch.cat(patch_embeds_list, dim=0).unsqueeze(0)
 
-        # Compute position IDs for each image (same 2D grid for each)
-        # position_id = h * max_patches_per_side + w
+        # Compute position_ids for 2D rotary: position_id = row * max_patches_per_side + col
+        # Vision encoder owns 2D position encoding - attention just uses position_ids
         positions = []
         for _ in range(batch_size):
             mesh = torch.meshgrid(
@@ -2090,46 +2155,20 @@ class Apriel2VisionEncoder(nn.Module):
             positions.append(ids[:, 0])
         position_ids = torch.cat(positions).unsqueeze(0)  # [1, total_patches]
 
-        # Handle cross_document_attention=False by preventing cross-image attention
-        # This is critical for vision encoder correctness
-        patch_counts = [num_patches_per_image] * batch_size
-        attention_kwargs = {}
-
-        if not self.cross_document_attention:
-            if self._attn_implementation == "flash_attention_2":
-                # For flash attention: use cu_seqlens for variable-length attention
-                # This tells flash_attn_varlen_func where each image's patches start/end
-                cu_seqlens = torch.tensor(
-                    [0] + [num_patches_per_image * (i + 1) for i in range(batch_size)],
-                    dtype=torch.int32,
-                    device=hidden_states.device,
-                )
-                max_seqlen = num_patches_per_image
-                attention_kwargs = {
-                    "cu_seq_lens_q": cu_seqlens,
-                    "cu_seq_lens_k": cu_seqlens,
-                    "max_length_q": max_seqlen,
-                    "max_length_k": max_seqlen,
-                }
-                attention_mask = None
-            else:
-                # For other implementations: use block diagonal mask
-                attention_mask = _generate_block_attention_mask(patch_counts, hidden_states)
-        else:
-            # cross_document_attention=True: allow all patches to attend to each other
-            attention_mask = None
+        # Sequence lengths: patches per image (for image isolation in attention)
+        sequence_lengths = [num_patches_per_image] * batch_size
 
         # Forward through vision encoder block sequence
         hidden_states, _, _ = self.encoder(
             hidden_states,
-            attention_mask=attention_mask,
+            attention_mask=None,  # Attention computes masks from sequence_lengths if needed
             position_ids=position_ids,
+            sequence_lengths=sequence_lengths,
             past_key_values=None,
             output_attentions=False,
             output_hidden_states=False,
             use_cache=False,
             cache_position=None,
-            **attention_kwargs,
         )
 
         # Adapter/projector: [1, total_patches, vision_hidden] -> [1, total_patches, text_hidden]
