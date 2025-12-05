@@ -81,7 +81,7 @@ class TestStochasticMixerStructure:
                 "num_blocks": 2,
                 "block": {
                     "mixer": attn_config,
-                    "mlp": {"type": "mlp"},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm"},
                 },
             },
@@ -95,7 +95,11 @@ class TestStochasticMixerStructure:
                 "num_blocks": 2,
                 "pattern": ["attn", "stoch"],
                 "blocks": {
-                    "attn": {"mixer": attn_config},
+                    "attn": {
+                        "mixer": attn_config,
+                        "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                        "normalization": {"type": "rms_norm"},
+                    },
                     "stoch": {
                         "mixer": {
                             "type": "stochastic",
@@ -104,7 +108,9 @@ class TestStochasticMixerStructure:
                                 "attention": attn_config,
                                 "mamba": {"type": "mamba", "conv_bias": True, "dt_proj_bias": True}
                             }
-                        }
+                        },
+                        "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                        "normalization": {"type": "rms_norm"},
                     }
                 }
             }

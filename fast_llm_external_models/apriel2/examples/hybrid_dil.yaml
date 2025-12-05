@@ -85,7 +85,8 @@ decoder:
           gdn:
             type: gdn
             init: transfer  # Uses DIL conversion from attention
-            conv_kernel_size: 4  # required, no default
+            convolution_layer:
+              kernel_size: 4  # required, no default
             # GDN dimensions can be configured or derived from source
             # value_heads: 32  # defaults to source heads
             # key_heads: 8     # defaults to source head_groups

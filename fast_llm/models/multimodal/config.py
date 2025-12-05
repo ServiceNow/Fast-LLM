@@ -66,7 +66,7 @@ class MultiModalModelConfig(GPTModelConfig):
         return MultiModalInferenceRunner
 
     @classmethod
-    def get_huggingface_model_for_causal_lm_class(cls):
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceMultiModalModelForCausalLM"]:
         from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
 
         return HuggingfaceMultiModalModelForCausalLM

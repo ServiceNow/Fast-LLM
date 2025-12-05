@@ -83,7 +83,7 @@ decoder:
       mixer:
         type: attention
         init: transfer
-        sliding_window: 4096
+        window_size: 4096
       mlp:
         init: transfer
       normalization:
@@ -118,7 +118,8 @@ decoder:
         type: gdn
         init: transfer  # Uses DIL conversion
         # Required param (cannot be derived)
-        conv_kernel_size: 4
+        convolution_layer:
+          kernel_size: 4
         # Optional - defaults derived from source attention if not specified
         # value_heads: 32   # defaults to source heads
         # key_heads: 8      # defaults to source head_groups
@@ -163,11 +164,12 @@ decoder:
           swa:
             type: attention
             init: transfer
-            sliding_window: 4096
+            window_size: 4096
           gdn:
             type: gdn
             init: transfer  # DIL
-            conv_kernel_size: 4
+            convolution_layer:
+              kernel_size: 4
       mlp:
         init: transfer
       normalization:

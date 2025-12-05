@@ -374,7 +374,7 @@ class Apriel2BlockConverter:
             "type": "mlp",
             "intermediate_size": mlp_config["intermediate_size"],
             "activation": ActivationType.from_hf_name(mlp_config["activation"]),
-            "gated": True,
+            "gated": mlp_config["gated"],
             "add_linear_biases": mlp_config["add_linear_biases"],
         }
 
@@ -426,6 +426,7 @@ class Apriel2BlockConverter:
             "type": "mlp",
             "intermediate_size": config.mlp.intermediate_size,
             "activation": config.mlp.activation.value,
+            "gated": config.mlp.gated,
             "add_linear_biases": config.mlp.add_linear_biases,
         }
 

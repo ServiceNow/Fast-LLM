@@ -429,7 +429,7 @@ class TestPlanCompositionTorture:
         # Verify sub-mixers have correct types
         assert mixer["mixers"]["attention"]["type"] == "attention"
         assert mixer["mixers"]["sliding_window"]["type"] == "attention"
-        assert mixer["mixers"]["sliding_window"]["sliding_window"] == 512
+        assert mixer["mixers"]["sliding_window"]["window_size"] == 512
         assert mixer["mixers"]["gdn"]["type"] == "gdn"
 
         # Verify model works
@@ -1276,7 +1276,7 @@ class TestInitSeparationOfConcerns:
                                 "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -1443,7 +1443,7 @@ class TestMarkovianProperty:
                                 "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -1552,7 +1552,7 @@ class TestMarkovianProperty:
                                 "key_heads": 4,
                                 "key_head_dim": 32,
                                 "value_head_dim": 32,
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },

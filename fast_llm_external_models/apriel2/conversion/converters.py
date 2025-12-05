@@ -508,7 +508,7 @@ def _plan_mixer_transfer(
         num_k_heads = target_config.get("key_heads", source_kv_heads)
         head_k_dim = target_config.get("key_head_dim", source_head_size)
         head_v_dim = target_config.get("value_head_dim", source_head_size)
-        conv_kernel_size = target_config["conv_kernel_size"]
+        conv_kernel_size = target_config["convolution_layer"]["kernel_size"]
 
         return plan_attention_to_gated_delta_net(
             hidden_size=hidden_size,
@@ -604,7 +604,7 @@ def _plan_random_mixer(
         num_k_heads = config["key_heads"]
         head_k_dim = config["key_head_dim"]
         head_v_dim = config["value_head_dim"]
-        conv_kernel_size = config.get("conv_kernel_size", 4)
+        conv_kernel_size = config["convolution_layer"]["kernel_size"]
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
         conv_dim = key_dim * 2 + value_dim

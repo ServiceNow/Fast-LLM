@@ -599,7 +599,7 @@ class TestApriel2GDNVsQwen3Next:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 
@@ -691,7 +691,7 @@ class TestFastVsSlowPath:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 
@@ -800,7 +800,7 @@ class TestDeterminism:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 

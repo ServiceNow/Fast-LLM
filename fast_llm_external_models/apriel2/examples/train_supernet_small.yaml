@@ -5,11 +5,13 @@
 # Prerequisites:
 #
 # 1. Convert a source model to Apriel2 format with reduced layers:
+#    (Note: multiple --surgery flags are composed left-to-right)
 #
 #    python -m fast_llm_external_models.apriel2.conversion.convert \
 #        mistral-community/pixtral-12b \
 #        /tmp/apriel2-supernet-small \
-#        --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet_small.yaml
+#        --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet.yaml \
+#        --surgery fast_llm_external_models/apriel2/examples/small.yaml
 #
 # 2. Create a multimodal dataset with matching patch size (16x16):
 #

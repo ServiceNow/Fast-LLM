@@ -24,6 +24,7 @@ from transformers.models.mistral.modeling_mistral import (
 )
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import eager_attention_forward
+
 # GDN implementation - matches Fast-LLM's gdn.py exactly
 try:
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
@@ -177,7 +178,7 @@ class Apriel2Attention(nn.Module):
         head_size: Dimension per head
         add_linear_biases: Whether to use biases in projections
         causal: Whether to use causal masking
-        sliding_window: Optional sliding window size
+        window_size: Optional sliding window size
         rotary: Rotary embedding config dict
     """
 
@@ -194,9 +195,9 @@ class Apriel2Attention(nn.Module):
         self.hidden_size = d_model
 
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.scaling = self.head_dim ** -0.5
+        self.scaling = self.head_dim**-0.5
         self.is_causal = mixer_config.get("causal", True)
-        self.sliding_window = mixer_config.get("sliding_window")
+        self.window_size = mixer_config.get("window_size")
 
         # Whether to add biases to linear projections
         add_bias = mixer_config.get("add_linear_biases", False)
@@ -241,9 +242,7 @@ class Apriel2Attention(nn.Module):
                 image_size=rotary_config_dict["max_image_size"],
                 patch_size=rotary_config_dict["patch_size"],
             )
-            return nn.ModuleDict({
-                'rotary_emb': PixtralRotaryEmbedding(config=rotary_config)
-            })
+            return nn.ModuleDict({"rotary_emb": PixtralRotaryEmbedding(config=rotary_config)})
 
         elif rotary_type == "mistral_1d":
             from transformers.models.mistral.modeling_mistral import MistralRotaryEmbedding
@@ -256,9 +255,7 @@ class Apriel2Attention(nn.Module):
                 num_attention_heads=num_heads,
                 partial_rotary_factor=1.0,
             )
-            return nn.ModuleDict({
-                'rotary_emb': MistralRotaryEmbedding(config=rotary_config)
-            })
+            return nn.ModuleDict({"rotary_emb": MistralRotaryEmbedding(config=rotary_config)})
 
         else:
             raise ValueError(f"Unknown rotary type: {rotary_type}")
@@ -301,7 +298,7 @@ class Apriel2Attention(nn.Module):
             attention_mask,
             dropout=0.0,
             scaling=self.scaling,
-            sliding_window=self.sliding_window,
+            sliding_window=self.window_size,
             **kwargs,
         )
 
@@ -328,16 +325,16 @@ class Apriel2Attention(nn.Module):
         """
         # Compute position embeddings using rotary_emb from resources
         position_embeddings = None
-        if resources is not None and 'rotary_emb' in resources:
-            position_ids = kwargs['position_ids']
-            rotary_emb = resources['rotary_emb']
+        if resources is not None and "rotary_emb" in resources:
+            position_ids = kwargs["position_ids"]
+            rotary_emb = resources["rotary_emb"]
             cos, sin = rotary_emb(hidden_states, position_ids)
             position_embeddings = (cos, sin)
 
         # Compute mask based on mixer config
-        if self.is_causal and kwargs.get('cache_position') is not None:
+        if self.is_causal and kwargs.get("cache_position") is not None:
             # Causal attention - compute causal mask
-            mask_function = create_causal_mask if self.sliding_window is None else create_sliding_window_causal_mask
+            mask_function = create_causal_mask if self.window_size is None else create_sliding_window_causal_mask
 
             # Build config for mask creation
             mask_config = SimpleNamespace(
@@ -346,30 +343,31 @@ class Apriel2Attention(nn.Module):
                 num_key_value_heads=self.num_key_value_heads,
                 head_dim=self.head_dim,
                 max_position_embeddings=self.config.embeddings["max_position_embeddings"],
-                sliding_window=self.sliding_window,
-                _attn_implementation=getattr(self.config, '_attn_implementation', 'eager'),
+                sliding_window=self.window_size,
+                _attn_implementation=getattr(self.config, "_attn_implementation", "eager"),
             )
 
             mask = mask_function(
                 config=mask_config,
                 input_embeds=hidden_states,
-                attention_mask=kwargs.get('attention_mask'),
-                cache_position=kwargs['cache_position'],
-                past_key_values=kwargs.get('past_key_values'),
-                position_ids=kwargs['position_ids'],
+                attention_mask=kwargs.get("attention_mask"),
+                cache_position=kwargs["cache_position"],
+                past_key_values=kwargs.get("past_key_values"),
+                position_ids=kwargs["position_ids"],
             )
         else:
             # Non-causal attention (vision) - pass through original mask
-            mask = kwargs.get('attention_mask')
+            mask = kwargs.get("attention_mask")
 
         # Return computed tensors (not modules!)
         return {
-            'position_embeddings': position_embeddings,
-            'attention_mask': mask,
+            "position_embeddings": position_embeddings,
+            "attention_mask": mask,
         }
 
 
 # Shared helper functions for both text and vision models
+
 
 def get_mixer_class(mixer_type: str) -> type:
     """Map mixer type string to mixer class."""
@@ -389,6 +387,7 @@ def get_mixer_class(mixer_type: str) -> type:
 
 def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, allow_stochastic: bool = True):
     """Create a mixer instance from config. Uses get_mixer_class() for type→class mapping."""
+    # TODO: make constructor signatures uniform across mixer types and remove this function
     mixer_type = mixer_config.get("type", "attention")
     mixer_class = get_mixer_class(mixer_type)  # Handles unknown types
 
@@ -879,7 +878,7 @@ class Apriel2GatedDeltaNet(nn.Module):
         self.key_heads = config_dict.get("key_heads", 8)
         self.key_head_dim = config_dict.get("key_head_dim", 64)
         self.value_head_dim = config_dict.get("value_head_dim", 64)
-        self.conv_kernel_size = config_dict.get("conv_kernel_size", 4)
+        self.conv_kernel_size = config_dict["convolution_layer"]["kernel_size"]
         self.norm_eps = config_dict.get("norm_eps", 1e-5)
 
         # Derived dimensions
@@ -930,10 +929,10 @@ class Apriel2GatedDeltaNet(nn.Module):
         """
         # Split QKVZ - flat layout matching Fast-LLM
         qkv_sizes = (
-            self.key_dim,   # Q: key_heads * key_head_dim
-            self.key_dim,   # K: key_heads * key_head_dim
-            self.value_dim, # V: value_heads * value_head_dim
-            self.value_dim, # Z: value_heads * value_head_dim
+            self.key_dim,  # Q: key_heads * key_head_dim
+            self.key_dim,  # K: key_heads * key_head_dim
+            self.value_dim,  # V: value_heads * value_head_dim
+            self.value_dim,  # Z: value_heads * value_head_dim
         )
         query, key, value, z = torch.split(mixed_qkvz, qkv_sizes, dim=-1)
 
@@ -954,16 +953,12 @@ class Apriel2GatedDeltaNet(nn.Module):
             return
 
         if past_key_values.conv_states[self.layer_idx] is None:
-            conv_state = torch.zeros(
-                batch_size, self.conv_dim, self.conv_kernel_size,
-                device=device, dtype=dtype
-            )
+            conv_state = torch.zeros(batch_size, self.conv_dim, self.conv_kernel_size, device=device, dtype=dtype)
             past_key_values.conv_states[self.layer_idx] = conv_state
 
         if past_key_values.recurrent_states[self.layer_idx] is None:
             recurrent_state = torch.zeros(
-                batch_size, self.value_heads, self.key_head_dim, self.value_head_dim,
-                device=device, dtype=dtype
+                batch_size, self.value_heads, self.key_head_dim, self.value_head_dim, device=device, dtype=dtype
             )
             past_key_values.recurrent_states[self.layer_idx] = recurrent_state
 
@@ -981,10 +976,7 @@ class Apriel2GatedDeltaNet(nn.Module):
         # Check if using precomputed states (single token decode with cache)
         # Must check that conv_state exists for THIS layer (not just overall has_previous_state)
         use_precomputed_states = (
-            past_key_values is not None
-            and conv_state is not None
-            and seq_len == 1
-            and cache_position is not None
+            past_key_values is not None and conv_state is not None and seq_len == 1 and cache_position is not None
         )
 
         # Project to QKVZ and BA
@@ -1011,22 +1003,22 @@ class Apriel2GatedDeltaNet(nn.Module):
                 self.convolution.weight.squeeze(1),
                 None,  # bias
                 "silu",
-            ).unsqueeze(2)  # [batch, conv_dim] -> [batch, conv_dim, 1]
+            ).unsqueeze(
+                2
+            )  # [batch, conv_dim] -> [batch, conv_dim, 1]
         else:
             # Prefill - store padded state for future decoding
             if past_key_values is not None:
                 # Pad to kernel size and store for future decoding
                 padded = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
-                past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size:]
+                past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size :]
             # Apply convolution
             mixed_qkv = F.silu(self.convolution(mixed_qkv)[:, :, :seq_len])
 
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
 
         # Split back after convolution
-        query_flat, key_flat, value_flat = torch.split(
-            mixed_qkv, (self.key_dim, self.key_dim, self.value_dim), dim=-1
-        )
+        query_flat, key_flat, value_flat = torch.split(mixed_qkv, (self.key_dim, self.key_dim, self.value_dim), dim=-1)
         query = query_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
         key = key_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
         value = value_flat.reshape(batch_size, seq_len, self.value_heads, self.value_head_dim)
@@ -1044,7 +1036,11 @@ class Apriel2GatedDeltaNet(nn.Module):
         if not use_precomputed_states:
             # Chunked mode for prefill
             output, last_recurrent_state = self._chunk_gated_delta_rule(
-                query, key, value, g=g, beta=beta_gate,
+                query,
+                key,
+                value,
+                g=g,
+                beta=beta_gate,
                 initial_state=None,
                 output_final_state=past_key_values is not None,
                 use_qk_l2norm_in_kernel=True,
@@ -1087,11 +1083,11 @@ class Apriel2GatedDeltaNet(nn.Module):
 
         # Update state: S = exp(g) * S + beta * k^T @ v
         decay = g.exp().unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
-        k_outer_v = torch.einsum('bhk,bhv->bhkv', key * beta.unsqueeze(-1), value)
+        k_outer_v = torch.einsum("bhk,bhv->bhkv", key * beta.unsqueeze(-1), value)
         state = decay * state + k_outer_v
 
         # Output: o = q @ S
-        output = torch.einsum('bhk,bhkv->bhv', query, state)
+        output = torch.einsum("bhk,bhkv->bhv", query, state)
         output = output.unsqueeze(2)  # [batch, heads, 1, v_dim]
 
         return output, state
@@ -1254,15 +1250,19 @@ class Apriel2BlockSequence(nn.Module):
                 blocks_config = self.sequence_config.get("blocks", {})
                 block_name = pattern[layer_idx % len(pattern)]
                 block_config = blocks_config[block_name]
+            else:
+                raise ValueError(f"Unknown sequence type: {seq_type}")
 
             # Create block with explicit parameters (no fake config creation!)
-            blocks.append(Apriel2Block(
-                block_config=block_config,
-                hidden_size=self.hidden_size,
-                layer_idx=layer_idx,
-                rms_norm_eps=rms_norm_eps,
-                config=self.config,
-            ))
+            blocks.append(
+                Apriel2Block(
+                    block_config=block_config,
+                    hidden_size=self.hidden_size,
+                    layer_idx=layer_idx,
+                    rms_norm_eps=rms_norm_eps,
+                    config=self.config,
+                )
+            )
 
         return nn.ModuleList(blocks)
 
@@ -1301,9 +1301,7 @@ class Apriel2BlockSequence(nn.Module):
 
             # Mixer computes preprocessing using resources (read-only)
             # Returns PreprocessingOutput (position_embeddings, attention_mask, etc.)
-            preprocessing_cache[block_name] = mixer.preprocess(
-                hidden_states, resources, **kwargs
-            )
+            preprocessing_cache[block_name] = mixer.preprocess(hidden_states, resources, **kwargs)
 
         return preprocessing_cache
 
@@ -1327,8 +1325,8 @@ class Apriel2BlockSequence(nn.Module):
         preprocessing_cache = self.preprocess(hidden_states, **kwargs)
 
         # Initialize output collections
-        all_hidden_states = () if kwargs.get('output_hidden_states') else None
-        all_attentions = () if kwargs.get('output_attentions') else None
+        all_hidden_states = () if kwargs.get("output_hidden_states") else None
+        all_attentions = () if kwargs.get("output_attentions") else None
 
         # Iterate through blocks - REUSE cached preprocessing
         for layer_idx, block in enumerate(self.blocks):
@@ -1400,13 +1398,20 @@ class Apriel2Block(nn.Module):
         mlp_type = mlp_config.get("type", "mlp")
 
         if mlp_type == "mlp":
-            intermediate_size = mlp_config.get("intermediate_size", hidden_size * 4)
-            mlp_cfg = SimpleNamespace(
-                hidden_size=hidden_size,
-                intermediate_size=intermediate_size,
-                hidden_act=mlp_config.get("activation", "silu"),
-            )
-            return MistralMLP(mlp_cfg)
+            intermediate_size = mlp_config["intermediate_size"]
+            activation = mlp_config.get("activation", "silu")
+            gated = mlp_config["gated"]
+            bias = mlp_config.get("add_linear_biases", False)
+
+            if gated:
+                mlp_cfg = SimpleNamespace(
+                    hidden_size=hidden_size,
+                    intermediate_size=intermediate_size,
+                    hidden_act=activation,
+                )
+                return MistralMLP(mlp_cfg)
+            else:
+                return SimpleMLP(hidden_size, intermediate_size, activation, bias)
         else:
             raise ValueError(f"Unknown MLP type: {mlp_type}")
 
@@ -1656,7 +1661,6 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
 
         self.gradient_checkpointing = False
         self.post_init()
-
 
     def forward(
         self,
@@ -1946,15 +1950,15 @@ def _compute_2d_position_ids(
 
         # For now, assume square grid or use the stored dimensions
         # We'll get actual h, w from the caller
-        height = width = int(num_patches ** 0.5)
+        height = width = int(num_patches**0.5)
         if height * width != num_patches:
             # Non-square: will be handled by caller passing dimensions
-            height = width = int(num_patches ** 0.5)
+            height = width = int(num_patches**0.5)
 
         mesh = torch.meshgrid(
             torch.arange(height, device=patch_embed.device),
             torch.arange(width, device=patch_embed.device),
-            indexing="ij"
+            indexing="ij",
         )
         h_grid, w_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
         ids = h_grid * max_patches_per_side + w_grid
@@ -1984,10 +1988,15 @@ class Apriel2VisionEncoder(nn.Module):
 
         # Get max_patches_per_side from rotary config for position_ids computation
         encoder_config = vision_encoder_config["encoder"]
-        block_config = encoder_config.get("block", encoder_config.get("blocks", {}).get(encoder_config.get("pattern", [""])[0], {}))
+        block_config = encoder_config.get(
+            "block", encoder_config.get("blocks", {}).get(encoder_config.get("pattern", [""])[0], {})
+        )
         rotary_config = block_config["mixer"]["rotary"]
         max_image_size = rotary_config["max_image_size"]
         self.max_patches_per_side = max_image_size // self.patch_size
+
+        # Store cross_document_attention setting - False means images should NOT attend to each other
+        self.cross_document_attention = block_config["mixer"]["cross_document_attention"]
 
         # Store attention implementation for choosing mask strategy
         self._attn_implementation = getattr(text_config, "_attn_implementation", "eager")
@@ -2074,20 +2083,41 @@ class Apriel2VisionEncoder(nn.Module):
             mesh = torch.meshgrid(
                 torch.arange(height_patches, device=hidden_states.device),
                 torch.arange(width_patches, device=hidden_states.device),
-                indexing="ij"
+                indexing="ij",
             )
             h_grid, w_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
             ids = h_grid * self.max_patches_per_side + w_grid
             positions.append(ids[:, 0])
         position_ids = torch.cat(positions).unsqueeze(0)  # [1, total_patches]
 
-        # Generate block attention mask for non-flash attention
-        # For flash_attention_2, we rely on position_ids only (like Pixtral)
+        # Handle cross_document_attention=False by preventing cross-image attention
+        # This is critical for vision encoder correctness
         patch_counts = [num_patches_per_image] * batch_size
-        if self._attn_implementation == "flash_attention_2":
-            attention_mask = None
+        attention_kwargs = {}
+
+        if not self.cross_document_attention:
+            if self._attn_implementation == "flash_attention_2":
+                # For flash attention: use cu_seqlens for variable-length attention
+                # This tells flash_attn_varlen_func where each image's patches start/end
+                cu_seqlens = torch.tensor(
+                    [0] + [num_patches_per_image * (i + 1) for i in range(batch_size)],
+                    dtype=torch.int32,
+                    device=hidden_states.device,
+                )
+                max_seqlen = num_patches_per_image
+                attention_kwargs = {
+                    "cu_seq_lens_q": cu_seqlens,
+                    "cu_seq_lens_k": cu_seqlens,
+                    "max_length_q": max_seqlen,
+                    "max_length_k": max_seqlen,
+                }
+                attention_mask = None
+            else:
+                # For other implementations: use block diagonal mask
+                attention_mask = _generate_block_attention_mask(patch_counts, hidden_states)
         else:
-            attention_mask = _generate_block_attention_mask(patch_counts, hidden_states)
+            # cross_document_attention=True: allow all patches to attend to each other
+            attention_mask = None
 
         # Forward through vision encoder block sequence
         hidden_states, _, _ = self.encoder(
@@ -2099,6 +2129,7 @@ class Apriel2VisionEncoder(nn.Module):
             output_hidden_states=False,
             use_cache=False,
             cache_position=None,
+            **attention_kwargs,
         )
 
         # Adapter/projector: [1, total_patches, vision_hidden] -> [1, total_patches, text_hidden]
@@ -2108,6 +2139,21 @@ class Apriel2VisionEncoder(nn.Module):
         image_features = image_features.squeeze(0).view(batch_size, num_patches_per_image, -1)
 
         return image_features
+
+
+class SimpleMLP(nn.Module):
+    """Non-gated MLP: up_proj -> activation -> down_proj."""
+
+    def __init__(self, hidden_size: int, intermediate_size: int, activation: str = "silu", bias: bool = False):
+        super().__init__()
+        from transformers.activations import ACT2FN
+
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=bias)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=bias)
+        self.act_fn = ACT2FN[activation]
+
+    def forward(self, x):
+        return self.down_proj(self.act_fn(self.up_proj(x)))
 
 
 class Apriel2MultiModalProjector(nn.Module):

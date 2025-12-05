@@ -68,13 +68,13 @@ class Apriel2Cache(Cache):
                 main = mixer.get("main_mixer_name")
                 for name, cfg in mixer.get("mixers", {}).items():
                     if cfg.get("type") == "attention":
-                        sub[name] = _AttentionCache(cfg.get("sliding_window"))
+                        sub[name] = _AttentionCache(cfg.get("window_size"))
                     else:
                         sub[name] = _SSMCache()
                 self.layers.append(sub)
                 self.mixer_types.append(mixer["mixers"][main].get("type") if main else "attention")
             elif mtype == "attention":
-                self.layers.append(_AttentionCache(mixer.get("sliding_window")))
+                self.layers.append(_AttentionCache(mixer.get("window_size")))
                 self.mixer_types.append("attention")
             else:
                 self.layers.append(_SSMCache())

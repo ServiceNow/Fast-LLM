@@ -267,7 +267,7 @@ def apriel2_config_tiny():
                     "head_size": 16,
                     "rotary": {"type": "mistral_1d", "theta": 10000.0},
                 },
-                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                 "normalization": {"type": "rms_norm", "epsilon": 1e-5},
             },
         },
@@ -295,7 +295,7 @@ def apriel2_config_stochastic():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch": {
@@ -308,7 +308,7 @@ def apriel2_config_stochastic():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 4096,
+                                "window_size": 4096,
                                 "rotary": {"type": "mistral_1d", "theta": 250000.0},
                             },
                             "mamba": {
@@ -327,7 +327,7 @@ def apriel2_config_stochastic():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -358,7 +358,7 @@ def apriel2_config_multi_mixer():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 2048,
+                                "window_size": 2048,
                                 "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "attn_large": {
@@ -366,7 +366,7 @@ def apriel2_config_multi_mixer():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 8192,
+                                "window_size": 8192,
                                 "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "mamba_v1": {
@@ -399,7 +399,7 @@ def apriel2_config_multi_mixer():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -434,7 +434,7 @@ def apriel2_config_all_mixers():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "all_mixers": {
@@ -454,7 +454,7 @@ def apriel2_config_all_mixers():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 2048,
+                                "window_size": 2048,
                                 "rotary": {"type": "mistral_1d", "theta": 1000000.0},
                             },
                             "mamba": {
@@ -473,10 +473,15 @@ def apriel2_config_all_mixers():
                             },
                             "gdn": {
                                 "type": "gdn",
+                                "value_heads": 4,
+                                "key_heads": 2,
+                                "key_head_dim": 16,
+                                "value_head_dim": 16,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -522,7 +527,7 @@ def apriel2_config_comprehensive():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "swa": {
@@ -531,10 +536,10 @@ def apriel2_config_comprehensive():
                         "heads": 4,
                         "head_groups": 2,
                         "head_size": 16,
-                        "sliding_window": 512,
+                        "window_size": 512,
                         "rotary": {"type": "mistral_1d", "theta": 100000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "mamba": {
@@ -552,7 +557,7 @@ def apriel2_config_comprehensive():
                         "dt_max": 0.1,
                         "dt_init_floor": 1e-4,
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "gdn": {
@@ -562,9 +567,9 @@ def apriel2_config_comprehensive():
                         "key_heads": 2,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
-                        "conv_kernel_size": 4,
+                        "convolution_layer": {"kernel_size": 4},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch_attn_mamba": {
@@ -595,7 +600,7 @@ def apriel2_config_comprehensive():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch_swa_gdn": {
@@ -608,7 +613,7 @@ def apriel2_config_comprehensive():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 256,
+                                "window_size": 256,
                                 "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "gdn": {
@@ -617,11 +622,11 @@ def apriel2_config_comprehensive():
                                 "key_heads": 2,
                                 "key_head_dim": 16,
                                 "value_head_dim": 16,
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -705,7 +710,7 @@ def additive_surgery_chain():
                             "sliding_window": {
                                 "type": "attention",
                                 "init": "transfer",
-                                "sliding_window": 512,
+                                "window_size": 512,
                             },
                         },
                     },
@@ -721,7 +726,7 @@ def additive_surgery_chain():
                             "gdn": {
                                 "type": "gdn",
                                 "init": "transfer",
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -788,7 +793,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "attention",
                             "init": "transfer",
-                            "sliding_window": 512,
+                            "window_size": 512,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -829,7 +834,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "attention",
                             "init": "transfer",
-                            "sliding_window": 512,
+                            "window_size": 512,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -843,7 +848,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",  # DIL conversion
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -901,7 +906,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -912,7 +917,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",  # DIL from previous swa
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -951,7 +956,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                     "rotary": rotary_config,
                                 },
                             },
@@ -973,7 +978,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                                 "mamba": {
                                     "type": "mamba",
@@ -989,7 +994,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1006,7 +1011,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 128,
+                                    "window_size": 128,
                                     "rotary": rotary_config,
                                 },
                             },
@@ -1040,7 +1045,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",  # Now transfer from previous
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                 },
                             },
                         },
@@ -1063,7 +1068,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",  # Transfer from stoch's gdn
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1075,7 +1080,7 @@ def comprehensive_torture_chain():
                             "heads": 8,
                             "head_groups": 4,
                             "head_size": 32,
-                            "sliding_window": 512,
+                            "window_size": 512,
                             "rotary": rotary_config,
                         },
                         "mlp": {"init": "transfer"},
@@ -1090,7 +1095,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",
-                                    "sliding_window": 128,
+                                    "window_size": 128,
                                 },
                             },
                         },
@@ -1126,7 +1131,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                 },
                             },
                         },
@@ -1138,7 +1143,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1166,7 +1171,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 512,
+                                    "window_size": 512,
                                     "rotary": rotary_config,
                                 },
                                 "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
@@ -1177,7 +1182,7 @@ def comprehensive_torture_chain():
                                     "key_heads": 4,
                                     "key_head_dim": 32,
                                     "value_head_dim": 32,
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -1252,7 +1257,7 @@ def torture_surgery_chain():
                             "gdn": {
                                 "type": "gdn",
                                 "init": "transfer",
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -1294,7 +1299,7 @@ def torture_surgery_chain():
                     "mixer": {
                         "type": "attention",
                         "init": "transfer",
-                        "sliding_window": 4096,
+                        "window_size": 4096,
                     },
                 },
             },
@@ -1306,7 +1311,7 @@ def torture_surgery_chain():
                     "mixer": {
                         "type": "gdn",
                         "init": "transfer",
-                        "conv_kernel_size": 8,
+                        "convolution_layer": {"kernel_size": 8},
                     },
                 },
             },
