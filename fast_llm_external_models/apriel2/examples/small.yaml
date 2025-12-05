@@ -1,0 +1,15 @@
+# Surgery modifier: reduce to 3 blocks for fast testing
+#
+# This is a composable surgery spec that can be combined with any other surgery.
+# Surgery specs are applied left-to-right, with later specs overriding earlier ones.
+#
+# Usage (compose with stochastic_supernet.yaml):
+#   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
+#       --surgery examples/stochastic_supernet.yaml \
+#       --surgery examples/small.yaml
+#
+# This produces the same result as a single "stochastic_supernet_small.yaml" would,
+# but demonstrates the composability of surgery specs.
+
+decoder:
+  num_blocks: 3

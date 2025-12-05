@@ -1,0 +1,33 @@
+# Example: Heterogeneous pattern with alternating attention and sliding window
+#
+# Converts a homogeneous attention model to a heterogeneous pattern
+# where different layers use different mixer types.
+#
+# Usage:
+#   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
+#       --surgery examples/heterogeneous_pattern.yaml
+
+decoder:
+  type: pattern
+  # Pattern repeats to fill all layers
+  # With 48 layers: 0=full, 1=sliding, 2=full, 3=sliding, ...
+  pattern: [full_attention, sliding_window]
+
+  blocks:
+    full_attention:
+      mixer:
+        init: transfer
+        # No overrides - use source config exactly
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    sliding_window:
+      mixer:
+        init: transfer
+        window_size: 4096
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
