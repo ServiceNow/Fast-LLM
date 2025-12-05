@@ -96,8 +96,11 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
 
         if self._config.max_vocab_size is not None:
             # In some cases creating a tensor before restricting the vocab size may cause an overflow.
-            (
-                torch.tensor(tokens, dtype=torch.int64 if len(self.tokenizer) > torch.iinfo().max else data_type.torch)
+            tokens = (
+                torch.tensor(
+                    tokens,
+                    dtype=torch.int64 if len(self.tokenizer) > torch.iinfo(data_type.torch).max else data_type.torch,
+                )
                 % self._config.max_vocab_size
             ).to(data_type.torch)
         else:
