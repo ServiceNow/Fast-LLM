@@ -188,6 +188,37 @@ MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
 # Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
 init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
+base_model = {
+    "embeddings": {
+        "word_embeddings": init_1,
+        "position_embeddings": {"enabled": True, **init_1},
+        "num_position_embeddings": 512,
+        "vocab_size": MODEL_TEST_VOCAB_SIZE,
+    },
+    "decoder": {
+        "block": {
+            "mixer": {
+                "query_layer": {"weight": init_1},
+                "key_layer": {"weight": init_1},
+                "value_layer": {"weight": init_1},
+                "dense_layer": {"weight": init_2},
+                "heads": 8,
+                "head_groups": 8,
+                "head_size": 32,
+                # "cross_document_attention":False,
+            },
+            "mlp": {
+                "layer_1": {"weight": init_1},
+                "layer_2": {"weight": init_2},
+                "intermediate_size": 1024,
+            },
+        },
+        "num_blocks": 2,
+    },
+    "head": {"output_weight": init_1},
+    "hidden_size": 256,
+    "tied_embedding_weight": True,
+}
 
 MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
@@ -207,37 +238,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "timeout": 30,
         },
         "model": {
-            "base_model": {
-                "embeddings": {
-                    "word_embeddings": init_1,
-                    "position_embeddings": {"enabled": True, **init_1},
-                    "num_position_embeddings": 512,
-                    "vocab_size": MODEL_TEST_VOCAB_SIZE,
-                },
-                "decoder": {
-                    "block": {
-                        "mixer": {
-                            "query_layer": {"weight": init_1},
-                            "key_layer": {"weight": init_1},
-                            "value_layer": {"weight": init_1},
-                            "dense_layer": {"weight": init_2},
-                            "heads": 8,
-                            "head_groups": 8,
-                            "head_size": 32,
-                            # "cross_document_attention":False,
-                        },
-                        "mlp": {
-                            "layer_1": {"weight": init_1},
-                            "layer_2": {"weight": init_2},
-                            "intermediate_size": 1024,
-                        },
-                    },
-                    "num_blocks": 2,
-                },
-                "head": {"output_weight": init_1},
-                "hidden_size": 256,
-                "tied_embedding_weight": True,
-            },
+            "base_model": base_model,
             "multi_stage": {
                 "debug_param_init": _LOG_LEVEL,
                 "debug_layer_outputs": _LOG_LEVEL,
@@ -536,6 +537,84 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+)
+
+_update_and_add_testing_config(
+    # Tests logit distillation.
+    "mistral",
+    "mistral_distill_logits",
+    updates={
+        ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("reference_models"): {
+            "teacher": {
+                "model": {"base_model": base_model},
+            },
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: tp2, stp2, stp2_ce4
+    },
+    compare_factor=1.5,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+)
+
+_update_and_add_testing_config(
+    "mistral_distill_logits",
+    "mistral_reverse_kl",
+    updates={
+        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
+    },
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
+    },
+    compare_factor=2,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+)
+
+_update_and_add_testing_config(
+    "mistral_distill_logits",
+    "mistral_distill_activations",
+    updates={
+        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
+        ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
+        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
+        ("reference_models"): {
+            "teacher": {
+                "model": {"base_model": base_model},
+            },
+        },
+    },
+    # Megatron doesn't support sliding windows.
+    megatron_args=None,
+    checkpoint_format=MistralCheckpointFormat,
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, df4, df4_sf, tp2, stp2,
+    },
+    compare_factor=8,
+    # modes not supported with reference models
+    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "stp2_ce4"),
 )
 
 _update_and_add_testing_config(
