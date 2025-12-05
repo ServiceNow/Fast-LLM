@@ -28,10 +28,37 @@ ssm_config_default = {
 }
 
 
+class AprielGDNConfig:
+    def __init__(
+        self,
+        linear_num_key_heads=16,
+        linear_num_value_heads=32,
+        linear_key_head_dim=128,
+        linear_value_head_dim=128,
+        linear_conv_kernel_dim=4,
+        kl_short_conv_kernel_size=4,
+        kl_num_heads=32,
+        kl_head_dim=128,
+    ):
+        self.linear_num_key_heads = linear_num_key_heads
+        self.linear_num_value_heads = linear_num_value_heads
+        self.linear_key_head_dim = linear_key_head_dim
+        self.linear_value_head_dim = linear_value_head_dim
+        self.linear_conv_kernel_dim = linear_conv_kernel_dim
+
+        # Kimi LInear
+        self.short_conv_kernel_size = kl_short_conv_kernel_size
+        self.head_dim = kl_head_dim
+        self.num_heads = kl_num_heads
+
+
+LAYER_TYPES = {"t": "full_attention", "swa": "sliding_attention", "gdn": "gated_delta_net", "kl": "kimi_linear"}
+
+
 class AprielHybridSSMConfig(MistralConfig):
     model_type = "apriel_hybrid_ssm"
 
-    def __init__(self, hybrid_block_layout=["m2d"], ssm_cfg=None, **kwargs):
+    def __init__(self, hybrid_block_layout=["t"], ssm_cfg=None, gdn_cfg=None, **kwargs):
         super().__init__(**kwargs)
         self.hybrid_block_layout = hybrid_block_layout
         self.head_dim = self.head_dim or self.hidden_size // self.num_attention_heads  # as in transformers 4.51.3
@@ -40,3 +67,14 @@ class AprielHybridSSMConfig(MistralConfig):
         for k, v in ssm_config_default.items():
             if k not in self.ssm_cfg:
                 self.ssm_cfg[k] = v  # to make sure all elements are present in the config
+
+        gdn_config: AprielGDNConfig = (
+            AprielGDNConfig(**gdn_cfg) if isinstance(gdn_cfg, dict) else gdn_cfg or AprielGDNConfig()
+        )
+        # for compatibility with vllm
+        self.layer_types = [LAYER_TYPES[lt] for lt in hybrid_block_layout]  # this is for vllm compatibility
+        self.linear_attn_config = {
+            "short_conv_kernel_size": gdn_config.short_conv_kernel_size,
+            "head_dim": gdn_config.head_dim,
+            "num_heads": gdn_config.num_heads,
+        }
