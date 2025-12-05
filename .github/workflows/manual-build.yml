@@ -22,14 +22,6 @@ on:
         required: false
         default: true
         type: boolean
-      kda_nightly:
-        description: 'Enable KDA nightly builds (1 to enable, 0 to disable)'
-        required: false
-        default: '0'
-        type: choice
-        options:
-          - '1'
-          - '0'
 
 jobs:
   manual-docker-build:
@@ -88,8 +80,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/servicenow/fast-llm:cache
           cache-to: type=registry,ref=ghcr.io/servicenow/fast-llm:cache,mode=max
-          build-args: |
-            KDA_NIGHTLY=${{ inputs.kda_nightly }}
 
       - name: Output build info
         run: |
