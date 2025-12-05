@@ -11,7 +11,6 @@
 !tools
 !tests
 !pyproject.toml
-!requirements-kda-nightly.txt
 
 # Exclude Python cache directories and shared object files within included directories
 **/__pycache__/
