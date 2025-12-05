@@ -387,7 +387,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    sequence_parallel_logits=self._sequence_parallel_logits,
                 )
+
             elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),

@@ -167,6 +167,7 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             prediction_heads = 1
 
         expected_names = {name for name in (head.distillation_model, head.dpo_reference_model) if name is not None}
+        expected_names.update(self.model.base_model.decoder.get_distillation_models())
         Assert.eq(self.reference_models.keys(), expected_names)
 
         for reference_model in self.reference_models.values():
