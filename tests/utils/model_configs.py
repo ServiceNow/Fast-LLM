@@ -818,14 +818,24 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests hybrid with gated delta net mixer.
+    # Tests hybrid with attention + gated delta net mixer.
     "llama",
-    "hybrid_gdn",
+    "apriel2_text_gdn_hybrid",
     updates={
         ("model", "base_model", "decoder"): {
             "type": "pattern",
             "blocks": {
-                "t": copy.deepcopy(_llama_block),
+                "attn": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "attention",
+                        "rotary": {"type": "default", "theta": 10000},
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "add_linear_biases": False,
+                    },
+                },
                 "gdn": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
@@ -838,11 +848,11 @@ _update_and_add_testing_config(
                 },
             },
             "num_blocks": 2,
-            "pattern": ["t", "gdn"],
+            "pattern": ["attn", "gdn"],
         },
     },
     megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    checkpoint_format=Apriel2TextCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -859,9 +869,9 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests apriel2 format with pattern decoder mixing all mixer types.
-    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention.
+    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention, gdn.
     "llama",
-    "apriel2_text",
+    "apriel2_text_all_hybrid",
     updates={
         ("model", "base_model", "tied_embedding_weight"): True,
         ("model", "base_model", "decoder"): {
@@ -969,8 +979,8 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
-    # Uses the same decoder as apriel2_text but adds vision capabilities.
-    "apriel2_text",
+    # Uses the same decoder as apriel2_text_all_hybrid but adds vision capabilities.
+    "apriel2_text_all_hybrid",
     "apriel2",
     model_type="multimodal",
     updates={
