@@ -718,8 +718,7 @@ _update_and_add_testing_config(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -732,7 +731,7 @@ _update_and_add_testing_config(
     ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
-# TODO: remove obsolete model
+
 _update_and_add_testing_config(
     # Tests hybrid discrete Mamba 2.
     "llama",
@@ -804,7 +803,7 @@ _update_and_add_testing_config(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement
