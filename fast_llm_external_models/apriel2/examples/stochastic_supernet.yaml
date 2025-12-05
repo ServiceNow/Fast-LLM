@@ -13,6 +13,7 @@
 #       --surgery examples/stochastic_supernet.yaml
 
 decoder:
+  num_blocks: 5
   type: fixed
   block:
     mixer:
