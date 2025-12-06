@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
@@ -87,6 +88,16 @@ class PatchSample(Sample):
             self.patches.new_empty((0, *self.patches.shape[1:])),
             self.token_map.new_empty(0),
             self.positions.new_empty([0, self.patches.ndim - 2]),
+            size,
+            [],
+        )
+
+    @classmethod
+    def get_empty(cls, size: int, shape: tuple[int, ...]) -> typing.Self:
+        return PatchSample(
+            self.patches.new_empty((0, *shape[1:])),
+            self.token_map.new_empty(0),
+            self.positions.new_empty([0, len(shape) - 2]),
             size,
             [],
         )
@@ -188,8 +199,8 @@ class PatchReaderConfig(MemmapReaderConfig):
 
 
 class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._patches = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
@@ -248,6 +259,16 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
         )
 
 
+class EmptyPatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        return PatchSample(
+            torch.empty(0, *self._config.patch_shape, dtype=self._config.data_type.torch),
+            torch.empty(0, dtype=torch.int32),
+            torch.empty(0, self._config.grid_dims, dtype=torch.int32),
+            end - begin,
+        )
+
+
 class PatchWriter(MemmapWriter):
     def __enter__(self):
         super().__enter__()
@@ -300,4 +321,5 @@ class PatchWriter(MemmapWriter):
             num_patch_groups=self._group_count_cumsum[-1],
             patch_shape=self._patch_shape,
             data_type=DataType.from_torch(self._data_type),
+            preprocessing=self._preprocessing_config,
         )

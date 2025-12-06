@@ -7,28 +7,16 @@ import yaml
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData, SamplingParameters
+from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.fim import GPTFimDataset
-    from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
     from fast_llm.data.sample.language_model import LanguageModelSample
-
-
-@dataclasses.dataclass(kw_only=True)
-class GPTSamplingParameters(SamplingParameters):
-    """
-    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
-    """
-
-    # TODO: Only used for random dataset. Remove? Or use as safety check?
-    vocab_size: int | None = None
-    # TODO: ====== Get these to memmap dataset (currently ignored) ======
-    use_loss_masking_spans: bool = False
-    use_preference_loss_spans: bool = False
-    use_images: bool = False
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -38,11 +26,11 @@ class GPTSamplingData(SamplingData):
     usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
     """
 
-    parameters: GPTSamplingParameters
+    preprocessing: LanguageModelPreprocessingConfig
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
+class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -50,10 +38,10 @@ class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTRandomDataset[SampleType]":
-        from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    def build_and_sample(self, sampling: GPTSamplingData) -> "GPTRandomSampledDataset[SampleType]":
+        from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
 
-        return GPTRandomDataset[SampleType](self.name)
+        return GPTRandomSampledDataset[SampleType](sampling, self.name)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
@@ -69,10 +57,10 @@ class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDataset
         config = self._load_config()
         return config.build_and_sample(sampling)
 
-    def build(self) -> SamplableDataset[SampleType]:
+    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
         config = self._load_config()
         assert isinstance(config, SamplableDatasetConfig)
-        return config.build()
+        return config.build(preprocessing)
 
     def _load_config(self) -> SampledDatasetConfig[SampleType]:
         assert self.path.is_file(), f"File {self.path} does not exist."

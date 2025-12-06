@@ -8,6 +8,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import gdn as gdn_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
+from fast_llm.utils import Assert
 
 
 @pytest.fixture
@@ -207,13 +208,7 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: 
 
     for (name, param), (_, param_ref) in zip(mixer_packed.named_parameters(), mixer_ref.named_parameters()):
         if param.requires_grad:
-            torch.testing.assert_close(
-                _param_grad(param),
-                _param_grad(param_ref),
-                atol=1e-3,
-                rtol=1e-3,
-                msg=f"Grad mismatch for parameter {name}",
-            )
+            Assert.rms_close_relative(_param_grad(param), _param_grad(param_ref), 1e-3, 1e-3, msg=name)
 
 
 if __name__ == "__main__":

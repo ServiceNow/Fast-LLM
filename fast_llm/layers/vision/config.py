@@ -99,7 +99,6 @@ class PatchEmbeddingsConfig(BlockConfig):
 @config_class(registry=True)
 class VisionEncoderConfig(BlockConfig):
     _abstract = False
-    # TODO: ====== Rename to patch_embeddings? ======
     embeddings: PatchEmbeddingsConfig = Field(
         desc="Configuration for the patch convolution layer.",
         hint=FieldHint.architecture,

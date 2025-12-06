@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
@@ -85,8 +86,8 @@ class RangeReaderConfig(MemmapReaderConfig):
 
 
 class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._ranges = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -106,6 +107,11 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
             for begin_, end_ in self._ranges[self._count_cumsums[index] : self._count_cumsums[index + 1]].tolist()
         )
         return RangeSample([(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_], sample_size)
+
+
+class EmptyRangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        return RangeSample([], end - begin)
 
 
 class RangeWriter(MemmapWriter):
@@ -135,4 +141,5 @@ class RangeWriter(MemmapWriter):
             end=end,
             num_documents=len(self._count_cumsum) - 1,
             num_ranges=self._count_cumsum[-1],
+            preprocessing=self._preprocessing_config,
         )

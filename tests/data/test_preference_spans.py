@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
@@ -39,8 +40,10 @@ TOKEN_PREFERENCE_SPANS = {
 
 @pytest.mark.slow
 def test_gpt_data_with_spans():
-    _, config, hf_path = get_test_dataset_with_preference_spans()
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
+    _, config, hf_path, preprocessing = get_test_dataset_with_preference_spans()
+    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
+        preprocessing
+    )
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -79,9 +82,7 @@ def test_gpt_data_with_spans():
             (token_length_cumsum[4], token_length_cumsum[5]),
         ]
 
-        document = dataset.get_document(
-            index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
-        )
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         token_spans = document.chosen_spans.ranges + document.rejected_spans.ranges
 
         # Compare tokens and token spans.
@@ -100,8 +101,6 @@ def test_gpt_data_with_spans():
             DATASET_WITH_PREFERENCE_SPAN_TEXT[index],
         )
 
-        document = dataset.get_document(
-            index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
-        )
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
         Assert.eq(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])

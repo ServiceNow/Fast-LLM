@@ -2,7 +2,8 @@ import logging
 import typing
 
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.models.gpt.config import GPTTrainerConfig
 
@@ -17,18 +18,26 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         )
 
     def _get_sampling_parameters(
-        self, parameters: dict[str, typing.Any], _return_dict: bool = False
-    ) -> GPTSamplingParameters | dict[str, typing.Any]:
+        self, parameters: dict[str, typing.Any], *, _return_dict: bool = False
+    ) -> SamplingParameters | dict[str, typing.Any]:
         parameters = super()._get_sampling_parameters(parameters, _return_dict=True)
         parameters.update(
             {
-                "vocab_size": self._config.model.base_model.embeddings.vocab_size,
                 "sequence_length": self._config.batch.sequence_length,
-                "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
-                # OK since DPO is not supported for MTP.
-                "use_preference_loss_spans": getattr(self._config.model.base_model.head, "enable_dpo", False),
                 "truncate_documents": self._config.batch.truncate_documents,
                 "extra_tokens": self._config.model.base_model.head.max_prediction_distance,
             }
         )
-        return parameters if _return_dict else GPTSamplingParameters(**parameters)
+        return parameters if _return_dict else SamplingParameters(**parameters)
+
+    def _get_preprocessing_config(
+        self, *, _return_dict: bool = False
+    ) -> LanguageModelPreprocessingConfig | dict[str, typing.Any]:
+        out = {
+            "type": "language_model",
+            "vocab_size": self._config.model.base_model.embeddings.vocab_size,
+            "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
+            # OK since DPO is not supported for MTP.
+            "use_preference_spans": getattr(self._config.model.base_model.head, "enable_dpo", False),
+        }
+        return out if _return_dict else LanguageModelPreprocessingConfig.from_dict(out)

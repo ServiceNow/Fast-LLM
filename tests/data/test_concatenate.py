@@ -1,5 +1,6 @@
 from fast_llm.data.dataset.config import ConcatenatedDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from tests.data.common import (
     compare_indexed_dataset_tokens,
@@ -25,19 +26,19 @@ GPT_CONCATENATED_SAMPLES = [
 
 def test_gpt_concatenate():
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
     memmap_config = GPTDatasetFromFileConfig.from_dict(config)._load_config()
     dataset = get_dataset_config(
         dataset_config := {"type": "concatenated", "datasets": [memmap_config.to_dict() for _ in range(3)]},
         ConcatenatedDatasetConfig[LanguageModelSample],
-    ).build()
+    ).build(LanguageModelPreprocessingConfig())
     compare_indexed_dataset_tokens(
         dataset,
         3 * COMMON_DATASET_LENGTH,
         3 * COMMON_DATASET_TOKENS,
         {j * COMMON_DATASET_LENGTH + i: sample for j in range(3) for i, sample in COMMON_DATASET_SAMPLES.items()},
     )
-    sampled = dataset.sample(get_sampling_data(8, sequence_length=5))
+    sampled = dataset.sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_CONCATENATED_SAMPLES)
 
     # Test in data.
@@ -46,4 +47,5 @@ def test_gpt_concatenate():
         8,
         sequence_length=5,
         expected_samples=GPT_CONCATENATED_SAMPLES,
+        preprocessing=preprocessing,
     )

@@ -79,7 +79,6 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
 
 class PixtralBlockConverter(LlamaBlockConverter):
     mixer_converter_class: typing.ClassVar[type[PixtralAttentionConverter]] = PixtralAttentionConverter
-    # TODO: ====== MistralMLPConverter (#391 / #382) ======
     mlp_converter_class: typing.ClassVar[type[MistralMLPConverter]] = MistralMLPConverter
     normalization_converter_class: typing.ClassVar[type[PixtralNormalizationConverter]] = PixtralNormalizationConverter
     hf_mixer_name: typing.ClassVar[str] = "attention"
@@ -225,7 +224,6 @@ class LlavaVisionModelConverter:
     @classmethod
     def export_config(cls, config: VisionEncoderConfig) -> dict:
         Assert.custom(isinstance, config, VisionEncoderConfig)
-        # TODO: ====== image_size? ======
         vision_config = safe_merge_dicts(
             cls.embeddings_converter_class.export_config(config.embeddings),
             cls.encoder_converter_class.export_config(config.encoder),

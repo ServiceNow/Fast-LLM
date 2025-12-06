@@ -43,12 +43,12 @@ GPT_BLENDED_SAMPLES = [
 
 GPT_BLENDED_MIXED_SAMPLES = [
     [49152, 46, 10, 819, 19, 45],
-    [916, 6683, 7685, 1277, 5106, 378],
+    [25492, 15877, 37874, 8570, 31649, 15521],
     [45, 69, 17, 86, 38826, 15],
-    [3359, 6803, 780, 4561, 669, 7878],
+    [3359, 20945, 33437, 32454, 42084, 45942],
     [15, 25, 51, 31, 32348, 64],
     [64, 17, 93, 78, 40, 1793],
-    [6920, 2218, 2921, 3963, 7606, 6904],
+    [15112, 36731, 47864, 35586, 33356, 37537],
     [1793, 1, 1746, 38, 27, 58],
 ]
 
@@ -106,8 +106,8 @@ def test_blending(probs):
 
 def test_gpt_blended():
     # Make sure dataset blending works and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
-    _, alt_config, _ = get_alt_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
+    _, alt_config, _, _ = get_alt_test_dataset()
     sampled = get_dataset_config(
         dataset_config := {
             "type": "blended",
@@ -115,7 +115,7 @@ def test_gpt_blended():
             "weights": [0.75, 0.25],
         },
         BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, vocab_size=8192))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
     # Test in data.
@@ -124,12 +124,15 @@ def test_gpt_blended():
         8,
         sequence_length=5,
         expected_samples=GPT_BLENDED_SAMPLES,
+        preprocessing=preprocessing,
     )
 
 
 def test_gpt_blended_mixed():
     # Make sure dataset blending works and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
+    # Random dataset needs an explicit vocab size.
+    preprocessing = preprocessing.from_dict(preprocessing, {"vocab_size": 50000})
     sampled = get_dataset_config(
         dataset_config := {
             "type": "blended",
@@ -140,7 +143,7 @@ def test_gpt_blended_mixed():
             "weights": [0.6, 0.4],
         },
         BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, vocab_size=8192))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
     # Test in data.
@@ -148,6 +151,6 @@ def test_gpt_blended_mixed():
         {"datasets": {"training": dataset_config}},
         8,
         sequence_length=5,
-        vocab_size=8192,
         expected_samples=GPT_BLENDED_MIXED_SAMPLES,
+        preprocessing=preprocessing,
     )

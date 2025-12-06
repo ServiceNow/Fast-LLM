@@ -6,7 +6,8 @@ import numpy as np
 import PIL.Image
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
@@ -123,8 +124,10 @@ def _get_image_tokens(
 @pytest.mark.parametrize("image_break_token", (None, 55))
 @pytest.mark.parametrize("image_end_token", (None, 132))
 def test_gpt_data_with_image_patches(image_break_token, image_end_token):
-    _, config, hf_path = get_test_dataset_with_image_patches(image_break_token, image_end_token)
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
+    _, config, hf_path, preprocessing = get_test_dataset_with_image_patches(image_break_token, image_end_token)
+    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
+        preprocessing
+    )
     test_index = 2 * (image_break_token is not None) + (image_end_token is not None)
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
@@ -146,9 +149,7 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
         )
         Assert.eq(hf_dataset[index]["image_positions"], DATASET_WITH_IMAGE_PATCHES_IMAGE_POSITIONS[index])
 
-        document = dataset.get_document(
-            index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_images=True)
-        )
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         expected_tokens = [
             tokens
             for token_or_patches in DATASET_WITH_IMAGE_PATCHES_SAMPLES[index]

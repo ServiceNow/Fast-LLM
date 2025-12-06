@@ -41,7 +41,7 @@ def _test_load_and_save_parallel(
         mode=StageMode.inference,
     )
     for save_format in (DistributedCheckpointFormat, FastLLMCheckpointFormat):
-        logger.info(f"Loading {save_format.name} checkpoint to {config.save_path / save_format.name}")
+        logger.info(f"Saving {save_format.name} checkpoint to {config.save_path / save_format.name}")
         model.save_checkpoint(CheckpointSaveConfig(path=config.save_path / save_format.name, format=save_format))
     del model
     gc.collect()

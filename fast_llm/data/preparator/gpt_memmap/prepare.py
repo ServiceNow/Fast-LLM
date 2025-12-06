@@ -1,5 +1,6 @@
 import collections
 import enum
+import functools
 import json
 import logging
 import math
@@ -27,6 +28,8 @@ from fast_llm.data.dataset.config import (
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import Tokenizer
 from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
@@ -194,15 +197,26 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
+            self._preprocessing_config,
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 
+    @functools.cached_property
+    def _preprocessing_config(self) -> LanguageModelPreprocessingConfig:
+        return LanguageModelPreprocessingConfig(
+            tokenizer=self._config.tokenizer,
+            vocab_size=self._tokenizer.vocab_size,
+            image_patches=(
+                self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
+            ),
+            use_loss_masking_spans=self._source_schema.has_loss_masking_span,
+            use_preference_spans=self._source_schema.has_preference_spans,
+        )
+
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
-        # TODO: ======= Extract so we can use elsewhere? (ex. inference) ======
         text = sample[self._source_schema.text]
         all_spans = []
         if self._source_schema.has_loss_masking_span:
-            # TODO: ====== What is the exact input format? ======
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (SpanType.loss_masking, (begin, last + 1))
@@ -213,7 +227,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             all_spans.extend(loss_masking_spans)
 
         if self._source_schema.has_preference_spans:
-            # TODO: ===== Was `self._config.dataset.field` (bug?) ======
             full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
             full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
             # compute chosen span
@@ -377,9 +390,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             }
         )
 
-    @classmethod
     def _split_and_blend_dataset_configs(
-        cls,
+        self,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
@@ -414,14 +426,16 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
-                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
+                        self._preprocessing_config
+                    )
                     sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
                     Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
                     begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
                     end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
                     if end_index > begin_index:
                         datasets_in_split.append(
-                            DatasetSliceConfig[cls._sample_type].from_dict(
+                            DatasetSliceConfig[self._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
@@ -443,7 +457,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             elif len(datasets_in_split) == 1:
                 dataset_splits[split_name] = datasets_in_split[0]
             else:
-                dataset_splits[split_name] = BlendedDatasetConfig[cls._sample_type].from_dict(
+                dataset_splits[split_name] = BlendedDatasetConfig[self._sample_type].from_dict(
                     {
                         "type": "blended",
                         "datasets": datasets_in_split,

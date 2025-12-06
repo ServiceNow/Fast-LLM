@@ -428,8 +428,10 @@ def reference_distributed_shard(get_convert_path) -> torch.Tensor | None:
         return None
 
 
+# We don't want to depend on `test_save_and_load_in_parallel` because we still want to run this in cas of failure.
+# This should still run after `test_save_and_load_in_parallel`
 @requires_cuda
-@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
+@pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_parallel_checkpoint_in_single_gpu(
     distributed_save_load_config: DistributedSaveLoadConfig,
