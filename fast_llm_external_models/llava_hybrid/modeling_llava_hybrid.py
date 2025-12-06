@@ -22,12 +22,12 @@ class LlavaMultiModalProjector(nn.Module):
         num_feature_layers = 1 if isinstance(config.vision_feature_layer, int) else len(config.vision_feature_layer)
         self.linear_1 = nn.Linear(
             config.vision_config.hidden_size * num_feature_layers,
-            config.projector_intermediate_size,
+            config.text_config.hidden_size,
             bias=config.multimodal_projector_bias,
         )
         self.act = ACT2FN[config.projector_hidden_act]
         self.linear_2 = nn.Linear(
-            config.projector_intermediate_size, config.text_config.hidden_size, bias=config.multimodal_projector_bias
+            config.text_config.hidden_size, config.text_config.hidden_size, bias=config.multimodal_projector_bias
         )
 
     def forward(self, image_features):
