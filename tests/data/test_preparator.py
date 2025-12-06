@@ -184,7 +184,7 @@ def test_dataset_preparator_from_hub():
     Assert.eq(json.load(croissant_path.open("r"))["url"], "https://huggingface.co/datasets/openai/gsm8k")
 
     dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build(
-        LanguageModelPreprocessingConfig(vocab_size=0)
+        LanguageModelPreprocessingConfig()
     )
     Assert.custom(isinstance, dataset, MemmapDataset)
 

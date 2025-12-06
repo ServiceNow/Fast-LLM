@@ -31,7 +31,7 @@ def test_gpt_concatenate():
     dataset = get_dataset_config(
         dataset_config := {"type": "concatenated", "datasets": [memmap_config.to_dict() for _ in range(3)]},
         ConcatenatedDatasetConfig[LanguageModelSample],
-    ).build(LanguageModelPreprocessingConfig(vocab_size=0))
+    ).build(LanguageModelPreprocessingConfig())
     compare_indexed_dataset_tokens(
         dataset,
         3 * COMMON_DATASET_LENGTH,

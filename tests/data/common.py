@@ -29,10 +29,12 @@ def get_sampling_data(
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
-    preprocessing: LanguageModelPreprocessingConfig,
+    preprocessing: LanguageModelPreprocessingConfig | None = None,
 ) -> GPTSamplingData:
     # Config with convenient defaults.
     distributed = Distributed(DistributedConfig(), use_cpu=True)
+    if preprocessing is None:
+        preprocessing = LanguageModelPreprocessingConfig()
     return GPTSamplingData(
         config=SamplingConfig(
             seed=seed,
@@ -122,6 +124,9 @@ def compare_indexed_dataset_tokens(
 
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
+    # Uncomment to print the current list of samples.
+    # for i in range(len(expected_samples)):
+    #     print(i, sampled[i].tokens.tokens.tolist())
     Assert.eq(len(sampled), len(expected_samples))
     Assert.all_equal(torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]), expected_samples)
 

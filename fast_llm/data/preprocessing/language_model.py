@@ -19,7 +19,7 @@ class LanguageModelPreprocessingConfig(PreprocessingConfig):
     # and in any case the tokenizer path may no longer be valid when loading a prepared dataset,
     # so we provide the vocab size and use it for compatibility checks.
     image_patches: PreprocessingConfig = Field()
-    vocab_size: int = Field()
+    vocab_size: int | None = Field(default=None)
     use_loss_masking_spans: bool = Field(default=False)
     use_preference_spans: bool = Field(default=False)
 
@@ -35,7 +35,8 @@ class LanguageModelPreprocessingConfig(PreprocessingConfig):
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, LanguageModelPreprocessingConfig)
         # TODO: Check more tokenizer data, ex. bos/eos tokens? path if points to HF hub?
-        Assert.geq(self.vocab_size, preprocessing.vocab_size)
+        if self.vocab_size is not None and preprocessing.vocab_size is not None:
+            Assert.leq(self.vocab_size, preprocessing.vocab_size)
         if preprocessing.use_preference_spans:
             # Preference spans are strictly needed for DPO loss.
             assert self.use_preference_spans

@@ -146,19 +146,23 @@ class Assert:
         assert x % y == 0, f"{x} not a multiple of {y}"
 
     @staticmethod
-    def rms_close(x, y, threshold):
+    def rms_close(x, y, threshold, *, msg=None):
         rms = rms_diff(x, y).detach().item()
-        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}" + (
+            "" if msg is None else f"| {msg}"
+        )
 
     @staticmethod
-    def rms_close_relative(x, y, threshold, min_threshold=0):
+    def rms_close_relative(x, y, threshold, min_threshold=0, *, msg=None):
         import torch
 
         Assert.eq(x.shape, y.shape)
         scale = (torch.sum(x**2 + y**2) / (2 * x.numel())) ** 0.5
         threshold = max(threshold * scale, min_threshold)
         rms = rms_diff(x, y).item()
-        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}" + (
+            "" if msg is None else f"| {msg}"
+        )
 
     @staticmethod
     def all_equal(x, *args):

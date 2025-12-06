@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from fast_llm.data.dataset.config import BlendedDatasetConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.data.common import (
@@ -44,12 +43,12 @@ GPT_BLENDED_SAMPLES = [
 
 GPT_BLENDED_MIXED_SAMPLES = [
     [49152, 46, 10, 819, 19, 45],
-    [916, 6683, 7685, 1277, 5106, 378],
+    [25492, 15877, 37874, 8570, 31649, 15521],
     [45, 69, 17, 86, 38826, 15],
-    [3359, 6803, 780, 4561, 669, 7878],
+    [3359, 20945, 33437, 32454, 42084, 45942],
     [15, 25, 51, 31, 32348, 64],
     [64, 17, 93, 78, 40, 1793],
-    [6920, 2218, 2921, 3963, 7606, 6904],
+    [15112, 36731, 47864, 35586, 33356, 37537],
     [1793, 1, 1746, 38, 27, 58],
 ]
 
@@ -85,7 +84,7 @@ def test_blending(probs):
         # Use a list of integers as a mock dataset, encoding both indexes in the sample.
         [list(range(i * num_samples, (i + 1) * num_samples)) for i, _ in enumerate(probs)],  # noqa
         probs,
-        get_sampling_data(num_samples, preprocessing=LanguageModelPreprocessingConfig(vocab_size=8192)),
+        get_sampling_data(num_samples),
     )
     probs = normalize_probabilities(probs)
     samples = np.array([dataset[i] for i in range(num_samples)])
@@ -133,7 +132,7 @@ def test_gpt_blended_mixed():
     # Make sure dataset blending works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     # Random dataset needs an explicit vocab size.
-    preprocessing = preprocessing.from_dict(preprocessing, {"vocab_size": 8192})
+    preprocessing = preprocessing.from_dict(preprocessing, {"vocab_size": 50000})
     sampled = get_dataset_config(
         dataset_config := {
             "type": "blended",

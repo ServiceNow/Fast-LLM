@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import math
 import typing
 
@@ -17,6 +18,8 @@ from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, clamp, padded_cumsum
+
+logger = logging.getLogger(__name__)
 
 
 class FSDP:
@@ -276,6 +279,9 @@ class FSDP:
         return {name: self._get_parameter_in_buffer(buffer, name) for name in self._parameter_metas}
 
     def _get_parameter_in_buffer(self, buffer: torch.Tensor, name: str) -> torch.Tensor:
+        logger.info(
+            f"{name}, {self.get_parameter_begin_in_buffer(name)}, {self.get_parameter_end_in_buffer(name)}, {buffer.shape}, {self._parameter_metas[name]}"
+        )
         return buffer[self.get_parameter_begin_in_buffer(name) : self.get_parameter_end_in_buffer(name)].view(
             self._parameter_metas[name].shape
         )

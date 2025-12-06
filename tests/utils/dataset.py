@@ -236,7 +236,7 @@ def _get_test_dataset(
     preprocessing = LanguageModelPreprocessingConfig(
         tokenizer={"type": "tokenizer", "path": tokenizer_path, "max_vocab_size": max_vocab_size},
         image_patches=NullPreprocessingConfig() if image_patch_config is None else image_patch_config,
-        vocab_size=max_vocab_size or 0,
+        vocab_size=max_vocab_size,
         use_loss_masking_spans=max_loss_masking_spans > 0,
         use_preference_spans=has_preference_spans,
     )

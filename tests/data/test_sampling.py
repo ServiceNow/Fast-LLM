@@ -5,7 +5,6 @@ import torch
 from fast_llm.data.dataset.config import SamplingParameters, ShufflingType
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.utils import Assert
@@ -106,7 +105,6 @@ def test_gpt_sample(seed, shuffle):
                 sequence_length=5,
                 seed=seed,
                 shuffle=shuffle,
-                preprocessing=LanguageModelPreprocessingConfig(vocab_size=0),
             )
         )
         samples = validate_indexed_dataset_sampling(sampled)
@@ -172,7 +170,6 @@ def test_gpt_sample_padding():
             seed=seed,
             shuffle=ShufflingType.disabled,
             truncate_documents=False,
-            preprocessing=LanguageModelPreprocessingConfig(vocab_size=vocab_size),
         )
         if total_tokens == 0:
             with pytest.raises(RuntimeError):

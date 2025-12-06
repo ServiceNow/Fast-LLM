@@ -156,7 +156,6 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             else:
                 image_patches = NullPreprocessingConfig()
             self.preprocessing = LanguageModelPreprocessingConfig(
-                vocab_size=0,
                 image_patches=image_patches,
                 use_loss_masking_spans=isinstance(self.loss_masking_spans, RangeReaderConfig),
                 use_preference_spans=isinstance(self.chosen_spans, RangeReaderConfig),

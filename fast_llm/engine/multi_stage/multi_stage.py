@@ -3,6 +3,7 @@ import logging
 import typing
 import warnings
 
+import safetensors.torch
 import torch
 from torch._C._distributed_c10d import ProcessGroup
 
@@ -21,6 +22,7 @@ from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, get_unique
 
 logger = logging.getLogger(__name__)
+safetensors.torch.safe_open
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
@@ -427,6 +429,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         return self._stages_on_device
 
     @property
+    def stages_owned(self) -> dict[int, Stage]:
+        return self._stages_owned
+
+    @property
     def tied_parameters(self) -> dict[str, "TiedParameter"]:
         return self._tied_parameters
 
@@ -485,11 +491,17 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for shard_name in shard_names:
             shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
-            for shard_index, (stage, shard) in enumerate(zip(self._stages_owned.values(), shard_split, strict=True)):
-                for name, tensor in stage._export_shard(
-                    shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
-                ):  # noqa
-                    yield name, shard_name, tensor
+            logger.info(
+                f"{shard_name}, {self._shards[shard_name].shape}, {self._stage_weight_shard_sizes}, {self._stages_owned.values}, {[x.shape for x in shard_split]}"
+            )
+            for shard_index, ((stage_index, stage), shard) in enumerate(
+                zip(self._stages_on_device.items(), shard_split, strict=True)
+            ):
+                if stage_index in self._stages_owned:
+                    for name, tensor in stage._export_shard(
+                        shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
+                    ):  # noqa
+                        yield name, shard_name, tensor
 
     def import_state_tensor(self, parameter_name: str, shard_name: str, tensor: torch.Tensor | SafeTensorSlice):
         """

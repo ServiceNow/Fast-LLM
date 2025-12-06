@@ -14,6 +14,7 @@ class MultiModalTrainer[ConfigType: MultiModalTrainerConfig](GPTTrainer[ConfigTy
     ) -> LanguageModelPreprocessingConfig | dict[str, typing.Any]:
         out = super()._get_preprocessing_config(_return_dict=True)
         out["image_patches"] = {
+            "type": "image_patch",
             "height": self._config.model.base_model.vision_encoder.embeddings.patch_height,
             "width": self._config.model.base_model.vision_encoder.embeddings.patch_width,
             # TODO: Max shape and special tokens are unspecified in the model.
