@@ -21,7 +21,6 @@ from fast_llm.models.multimodal.conversion.config import (
 )
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
     from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalInferenceRunner, MultiModalModel
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
@@ -80,6 +79,7 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 
