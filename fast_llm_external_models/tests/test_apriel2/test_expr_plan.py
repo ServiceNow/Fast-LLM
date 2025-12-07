@@ -4,6 +4,8 @@ import json
 import pytest
 import torch
 
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
+
 from fast_llm_external_models.apriel2.conversion import (
     Concat,
     EvalKwargs,
@@ -1279,6 +1281,7 @@ class TestEndToEndConversion:
     with strict=True, then all keys and shapes are correct.
     """
 
+    @requires_cuda
     def test_comprehensive_conversion_all_mixer_types(self, llava_pixtral_checkpoint, tmp_path):
         """Full pipeline: LLaVA → Apriel2 with surgery exercising ALL conversion paths.
 

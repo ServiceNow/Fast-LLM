@@ -8,6 +8,13 @@ import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
 
 
+# Skip marker for tests that require CUDA for Mamba forward pass
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="SSM mixers (Mamba) require CUDA for forward pass"
+)
+
+
 @pytest.fixture(autouse=True)
 def set_default_device():
     """Set default device to CUDA for all tests (Mamba requires CUDA)."""

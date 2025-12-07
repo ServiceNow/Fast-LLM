@@ -853,7 +853,8 @@ class GatedRMSNormalization(nn.Module):
         self.eps = eps
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        if rms_norm_gated is not None:
+        # Use PyTorch fallback on CPU since fla requires CUDA
+        if rms_norm_gated is not None and input_.device.type != "cpu":
             return self._forward_fla(input_, gate)
         else:
             return self._forward_local(input_, gate)
@@ -1065,9 +1066,14 @@ class Apriel2GatedDeltaNet(nn.Module):
             key = key.repeat_interleave(self.value_heads_per_key, dim=2)
 
         # Run gated delta rule
+        # Use PyTorch fallback on CPU since fla requires CUDA
+        chunk_fn = self._chunk_gated_delta_rule
+        if query.device.type == "cpu" and chunk_gated_delta_rule is not None:
+            chunk_fn = torch_chunk_gated_delta_rule
+
         if not use_precomputed_states:
             # Chunked mode for prefill
-            output, last_recurrent_state = self._chunk_gated_delta_rule(
+            output, last_recurrent_state = chunk_fn(
                 query,
                 key,
                 value,

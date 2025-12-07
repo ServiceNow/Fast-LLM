@@ -107,9 +107,12 @@ def tolerance(test_mode):
     """Tolerance (rtol, atol) derived from test_mode.
 
     bf16 has ~3 decimal digits precision, so needs looser tolerance.
+    fp32 "precise" mode uses 2e-4 to accommodate minor differences in
+    kernel implementations (e.g., fla vs pure PyTorch) while still
+    catching real bugs.
     """
     if test_mode == "precise":
-        return (1e-4, 1e-4)
+        return (2e-4, 2e-4)
     else:
         return (1e-2, 1e-2)
 

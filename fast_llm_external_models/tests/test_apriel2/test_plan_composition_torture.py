@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
+
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
 from fast_llm_external_models.apriel2.conversion import (
     compose,
@@ -815,6 +817,7 @@ class TestComprehensiveTortureChain:
             except Exception as e:
                 pytest.fail(f"Step {i+1} produced invalid config: {e}")
 
+    @requires_cuda
     def test_each_step_produces_working_model(
         self, torture_setup, comprehensive_torture_chain
     ):
@@ -871,6 +874,7 @@ class TestComprehensiveTortureChain:
             current_config = target_config
             current_weights = new_weights
 
+    @requires_cuda
     def test_final_supernet_structure(
         self, torture_setup, comprehensive_torture_chain
     ):
@@ -909,6 +913,7 @@ class TestComprehensiveTortureChain:
             outputs = model(input_ids)
         assert outputs.logits.shape == (1, 8, config.vocab_size)
 
+    @requires_cuda
     def test_plan_config_consistency_comprehensive(
         self, torture_setup, comprehensive_torture_chain
     ):
