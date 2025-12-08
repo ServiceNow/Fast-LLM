@@ -80,6 +80,7 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 
