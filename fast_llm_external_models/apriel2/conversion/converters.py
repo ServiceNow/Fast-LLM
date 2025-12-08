@@ -57,15 +57,7 @@ respective subpackages (e.g., `conversion.llava`).
 
 from __future__ import annotations
 
-from fast_llm_external_models.apriel2.conversion.expr import (
-    Concat,
-    Expr,
-    ExprPlan,
-    Init,
-    Ref,
-    Slice,
-    W,
-)
+from fast_llm_external_models.apriel2.conversion.expr import Concat, Expr, ExprPlan, Init, Ref, Slice, W
 
 
 def plan_mil_attention_to_mamba(
@@ -320,18 +312,24 @@ def plan_surgery(
         target_block = _get_block_config(target_decoder, target_layer_idx)
 
         plan += _plan_mixer(
-            target_layer_idx, source_layer_idx,
-            source_block.get("mixer", {}), target_block.get("mixer", {}),
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mixer", {}),
+            target_block.get("mixer", {}),
             hidden_size,
         )
         plan += _plan_mlp(
-            target_layer_idx, source_layer_idx,
-            source_block.get("mlp", {}), target_block.get("mlp", {}),
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mlp", {}),
+            target_block.get("mlp", {}),
             hidden_size,
         )
         plan += _plan_norms(
-            target_layer_idx, source_layer_idx,
-            source_block, target_block,
+            target_layer_idx,
+            source_layer_idx,
+            source_block,
+            target_block,
             hidden_size,
         )
 
@@ -393,9 +391,13 @@ def _plan_mixer(
                 source_prefix = source_mixer_base
 
                 plan += _plan_mixer_transfer(
-                    matched_source_type, sub_type,
-                    matched_source, sub_config,
-                    source_prefix, target_prefix, hidden_size,
+                    matched_source_type,
+                    sub_type,
+                    matched_source,
+                    sub_config,
+                    source_prefix,
+                    target_prefix,
+                    hidden_size,
                 )
 
         # Passthrough source sub-mixers not in target spec
@@ -406,8 +408,13 @@ def _plan_mixer(
                     source_prefix = source_layer / "mixer" / "mixers" / sub_name
                     target_prefix = target_layer / "mixer" / "mixers" / sub_name
                     plan += _plan_mixer_transfer(
-                        sub_type, sub_type, sub_config, sub_config,
-                        source_prefix, target_prefix, hidden_size,
+                        sub_type,
+                        sub_type,
+                        sub_config,
+                        sub_config,
+                        source_prefix,
+                        target_prefix,
+                        hidden_size,
                     )
 
         return plan
@@ -423,9 +430,13 @@ def _plan_mixer(
             source_prefix = source_layer / "mixer"
 
         return _plan_mixer_transfer(
-            main_source_type, target_type,
-            main_source, target_mixer,
-            source_prefix, target_prefix, hidden_size,
+            main_source_type,
+            target_type,
+            main_source,
+            target_mixer,
+            source_prefix,
+            target_prefix,
+            hidden_size,
         )
 
 
@@ -508,7 +519,7 @@ def _plan_mixer_transfer(
         num_k_heads = target_config.get("key_heads", source_kv_heads)
         head_k_dim = target_config.get("key_head_dim", source_head_size)
         head_v_dim = target_config.get("value_head_dim", source_head_size)
-        conv_kernel_size = target_config["conv_kernel_size"]
+        conv_kernel_size = target_config["convolution_layer"]["kernel_size"]
 
         return plan_attention_to_gated_delta_net(
             hidden_size=hidden_size,
@@ -604,7 +615,7 @@ def _plan_random_mixer(
         num_k_heads = config["key_heads"]
         head_k_dim = config["key_head_dim"]
         head_v_dim = config["value_head_dim"]
-        conv_kernel_size = config.get("conv_kernel_size", 4)
+        conv_kernel_size = config["convolution_layer"]["kernel_size"]
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
         conv_dim = key_dim * 2 + value_dim
@@ -669,11 +680,17 @@ def _plan_random_mlp(
 ) -> ExprPlan:
     target_mlp_path = W("model", "decoder", "blocks", target_layer_idx, "mlp")
     intermediate_size = target_mlp["intermediate_size"]
-    return ExprPlan(mappings={
-        target_mlp_path / "gate_proj" / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
-        target_mlp_path / "up_proj" / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
-        target_mlp_path / "down_proj" / "weight": Init(shape=(hidden_size, intermediate_size), init_type="kaiming"),
-    })
+    return ExprPlan(
+        mappings={
+            target_mlp_path
+            / "gate_proj"
+            / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
+            target_mlp_path / "up_proj" / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
+            target_mlp_path
+            / "down_proj"
+            / "weight": Init(shape=(hidden_size, intermediate_size), init_type="kaiming"),
+        }
+    )
 
 
 def _plan_norms(
@@ -724,7 +741,9 @@ def _plan_random_norms(
     hidden_size: int,
 ) -> ExprPlan:
     target_layer = W("model", "decoder", "blocks", target_layer_idx)
-    return ExprPlan(mappings={
-        target_layer / norm_name / "weight": Init(shape=(hidden_size,), init_type="ones")
-        for norm_name in ["input_layernorm", "post_attention_layernorm"]
-    })
+    return ExprPlan(
+        mappings={
+            target_layer / norm_name / "weight": Init(shape=(hidden_size,), init_type="ones")
+            for norm_name in ["input_layernorm", "post_attention_layernorm"]
+        }
+    )

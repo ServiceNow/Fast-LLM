@@ -13,11 +13,11 @@ from fast_llm.layers.ssm.config import GatedDeltaNetConfig, Mamba2Config
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
+    KeyValueWeightConverter,
     LlamaEmbeddingsConverter,
     LlamaNormalizationConverter,
     MLPLayer2Converter,
     QueryWeightConverter,
-    KeyValueWeightConverter,
     SplitWeightConverter,
     get_parameter_converter,
     get_weight_and_bias_converters,
@@ -389,9 +389,9 @@ class Apriel2BlockConverter:
     @classmethod
     def export_config(cls, config: DecoderBlockConfig) -> dict:
         from fast_llm.layers.common.normalization.config import (
-            RMSNormalizationConfig,
             LayerNormalizationConfig,
             NoNormalizationConfig,
+            RMSNormalizationConfig,
         )
 
         mixer_type = type(config.mixer)
@@ -426,6 +426,7 @@ class Apriel2BlockConverter:
             "type": "mlp",
             "intermediate_size": config.mlp.intermediate_size,
             "activation": config.mlp.activation.value,
+            "gated": config.mlp.gated,
             "add_linear_biases": config.mlp.add_linear_biases,
         }
 
@@ -471,37 +472,41 @@ class Apriel2BlockConverter:
             )
         )
 
-        converters.extend([
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1",
-                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                config.mlp.add_linear_biases,
-                SplitWeightConverter,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_2",
-                f"{hf_prefix}.mlp.down_proj",
-                config.mlp.add_linear_biases,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ])
+        converters.extend(
+            [
+                *get_weight_and_bias_converters(
+                    f"{fast_llm_prefix}.mlp.layer_1",
+                    (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                    config.mlp.add_linear_biases,
+                    SplitWeightConverter,
+                    drop_on_export=drop_on_export,
+                ),
+                *get_weight_and_bias_converters(
+                    f"{fast_llm_prefix}.mlp.layer_2",
+                    f"{hf_prefix}.mlp.down_proj",
+                    config.mlp.add_linear_biases,
+                    MLPLayer2Converter,
+                    drop_on_export=drop_on_export,
+                ),
+            ]
+        )
 
-        converters.extend([
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.input_layernorm",
-                drop_on_export=drop_on_export,
-            ),
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.post_attention_layernorm",
-                drop_on_export=drop_on_export,
-            ),
-        ])
+        converters.extend(
+            [
+                *LlamaNormalizationConverter.get_converters(
+                    config.normalization,
+                    f"{fast_llm_prefix}.norm_1",
+                    f"{hf_prefix}.input_layernorm",
+                    drop_on_export=drop_on_export,
+                ),
+                *LlamaNormalizationConverter.get_converters(
+                    config.normalization,
+                    f"{fast_llm_prefix}.norm_2",
+                    f"{hf_prefix}.post_attention_layernorm",
+                    drop_on_export=drop_on_export,
+                ),
+            ]
+        )
 
         return converters
 
@@ -703,10 +708,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
     @classmethod
     def get_model_files(cls) -> tuple[str, str, str | None]:
-        from fast_llm_external_models.apriel2 import (
-            configuration_apriel2,
-            modeling_apriel2,
-        )
+        from fast_llm_external_models.apriel2 import configuration_apriel2, modeling_apriel2
 
         return configuration_apriel2.__file__, modeling_apriel2.__file__, None
 

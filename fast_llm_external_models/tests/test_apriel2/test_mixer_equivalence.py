@@ -12,13 +12,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from fast_llm_external_models.apriel2.conversion import (
-    ExprPlan,
-    Ref,
-    W,
-    execute,
-)
-
+from fast_llm_external_models.apriel2.conversion import ExprPlan, Ref, W, execute
 
 # =============================================================================
 # Fixtures for configs
@@ -107,9 +101,12 @@ def tolerance(test_mode):
     """Tolerance (rtol, atol) derived from test_mode.
 
     bf16 has ~3 decimal digits precision, so needs looser tolerance.
+    fp32 "precise" mode uses 2e-4 to accommodate minor differences in
+    kernel implementations (e.g., fla vs pure PyTorch) while still
+    catching real bugs.
     """
     if test_mode == "precise":
-        return (1e-4, 1e-4)
+        return (2e-4, 2e-4)
     else:
         return (1e-2, 1e-2)
 
@@ -176,8 +173,8 @@ def plan_qwen3next_gdn_to_apriel2(
     from fast_llm_external_models.apriel2.conversion import Concat, Slice
 
     # Dimensions
-    key_dim = num_k_heads * head_k_dim
-    value_dim = num_v_heads * head_v_dim
+    num_k_heads * head_k_dim
+    num_v_heads * head_v_dim
     v_per_group = (num_v_heads // num_k_heads) * head_v_dim
     group_size = head_k_dim * 2 + v_per_group * 2  # Q + K + V_group + Z_group
 
@@ -235,7 +232,10 @@ def plan_qwen3next_gdn_to_apriel2(
             Slice(expr=ba_ref, slices=((base, base + num_v_heads // num_k_heads, None), (None, None, None)))
         )
         a_slices.append(
-            Slice(expr=ba_ref, slices=((base + num_v_heads // num_k_heads, base + ba_per_group, None), (None, None, None)))
+            Slice(
+                expr=ba_ref,
+                slices=((base + num_v_heads // num_k_heads, base + ba_per_group, None), (None, None, None)),
+            )
         )
 
     in_proj_ba_expr = Concat(
@@ -356,6 +356,7 @@ class TestApriel2AttentionVsMistral:
     ):
         """Test that Apriel2Attention produces same output as MistralAttention."""
         from transformers.models.mistral.modeling_mistral import MistralAttention, MistralRotaryEmbedding
+
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
         # Create models (uses default device/dtype from fixtures)
@@ -476,8 +477,9 @@ class TestApriel2AttentionVsPixtral:
         allowing us to verify the core attention mechanism is equivalent.
         """
         from transformers.models.pixtral.modeling_pixtral import PixtralAttention, PixtralRotaryEmbedding
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
+
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
         num_heads, _, head_dim = attention_config
         hidden_size = num_heads * head_dim
@@ -599,7 +601,7 @@ class TestApriel2GDNVsQwen3Next:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 
@@ -618,6 +620,7 @@ class TestApriel2GDNVsQwen3Next:
     ):
         """Test that Apriel2GatedDeltaNet produces same output as Qwen3NextGatedDeltaNet."""
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
+
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
@@ -691,7 +694,7 @@ class TestFastVsSlowPath:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 
@@ -729,8 +732,8 @@ class TestDeterminism:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
     def test_attention_determinism(self, attention_config):
         """Test Apriel2Attention produces deterministic output."""
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
         num_heads, num_kv_heads, head_dim = attention_config
         hidden_size = 256
@@ -800,7 +803,7 @@ class TestDeterminism:
             "key_heads": key_heads,
             "key_head_dim": key_head_dim,
             "value_head_dim": value_head_dim,
-            "conv_kernel_size": 4,
+            "convolution_layer": {"kernel_size": 4},
             "norm_eps": 1e-5,
         }
 

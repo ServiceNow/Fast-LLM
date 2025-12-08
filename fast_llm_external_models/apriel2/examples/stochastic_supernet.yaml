@@ -13,7 +13,6 @@
 #       --surgery examples/stochastic_supernet.yaml
 
 decoder:
-  num_blocks: 5
   type: fixed
   block:
     mixer:
@@ -30,7 +29,7 @@ decoder:
         sliding_window:
           type: attention
           init: transfer
-          sliding_window: 4096
+          window_size: 4096
 
         # Gated delta net - DIL initialization maps Q/K/V/O -> GDN projections
         # GDN dimensions are derived from source attention:
@@ -41,7 +40,8 @@ decoder:
         gdn:
           type: gdn
           init: transfer
-          conv_kernel_size: 4  # Only required param - rest derived from source
+          convolution_layer:
+            kernel_size: 4
 
     # MLP and normalization transfer from source
     mlp:

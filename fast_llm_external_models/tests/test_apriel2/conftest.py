@@ -1,11 +1,16 @@
 """Test fixtures for Apriel2 model tests."""
 
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
+
+# Skip marker for tests that require CUDA for Mamba forward pass
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="SSM mixers (Mamba) require CUDA for forward pass"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -128,14 +133,11 @@ def model_pair(request, small_pixtral_model, tmp_path):
         tuple: (source_model, target_model, expected_atol, variant_name)
     """
     import json
+
     from safetensors import safe_open
 
     from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-    from fast_llm_external_models.apriel2.conversion import (
-        convert_llava_config,
-        execute,
-        plan_llava_to_apriel2,
-    )
+    from fast_llm_external_models.apriel2.conversion import convert_llava_config, execute, plan_llava_to_apriel2
     from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
 
     source = small_pixtral_model
@@ -267,7 +269,7 @@ def apriel2_config_tiny():
                     "head_size": 16,
                     "rotary": {"type": "mistral_1d", "theta": 10000.0},
                 },
-                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                 "normalization": {"type": "rms_norm", "epsilon": 1e-5},
             },
         },
@@ -295,7 +297,7 @@ def apriel2_config_stochastic():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch": {
@@ -308,7 +310,7 @@ def apriel2_config_stochastic():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 4096,
+                                "window_size": 4096,
                                 "rotary": {"type": "mistral_1d", "theta": 250000.0},
                             },
                             "mamba": {
@@ -327,7 +329,7 @@ def apriel2_config_stochastic():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -358,7 +360,7 @@ def apriel2_config_multi_mixer():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 2048,
+                                "window_size": 2048,
                                 "rotary": {"type": "mistral_1d", "theta": 10000.0},
                             },
                             "attn_large": {
@@ -366,7 +368,7 @@ def apriel2_config_multi_mixer():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 8192,
+                                "window_size": 8192,
                                 "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "mamba_v1": {
@@ -399,7 +401,7 @@ def apriel2_config_multi_mixer():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -434,7 +436,7 @@ def apriel2_config_all_mixers():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "all_mixers": {
@@ -454,7 +456,7 @@ def apriel2_config_all_mixers():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 2048,
+                                "window_size": 2048,
                                 "rotary": {"type": "mistral_1d", "theta": 1000000.0},
                             },
                             "mamba": {
@@ -473,10 +475,15 @@ def apriel2_config_all_mixers():
                             },
                             "gdn": {
                                 "type": "gdn",
+                                "value_heads": 4,
+                                "key_heads": 2,
+                                "key_head_dim": 16,
+                                "value_head_dim": 16,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -506,12 +513,12 @@ def apriel2_config_comprehensive():
             "type": "pattern",
             "num_blocks": 6,
             "pattern": [
-                "attn",          # 0: pure full attention
-                "swa",           # 1: pure sliding window attention
-                "mamba",         # 2: pure mamba
-                "gdn",           # 3: pure gated delta net
-                "stoch_attn_mamba",   # 4: stochastic attention + mamba
-                "stoch_swa_gdn",      # 5: stochastic swa + gated delta net
+                "attn",  # 0: pure full attention
+                "swa",  # 1: pure sliding window attention
+                "mamba",  # 2: pure mamba
+                "gdn",  # 3: pure gated delta net
+                "stoch_attn_mamba",  # 4: stochastic attention + mamba
+                "stoch_swa_gdn",  # 5: stochastic swa + gated delta net
             ],
             "blocks": {
                 "attn": {
@@ -522,7 +529,7 @@ def apriel2_config_comprehensive():
                         "head_size": 16,
                         "rotary": {"type": "mistral_1d", "theta": 10000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "swa": {
@@ -531,10 +538,10 @@ def apriel2_config_comprehensive():
                         "heads": 4,
                         "head_groups": 2,
                         "head_size": 16,
-                        "sliding_window": 512,
+                        "window_size": 512,
                         "rotary": {"type": "mistral_1d", "theta": 100000.0},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "mamba": {
@@ -552,7 +559,7 @@ def apriel2_config_comprehensive():
                         "dt_max": 0.1,
                         "dt_init_floor": 1e-4,
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "gdn": {
@@ -562,9 +569,9 @@ def apriel2_config_comprehensive():
                         "key_heads": 2,
                         "key_head_dim": 16,
                         "value_head_dim": 16,
-                        "conv_kernel_size": 4,
+                        "convolution_layer": {"kernel_size": 4},
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch_attn_mamba": {
@@ -595,7 +602,7 @@ def apriel2_config_comprehensive():
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
                 "stoch_swa_gdn": {
@@ -608,7 +615,7 @@ def apriel2_config_comprehensive():
                                 "heads": 4,
                                 "head_groups": 2,
                                 "head_size": 16,
-                                "sliding_window": 256,
+                                "window_size": 256,
                                 "rotary": {"type": "mistral_1d", "theta": 500000.0},
                             },
                             "gdn": {
@@ -617,11 +624,11 @@ def apriel2_config_comprehensive():
                                 "key_heads": 2,
                                 "key_head_dim": 16,
                                 "value_head_dim": 16,
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
                     "normalization": {"type": "rms_norm", "epsilon": 1e-5},
                 },
             },
@@ -705,7 +712,7 @@ def additive_surgery_chain():
                             "sliding_window": {
                                 "type": "attention",
                                 "init": "transfer",
-                                "sliding_window": 512,
+                                "window_size": 512,
                             },
                         },
                     },
@@ -721,7 +728,7 @@ def additive_surgery_chain():
                             "gdn": {
                                 "type": "gdn",
                                 "init": "transfer",
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -753,7 +760,7 @@ def comprehensive_torture_chain():
     # MIL requires: d_inner <= Q rows (256), d_xb <= K/V rows (128)
     mamba_params = {
         "d_inner": 256,  # Must be <= heads*head_size = 256
-        "d_xb": 64,      # Must be <= head_groups*head_size = 128
+        "d_xb": 64,  # Must be <= head_groups*head_size = 128
         "dt_rank": 16,
         "d_state": 16,
         "d_conv": 4,
@@ -788,7 +795,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "attention",
                             "init": "transfer",
-                            "sliding_window": 512,
+                            "window_size": 512,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -829,7 +836,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "attention",
                             "init": "transfer",
-                            "sliding_window": 512,
+                            "window_size": 512,
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -843,7 +850,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",  # DIL conversion
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -901,7 +908,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -912,7 +919,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",  # DIL from previous swa
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -951,7 +958,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                     "rotary": rotary_config,
                                 },
                             },
@@ -973,7 +980,7 @@ def comprehensive_torture_chain():
                                 "gdn": {
                                     "type": "gdn",
                                     "init": "transfer",
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                                 "mamba": {
                                     "type": "mamba",
@@ -989,7 +996,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1006,7 +1013,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 128,
+                                    "window_size": 128,
                                     "rotary": rotary_config,
                                 },
                             },
@@ -1040,7 +1047,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",  # Now transfer from previous
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                 },
                             },
                         },
@@ -1063,7 +1070,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",  # Transfer from stoch's gdn
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1075,7 +1082,7 @@ def comprehensive_torture_chain():
                             "heads": 8,
                             "head_groups": 4,
                             "head_size": 32,
-                            "sliding_window": 512,
+                            "window_size": 512,
                             "rotary": rotary_config,
                         },
                         "mlp": {"init": "transfer"},
@@ -1090,7 +1097,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",
-                                    "sliding_window": 128,
+                                    "window_size": 128,
                                 },
                             },
                         },
@@ -1126,7 +1133,7 @@ def comprehensive_torture_chain():
                                 "swa": {
                                     "type": "attention",
                                     "init": "transfer",
-                                    "sliding_window": 256,
+                                    "window_size": 256,
                                 },
                             },
                         },
@@ -1138,7 +1145,7 @@ def comprehensive_torture_chain():
                         "mixer": {
                             "type": "gdn",
                             "init": "transfer",
-                            "conv_kernel_size": 4,
+                            "convolution_layer": {"kernel_size": 4},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1166,7 +1173,7 @@ def comprehensive_torture_chain():
                                     "heads": 8,
                                     "head_groups": 4,
                                     "head_size": 32,
-                                    "sliding_window": 512,
+                                    "window_size": 512,
                                     "rotary": rotary_config,
                                 },
                                 "mamba": {"type": "mamba", "init": "transfer", **mamba_params},
@@ -1177,7 +1184,7 @@ def comprehensive_torture_chain():
                                     "key_heads": 4,
                                     "key_head_dim": 32,
                                     "value_head_dim": 32,
-                                    "conv_kernel_size": 4,
+                                    "convolution_layer": {"kernel_size": 4},
                                 },
                             },
                         },
@@ -1252,7 +1259,7 @@ def torture_surgery_chain():
                             "gdn": {
                                 "type": "gdn",
                                 "init": "transfer",
-                                "conv_kernel_size": 4,
+                                "convolution_layer": {"kernel_size": 4},
                             },
                         },
                     },
@@ -1294,7 +1301,7 @@ def torture_surgery_chain():
                     "mixer": {
                         "type": "attention",
                         "init": "transfer",
-                        "sliding_window": 4096,
+                        "window_size": 4096,
                     },
                 },
             },
@@ -1306,7 +1313,7 @@ def torture_surgery_chain():
                     "mixer": {
                         "type": "gdn",
                         "init": "transfer",
-                        "conv_kernel_size": 8,
+                        "convolution_layer": {"kernel_size": 8},
                     },
                 },
             },

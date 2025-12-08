@@ -373,9 +373,9 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
     # Cross-type: derive what we can, then apply surgery overrides
     if source_type in ("attention", "sliding_window"):
         # Extract source attention geometry
-        heads = source.get("heads", 32)
+        heads = source.get("heads")
         head_groups = source.get("head_groups", heads)
-        head_size = source.get("head_size", hidden_size // heads if heads else 128)
+        head_size = source.get("head_size", hidden_size // heads if heads else None)
 
         if target_type in ("attention", "sliding_window"):
             # Attention → Attention variant: preserve geometry
@@ -386,7 +386,7 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                 "head_size": surgery.get("head_size", head_size),
             }
             # Copy other attention fields (rotary is critical for position embeddings)
-            for key in ["sliding_window", "window_size", "rope_theta", "rope_scaling", "rotary"]:
+            for key in ["window_size", "rope_theta", "rope_scaling", "rotary"]:
                 if key in surgery:
                     result[key] = surgery[key]
                 elif key in source:
@@ -404,8 +404,10 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                 "key_heads": surgery.get("key_heads", head_groups),
                 "key_head_dim": surgery.get("key_head_dim", head_size),
                 "value_head_dim": surgery.get("value_head_dim", head_size),
-                "conv_kernel_size": surgery.get("conv_kernel_size", 4),
             }
+            # Pass through convolution_layer if provided (required at conversion time)
+            if "convolution_layer" in surgery:
+                result["convolution_layer"] = surgery["convolution_layer"]
             # Preserve init
             if "init" in surgery:
                 result["init"] = surgery["init"]
@@ -421,8 +423,14 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
             }
             # Copy mamba-specific fields from surgery
             for key in [
-                "d_state", "d_conv", "repeat_kv_before_conv", "conv_bias",
-                "dt_proj_bias", "dt_min", "dt_max", "dt_init_floor",
+                "d_state",
+                "d_conv",
+                "repeat_kv_before_conv",
+                "conv_bias",
+                "dt_proj_bias",
+                "dt_min",
+                "dt_max",
+                "dt_init_floor",
             ]:
                 if key in surgery:
                     result[key] = surgery[key]

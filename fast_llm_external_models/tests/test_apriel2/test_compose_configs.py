@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.conversion.config import apply_surgery, compose_configs
+from fast_llm_external_models.apriel2.conversion.config import compose_configs
 
 
 class TestComposeConfigsLaws:
@@ -100,7 +100,7 @@ class TestComposeConfigsLaws:
                 "block": {
                     "mixer": {
                         "init": "transfer",  # For weight handling
-                        "sliding_window": 512,  # Add this field
+                        "window_size": 512,  # Add this field
                     },
                 },
             },
@@ -113,7 +113,7 @@ class TestComposeConfigsLaws:
         assert mixer["head_groups"] == 4  # Inherited
         assert mixer["head_size"] == 32  # Inherited
         assert mixer["rope_theta"] == 10000.0  # Inherited
-        assert mixer["sliding_window"] == 512  # Added
+        assert mixer["window_size"] == 512  # Added
         assert "init" not in mixer  # Stripped by apply_surgery
 
     def test_cross_type_attention_to_gdn(self, source_config):
@@ -124,7 +124,7 @@ class TestComposeConfigsLaws:
                     "mixer": {
                         "type": "gdn",
                         "init": "transfer",  # For weight handling
-                        "conv_kernel_size": 4,
+                        "convolution_layer": {"kernel_size": 4},
                     },
                 },
             },
@@ -138,7 +138,7 @@ class TestComposeConfigsLaws:
         assert mixer["key_heads"] == 4  # from head_groups
         assert mixer["key_head_dim"] == 32  # from head_size
         assert mixer["value_head_dim"] == 32  # from head_size
-        assert mixer["conv_kernel_size"] == 4  # from surgery
+        assert mixer["convolution_layer"]["kernel_size"] == 4  # from surgery
 
     def test_cross_type_attention_to_mamba(self, source_config):
         """attention→mamba derives Mamba dims from hidden_size."""
@@ -176,8 +176,8 @@ class TestComposeConfigsLaws:
                         "main_mixer_name": "attention",
                         "mixers": {
                             "attention": {"init": "transfer"},  # Inherits from source attention
-                            "sliding_window": {"init": "transfer", "sliding_window": 512},
-                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
+                            "sliding_window": {"init": "transfer", "window_size": 512},
+                            "gdn": {"type": "gdn", "init": "transfer", "convolution_layer": {"kernel_size": 4}},
                         },
                     },
                 },
@@ -194,16 +194,16 @@ class TestComposeConfigsLaws:
         assert mixers["attention"]["head_size"] == 32
         assert mixers["attention"]["rope_theta"] == 10000.0
 
-        # Sliding window inherits geometry, adds sliding_window
+        # Sliding window inherits geometry, adds window_size
         assert mixers["sliding_window"]["type"] == "attention"
         assert mixers["sliding_window"]["heads"] == 8
-        assert mixers["sliding_window"]["sliding_window"] == 512
+        assert mixers["sliding_window"]["window_size"] == 512
 
         # GDN derives from source attention geometry
         assert mixers["gdn"]["type"] == "gdn"
         assert mixers["gdn"]["value_heads"] == 8
         assert mixers["gdn"]["key_heads"] == 4
-        assert mixers["gdn"]["conv_kernel_size"] == 4
+        assert mixers["gdn"]["convolution_layer"]["kernel_size"] == 4
 
     def test_null_deletion(self, source_config):
         """Law 7: Null deletion removes keys."""
@@ -224,7 +224,7 @@ class TestComposeConfigsLaws:
                         "main_mixer_name": "attention",
                         "mixers": {
                             "attention": {"init": "transfer"},
-                            "gdn": {"type": "gdn", "init": "random", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "random", "convolution_layer": {"kernel_size": 4}},
                         },
                     },
                     "mlp": {"init": "transfer"},
@@ -249,7 +249,7 @@ class TestComposeConfigsLaws:
                 "block": {
                     "mixer": {
                         "init": "random",  # Random weights, but config inherited
-                        "sliding_window": 512,
+                        "window_size": 512,
                     },
                 },
             },
@@ -260,7 +260,7 @@ class TestComposeConfigsLaws:
         # Config params inherited despite init: random
         assert mixer["heads"] == 8
         assert mixer["head_groups"] == 4
-        assert mixer["sliding_window"] == 512
+        assert mixer["window_size"] == 512
 
 
 class TestComposeConfigsRealYAML:
@@ -305,7 +305,7 @@ class TestComposeConfigsRealYAML:
         gdn = mixer["mixers"]["gdn"]
         assert "value_heads" in gdn
         assert "key_heads" in gdn
-        assert "conv_kernel_size" in gdn
+        assert "convolution_layer" in gdn
 
         # Should be instantiatable
         config = Apriel2Config(**result)
@@ -446,7 +446,7 @@ class TestMonoidLaws:
                 "block": {
                     "mixer": {
                         "mixers": {
-                            "sliding_window": {"init": "transfer", "sliding_window": 512},
+                            "sliding_window": {"init": "transfer", "window_size": 512},
                         },
                     },
                 },
@@ -465,7 +465,7 @@ class TestMonoidLaws:
                 "block": {
                     "mixer": {
                         "mixers": {
-                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "transfer", "convolution_layer": {"kernel_size": 4}},
                         },
                     },
                 },
@@ -505,7 +505,7 @@ class TestMonoidLaws:
                 "block": {
                     "mixer": {
                         "mixers": {
-                            "gdn": {"type": "gdn", "init": "transfer", "conv_kernel_size": 4},
+                            "gdn": {"type": "gdn", "init": "transfer", "convolution_layer": {"kernel_size": 4}},
                         },
                     },
                 },
@@ -513,16 +513,10 @@ class TestMonoidLaws:
         }
 
         # Sequential: ((c ⊳ A) ⊳ B) ⊳ C
-        seq = compose_configs(
-            compose_configs(compose_configs(complete_config, surgery_a), surgery_b),
-            surgery_c
-        )
+        seq = compose_configs(compose_configs(compose_configs(complete_config, surgery_a), surgery_b), surgery_c)
 
         # Merged: c ⊳ ((A ∘ B) ∘ C)
-        merged = compose_configs(
-            complete_config,
-            compose_configs(compose_configs(surgery_a, surgery_b), surgery_c)
-        )
+        merged = compose_configs(complete_config, compose_configs(compose_configs(surgery_a, surgery_b), surgery_c))
 
         assert seq == merged, "Three-way monoid action should satisfy compatibility"
 
@@ -622,7 +616,7 @@ class TestCompositionTortureTest:
         # Sub-mixers should have inherited geometry
         assert mixer["mixers"]["attention"]["heads"] == 16
         assert mixer["mixers"]["sliding_window"]["heads"] == 16
-        assert mixer["mixers"]["sliding_window"]["sliding_window"] == 512
+        assert mixer["mixers"]["sliding_window"]["window_size"] == 512
         assert mixer["mixers"]["gdn"]["value_heads"] == 16
 
     def test_no_init_keys_in_result(self, complete_config, additive_surgery_chain):
