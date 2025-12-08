@@ -143,7 +143,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 backend=self._config.distributed.backend,
                 rank=self._config.distributed.rank,
                 world_size=self._config.distributed.world_size,
-                timeout=datetime.timedelta(hours=1),
+                timeout=datetime.timedelta(seconds=self._config.distributed.timeout_seconds),
             )
 
         # Prepare output directory

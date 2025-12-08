@@ -147,6 +147,12 @@ class DatasetPreparatorDistributedConfig(Config):
         desc="Distributed backend to use.",
         hint=FieldHint.optional,
     )
+    timeout_seconds: int = Field(
+        default=3600,
+        desc="Timeout in seconds for torch distributed operations. Default is 3600.",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.gt, 0),
+    )
 
     def _validate(self) -> None:
         if self.world_size is None:
