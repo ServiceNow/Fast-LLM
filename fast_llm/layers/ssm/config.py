@@ -4,7 +4,6 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
-from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
@@ -15,6 +14,8 @@ if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+    from fast_llm.layers.ssm.gdn import GatedDeltaNet
+    from fast_llm.layers.ssm.kda import KimiDeltaAttention
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
 
@@ -84,37 +85,18 @@ class GatedDeltaNetConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    norm_epsilon: float = Field(
-        default=1e-6,
-        desc="Epsilon used by the gated RMS norm.",
-        hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
-    )
-    activation: ActivationType = Field(
-        default=ActivationType.silu,
-        desc="Activation used after the convolution.",
-        hint=FieldHint.architecture,
-    )
 
     def _validate(self) -> None:
         super()._validate()
         Assert.multiple(self.value_heads, self.key_heads)
 
     @property
-    def layer_class(self) -> "type":
+    def layer_class(self) -> "type[GatedDeltaNet]":
         from fast_llm.layers.ssm.gdn import GatedDeltaNet
 
         return GatedDeltaNet
 
     def _validate(self) -> None:
-        with self._set_implicit_default():
-            if "epsilon" not in self.normalization._explicit_fields:
-                self.normalization.epsilon = 1.0e-5
-            if "activation" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.activation = "silu"
-            if "kernel_size" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.kernel_size = 4
-
         super()._validate()
 
 
@@ -192,19 +174,13 @@ class KimiDeltaAttentionConfig(MixerConfig):
     )
 
     @property
-    def layer_class(self) -> "type":
+    def layer_class(self) -> "type[KimiDeltaAttention]":
         from fast_llm.layers.ssm.kda import KimiDeltaAttention
 
         return KimiDeltaAttention
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            if "epsilon" not in self.normalization._explicit_fields:
-                self.normalization.epsilon = 1.0e-5
-            if "activation" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.activation = "silu"
-            if "kernel_size" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.kernel_size = 4
             if "activation" not in self.normalization._explicit_fields:
                 self.normalization.activation = "sigmoid"
 

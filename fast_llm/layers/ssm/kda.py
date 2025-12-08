@@ -8,6 +8,7 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -102,21 +103,21 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         self.q_conv = self._config.convolution_layer.get_layer(
             self._projection_dim,
             default_add_bias=False,
-            default_activation=self._config.convolution_layer.activation,
+            default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.k_conv = self._config.convolution_layer.get_layer(
             self._projection_dim,
             default_add_bias=False,
-            default_activation=self._config.convolution_layer.activation,
+            default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.v_conv = self._config.convolution_layer.get_layer(
             self._projection_dim,
             default_add_bias=False,
-            default_activation=self._config.convolution_layer.activation,
+            default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )

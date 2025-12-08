@@ -950,7 +950,7 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests hybrid with gated delta net mixer.
+    # Tests hybrid with KDA mixer.
     "llama",
     "hybrid_kda",
     updates={

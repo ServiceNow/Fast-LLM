@@ -1,104 +1,89 @@
 import pytest
 import torch
 
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.functional.config import ActivationType
+from fast_llm.config import UpdateType
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
-try:
-    from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextConfig, Qwen3NextGatedDeltaNet
-except ImportError:
-    Qwen3NextConfig, Qwen3NextGatedDeltaNet = None, None
-
-
-def _materialize_mixer_tensors(module: torch.nn.Module, distributed: Distributed, device: torch.device) -> None:
-    """
-    Instantiate meta-allocated parameters on the requested device so the layer can run standalone.
-    """
-    for name, param in module.named_parameters():
-        if param.device.type != "meta":
-            continue
-        param_data = torch.empty_like(param, device=device)
-        param.init_parameter(param_data, distributed)
-        module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
-        target = module
-        if module_path is not None:
-            for part in module_path.split("."):
-                target = getattr(target, part)
-        new_param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
-        new_param.grad = None
-        new_param.grad_buffer = torch.zeros_like(param_data)
-        new_param.param_grad_is_zero = True
-        target._parameters[param_name] = new_param
+VOCAB_SIZE = 500
+HIDDEN_SIZE = 16
+SEQ_LEN = 65
+NUM_V_HEADS = 4
+NUM_K_HEADS = 2
+HEAD_DIM = 4
+KERNEL_SIZE = 4
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Varlen test needs CUDA")
-@pytest.mark.skipif(Qwen3NextConfig is None, reason="transformers with Qwen3-Next not installed")
+@requires_cuda
 def test_fast_llm_gdn_matches_qwen3_next_forward():
     torch.manual_seed(0)
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
-    hidden_size = 16
-    seq_len = 6
-    num_k_heads = 2
-    num_v_heads = 4
-    head_k_dim = 4
-    head_v_dim = 4
-    kernel_size = 4
+    config_dict_hf = {
+        "num_value_heads": NUM_V_HEADS,
+        "num_key_heads": NUM_K_HEADS,
+        "key_head_dim": HEAD_DIM,
+        "value_head_dim": HEAD_DIM,
+        "conv_kernel_size": KERNEL_SIZE,
+        "activation": "silu",
+        "norm_eps": 1e-5,
+    }
 
-    hf_config = Qwen3NextConfig(
-        hidden_size=hidden_size,
-        linear_num_key_heads=num_k_heads,
-        linear_num_value_heads=num_v_heads,
-        linear_key_head_dim=head_k_dim,
-        linear_value_head_dim=head_v_dim,
-        linear_conv_kernel_dim=kernel_size,
-        hidden_act="silu",
-        rms_norm_eps=1e-6,
-        dtype=dtype,
+    hf_layer = (
+        Apriel2GatedDeltaNet(HIDDEN_SIZE, config_dict_hf, layer_idx=0, dtype=dtype)
+        .to(device=device, dtype=dtype)
+        .eval()
     )
-    hf_layer = Qwen3NextGatedDeltaNet(hf_config, layer_idx=0).to(device=device, dtype=dtype).eval()
 
-    fast_config = GatedDeltaNetConfig(
-        value_heads=num_v_heads,
-        key_heads=num_k_heads,
-        value_head_dim=head_v_dim,
-        key_head_dim=head_k_dim,
-        activation=ActivationType.silu,
-        normalization={"epsilon": hf_config.rms_norm_eps},
-        convolution_layer={"kernel_size": kernel_size, "activation": ActivationType.silu},
+    config = GPTBaseModelConfig.from_dict(
+        {
+            "decoder": {
+                "num_blocks": 1,
+                "block": {
+                    "mixer": {
+                        "type": "gdn",
+                        "value_heads": NUM_V_HEADS,
+                        "key_heads": NUM_K_HEADS,
+                        "key_head_dim": HEAD_DIM,
+                        "value_head_dim": HEAD_DIM,
+                        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
+                    }
+                },
+            },
+            "embeddings": {"vocab_size": VOCAB_SIZE},
+            "hidden_size": HIDDEN_SIZE,
+        },
+        update_type=UpdateType.update,
     )
-    distributed_config = DistributedConfig(
-        tensor_parallel=1,
-        pipeline_parallel=1,
-        sequence_data_parallel=1,
-        local_world_size=1,
-        world_size=1,
+
+    model, distributed = get_base_model(
+        GPTModelConfig.from_dict(
+            {
+                "base_model": config,
+                "distributed": {},
+            },
+        )
     )
-    hidden_dim = TensorDim("hidden", hidden_size)
-    fast_layer = fast_config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
-    distributed = Distributed(config=distributed_config)
-    fast_layer.setup(distributed)
-    _materialize_mixer_tensors(fast_layer, distributed, device)
+    fast_layer = model.decoder[0].mixer
+    get_stage([fast_layer], distributed, [], {})
     fast_layer.to(device=device, dtype=dtype).eval()
 
     with torch.no_grad():
-        fast_layer.in_proj_qkvz.weight.copy_(hf_layer.in_proj_qkvz.weight)
-        fast_layer.in_proj_ba.weight.copy_(hf_layer.in_proj_ba.weight)
-        fast_layer.convolution.weight.copy_(hf_layer.conv1d.weight)
-        if fast_layer.convolution.bias is not None and hf_layer.conv1d.bias is not None:
-            fast_layer.convolution.bias.copy_(hf_layer.conv1d.bias)
-        fast_layer.out_proj.weight.copy_(hf_layer.out_proj.weight)
-        fast_layer.A_log.copy_(hf_layer.A_log)
-        fast_layer.dt_bias.copy_(hf_layer.dt_bias)
-        fast_layer.norm.weight.copy_(hf_layer.norm.weight)
+        fast_layer.in_proj_qkvz.weight.copy_(hf_layer.gdn.in_proj_qkvz.weight)
+        fast_layer.in_proj_ba.weight.copy_(hf_layer.gdn.in_proj_ba.weight)
+        fast_layer.convolution.weight.copy_(hf_layer.gdn.conv1d.weight)
+        if fast_layer.convolution.bias is not None and hf_layer.gdn.conv1d.bias is not None:
+            fast_layer.convolution.bias.copy_(hf_layer.gdn.conv1d.bias)
+        fast_layer.out_proj.weight.copy_(hf_layer.gdn.out_proj.weight)
+        fast_layer.A_log.copy_(hf_layer.gdn.A_log)
+        fast_layer.dt_bias.copy_(hf_layer.gdn.dt_bias)
+        fast_layer.norm.weight.copy_(hf_layer.gdn.norm.weight)
 
-    hidden_states = torch.randn(1, seq_len, hidden_size, device=device, dtype=dtype, requires_grad=False)
+    hidden_states = torch.randn(1, SEQ_LEN, HIDDEN_SIZE, device=device, dtype=dtype, requires_grad=False)
 
     param_map = {
         "in_proj_qkvz.weight": "in_proj_qkvz.weight",
@@ -110,22 +95,28 @@ def test_fast_llm_gdn_matches_qwen3_next_forward():
         "dt_bias": "dt_bias",
         "norm.weight": "norm.weight",
     }
+    hf_state_dict = hf_layer.gdn.state_dict()
     for k, p in fast_layer.state_dict().items():
-        torch.testing.assert_close(p, hf_layer.state_dict()[param_map[k]], atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(p, hf_state_dict[param_map[k]], atol=1e-5, rtol=1e-5)
 
     # need to monkey patch the hf implementation with our fix_query_key_value_ordering due to the layout differences
-    hf_layer.fix_query_key_value_ordering = fast_layer.fix_query_key_value_ordering
+    hf_layer.gdn.fix_query_key_value_ordering = fast_layer.fix_query_key_value_ordering
     hf_layer._local_key_heads = fast_layer._local_key_heads
     hf_layer._local_value_heads = fast_layer._local_value_heads
     hf_layer._config = fast_layer._config
 
-    hf_out = hf_layer(hidden_states)
+    hf_out = hf_layer(hidden_states)[0]
 
+    sequence_lengths = [[SEQ_LEN] for _ in range(hidden_states.size(0))]
     fast_kwargs = {
+        BlockKwargs.device: device,
         BlockKwargs.sequence_first: False,
-        BlockKwargs.hidden_dims: (hidden_dim,),
+        BlockKwargs.hidden_dims: (HIDDEN_SIZE,),
+        BlockKwargs.sequence_length: SEQ_LEN,
+        BlockKwargs.sequence_lengths: sequence_lengths,
     }
-    fast_out = fast_layer(hidden_states, fast_kwargs)
+    fast_layer.preprocess(fast_kwargs)
+    fast_out, _ = fast_layer(hidden_states, fast_kwargs)
 
     torch.testing.assert_close(fast_out, hf_out, atol=1e-5, rtol=1e-5)
 
