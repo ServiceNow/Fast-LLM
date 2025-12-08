@@ -147,7 +147,7 @@ class DatasetPreparatorDistributedConfig(Config):
         desc="Distributed backend to use.",
         hint=FieldHint.optional,
     )
-    timeout_seconds: int = Field(
+    timeout: int = Field(
         default=3600,
         desc="Timeout in seconds for torch distributed operations. Default is 3600.",
         hint=FieldHint.optional,
