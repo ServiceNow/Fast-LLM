@@ -329,6 +329,10 @@ class RedisConfig(Config):
         hint=FieldHint.core,
     )
 
+
+@config_class()
+class RedisStreamDatasetConfig(RedisConfig):
+
     group_name: str = Field(
         default="fast_llm_dp_group",
         desc="Name of the Redis consumer group used for data-parallel reading.",
@@ -350,7 +354,7 @@ class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableDatasetConfi
 
     _abstract = False
 
-    redis: RedisConfig = Field(
+    redis: RedisStreamDatasetConfig = Field(
         desc="Redis connection and stream settings used to fetch incoming training data.",
         hint=FieldHint.core,
     )
