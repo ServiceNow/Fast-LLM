@@ -1,0 +1,176 @@
+# Example: Comprehensive architecture with all mixer types
+#
+# This config is designed for thorough testing of the converter.
+# It exercises every mixer type and conversion path in a chaotic pattern:
+#
+# - Pure attention (direct transfer)
+# - Pure sliding window attention (transfer with window override)
+# - Pure mamba (MIL conversion from attention)
+# - Pure gdn (DIL conversion from attention)
+# - Stochastic mixer: attention + mamba
+# - Stochastic mixer: swa + gdn
+#
+# Usage:
+#   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
+#       --surgery examples/comprehensive.yaml
+
+decoder:
+  type: pattern
+  # 48-layer chaotic pattern for Apriel 1.5 - maximally heterogeneous
+  pattern:
+    - attn        # 0
+    - mamba       # 1
+    - gdn         # 2
+    - stoch_am    # 3
+    - swa         # 4
+    - stoch_sg    # 5
+    - gdn         # 6
+    - attn        # 7
+    - stoch_sg    # 8
+    - mamba       # 9
+    - swa         # 10
+    - stoch_am    # 11
+    - gdn         # 12
+    - stoch_sg    # 13
+    - attn        # 14
+    - mamba       # 15
+    - stoch_am    # 16
+    - swa         # 17
+    - gdn         # 18
+    - attn        # 19
+    - stoch_sg    # 20
+    - mamba       # 21
+    - stoch_am    # 22
+    - swa         # 23
+    - attn        # 24
+    - gdn         # 25
+    - stoch_sg    # 26
+    - mamba       # 27
+    - swa         # 28
+    - stoch_am    # 29
+    - gdn         # 30
+    - attn        # 31
+    - mamba       # 32
+    - stoch_sg    # 33
+    - swa         # 34
+    - stoch_am    # 35
+    - attn        # 36
+    - gdn         # 37
+    - mamba       # 38
+    - stoch_sg    # 39
+    - stoch_am    # 40
+    - swa         # 41
+    - attn        # 42
+    - gdn         # 43
+    - mamba       # 44
+    - stoch_sg    # 45
+    - swa         # 46
+    - attn        # 47
+
+  blocks:
+    # Pure full attention - direct weight transfer
+    attn:
+      mixer:
+        type: attention
+        init: transfer
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Pure sliding window attention - transfer with window size
+    swa:
+      mixer:
+        type: attention
+        init: transfer
+        window_size: 4096
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Pure mamba - MIL conversion from attention
+    mamba:
+      mixer:
+        type: mamba
+        init: transfer  # Uses MIL conversion
+        # Required params (cannot be derived)
+        d_state: 64
+        d_conv: 4
+        repeat_kv_before_conv: true
+        conv_bias: true
+        dt_proj_bias: true
+        dt_min: 0.001
+        dt_max: 0.1
+        dt_init_floor: 0.0001
+        # Optional - defaults derived from hidden_size if not specified
+        # d_inner: 10240     # defaults to 2 * hidden_size
+        # dt_rank: 320       # defaults to hidden_size / 16
+        # d_xb: 1280         # defaults to hidden_size / 4
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Pure gated delta net - DIL conversion from attention
+    gdn:
+      mixer:
+        type: gdn
+        init: transfer  # Uses DIL conversion
+        # Required param (cannot be derived)
+        convolution_layer:
+          kernel_size: 4
+        # Optional - defaults derived from source attention if not specified
+        # value_heads: 32   # defaults to source heads
+        # key_heads: 8      # defaults to source head_groups
+        # key_head_dim: 160     # defaults to source head_size
+        # value_head_dim: 160   # defaults to source head_size
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Stochastic: attention + mamba
+    stoch_am:
+      mixer:
+        type: stochastic
+        main_mixer_name: attention
+        mixers:
+          attention:
+            type: attention
+            init: transfer
+          mamba:
+            type: mamba
+            init: transfer  # MIL
+            d_state: 64
+            d_conv: 4
+            repeat_kv_before_conv: true
+            conv_bias: true
+            dt_proj_bias: true
+            dt_min: 0.001
+            dt_max: 0.1
+            dt_init_floor: 0.0001
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Stochastic: sliding window attention + gated delta net
+    stoch_sg:
+      mixer:
+        type: stochastic
+        main_mixer_name: swa
+        mixers:
+          swa:
+            type: attention
+            init: transfer
+            window_size: 4096
+          gdn:
+            type: gdn
+            init: transfer  # DIL
+            convolution_layer:
+              kernel_size: 4
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer

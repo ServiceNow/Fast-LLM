@@ -12,11 +12,11 @@ class TestStochasticMixerStructure:
     def test_all_submixers_present(self, apriel2_config_all_mixers):
         """Stochastic layer contains all 4 configured sub-mixers."""
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
-        stochastic_layer = model.model.layers[1]  # Layer 1 is the "all_mixers" layer
+        stochastic_layer = model.model.decoder.blocks[1]  # Layer 1 is the "all_mixers" layer
 
         assert hasattr(stochastic_layer.mixer, 'mixers'), "Stochastic mixer should have 'mixers' attribute"
         assert set(stochastic_layer.mixer.mixers.keys()) == {
-            'attention', 'swa', 'mamba', 'gated_delta_net'
+            'attention', 'swa', 'mamba', 'gdn'
         }, "Stochastic mixer should contain all 4 configured mixer types"
 
         # Verify each mixer is the correct type
@@ -27,12 +27,12 @@ class TestStochasticMixerStructure:
         assert isinstance(stochastic_layer.mixer.mixers['attention'], Apriel2Attention)
         assert isinstance(stochastic_layer.mixer.mixers['swa'], Apriel2Attention)  # SWA is Apriel2Attention with sliding_window
         assert isinstance(stochastic_layer.mixer.mixers['mamba'], Apriel2Mamba)
-        assert isinstance(stochastic_layer.mixer.mixers['gated_delta_net'], Apriel2GatedDeltaNet)
+        assert isinstance(stochastic_layer.mixer.mixers['gdn'], Apriel2GatedDeltaNet)
 
     def test_main_mixer_is_configured(self, apriel2_config_all_mixers):
         """Verify main_mixer_name is set correctly."""
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
-        stochastic_layer = model.model.layers[1]
+        stochastic_layer = model.model.decoder.blocks[1]
 
         assert stochastic_layer.mixer.main_mixer_name == "attention"
         assert stochastic_layer.mixer.main_mixer_name in stochastic_layer.mixer.mixers
@@ -44,7 +44,7 @@ class TestStochasticMixerStructure:
 
         assert isinstance(layer_cache, dict), "Stochastic layer cache should be a dict"
         assert set(layer_cache.keys()) == {
-            'attention', 'swa', 'mamba', 'gated_delta_net'
+            'attention', 'swa', 'mamba', 'gdn'
         }, "Cache should have slots for all 4 mixers"
 
     def test_attention_mixers_use_attention_cache(self, apriel2_config_all_mixers):
@@ -58,34 +58,59 @@ class TestStochasticMixerStructure:
 
         # SSM-based mixers use SSMCache
         assert isinstance(layer_cache['mamba'], _SSMCache)
-        assert isinstance(layer_cache['gated_delta_net'], _SSMCache)
+        assert isinstance(layer_cache['gdn'], _SSMCache)
 
     def test_parameter_counts_differ_by_config(self):
         """Different configs create models with different parameter counts."""
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
 
+        rotary_config = {"type": "mistral_1d", "theta": 10000.0}
+        attn_config = {
+            "type": "attention",
+            "heads": 4,
+            "head_groups": 2,
+            "head_size": 16,
+            "rotary": rotary_config,
+        }
+
         config_tiny = Apriel2Config(
-            vocab_size=100, hidden_size=64, num_hidden_layers=2,
-            num_attention_heads=4, num_key_value_heads=2
+            vocab_size=100, hidden_size=64,
+            num_attention_heads=4, num_key_value_heads=2,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 2,
+                "block": {
+                    "mixer": attn_config,
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                    "normalization": {"type": "rms_norm"},
+                },
+            },
         )
 
         config_stochastic = Apriel2Config(
-            vocab_size=100, hidden_size=64, num_hidden_layers=2,
+            vocab_size=100, hidden_size=64,
             num_attention_heads=4, num_key_value_heads=2,
             decoder={
                 "type": "pattern",
+                "num_blocks": 2,
                 "pattern": ["attn", "stoch"],
                 "blocks": {
-                    "attn": {"mixer": {"type": "attention"}},
+                    "attn": {
+                        "mixer": attn_config,
+                        "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                        "normalization": {"type": "rms_norm"},
+                    },
                     "stoch": {
                         "mixer": {
                             "type": "stochastic",
                             "main_mixer_name": "attention",
                             "mixers": {
-                                "attention": {"type": "attention"},
+                                "attention": attn_config,
                                 "mamba": {"type": "mamba", "conv_bias": True, "dt_proj_bias": True}
                             }
-                        }
+                        },
+                        "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                        "normalization": {"type": "rms_norm"},
                     }
                 }
             }
@@ -105,7 +130,7 @@ class TestStochasticMixerStructure:
         model = Apriel2ForCausalLM(apriel2_config_all_mixers)
 
         # Check that model has parameters
-        stochastic_layer = model.model.layers[1]
+        stochastic_layer = model.model.decoder.blocks[1]
         total_params = sum(p.numel() for p in stochastic_layer.mixer.parameters())
         assert total_params > 0, "Stochastic mixer should have parameters"
 

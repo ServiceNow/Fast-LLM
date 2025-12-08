@@ -3,7 +3,6 @@ import logging
 import typing
 import warnings
 
-import safetensors.torch
 import torch
 from torch._C._distributed_c10d import ProcessGroup
 
@@ -22,7 +21,6 @@ from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, get_unique
 
 logger = logging.getLogger(__name__)
-safetensors.torch.safe_open
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
@@ -491,9 +489,6 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for shard_name in shard_names:
             shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
-            logger.info(
-                f"{shard_name}, {self._shards[shard_name].shape}, {self._stage_weight_shard_sizes}, {self._stages_owned.values}, {[x.shape for x in shard_split]}"
-            )
             for shard_index, ((stage_index, stage), shard) in enumerate(
                 zip(self._stages_on_device.items(), shard_split, strict=True)
             ):

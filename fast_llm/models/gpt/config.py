@@ -13,7 +13,7 @@ from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig, MultiTokenPredictionConfig
 from fast_llm.models.gpt.conversion.config import (
-    Apriel2CheckpointFormat,
+    Apriel2TextCheckpointFormat,
     AprielHybridSSMCheckpointFormat,
     AutoGPTHuggingfaceCheckpointFormat,
     DiffusionDreamCheckpointFormat,
@@ -112,7 +112,7 @@ class GPTModelConfig(FastLLMModelConfig):
         DiffusionDreamCheckpointFormat,
         DiffusionLlamaCheckpointFormat,
         AprielHybridSSMCheckpointFormat,
-        Apriel2CheckpointFormat,
+        Apriel2TextCheckpointFormat,
     )
 
     @classmethod

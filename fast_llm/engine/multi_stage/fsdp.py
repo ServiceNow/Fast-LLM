@@ -279,9 +279,6 @@ class FSDP:
         return {name: self._get_parameter_in_buffer(buffer, name) for name in self._parameter_metas}
 
     def _get_parameter_in_buffer(self, buffer: torch.Tensor, name: str) -> torch.Tensor:
-        logger.info(
-            f"{name}, {self.get_parameter_begin_in_buffer(name)}, {self.get_parameter_end_in_buffer(name)}, {buffer.shape}, {self._parameter_metas[name]}"
-        )
         return buffer[self.get_parameter_begin_in_buffer(name) : self.get_parameter_end_in_buffer(name)].view(
             self._parameter_metas[name].shape
         )

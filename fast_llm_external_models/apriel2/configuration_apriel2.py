@@ -1,89 +1,37 @@
-"""
-Apriel2 configuration - HuggingFace format that mirrors Fast-LLM's config structure.
-"""
+"""Apriel2 HuggingFace configuration."""
 
+import logging
 from typing import Optional
 
 from transformers import PretrainedConfig
 
+logger = logging.getLogger(__name__)
 
-class Apriel2Config(PretrainedConfig):
-    """
-    Configuration class for Apriel2 models.
 
-    This config mirrors Fast-LLM's hierarchical structure:
-
-    decoder:
-      type: "fixed" or "pattern"
-      num_blocks: int
-
-      # For fixed decoder:
-      block:
-        mixer: {type, ...params}
-        mlp: {type, ...params}
-        normalization: {type}
-
-      # For pattern decoder:
-      blocks:
-        block_name:
-          mixer: {type, ...params}
-          mlp: {type, ...params}
-          normalization: {type}
-      pattern: [block_name, ...]
-
-    Mixer types: attention, mamba, gated_delta_net, kimi_linear_attention, stochastic
-    For stochastic mixers, mixer.mixers is a dict of {name: mixer_config}
-    """
-
-    model_type = "apriel2"
+class Apriel2TextConfig(PretrainedConfig):
+    model_type = "apriel2_text"
 
     def __init__(
         self,
-        vocab_size: int = 32000,
         hidden_size: int = 4096,
-        # Decoder configuration
+        vocab_size: int = 32000,
         decoder: Optional[dict] = None,
-        # Embedding config
-        max_position_embeddings: int = 2048,
-        rope_theta: float = 10000.0,
-        # Attention defaults (can be overridden per-block)
-        num_attention_heads: int = 32,
-        num_key_value_heads: Optional[int] = None,
-        head_dim: Optional[int] = None,
-        # Head config
-        rms_norm_eps: float = 1e-5,
+        embeddings: Optional[dict] = None,
+        head: Optional[dict] = None,
         tie_word_embeddings: bool = False,
-        # Generation config
         bos_token_id: int = 1,
         eos_token_id: int = 2,
         pad_token_id: Optional[int] = None,
         use_cache: bool = True,
         **kwargs,
     ):
-        self.vocab_size = vocab_size
         self.hidden_size = hidden_size
-        self.max_position_embeddings = max_position_embeddings
-        self.rope_theta = rope_theta
-        self.num_attention_heads = num_attention_heads
-        self.num_key_value_heads = num_key_value_heads if num_key_value_heads is not None else num_attention_heads
-        self.head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
-        self.rms_norm_eps = rms_norm_eps
-        self.tie_word_embeddings = tie_word_embeddings
+        self.vocab_size = vocab_size
         self.use_cache = use_cache
 
-        # Decoder configuration with defaults
-        self.decoder = decoder or {
-            "type": "fixed",
-            "num_blocks": 32,
-            "block": {
-                "mixer": {"type": "attention"},
-                "mlp": {"type": "mlp"},
-                "normalization": {"type": "rms_norm"},
-            },
-        }
-
-        # Convenience accessor for HuggingFace compatibility
-        self.num_hidden_layers = self.decoder.get("num_blocks", 32)
+        self.decoder = decoder or self._default_decoder_config()
+        self.embeddings = embeddings or self._default_embeddings_config()
+        self.head = head or self._default_head_config()
 
         super().__init__(
             bos_token_id=bos_token_id,
@@ -93,12 +41,44 @@ class Apriel2Config(PretrainedConfig):
             **kwargs,
         )
 
+    def _default_decoder_config(self) -> dict:
+        return {
+            "type": "fixed",
+            "num_blocks": 32,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 32,
+                    "head_groups": 32,
+                    "head_size": self.hidden_size // 32,
+                    "rotary": {"type": "default", "theta": 10000.0},
+                    "add_linear_biases": False,
+                },
+                "mlp": {
+                    "type": "mlp",
+                    "intermediate_size": self.hidden_size * 4,
+                    "activation": "silu",
+                    "gated": True,
+                    "add_linear_biases": False,
+                },
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        }
+
+    def _default_embeddings_config(self) -> dict:
+        return {
+            "max_position_embeddings": 2048,
+        }
+
+    def _default_head_config(self) -> dict:
+        return {
+            "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+        }
+
     def get_text_config(self, decoder: bool = False):
-        """Return self to ensure tie_word_embeddings is accessible."""
         return self
 
     def get_block_name(self, layer_idx: int) -> str:
-        """Get the block name for a specific layer."""
         decoder_type = self.decoder.get("type", "fixed")
 
         if decoder_type == "fixed":
@@ -112,14 +92,11 @@ class Apriel2Config(PretrainedConfig):
             raise ValueError(f"Unknown decoder type: {decoder_type}")
 
     def get_block_config(self, layer_idx: int) -> dict:
-        """Get the block configuration for a specific layer."""
         decoder_type = self.decoder.get("type", "fixed")
 
         if decoder_type == "fixed":
-            # Fixed decoder: all blocks use the same configuration
-            return self.decoder.get("block", self._default_block_config())
+            return self.decoder.get("block", {})
         elif decoder_type == "pattern":
-            # Pattern decoder: blocks follow a repeating pattern
             blocks = self.decoder.get("blocks", {})
             pattern = self.decoder.get("pattern", [])
             if not blocks or not pattern:
@@ -129,10 +106,39 @@ class Apriel2Config(PretrainedConfig):
         else:
             raise ValueError(f"Unknown decoder type: {decoder_type}")
 
-    def _default_block_config(self) -> dict:
-        """Create default block configuration."""
-        return {
-            "mixer": {"type": "attention"},
-            "mlp": {"type": "mlp"},
-            "normalization": {"type": "rms_norm"},
-        }
+
+class Apriel2Config(Apriel2TextConfig):
+    model_type = "apriel2"
+
+    def __init__(
+        self,
+        hidden_size: int = 4096,
+        vocab_size: int = 32000,
+        decoder: Optional[dict] = None,
+        embeddings: Optional[dict] = None,
+        head: Optional[dict] = None,
+        vision_encoder: Optional[dict] = None,
+        image_token_index: Optional[int] = None,
+        tie_word_embeddings: bool = False,
+        bos_token_id: int = 1,
+        eos_token_id: int = 2,
+        pad_token_id: Optional[int] = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super().__init__(
+            hidden_size=hidden_size,
+            vocab_size=vocab_size,
+            decoder=decoder,
+            embeddings=embeddings,
+            head=head,
+            tie_word_embeddings=tie_word_embeddings,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            pad_token_id=pad_token_id,
+            use_cache=use_cache,
+            **kwargs,
+        )
+
+        self.vision_encoder = vision_encoder
+        self.image_token_index = image_token_index

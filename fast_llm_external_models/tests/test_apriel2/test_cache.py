@@ -11,11 +11,12 @@ class TestCacheBasics:
     def test_cache_creation(self, apriel2_config_tiny):
         """Test cache creation from config."""
         cache = Apriel2Cache(apriel2_config_tiny)
-        assert len(cache) == apriel2_config_tiny.num_hidden_layers
+        num_blocks = apriel2_config_tiny.decoder["num_blocks"]
+        assert len(cache) == num_blocks
         assert cache.is_compileable == False
         assert cache.is_initialized == False
         assert isinstance(cache.is_sliding, list)
-        assert len(cache.is_sliding) == apriel2_config_tiny.num_hidden_layers
+        assert len(cache.is_sliding) == num_blocks
 
     def test_cache_properties_empty(self, apriel2_cache):
         """Test cache properties when empty."""

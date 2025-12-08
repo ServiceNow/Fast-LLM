@@ -7,7 +7,8 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import gdn as gdn_module
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig
+from fast_llm.layers.ssm import kda as kda_module
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig
 from fast_llm.utils import Assert
 
 
@@ -124,15 +125,33 @@ def _param_grad(param: torch.nn.Parameter) -> torch.Tensor | None:
 # TODO: include mamba varlen
 @pytest.mark.slow
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Varlen test needs CUDA")
-@pytest.mark.skipif(
-    gdn_module.chunk_gated_delta_rule is None,
-    reason="Gated Delta Net fused kernels not available",
-)
 @pytest.mark.parametrize(
     "config, sequence_first",
     [
-        pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), False),
-        pytest.param(GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16), True),
+        pytest.param(
+            GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16),
+            False,
+            marks=pytest.mark.skipif(
+                gdn_module.chunk_gated_delta_rule is None, reason="GDN fused kernels not available"
+            ),
+        ),
+        pytest.param(
+            GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16),
+            True,
+            marks=pytest.mark.skipif(
+                gdn_module.chunk_gated_delta_rule is None, reason="GDN fused kernels not available"
+            ),
+        ),
+        pytest.param(
+            KimiDeltaAttentionConfig(heads=4, head_dim=16),
+            False,
+            marks=pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available"),
+        ),
+        pytest.param(
+            KimiDeltaAttentionConfig(heads=4, head_dim=16),
+            True,
+            marks=pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available"),
+        ),
     ],
 )
 def test_mixer_varlen_stacking_equivalence(config: MixerConfig, sequence_first: bool, distributed_config, distributed):
