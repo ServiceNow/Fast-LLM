@@ -400,6 +400,9 @@ def test_save_and_load_in_parallel(run_distributed_script, run_test_script_base_
     # TODO: Test beyond 2 gpu configs?
     import tests.models.distributed_test_checkpoint
 
+    if torch.cuda.device_count() < 2:
+        pytest.skip(f"Not enough GPUs: {torch.cuda.device_count()} < 2")
+
     script = [
         "-m",
         tests.models.distributed_test_checkpoint.__name__,
@@ -426,7 +429,7 @@ def reference_distributed_shard(get_convert_path) -> torch.Tensor | None:
 
 
 @requires_cuda
-@pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
+@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_parallel_checkpoint_in_single_gpu(
     distributed_save_load_config: DistributedSaveLoadConfig,
@@ -446,6 +449,10 @@ def test_load_parallel_checkpoint_in_single_gpu(
     distributed_save_load_config = distributed_save_load_config.resolve(
         base_path=run_test_script_base_path, model_testing_config=model_testing_config
     )
+    if torch.cuda.device_count() < distributed_save_load_config.num_gpus:
+        pytest.skip(
+            f"Not enough GPUs to run dependency: {torch.cuda.device_count()} < {distributed_save_load_config.num_gpus}"
+        )
     report_subtest(distributed_save_load_config.save_path, distributed_save_load_config.num_gpus)
     load_and_compare_checkpoints(
         DistributedCheckpointFormat,

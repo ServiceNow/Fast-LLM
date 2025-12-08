@@ -203,7 +203,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         # Setup the model.
         with torch.no_grad():
             log_main_rank("Setting up model...")
-            self._multi_stage.setup(distributed)
+            self._multi_stage.setup(
+                distributed, mode=StageMode.inference if self._is_evaluation_only else StageMode.training
+            )
             for name, reference_model in self._reference_models.items():
                 log_main_rank(f"Setting up `{name}` reference model...")
                 reference_model.fast_llm_model.setup(distributed, StageMode.inference)
