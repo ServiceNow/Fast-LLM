@@ -136,7 +136,3 @@ def test_fast_llm_kda_matches_apriel_forward():
     fast_out, _ = fast_layer(hidden_states, fast_kwargs)
 
     torch.testing.assert_close(fast_out, hf_out, atol=1e-5, rtol=1e-5)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
