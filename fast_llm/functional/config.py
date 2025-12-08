@@ -42,6 +42,7 @@ class ActivationType(enum.StrEnum):
     gelu = "gelu"
     silu = "silu"
     relu = "relu"
+    sigmoid = "sigmoid"
     squared_relu = "squared_relu"
     identity = "identity"
 
@@ -70,6 +71,7 @@ def _set_activation_fn_map() -> None:
         ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ActivationType.silu: torch.nn.functional.silu,
         ActivationType.relu: torch.nn.functional.relu,
+        ActivationType.sigmoid: torch.nn.functional.sigmoid,
         ActivationType.squared_relu: lambda x: torch.pow(torch.nn.functional.relu(x), 2),
         ActivationType.identity: lambda x: x,
     }
@@ -83,6 +85,7 @@ _ACTIVATION_HF_NAMES = {
     ActivationType.relu: "relu",
     ActivationType.squared_relu: "relu2",
     ActivationType.identity: "identity",
+    ActivationType.sigmoid: "sigmoid",
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 _ACTIVATION_HF_NAMES_INV["gelu"] = ActivationType.gelu

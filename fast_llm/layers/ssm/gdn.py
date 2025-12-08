@@ -9,6 +9,7 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -204,7 +205,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         self.convolution = self._config.convolution_layer.get_layer(
             qkv_channels_dim,
             default_add_bias=False,
-            default_activation=self._config.activation,
+            default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
