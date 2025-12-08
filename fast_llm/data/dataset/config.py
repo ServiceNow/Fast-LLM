@@ -10,14 +10,13 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import (
     SamplableDataset,
-    SamplableIterableDataset,
     SampledDataset,
-    SampledIterableDataset,
 )
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
     from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.data.sample.pipeline_rl import PipelineRLSample
@@ -116,18 +115,18 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
 
     def build_and_sample(
         self, sampling: SamplingData
-    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
+    ) -> "SampledDataset[SampleType] | SampledIterableDataset[SampleType]":
         raise NotImplementedError()
 
 
 @config_class()
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self) -> SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]:
+    def build(self) -> "SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]":
         raise NotImplementedError()
 
     def build_and_sample(
         self, sampling: SamplingData
-    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
+    ) -> "SampledDataset[SampleType] | SampledIterableDataset[SampleType]":
         return self.build().sample(sampling)
 
 
@@ -365,7 +364,7 @@ class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableDatasetConfi
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledIterableDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> "SampledIterableDataset[SampleType]":
         from fast_llm.data.dataset.streaming import StreamingDataset
 
         return StreamingDataset[SampleType](self, sampling.distributed).sample(sampling)

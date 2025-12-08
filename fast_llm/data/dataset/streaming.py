@@ -2,7 +2,7 @@ import typing
 
 import torch.utils.data
 
-from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledIterableDataset
+from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
 from fast_llm.data.dataset.config import SamplingData, StreamingDatasetConfig
 from fast_llm.data.dataset.sampled import NaiveSampledIterableDataset
 from fast_llm.data.sample.pipeline_rl import PipelineRLSample

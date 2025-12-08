@@ -8,7 +8,8 @@ import numpy as np
 import torch
 import yaml
 
-from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledDataset, SampledIterableDataset
+from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
