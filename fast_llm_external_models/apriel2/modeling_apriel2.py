@@ -903,9 +903,9 @@ class Apriel2GatedDeltaNet(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
         self.hidden_size = d_model
-        self.activation = config_dict["convolution_layer"].get("activation", "silu")
 
         # Config params - match Fast-LLM naming (value_heads, key_heads, etc.)
+        self.activation = config_dict["convolution_layer"].get("activation", "silu")
         self.value_heads = config_dict.get("value_heads", 32)
         self.key_heads = config_dict.get("key_heads", 8)
         self.key_head_dim = config_dict.get("key_head_dim", 64)
@@ -1044,7 +1044,6 @@ class Apriel2GatedDeltaNet(nn.Module):
                 # Pad to kernel size and store for future decoding
                 padded = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
                 past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size :]
-
             # Apply convolution
             # note, using F.silu(self.convolution(mixed_qkv)[:, :, :seq_len]) is numerically different than applying causal_conv1d_fn
             # which failed the test test_fast_llm_gdn_matches_apriel2_forward
