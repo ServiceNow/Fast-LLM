@@ -1038,8 +1038,6 @@ class TestPlanBuilders:
             target_prefix=W(""),
         )
 
-        projection_size = 4 * 16  # 64
-
         # KDA has 15 weight tensors
         assert len(plan.mappings) == 15
 

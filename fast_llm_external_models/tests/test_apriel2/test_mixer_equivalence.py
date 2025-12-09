@@ -558,7 +558,6 @@ class TestAttentionEquivalence:
         self,
         mistral_config,
         apriel2_config,
-        attention_config,
         batch_size,
         seq_len,
         hidden_size,
@@ -568,7 +567,6 @@ class TestAttentionEquivalence:
         from transformers.models.mistral.modeling_mistral import MistralAttention, MistralRotaryEmbedding
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
-        num_heads, num_kv_heads, head_dim = attention_config
         mixer_config = apriel2_config.decoder["block"]["mixer"]
 
         # Create models
