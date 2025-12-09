@@ -361,7 +361,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             key_value = key_value.transpose(0, 1).contiguous()
 
         key, value = key_value.split(self._local_head_groups * self._config.head_size, dim=-1)
-        print("AAAAA", input_.shape, query.shape, key.shape)
 
         query = query.view(*query.shape[:2], self._local_heads, self._config.head_size)
         key = key.view(*key.shape[:2], self._local_head_groups, self._config.head_size)
