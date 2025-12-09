@@ -52,7 +52,14 @@ class AprielGDNConfig:
         self.num_heads = kl_num_heads
 
 
-LAYER_TYPES = {"t": "full_attention", "swa": "sliding_attention", "gdn": "gated_delta_net", "kl": "kimi_linear"}
+# TODO: this mapping is here for vllm
+LAYER_TYPES = {
+    "t": "full_attention",
+    "swa": "sliding_attention",
+    "gdn": "gated_delta_net",
+    "kl": "kimi_linear",
+    "m2": "mamba2",
+}
 
 
 class AprielHybridSSMConfig(MistralConfig):
