@@ -136,5 +136,5 @@ training:
 # Experiment directory and logging
 run:
   experiment_dir: /tmp/apriel2-supernet-small-trained
-  # Uncomment to enable model debug logging (shows stochastic mixer selection per iteration):
-  # model_debug_level: 1
+  # Enable model debug logging to see stochastic mixer selection per iteration
+  model_debug_level: 1
