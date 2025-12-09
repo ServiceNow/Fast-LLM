@@ -5,6 +5,7 @@ import fast_llm.layers.ssm.kda as kda_module
 from fast_llm.config import UpdateType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
 try:
@@ -26,7 +27,6 @@ KERNEL_SIZE = 4
 @pytest.mark.skipif(KimiDeltaAttention is None or AprielHybridSSMConfig is None, reason="Apriel KDA deps missing")
 @pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available")
 def test_fast_llm_kda_matches_apriel_forward():
-    torch.manual_seed(0)
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
@@ -113,13 +113,13 @@ def test_fast_llm_kda_matches_apriel_forward():
         "dt_bias": "dt_bias",
         "norm.weight": "o_norm.weight",
     }
-    for fast_name, hf_name in param_map.items():
-        fast_param = fast_layer.state_dict()[fast_name]
-        hf_param = hf_layer.state_dict()[hf_name]
+    hf_params = hf_layer.state_dict()
+    for fast_name, fast_param in fast_layer.state_dict().items():
+        hf_param = hf_params[param_map[fast_name]]
         if fast_param.shape != hf_param.shape:
+            Assert.eq(fast_param.numel(), hf_param.numel(), msg=fast_name)
             hf_param = hf_param.reshape_as(fast_param)
-        print(f"Comparing parameter {fast_name} with shape {fast_param.shape}")
-        torch.testing.assert_close(fast_param, hf_param, atol=1e-5, rtol=1e-5)
+        Assert.rms_close_relative(fast_param, hf_param, 1e-5, 1e-5, msg=fast_name)
 
     hidden_states = torch.randn(2, SEQ_LEN, HIDDEN_SIZE, device=device, dtype=dtype, requires_grad=False)
     hf_layer.training = True
@@ -135,4 +135,4 @@ def test_fast_llm_kda_matches_apriel_forward():
     fast_layer.preprocess(fast_kwargs)
     fast_out, _ = fast_layer(hidden_states, fast_kwargs)
 
-    torch.testing.assert_close(fast_out, hf_out, atol=1e-5, rtol=1e-5)
+    Assert.rms_close_relative(fast_out, hf_out, 1e-5, 1e-5)

@@ -50,9 +50,9 @@ def _assert_loss_and_grad(logits, loss, grad):
         assert torch.isfinite(grad).all()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("use_mask", [False, True])
 def test_reverse_kl_no_tp(use_mask):
-    torch.manual_seed(0)
     batch_size, seq_len, vocab_size = 2, 3, 5
     logits = torch.randn(batch_size, seq_len, vocab_size, requires_grad=True)
     target = torch.randn(batch_size, seq_len, vocab_size)
@@ -81,11 +81,10 @@ def test_reverse_kl_no_tp(use_mask):
     else:
         valid_tokens = logits.shape[0] * logits.shape[1]
     reference = per_sample.sum() / valid_tokens
-    torch.testing.assert_close(loss, reference, atol=1e-6, rtol=1e-6)
+    Assert.rms_close_relative(loss, reference, 1e-6, 1e-6)
 
 
 def _vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
-    torch.manual_seed(0)
     world_size = dist.get_world_size(group)
 
     batch_size, seq_len, vocab_per_rank = 2, 3, 5
@@ -124,11 +123,10 @@ def _vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
     else:
         ref_loss = torch.zeros_like(loss)
     dist.broadcast(ref_loss, src=0, group=group)
-    torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-6)
+    Assert.rms_close_relative(loss, ref_loss, 1e-6, 1e-6)
 
 
 def _ce_vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
-    torch.manual_seed(0)
     world_size = dist.get_world_size(group)
 
     batch_size, seq_len, vocab_per_rank = 2, 3, 5
@@ -169,7 +167,7 @@ def _ce_vocab_tp_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):
     else:
         ref_loss = torch.zeros_like(loss)
     dist.broadcast(ref_loss, src=0, group=group)
-    torch.testing.assert_close(loss, ref_loss, atol=1e-6, rtol=1e-6)
+    Assert.rms_close_relative(loss, ref_loss, 1e-6, 1e-6)
 
 
 def combined_worker(rank: int, group: dist.ProcessGroup, use_mask: bool):

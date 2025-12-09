@@ -12,6 +12,7 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup, allreduce_scalar, safe_barrier
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.base_model.config import set_model_names
 from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
@@ -43,6 +44,12 @@ def get_stage(
     tied_parameter_duplicates: typing.Iterable[str] = (),
     tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
 ):
+
+    for layer in layers:
+        if not layer._is_setup:
+            layer.setup(distributed)
+    # Normally called in `BaseModelConfig.get_base_model`, but may be missing here.
+    set_model_names(torch.nn.ModuleList(layers))
     # Create a fast-llm stage which allocates and initializes meta tensors correctly.
     stage = Stage(
         config=StageConfig(),

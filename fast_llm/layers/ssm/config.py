@@ -4,7 +4,6 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
@@ -18,11 +17,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.ssm.kda import KimiDeltaAttention
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
-
-
-class LinearAttentionKwargs(BlockKwargs):
-    cu_seqlens = "cu_seqlens"
-    seq_idx = "seq_idx"
 
 
 @config_class(dynamic_type={MixerConfig: "gdn"})
@@ -179,13 +173,6 @@ class KimiDeltaAttentionConfig(MixerConfig):
 
         return KimiDeltaAttention
 
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            if "activation" not in self.normalization._explicit_fields:
-                self.normalization.activation = "sigmoid"
-
-        super()._validate()
-
 
 @config_class()
 class SSMConfig(MixerConfig):
@@ -333,6 +320,12 @@ class Mamba2Config(MambaBaseConfig):
         default=True,
         desc="Whether to repeat x and B before (True) or after (False) the conv1d in Mamba2 blocks.",
         hint=FieldHint.architecture,
+    )
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Allow for cross-document attention.",
+        doc="Disable to prevent attention between tokens belonging to different documents.",
+        hint=FieldHint.feature,
     )
 
     @property

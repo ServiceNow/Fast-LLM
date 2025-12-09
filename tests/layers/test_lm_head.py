@@ -163,8 +163,6 @@ def test_lm_head(
     loss_masking: bool,
     prediction_heads: int,
 ):
-    torch.cuda.manual_seed(0)
-    torch.manual_seed(0)
     head_config = {
         "cross_entropy_implementation": cross_entropy_impl,
         "normalization": {"type": "rms_norm"},

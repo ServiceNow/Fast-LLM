@@ -4,6 +4,7 @@ import torch
 from fast_llm.config import UpdateType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.utils import Assert
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
@@ -19,7 +20,6 @@ KERNEL_SIZE = 4
 @pytest.mark.slow
 @requires_cuda
 def test_fast_llm_gdn_matches_qwen3_next_forward():
-    torch.manual_seed(0)
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
@@ -97,7 +97,7 @@ def test_fast_llm_gdn_matches_qwen3_next_forward():
     }
     hf_state_dict = hf_layer.gdn.state_dict()
     for k, p in fast_layer.state_dict().items():
-        torch.testing.assert_close(p, hf_state_dict[param_map[k]], atol=1e-5, rtol=1e-5)
+        Assert.rms_close_relative(p, hf_state_dict[param_map[k]], 1e-5, 1e-5)
 
     # need to monkey patch the hf implementation with our fix_query_key_value_ordering due to the layout differences
     hf_layer.gdn.fix_query_key_value_ordering = fast_layer.fix_query_key_value_ordering
@@ -118,4 +118,4 @@ def test_fast_llm_gdn_matches_qwen3_next_forward():
     fast_layer.preprocess(fast_kwargs)
     fast_out, _ = fast_layer(hidden_states, fast_kwargs)
 
-    torch.testing.assert_close(fast_out, hf_out, atol=1e-5, rtol=1e-5)
+    Assert.rms_close_relative(fast_out, hf_out, 1e-5, 1e-5)

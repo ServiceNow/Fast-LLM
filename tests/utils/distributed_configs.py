@@ -79,7 +79,7 @@ _fp16_compare = get_config(
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
     compare=None,
-    config_args=["training.num_workers=2"],
+    config_args=[],
     num_gpus=1,
 )
 
@@ -87,7 +87,8 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="bf16",
         compare="simple",
-        config_args=["model.distributed.compute_dtype=bf16"],
+        # Also tests parallel data loader.
+        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=2"],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),
