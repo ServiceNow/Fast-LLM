@@ -21,9 +21,9 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
         dataset: SampledDataset[SampleType],
         sampling: GPTSamplingData,
     ):
-        if sampling.parameters.use_loss_masking_spans:
+        if sampling.preprocessing.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
-        if sampling.parameters.use_preference_loss_spans:
+        if sampling.preprocessing.use_preference_spans:
             raise NotImplementedError("FIM is currently not compatible with preference loss masking.")
         self._config = config
         self._dataset = dataset
