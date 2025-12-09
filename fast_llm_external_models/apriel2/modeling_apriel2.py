@@ -2,28 +2,30 @@
 
 import math
 import random
-from typing import Any, Optional, Union, TypedDict
 from types import SimpleNamespace
+from typing import Any, Optional, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.processing_utils import Unpack
-from transformers.utils import logging
-
-from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
-from fast_llm_external_models.apriel2.cache import Apriel2Cache
-from transformers.models.mistral.modeling_mistral import (
-    MistralMLP,
-    MistralRMSNorm,
-    apply_rotary_pos_emb,
-)
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import eager_attention_forward
+from transformers.models.mistral.modeling_mistral import MistralMLP, MistralRMSNorm, apply_rotary_pos_emb
+from transformers.processing_utils import Unpack
+from transformers.utils import logging
+from transformers.utils.import_utils import (
+    is_causal_conv1d_available,
+    is_mamba_ssm_available,
+    is_torch_flex_attn_available,
+)
+
+from fast_llm_external_models.apriel2.cache import Apriel2Cache
+from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 
 # GDN implementation - matches Fast-LLM's gdn.py exactly
 try:
@@ -36,10 +38,6 @@ try:
 except ImportError:
     rms_norm_gated = None
 
-from transformers.utils.import_utils import is_torch_flex_attn_available
-from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
-
-from transformers.utils.import_utils import is_mamba_ssm_available, is_causal_conv1d_available
 
 is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
@@ -667,7 +665,7 @@ class Apriel2Mamba(nn.Module):
         return {}
 
     def step(self, hidden_states, conv_state, ssm_state):
-        dtype = hidden_states.dtype
+        hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
 
         hidden_states_input = hidden_states.squeeze(1)
@@ -907,6 +905,7 @@ class Apriel2GatedDeltaNet(nn.Module):
         self.hidden_size = d_model
 
         # Config params - match Fast-LLM naming (value_heads, key_heads, etc.)
+        self.activation = config_dict["convolution_layer"].get("activation", "silu")
         self.value_heads = config_dict.get("value_heads", 32)
         self.key_heads = config_dict.get("key_heads", 8)
         self.key_head_dim = config_dict.get("key_head_dim", 64)
@@ -1046,7 +1045,14 @@ class Apriel2GatedDeltaNet(nn.Module):
                 padded = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
                 past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size :]
             # Apply convolution
-            mixed_qkv = F.silu(self.convolution(mixed_qkv)[:, :, :seq_len])
+            # note, using F.silu(self.convolution(mixed_qkv)[:, :, :seq_len]) is numerically different than applying causal_conv1d_fn
+            # which failed the test test_fast_llm_gdn_matches_apriel2_forward
+            mixed_qkv = causal_conv1d_fn(
+                x=mixed_qkv,
+                weight=self.convolution.weight.squeeze(1),
+                bias=self.convolution.bias,
+                activation=self.activation,
+            )
 
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
 
