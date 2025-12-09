@@ -1052,7 +1052,6 @@ class Apriel2GatedDeltaNet(nn.Module):
                 weight=self.convolution.weight.squeeze(1),
                 bias=self.convolution.bias,
                 activation=self.activation,
-                seq_idx=None,
             )
 
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
