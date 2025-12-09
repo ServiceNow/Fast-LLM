@@ -36,6 +36,15 @@ try:
 except ImportError:
     rms_norm_gated = None
 
+# KDA implementation - matches Fast-LLM's kda.py
+try:
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
+except ImportError:
+    chunk_kda = None
+    fused_recurrent_kda = None
+    fused_kda_gate = None
+
 from transformers.utils.import_utils import is_torch_flex_attn_available
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
@@ -409,8 +418,8 @@ def get_mixer_class(mixer_type: str) -> type:
         return Apriel2Mamba
     elif mixer_type == "gdn":
         return Apriel2GatedDeltaNet
-    elif mixer_type == "kimi_linear_attention":
-        return KimiLinearAttention
+    elif mixer_type == "kda":
+        return KimiDeltaAttention
     elif mixer_type == "stochastic":
         return Apriel2StochasticMixer
     else:
@@ -431,7 +440,7 @@ def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, a
             raise ValueError("Stochastic mixers cannot contain nested stochastic mixers")
         return mixer_class(mixer_config, config, layer_idx)
     else:
-        # mamba, gdn, kimi_linear_attention all have same signature
+        # mamba, gdn, kda all have same signature
         return mixer_class(hidden_size, mixer_config, layer_idx=layer_idx)
 
 
@@ -845,12 +854,18 @@ class GatedRMSNormalization(nn.Module):
     """
     Gated RMS normalization layer matching Fast-LLM's implementation.
     Uses fla.modules.fused_norm_gate.rms_norm_gated when available.
+
+    Args:
+        hidden_size: Size of the hidden dimension
+        eps: Epsilon for numerical stability
+        activation: Gating activation function ("silu" or "sigmoid")
     """
 
-    def __init__(self, hidden_size: int, eps: float = 1e-5):
+    def __init__(self, hidden_size: int, eps: float = 1e-5, activation: str = "silu"):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
+        self.activation = activation
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         # Use PyTorch fallback on CPU since fla requires CUDA
@@ -865,7 +880,7 @@ class GatedRMSNormalization(nn.Module):
             gate,
             self.weight,
             None,
-            activation="silu",
+            activation=self.activation,
             eps=self.eps,
             residual=None,
             prenorm=False,
@@ -879,7 +894,11 @@ class GatedRMSNormalization(nn.Module):
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
         hidden_states = self.weight * hidden_states.to(input_dtype)
-        return hidden_states * F.silu(gate)
+        # Apply gating with configured activation
+        if self.activation == "sigmoid":
+            return hidden_states * torch.sigmoid(gate)
+        else:  # silu
+            return hidden_states * F.silu(gate)
 
 
 class Apriel2GatedDeltaNet(nn.Module):
@@ -1150,8 +1169,22 @@ class Apriel2GatedDeltaNet(nn.Module):
         return {}
 
 
-class KimiLinearAttention(nn.Module):
-    """KimiLinearAttention mixer - stub for future implementation."""
+class KimiDeltaAttention(nn.Module):
+    """
+    Kimi Delta Attention (KDA) implementation matching Fast-LLM's kda.py.
+
+    Weight names match Fast-LLM:
+    - q_proj, k_proj, v_proj, o_proj - main projections
+    - f_a_proj, f_b_proj - gate kernel (low-rank)
+    - g_a_proj, g_b_proj - output gate (low-rank)
+    - beta_proj - beta gating
+    - q_conv, k_conv, v_conv - causal convolutions (nn.Conv1d)
+    - A_log, dt_bias - learnable parameters
+    - norm - gated RMS normalization
+
+    Uses fla.ops.kda.chunk_kda and fused_recurrent_kda kernels.
+    Uses causal_conv1d_fn/causal_conv1d_update for convolutions (with PyTorch fallback).
+    """
 
     def __init__(
         self,
@@ -1162,7 +1195,241 @@ class KimiLinearAttention(nn.Module):
         dtype=None,
     ):
         super().__init__()
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+
+        if chunk_kda is None or fused_kda_gate is None:
+            raise ImportError(
+                "KimiDeltaAttention requires the `fla` package. "
+                "Please install it with `pip install -U fla-core`."
+            )
+
+        self.layer_idx = layer_idx
+        self.hidden_size = d_model
+        self.mode = "chunk"
+
+        # Config params - match Fast-LLM naming
+        self.num_heads = config_dict.get("heads", 32)
+        self.head_dim = config_dict.get("head_dim", 64)
+        conv_config = config_dict.get("convolution_layer", {})
+        self.conv_kernel_size = conv_config.get("kernel_size", 4)
+        norm_config = config_dict.get("normalization", {})
+        self.norm_eps = norm_config.get("epsilon", 1e-5)
+
+        # Derived dimensions
+        self.projection_size = self.head_dim * self.num_heads
+
+        # Projection layers - names match Fast-LLM exactly
+        self.q_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.k_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.v_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Convolutions - use nn.Conv1d like GDN (not ShortConvolution)
+        # Named to match Fast-LLM (q_conv, k_conv, v_conv)
+        self.q_conv = nn.Conv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,  # depthwise
+            bias=False,
+            padding=self.conv_kernel_size - 1,
+            device=device,
+            dtype=dtype,
+        )
+        self.k_conv = nn.Conv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            padding=self.conv_kernel_size - 1,
+            device=device,
+            dtype=dtype,
+        )
+        self.v_conv = nn.Conv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            padding=self.conv_kernel_size - 1,
+            device=device,
+            dtype=dtype,
+        )
+
+        # Gate kernel projections (low-rank: hidden -> head_dim -> projection)
+        self.f_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.f_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Output gate projections (low-rank)
+        self.g_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.g_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Beta projection - named beta_proj to match Fast-LLM (not b_proj)
+        self.beta_proj = nn.Linear(d_model, self.num_heads, bias=False, device=device, dtype=dtype)
+
+        # Output projection
+        self.o_proj = nn.Linear(self.projection_size, d_model, bias=False, device=device, dtype=dtype)
+
+        # Learnable parameters - match Fast-LLM shapes
+        # A_log: 1D shape (num_heads,) to match Fast-LLM
+        self.A_log = nn.Parameter(torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log())
+        self.dt_bias = nn.Parameter(torch.ones(self.projection_size, device=device, dtype=torch.float32))
+
+        # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
+        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation="sigmoid")
+
+    def _apply_conv(self, x: torch.Tensor, conv: nn.Conv1d, conv_state: torch.Tensor | None, use_cache: bool):
+        """
+        Apply causal convolution with cache support.
+        Uses causal_conv1d_fn for prefill, causal_conv1d_update for single-token decode.
+        Falls back to PyTorch implementation on CPU.
+
+        Args:
+            x: Input tensor [batch, seq, dim]
+            conv: Conv1d module (weights)
+            conv_state: Previous conv state [batch, dim, kernel_size-1] or None
+            use_cache: Whether to output final state for caching
+
+        Returns:
+            (output, new_conv_state) tuple
+        """
+        batch_size, seq_len, dim = x.shape
+        x = x.transpose(1, 2)  # [batch, dim, seq]
+
+        # Get weight in [dim, kernel_size] format
+        weight = conv.weight.squeeze(1)  # [dim, 1, kernel] -> [dim, kernel]
+
+        # Single token decode with existing cache
+        if conv_state is not None and seq_len == 1:
+            # Use causal_conv1d_update for single-step
+            out = causal_conv1d_update(
+                x.squeeze(2),  # [batch, dim]
+                conv_state,
+                weight,
+                bias=conv.bias,
+                activation="silu",
+            )
+            return out.unsqueeze(1), conv_state  # [batch, 1, dim]
+
+        # Prefill mode - use causal_conv1d_fn or PyTorch fallback
+        if is_fast_path_available and x.device.type != "cpu":
+            # Use CUDA kernel with initial_states and return_final_states
+            # Note: causal_conv1d requires final_states.stride(1) == 1, so we create with
+            # transposed shape and transpose to get the right memory layout
+            if use_cache:
+                final_state = x.new_zeros(
+                    batch_size, self.conv_kernel_size - 1, dim
+                ).transpose(1, 2)  # Now stride(1) == 1
+            else:
+                final_state = None
+            out = causal_conv1d_fn(
+                x,
+                weight,
+                bias=conv.bias,
+                initial_states=conv_state,
+                return_final_states=use_cache,
+                final_states_out=final_state,
+                activation="silu",
+            )
+            if use_cache:
+                # causal_conv1d_fn returns (output, final_state) when return_final_states=True
+                if isinstance(out, tuple):
+                    out, final_state = out
+            return out.transpose(1, 2), final_state  # [batch, seq, dim]
+        else:
+            # PyTorch fallback
+            out = torch_causal_conv1d_fn(x, weight, bias=conv.bias, activation="silu")
+            # Compute final state for cache
+            if use_cache:
+                # Store last kernel_size-1 positions for next decode
+                padded = F.pad(x, (self.conv_kernel_size - 1 - x.shape[-1], 0)) if x.shape[-1] < self.conv_kernel_size - 1 else x
+                final_state = padded[:, :, -(self.conv_kernel_size - 1):].clone()
+            else:
+                final_state = None
+            return out.transpose(1, 2), final_state  # [batch, seq, dim]
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_values=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        batch_size, seq_len, _ = hidden_states.shape
+        mode = "fused_recurrent" if seq_len <= 64 else self.mode
+        if self.training:
+            mode = "chunk"
+
+        # Get cache states if available
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        use_cache = past_key_values is not None
+
+        if past_key_values is not None:
+            conv_states = past_key_values.conv_states[self.layer_idx]
+            if conv_states is not None:
+                conv_state_q, conv_state_k, conv_state_v = conv_states
+            recurrent_state = past_key_values.recurrent_states[self.layer_idx]
+
+        # Project Q, K, V and apply convolutions
+        q, conv_state_q = self._apply_conv(self.q_proj(hidden_states), self.q_conv, conv_state_q, use_cache)
+        k, conv_state_k = self._apply_conv(self.k_proj(hidden_states), self.k_conv, conv_state_k, use_cache)
+        v, conv_state_v = self._apply_conv(self.v_proj(hidden_states), self.v_conv, conv_state_v, use_cache)
+
+        # Gate kernel computation
+        g = self.f_b_proj(self.f_a_proj(hidden_states))
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+        g = fused_kda_gate(g, self.A_log.float(), dt_bias=self.dt_bias)
+
+        # Beta gating
+        beta = self.beta_proj(hidden_states).float().sigmoid()
+
+        # Reshape Q, K, V to head format
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Run KDA kernel
+        if mode == "chunk":
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=False,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+            )
+
+        # Update cache
+        if past_key_values is not None:
+            past_key_values.recurrent_states[self.layer_idx] = recurrent_state
+            past_key_values.conv_states[self.layer_idx] = (conv_state_q, conv_state_k, conv_state_v)
+
+        # Output gating and normalization
+        g_out = self.g_b_proj(self.g_a_proj(hidden_states))
+        g_out = rearrange(g_out, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Flatten for normalization, then reshape back
+        o_shape = o.shape
+        o = self.norm(o.reshape(-1, o.shape[-1]), g_out.reshape(-1, g_out.shape[-1]))
+        o = o.reshape(o_shape)
+
+        # Reshape and project output
+        o = rearrange(o, "b t h d -> b t (h d)")
+        o = self.o_proj(o)
+
+        return (o,)
 
     @classmethod
     def setup(
@@ -1171,11 +1438,8 @@ class KimiLinearAttention(nn.Module):
         hidden_size: int,
         max_position_embeddings: int,
     ) -> nn.ModuleDict:
-        """KimiLinearAttention setup not implemented."""
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
-
-    def forward(self, hidden_states: torch.Tensor, **kwargs):
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+        """KimiDeltaAttention has no setup resources - returns empty ModuleDict."""
+        return nn.ModuleDict()
 
     def preprocess(
         self,
@@ -1183,8 +1447,8 @@ class KimiLinearAttention(nn.Module):
         resources: Optional[nn.ModuleDict],
         **kwargs: Unpack[BlockSequenceKwargs],
     ) -> PreprocessingOutput:
-        """KimiLinearAttention preprocessing not implemented."""
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+        """KimiDeltaAttention has no preprocessing - returns empty dict."""
+        return {}
 
 
 class Apriel2BlockSequence(nn.Module):

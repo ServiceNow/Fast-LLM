@@ -1,14 +1,15 @@
 # Training config for small Apriel2 stochastic supernet (single GPU)
 #
 # This config loads a converted Apriel2 model and trains it on multimodal data.
+# The stochastic supernet includes attention, sliding window, gated delta net, and KDA mixers.
 #
 # Prerequisites:
 #
 # 1. Convert a source model to Apriel2 format with reduced layers:
 #    (Note: multiple --surgery flags are composed left-to-right)
 #
-#    python -m fast_llm_external_models.apriel2.conversion.convert \
-#        mistral-community/pixtral-12b \
+#    python fast_llm_external_models/apriel2/convert.py \
+#        ServiceNow-AI/Apriel-1.5-15b-Thinker \
 #        /tmp/apriel2-supernet-small \
 #        --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet.yaml \
 #        --surgery fast_llm_external_models/apriel2/examples/small.yaml
@@ -38,6 +39,44 @@
 #
 # The trained model will be exported to:
 #    /tmp/apriel2-supernet-small-trained/export/apriel2/{iteration}/
+#
+# 4. Load and test the trained model, then switch mixers at runtime:
+#
+#    python -c "
+#    import torch
+#    from transformers import AutoProcessor, AutoModelForImageTextToText
+#
+#    # Load the trained Apriel2 VLM (includes stochastic supernet with KDA)
+#    model = AutoModelForImageTextToText.from_pretrained(
+#        '/tmp/apriel2-supernet-small-trained/export/apriel2/10',
+#        torch_dtype=torch.bfloat16,
+#        device_map='auto',
+#        trust_remote_code=True,
+#    )
+#    processor = AutoProcessor.from_pretrained('ServiceNow-AI/Apriel-1.5-15b-Thinker')
+#
+#    # Show available mixers in the stochastic supernet
+#    block = model.model.decoder.blocks[0]
+#    print(f'Available mixers: {list(block.mixer.mixers.keys())}')
+#    print(f'Current main mixer: {block.mixer.main_mixer_name}')
+#
+#    # Switch all blocks to use KDA as the main mixer (used during inference)
+#    for block in model.model.decoder.blocks:
+#        block.mixer.main_mixer_name = 'kda'
+#    print(f'Switched to: {model.model.decoder.blocks[0].mixer.main_mixer_name}')
+#
+#    # Generate with KDA
+#    chat = [{'role': 'user', 'content': [{'type': 'text', 'text': 'Hello'}]}]
+#    inputs = processor.apply_chat_template(
+#        chat, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors='pt'
+#    )
+#    inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+#    inputs.pop('token_type_ids', None)
+#
+#    with torch.no_grad():
+#        output_ids = model.generate(**inputs, max_new_tokens=50, do_sample=True, temperature=0.7)
+#    print(processor.decode(output_ids[0], skip_special_tokens=True))
+#    "
 
 # Load pretrained model
 pretrained:

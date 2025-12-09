@@ -31,6 +31,7 @@ When applying a surgery spec to a complete config:
     - attention → sliding_window: preserve heads, head_groups, head_size
     - attention → gdn: heads → value_heads, head_groups → key_heads
     - attention → mamba: derive d_inner, d_xb, dt_rank from hidden_size
+    - attention → kda: preserve heads, head_size → head_dim
 
 **Stochastic Mixer Composition**
     Two semantics based on whether surgery declares `type: stochastic`:
@@ -432,6 +433,22 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                 "dt_max",
                 "dt_init_floor",
             ]:
+                if key in surgery:
+                    result[key] = surgery[key]
+            # Preserve init
+            if "init" in surgery:
+                result["init"] = surgery["init"]
+            return result
+
+        elif target_type == "kda":
+            # Attention → KDA: derive heads/head_dim from attention geometry
+            result = {
+                "type": "kda",
+                "heads": surgery.get("heads", heads),
+                "head_dim": surgery.get("head_dim", head_size),
+            }
+            # Copy KDA-specific fields from surgery
+            for key in ["convolution_layer", "normalization"]:
                 if key in surgery:
                     result[key] = surgery[key]
             # Preserve init

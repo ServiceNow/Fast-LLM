@@ -162,7 +162,11 @@ class Apriel2Cache(Cache):
                 cache.value = cache.value.index_select(0, beam_idx.to(cache.value.device))
         elif isinstance(cache, _SSMCache):
             if cache.conv is not None:
-                cache.conv = cache.conv.index_select(0, beam_idx.to(cache.conv.device))
+                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
+                if isinstance(cache.conv, tuple):
+                    cache.conv = tuple(c.index_select(0, beam_idx.to(c.device)) for c in cache.conv)
+                else:
+                    cache.conv = cache.conv.index_select(0, beam_idx.to(cache.conv.device))
             if cache.recurrent is not None:
                 cache.recurrent = cache.recurrent.index_select(0, beam_idx.to(cache.recurrent.device))
 
@@ -208,7 +212,11 @@ class Apriel2Cache(Cache):
                 cache.value = cache.value.repeat_interleave(repeats, dim=0)
         elif isinstance(cache, _SSMCache):
             if cache.conv is not None:
-                cache.conv = cache.conv.repeat_interleave(repeats, dim=0)
+                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
+                if isinstance(cache.conv, tuple):
+                    cache.conv = tuple(c.repeat_interleave(repeats, dim=0) for c in cache.conv)
+                else:
+                    cache.conv = cache.conv.repeat_interleave(repeats, dim=0)
             if cache.recurrent is not None:
                 cache.recurrent = cache.recurrent.repeat_interleave(repeats, dim=0)
 
@@ -227,7 +235,11 @@ class Apriel2Cache(Cache):
                 cache.value = cache.value.index_select(0, indices.to(cache.value.device))
         elif isinstance(cache, _SSMCache):
             if cache.conv is not None:
-                cache.conv = cache.conv.index_select(0, indices.to(cache.conv.device))
+                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
+                if isinstance(cache.conv, tuple):
+                    cache.conv = tuple(c.index_select(0, indices.to(c.device)) for c in cache.conv)
+                else:
+                    cache.conv = cache.conv.index_select(0, indices.to(cache.conv.device))
             if cache.recurrent is not None:
                 cache.recurrent = cache.recurrent.index_select(0, indices.to(cache.recurrent.device))
 
@@ -274,11 +286,17 @@ class Apriel2Cache(Cache):
                     if isinstance(cache, _AttentionCache) and cache.key is not None:
                         return cache.key.shape[0]
                     if isinstance(cache, _SSMCache) and cache.conv is not None:
+                        # Handle both single tensor and tuple conv states
+                        if isinstance(cache.conv, tuple):
+                            return cache.conv[0].shape[0]
                         return cache.conv.shape[0]
             else:
                 if isinstance(layer, _AttentionCache) and layer.key is not None:
                     return layer.key.shape[0]
                 if isinstance(layer, _SSMCache) and layer.conv is not None:
+                    # Handle both single tensor and tuple conv states
+                    if isinstance(layer.conv, tuple):
+                        return layer.conv[0].shape[0]
                     return layer.conv.shape[0]
         return None
 
