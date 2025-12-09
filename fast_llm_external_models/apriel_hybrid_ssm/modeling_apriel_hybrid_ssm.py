@@ -1358,6 +1358,8 @@ class Mamba2(nn.Module):
         #         batch_size, inference_params.max_seqlen, dtype=torch.float32
         #     )
         # Get states
+        if inference_params is None:
+            return None, None
         ssm_states = inference_params.ssm_states[self.layer_idx]
         conv_states = inference_params.conv_states[self.layer_idx]
         if initialize_states:
@@ -1389,7 +1391,6 @@ class AprielSSMDecoderLayer(nn.Module):
         self, hidden_states: torch.Tensor, **kwargs
     ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
 
-        outputs = {}
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -1408,9 +1409,9 @@ class AprielSSMDecoderLayer(nn.Module):
         hidden_states = residual + hidden_states
 
         # outputs["hidden_states"] = hidden_states
-        outputs = (hidden_states,)
+        # outputs = (hidden_states,)
 
-        return outputs
+        return hidden_states
 
 
 class AprielSSMM2DecoderLayer(AprielSSMDecoderLayer):
@@ -1423,7 +1424,8 @@ class AprielHybridIdentity(nn.Module):
         self.config = config
 
     def forward(self, hidden_states: torch.Tensor, **kwargs):
-        return (hidden_states,)
+        # return (hidden_states,)
+        return hidden_states
 
 
 class AprielHybridSSMModel(MistralModel):
