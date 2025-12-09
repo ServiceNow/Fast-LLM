@@ -199,6 +199,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "save": True,
                 "show": False,
             },
+            # Uncomment to enable model debug logging:
+            # "model_debug_level": _LOG_LEVEL,
         },
         "training": {
             "logs": {"interval": 1},
