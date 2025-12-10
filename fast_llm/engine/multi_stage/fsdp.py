@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import math
 import typing
 
@@ -17,6 +18,8 @@ from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, clamp, padded_cumsum
+
+logger = logging.getLogger(__name__)
 
 
 class FSDP:

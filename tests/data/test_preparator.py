@@ -3,10 +3,11 @@ import json
 import datasets
 import pytest
 
-from fast_llm.data.dataset.config import BlendedDatasetConfig, MemmapDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.config import BlendedDatasetConfig, MemmapDatasetConfig, SamplingParameters
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
@@ -42,11 +43,11 @@ def test_common_prepared_dataset():
     We already test the dataset preparator indirectly through the test dataset (`get_test_dataset`).
     Here we verify the correctness of the prepared dataset directly and check for regressions.
     """
-    path, config, hf_path = get_common_test_dataset()
-    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build()
+    path, config, hf_path, preprocessing = get_common_test_dataset()
+    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
     dataset_from_shard = get_dataset_config(
         {"type": "memmap", "path": path / "shard_0_0.fast_llm_dataset"}, MemmapDatasetConfig
-    ).build()
+    ).build(preprocessing)
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -71,18 +72,18 @@ def test_common_prepared_dataset():
     # Check some numerical values.
     for index in COMMON_DATASET_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
-        document = dataset.get_document(index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
 
 
 @pytest.mark.slow
 def test_preparator_sharded():
-    path, config, hf_path = get_sharded_test_dataset()
+    path, config, hf_path, preprocessing = get_sharded_test_dataset()
 
     dataset_config = get_dataset_config(config, GPTDatasetFromFileConfig)._load_config()
     Assert.custom(isinstance, dataset_config, BlendedDatasetConfig)
     Assert.eq(dataset_config.weights, [0.33003587104248827, 0.3455874161709333, 0.3243767127865784])
-    datasets_ = [dataset_config_.build() for dataset_config_ in dataset_config.datasets]
+    datasets_ = [dataset_config_.build(preprocessing) for dataset_config_ in dataset_config.datasets]
     Assert.eq([len(dataset) for dataset in datasets_], lengths := [334, 333, 333])
     Assert.eq([dataset.num_tokens for dataset in datasets_], [14813, 15511, 14559])
 
@@ -101,7 +102,7 @@ def test_preparator_sharded():
 
 @pytest.mark.slow
 def test_preparator_split():
-    path, config, hf_path = get_split_test_dataset()
+    path, config, hf_path, _ = get_split_test_dataset()
     dataset_config = {
         split: get_dataset_config(split_config, GPTDatasetFromFileConfig)._load_config().to_dict()
         for split, split_config in config.items()
@@ -125,7 +126,7 @@ def test_preparator_split():
 
 @pytest.mark.slow
 def test_preparator_split_sharded():
-    path, config, hf_path = get_split_sharded_test_dataset()
+    path, config, hf_path, _ = get_split_sharded_test_dataset()
     dataset_config = {
         split: get_dataset_config(split_config, GPTDatasetFromFileConfig)._load_config().to_dict()
         for split, split_config in config.items()
@@ -182,7 +183,9 @@ def test_dataset_preparator_from_hub():
     assert (croissant_path := output_path / "croissant.json").is_file()
     Assert.eq(json.load(croissant_path.open("r"))["url"], "https://huggingface.co/datasets/openai/gsm8k")
 
-    dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build()
+    dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build(
+        LanguageModelPreprocessingConfig()
+    )
     Assert.custom(isinstance, dataset, MemmapDataset)
 
     hf_dataset = datasets.load_dataset("openai/gsm8k", "main", split="test")

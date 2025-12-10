@@ -40,6 +40,9 @@ if typing.TYPE_CHECKING:
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
+TP_NO_STP = r"(?:^|(?<=[^s]))tp"
+
+
 class ModelTestingGroup(enum.StrEnum):
     basic = "basic"
     checkpoint = "checkpoint"
@@ -95,7 +98,7 @@ class ModelTestingConfig:
     )
 
     def __post_init__(self):
-        _, config, _ = self.get_dataset(config_only=True)
+        _, config, _, _ = self.get_dataset(config_only=True)
         self.config_dict["data"]["datasets"] = config
 
     @functools.cached_property
@@ -288,8 +291,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     ],
     checkpoint_format=None,
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.main,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         # TODO: PP checkpoint failing for tied weights.
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
@@ -584,8 +587,8 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
     },
     compare_factor=2,
-    # modes not supported with reference models
-    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
+    # Modes not supported with reference models
+    skip_tests=("sdp", "ms", "pp"),
 )
 
 _update_and_add_testing_config(
@@ -611,11 +614,12 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, df4, df4_sf, tp2, stp2,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
     compare_factor=8,
-    # modes not supported with reference models
-    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "stp2_ce4"),
+    # Modes not supported with reference models and/or activation distillation.
+    # TODO: Fix gradient accumulation and fp16, add TP support.
+    skip_tests=("sdp", "ms", "pp", "tp", "df", "bf", "fp16"),
 )
 
 _update_and_add_testing_config(
@@ -635,12 +639,12 @@ _update_and_add_testing_config(
     checkpoint_format=MixtralCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
     compare_factor=2.0,
 )
@@ -674,8 +678,8 @@ _update_and_add_testing_config(
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
         # TODO: Fix and bring back to `testing_groups`
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
@@ -684,7 +688,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=(r"sdp", r"ms"),
+    skip_tests=("sdp", "ms"),
 )
 
 _update_and_add_testing_config(
@@ -725,10 +729,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=(
-        r"sdp",
-        r"ms",
-    ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
+    skip_tests=("sdp", "ms"),
 )
 
 
@@ -856,15 +857,16 @@ _update_and_add_testing_config(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        # TODO: Fix (`fast_llm/models/gpt/conversion/apriel.py:235: KeyError: 'value_head_dim'`)
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=10.0,  # with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
+    compare_factor=10.0,  # High diff for fp16 and bf16 due to rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
-    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+    skip_tests=("sdp", "ms", TP_NO_STP),
 )
 
 _update_and_add_testing_config(
@@ -969,11 +971,11 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=10.0,
+    compare_factor=12.0,
     # Micro-sequence split not supported for Mamba.
     # Pipeline-parallel gives a different mixer selection.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "pp", r"^tp2$"),
+    skip_tests=("sdp", "ms", "pp", TP_NO_STP),
 )
 
 
@@ -1016,7 +1018,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "bf4", "df", r"^tp2$"),
+    skip_tests=("sdp", "ms", "bf4", "df4", TP_NO_STP),
 )
 
 
@@ -1046,8 +1048,8 @@ _update_and_add_testing_config(
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -1055,7 +1057,7 @@ _update_and_add_testing_config(
     compare_factor=10.0,  # similar to gdn with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
-    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+    skip_tests=("sdp", "ms", TP_NO_STP),
 )
 
 

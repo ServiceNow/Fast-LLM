@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapIndexedDatasetReader,
@@ -111,8 +112,8 @@ class TokenReaderConfig(MemmapReaderConfig):
 
 
 class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._tokens = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
@@ -126,7 +127,7 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
         begin_ = self._size_cumsums[index].item()
         # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
         # Convert begin and end to int to avoid numpy dtype overflow when adding to begin_
-        return TokenSample(self._tokens[begin_ + int(begin) : begin_ + int(end)].to(torch.int64), [end - begin])
+        return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
 
     def get_document_sizes(self) -> torch.Tensor:
         return self._size_cumsums[1:] - self._size_cumsums[:-1]
@@ -167,4 +168,5 @@ class TokenWriter(MemmapWriter):
             num_documents=len(self._size_cumsum) - 1,
             num_tokens=self._size_cumsum[-1],
             data_type=DataType.from_torch(self._data_type),
+            preprocessing=self._preprocessing_config,
         )
