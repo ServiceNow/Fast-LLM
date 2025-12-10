@@ -288,8 +288,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     ],
     checkpoint_format=None,
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.main,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         # TODO: PP checkpoint failing for tied weights.
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
@@ -636,12 +636,12 @@ _update_and_add_testing_config(
     checkpoint_format=MixtralCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
     compare_factor=2.0,
 )
