@@ -230,6 +230,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
                     f"The model uses loss masking spans, but the dataset does not specify any."
                     " Assuming empty span lists."
                 )
+                # TODO: this might have the same issue as empty PatchReaderConfig, so RangeReaderConfig.create_empty might be needed
                 self._loss_masking_spans = EmptyRangeReader(
                     RangeReaderConfig(begin=0, end=0, num_documents=0, num_ranges=0), buffer
                 )
