@@ -2,28 +2,30 @@
 
 import math
 import random
-from typing import Any, Optional, Union, TypedDict
 from types import SimpleNamespace
+from typing import Any, Optional, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.processing_utils import Unpack
-from transformers.utils import logging
-
-from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
-from fast_llm_external_models.apriel2.cache import Apriel2Cache
-from transformers.models.mistral.modeling_mistral import (
-    MistralMLP,
-    MistralRMSNorm,
-    apply_rotary_pos_emb,
-)
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import eager_attention_forward
+from transformers.models.mistral.modeling_mistral import MistralMLP, MistralRMSNorm, apply_rotary_pos_emb
+from transformers.processing_utils import Unpack
+from transformers.utils import logging
+from transformers.utils.import_utils import (
+    is_causal_conv1d_available,
+    is_mamba_ssm_available,
+    is_torch_flex_attn_available,
+)
+
+from fast_llm_external_models.apriel2.cache import Apriel2Cache
+from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 
 # GDN implementation - matches Fast-LLM's gdn.py exactly
 try:
@@ -45,10 +47,6 @@ except ImportError:
     fused_recurrent_kda = None
     fused_kda_gate = None
 
-from transformers.utils.import_utils import is_torch_flex_attn_available
-from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
-
-from transformers.utils.import_utils import is_mamba_ssm_available, is_causal_conv1d_available
 
 is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
@@ -676,7 +674,7 @@ class Apriel2Mamba(nn.Module):
         return {}
 
     def step(self, hidden_states, conv_state, ssm_state):
-        dtype = hidden_states.dtype
+        hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
 
         hidden_states_input = hidden_states.squeeze(1)
@@ -1198,8 +1196,7 @@ class KimiDeltaAttention(nn.Module):
 
         if chunk_kda is None or fused_kda_gate is None:
             raise ImportError(
-                "KimiDeltaAttention requires the `fla` package. "
-                "Please install it with `pip install -U fla-core`."
+                "KimiDeltaAttention requires the `fla` package. " "Please install it with `pip install -U fla-core`."
             )
 
         self.layer_idx = layer_idx
@@ -1213,6 +1210,7 @@ class KimiDeltaAttention(nn.Module):
         self.conv_kernel_size = conv_config.get("kernel_size", 4)
         norm_config = config_dict.get("normalization", {})
         self.norm_eps = norm_config.get("epsilon", 1e-5)
+        self.norm_activation = norm_config.get("activation", "sigmoid")
 
         # Derived dimensions
         self.projection_size = self.head_dim * self.num_heads
@@ -1271,11 +1269,13 @@ class KimiDeltaAttention(nn.Module):
 
         # Learnable parameters - match Fast-LLM shapes
         # A_log: 1D shape (num_heads,) to match Fast-LLM
-        self.A_log = nn.Parameter(torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log())
+        self.A_log = nn.Parameter(
+            torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log()
+        )
         self.dt_bias = nn.Parameter(torch.ones(self.projection_size, device=device, dtype=torch.float32))
 
         # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
-        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation="sigmoid")
+        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation=self.norm_activation)
 
     def _apply_conv(self, x: torch.Tensor, conv: nn.Conv1d, conv_state: torch.Tensor | None, use_cache: bool):
         """
@@ -1316,9 +1316,9 @@ class KimiDeltaAttention(nn.Module):
             # Note: causal_conv1d requires final_states.stride(1) == 1, so we create with
             # transposed shape and transpose to get the right memory layout
             if use_cache:
-                final_state = x.new_zeros(
-                    batch_size, self.conv_kernel_size - 1, dim
-                ).transpose(1, 2)  # Now stride(1) == 1
+                final_state = x.new_zeros(batch_size, self.conv_kernel_size - 1, dim).transpose(
+                    1, 2
+                )  # Now stride(1) == 1
             else:
                 final_state = None
             out = causal_conv1d_fn(
@@ -1341,8 +1341,12 @@ class KimiDeltaAttention(nn.Module):
             # Compute final state for cache
             if use_cache:
                 # Store last kernel_size-1 positions for next decode
-                padded = F.pad(x, (self.conv_kernel_size - 1 - x.shape[-1], 0)) if x.shape[-1] < self.conv_kernel_size - 1 else x
-                final_state = padded[:, :, -(self.conv_kernel_size - 1):].clone()
+                padded = (
+                    F.pad(x, (self.conv_kernel_size - 1 - x.shape[-1], 0))
+                    if x.shape[-1] < self.conv_kernel_size - 1
+                    else x
+                )
+                final_state = padded[:, :, -(self.conv_kernel_size - 1) :].clone()
             else:
                 final_state = None
             return out.transpose(1, 2), final_state  # [batch, seq, dim]
