@@ -84,7 +84,7 @@ def test_fast_llm_gdn_matches_apriel2_forward():
     hidden_states = torch.randn(1, SEQ_LEN, HIDDEN_SIZE, device=device, dtype=dtype, requires_grad=False)
     hf_state_dict = hf_layer.state_dict()
     for k, p in fast_layer.state_dict().items():
-        Assert.rms_close_relative(p, hf_state_dict[param_map[k]], 1e-5, 1e-5)
+        Assert.rms_close_relative(p, hf_state_dict[k], 1e-5, 1e-5)
 
     hf_out = hf_layer(hidden_states)[0]
 
