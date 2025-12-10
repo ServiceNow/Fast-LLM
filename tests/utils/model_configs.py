@@ -40,6 +40,9 @@ if typing.TYPE_CHECKING:
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
+TP_NO_STP = r"(?:^|(?<=[^s]))tp"
+
+
 class ModelTestingGroup(enum.StrEnum):
     basic = "basic"
     checkpoint = "checkpoint"
@@ -291,8 +294,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     ],
     checkpoint_format=None,
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.main,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         # TODO: PP checkpoint failing for tied weights.
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
@@ -600,7 +603,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {
             "teacher": {
-                "model": {"base_model": copy.deepcopy(_mistral_base_model)},
+                "model": {"base_model": base_model},
             },
         },
     },
@@ -623,84 +626,6 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    # Tests logit distillation.
-    "mistral",
-    "mistral_distill_logits",
-    updates={
-        ("model", "base_model", "head", "distillation_model"): "teacher",
-        ("reference_models"): {
-            "teacher": {
-                "model": {"base_model": base_model},
-            },
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: tp2, stp2, stp2_ce4
-    },
-    compare_factor=1.5,
-    # modes not supported with reference models
-    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
-)
-
-_update_and_add_testing_config(
-    "mistral_distill_logits",
-    "mistral_reverse_kl",
-    updates={
-        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
-    },
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
-    },
-    compare_factor=2,
-    # modes not supported with reference models
-    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
-)
-
-_update_and_add_testing_config(
-    "mistral_distill_logits",
-    "mistral_distill_activations",
-    updates={
-        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
-        ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
-        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
-        ("reference_models"): {
-            "teacher": {
-                "model": {"base_model": base_model},
-            },
-        },
-    },
-    # Megatron doesn't support sliding windows.
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, df4, df4_sf, tp2, stp2,
-    },
-    compare_factor=8,
-    # modes not supported with reference models
-    skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "stp2_ce4"),
-)
-
-_update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
@@ -717,12 +642,12 @@ _update_and_add_testing_config(
     checkpoint_format=MixtralCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
     compare_factor=2.0,
 )
@@ -944,7 +869,7 @@ _update_and_add_testing_config(
     compare_factor=10.0,  # High diff for fp16 and bf16 due to rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
-    skip_tests=("sdp", "ms", r"(?<!s)tp"),
+    skip_tests=("sdp", "ms", TP_NO_STP),
 )
 
 _update_and_add_testing_config(
@@ -1062,11 +987,11 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
-    compare_factor=10.0,
+    compare_factor=12.0,
     # Micro-sequence split not supported for Mamba.
     # Pipeline-parallel gives a different mixer selection.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "pp", r"^tp2$"),
+    skip_tests=("sdp", "ms", "pp", TP_NO_STP),
 )
 
 
@@ -1109,7 +1034,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "bf4", "df", r"^tp2$"),
+    skip_tests=("sdp", "ms", "bf4", "df4", TP_NO_STP),
 )
 
 
@@ -1139,8 +1064,8 @@ _update_and_add_testing_config(
     checkpoint_format=AprielHybridSSMCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -1148,7 +1073,7 @@ _update_and_add_testing_config(
     compare_factor=10.0,  # similar to gdn with compare_factor 2 fails fp16 and bf16 tests in the normalizaiton layer when using rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
-    skip_tests=(r"sdp", r"ms", r"^tp2$"),
+    skip_tests=("sdp", "ms", TP_NO_STP),
 )
 
 

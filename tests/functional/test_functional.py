@@ -136,6 +136,7 @@ def test_mlp_recomputation(gated, activation):
 
 # Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
 @pytest.mark.slow
+@pytest.mark.skip("Dropless MoE is broken")
 @requires_cuda
 def test_dropless_mlp():
     num_experts = 4

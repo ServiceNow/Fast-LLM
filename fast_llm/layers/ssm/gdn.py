@@ -244,38 +244,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             )
 
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-        """Derives query, key and value tensors from mixed_qkvz and mixed_ba."""
-        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._config.key_head_dim
-            + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
-        )
-        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._local_value_heads // self._local_key_heads,
-        )
-        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-        split_arg_list_qkvz = [
-            self._config.key_head_dim,
-            self._config.key_head_dim,
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-        ]
-        split_arg_list_ba = [
-            self._local_value_heads // self._local_key_heads,
-            self._local_value_heads // self._local_key_heads,
-        ]
-        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
-        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
-        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
-        value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
-        z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
-        b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
-        a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
-        return query, key, value, z, b, a
-
-    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """
         Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
         Replaces fix_query_key_value_ordering from Qwen due to layout differences.
