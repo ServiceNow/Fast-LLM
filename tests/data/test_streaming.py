@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from fast_llm.data.dataset.config import (
-    RedisConfig,
+    RedisStreamDatasetConfig,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
@@ -108,7 +108,7 @@ def fake_redis_server(stream_config):
 
 def get_stream_config():
     return StreamingDatasetConfig(
-        redis=RedisConfig(
+        redis=RedisStreamDatasetConfig(
             host="localhost",
             port=6379,
             stream_key="test_stream",
