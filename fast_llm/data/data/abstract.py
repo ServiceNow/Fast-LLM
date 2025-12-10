@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Configurable
 from fast_llm.data.data.config import DataConfig
 from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Batch
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
@@ -16,6 +17,7 @@ if typing.TYPE_CHECKING:
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
     _sampling_parameters: dict[str, SamplingParameters]
+    _preprocessing: PreprocessingConfig
     _cache_directory: pathlib.Path | None
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
@@ -27,11 +29,13 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         self,
         distributed: "Distributed",
         sampling_parameters: dict[str, SamplingParameters],
+        preprocessing: PreprocessingConfig,
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
         self._distributed = distributed
         self._sampling_parameters = sampling_parameters
+        self._preprocessing = preprocessing
         self._cache_directory = cache_directory
 
     @property

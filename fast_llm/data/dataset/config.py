@@ -9,12 +9,12 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
-    from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,7 @@ class SamplingData:
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
     dataset_name: str
+    preprocessing: PreprocessingConfig
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
     _rank_counter: typing.Iterator[int] = itertools.count
 
@@ -114,16 +115,16 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
 
 @config_class()
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self) -> SamplableDataset[SampleType]:
+    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
         raise NotImplementedError()
 
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
-        return self.build().sample(sampling)
+        return self.build(sampling.preprocessing).sample(sampling)
 
 
 @config_class()
 class IndexedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
-    def build(self) -> "IndexedDataset[SampleType]":
+    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
         raise NotImplementedError()
 
 
@@ -147,10 +148,10 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
         valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
 
-    def build(self) -> "ConcatenatedDataset":
+    def build(self, preprocessing: PreprocessingConfig) -> "ConcatenatedDataset":
         from fast_llm.data.dataset.indexed import ConcatenatedDataset
 
-        return ConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
+        return ConcatenatedDataset(self.name, [dataset.build(preprocessing) for dataset in self.datasets])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "slice"})
@@ -180,10 +181,10 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
         hint=FieldHint.core,
     )
 
-    def build(self) -> "DatasetSlice":
+    def build(self, preprocessing: PreprocessingConfig) -> "DatasetSlice":
         from fast_llm.data.dataset.indexed import DatasetSlice
 
-        dataset = self.dataset.build()
+        dataset = self.dataset.build(preprocessing)
         size = len(dataset)
         return DatasetSlice[SampleType](
             f"{dataset.name}_{self.begin}_{self.end}",
@@ -272,7 +273,7 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class MemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[SampleType]):
+class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -280,12 +281,12 @@ class MemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[
         hint=FieldHint.core,
     )
 
-    def build(self) -> "IndexedDataset[SampleType]":
+    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
         name = str(self.path).replace("/", "__")
         if self.path.is_file():
             from fast_llm.data.dataset.memmap import MemmapDataset
 
-            return MemmapDataset[SampleType](name, self.path)
+            return MemmapDataset[SampleType](name, self.path, preprocessing)
         elif self.path.with_suffix(".bin").is_file() and self.path.with_suffix(".idx").is_file():
             logger.warning(
                 "Using the legacy memmap dataset format."
@@ -294,6 +295,6 @@ class MemmapDatasetConfig[SampleType: LanguageModelSample](IndexedDatasetConfig[
             )
             from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
 
-            return LegacyMemmapDataset[SampleType](name, self.path)
+            return LegacyMemmapDataset[SampleType](name, self.path, preprocessing)
         else:
             raise FileNotFoundError(self.path)

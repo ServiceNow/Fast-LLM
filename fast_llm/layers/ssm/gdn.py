@@ -9,6 +9,7 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -204,7 +205,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         self.convolution = self._config.convolution_layer.get_layer(
             qkv_channels_dim,
             default_add_bias=False,
-            default_activation=self._config.activation,
+            default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -241,38 +242,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             logger.warning(
                 "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
             )
-
-    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-        """Derives query, key and value tensors from mixed_qkvz and mixed_ba."""
-        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._config.key_head_dim
-            + 2 * self._config.value_head_dim * self._local_value_heads // self._local_key_heads,
-        )
-        new_tensor_shape_ba = mixed_ba.size()[:-1] + (
-            self._local_key_heads,
-            2 * self._local_value_heads // self._local_key_heads,
-        )
-        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-        split_arg_list_qkvz = [
-            self._config.key_head_dim,
-            self._config.key_head_dim,
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-            (self._local_value_heads // self._local_key_heads * self._config.value_head_dim),
-        ]
-        split_arg_list_ba = [
-            self._local_value_heads // self._local_key_heads,
-            self._local_value_heads // self._local_key_heads,
-        ]
-        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
-        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
-        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
-        value = value.reshape(value.size(0), value.size(1), -1, self._config.value_head_dim)
-        z = z.reshape(z.size(0), z.size(1), -1, self._config.value_head_dim)
-        b = b.reshape(b.size(0), b.size(1), self._local_value_heads)
-        a = a.reshape(a.size(0), a.size(1), self._local_value_heads)
-        return query, key, value, z, b, a
 
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """

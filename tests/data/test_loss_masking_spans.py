@@ -1,7 +1,8 @@
 import datasets
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
@@ -37,8 +38,10 @@ TOKEN_LOSS_MASKING_SPANS = {
 
 @pytest.mark.slow
 def test_gpt_data_with_spans():
-    _, config, hf_path = get_test_dataset_with_loss_masking_spans()
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
+    _, config, hf_path, preprocessing = get_test_dataset_with_loss_masking_spans()
+    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
+        preprocessing
+    )
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -54,9 +57,7 @@ def test_gpt_data_with_spans():
             hf_dataset[index]["text"],
             text_spans=[(begin, last + 1) for begin, last in hf_dataset[index]["loss_masking_spans"]],
         )
-        document = dataset.get_document(
-            index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
-        )
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
 
         # Compare tokens and token spans.
         Assert.all_equal(document.tokens.tokens, expected_tokens)
@@ -73,8 +74,6 @@ def test_gpt_data_with_spans():
     for index in DATASET_WITH_SPAN_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
         Assert.eq(hf_dataset[index]["loss_masking_spans"], HF_LOSS_MASKING_SPANS[index])
-        document = dataset.get_document(
-            index, parameters=GPTSamplingParameters(num_samples=0, sequence_length=0, use_loss_masking_spans=True)
-        )
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_SPAN_SAMPLES[index])
         Assert.eq(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])

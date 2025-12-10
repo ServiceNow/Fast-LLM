@@ -4,7 +4,6 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
-from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
@@ -15,6 +14,8 @@ if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+    from fast_llm.layers.ssm.gdn import GatedDeltaNet
+    from fast_llm.layers.ssm.kda import KimiDeltaAttention
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
 
@@ -84,36 +85,104 @@ class GatedDeltaNetConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    norm_epsilon: float = Field(
-        default=1e-6,
-        desc="Epsilon used by the gated RMS norm.",
-        hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
-    )
-    activation: ActivationType = Field(
-        default=ActivationType.silu,
-        desc="Activation used after the convolution.",
-        hint=FieldHint.architecture,
-    )
 
     def _validate(self) -> None:
         super()._validate()
         Assert.multiple(self.value_heads, self.key_heads)
 
     @property
-    def layer_class(self) -> "type":
+    def layer_class(self) -> "type[GatedDeltaNet]":
         from fast_llm.layers.ssm.gdn import GatedDeltaNet
 
         return GatedDeltaNet
 
     def _validate(self) -> None:
+        super()._validate()
+
+
+@config_class(dynamic_type={MixerConfig: "kda"})
+class KimiDeltaAttentionConfig(MixerConfig):
+    """
+    Configuration for the KimiDeltaAttention mixer inspired by the Kimi Linear models.
+    """
+
+    _abstract = False
+    normalization: GatedRMSNormalizationConfig = Field(
+        desc="Configuration for the gated normalization applied to the KDA output.",
+        hint=FieldHint.architecture,
+    )
+    q_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces query vectors.",
+        hint=FieldHint.architecture,
+    )
+    k_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces key vectors.",
+        hint=FieldHint.architecture,
+    )
+    v_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces value vectors.",
+        hint=FieldHint.architecture,
+    )
+    f_a_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the Delta gating pre-activation.",
+        hint=FieldHint.architecture,
+    )
+    f_b_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the Delta gating expansion.",
+        hint=FieldHint.architecture,
+    )
+    g_a_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the output gating pre-activation.",
+        hint=FieldHint.architecture,
+    )
+    g_b_projection_layer: AffineLinearConfig = Field(
+        desc="Projection used for the output gating expansion.",
+        hint=FieldHint.architecture,
+    )
+    beta_projection_layer: AffineLinearConfig = Field(
+        desc="Projection that produces the Beta gate.",
+        hint=FieldHint.architecture,
+    )
+    output_projection_layer: AffineLinearConfig = Field(
+        desc="Projection applied after the Delta recurrence and gated normalization.",
+        hint=FieldHint.architecture,
+    )
+    convolution_layer: CausalConv1dConfig = Field(
+        desc="Depth-wise convolution applied independently on each Q, K and V stream.",
+        hint=FieldHint.architecture,
+    )
+    dt_bias_weight: ParameterConfig = Field(
+        desc="Parameter configuration for the Delta gate bias.",
+        hint=FieldHint.architecture,
+    )
+    a_log_weight: ParameterConfig = Field(
+        desc="Parameter configuration for the decay rates.",
+        hint=FieldHint.architecture,
+    )
+
+    heads: int = Field(
+        default=16,
+        desc="Number of attention heads.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    head_dim: int = Field(
+        default=64,
+        desc="Dimension of each head.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+
+    @property
+    def layer_class(self) -> "type[KimiDeltaAttention]":
+        from fast_llm.layers.ssm.kda import KimiDeltaAttention
+
+        return KimiDeltaAttention
+
+    def _validate(self) -> None:
         with self._set_implicit_default():
-            if "epsilon" not in self.normalization._explicit_fields:
-                self.normalization.epsilon = 1.0e-5
-            if "activation" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.activation = "silu"
-            if "kernel_size" not in self.convolution_layer._explicit_fields:
-                self.convolution_layer.kernel_size = 4
+            if "activation" not in self.normalization._explicit_fields:
+                self.normalization.activation = "sigmoid"
 
         super()._validate()
 

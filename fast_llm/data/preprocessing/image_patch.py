@@ -4,6 +4,7 @@ import math
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -11,12 +12,14 @@ if typing.TYPE_CHECKING:
     import torch
 
 
-@config_class()
-class ImagePatchConfig(Config):
+@config_class(dynamic_type={PreprocessingConfig: "image_patch"})
+class ImagePatchConfig(PreprocessingConfig):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
     """
+
+    _abstract = False
 
     height: int = Field(
         default=16,
@@ -61,10 +64,27 @@ class ImagePatchConfig(Config):
         hint=FieldHint.optional,
     )
 
+    def check_compatibility(self, preprocessing: typing.Self) -> None:
+        Assert.custom(isinstance, preprocessing, ImagePatchConfig)
+        Assert.eq(self.height, preprocessing.height)
+        Assert.eq(self.width, preprocessing.width)
+        Assert.eq(self.do_resize, preprocessing.do_resize)
+        Assert.leq(self.max_image_height, preprocessing.max_image_height)
+        Assert.leq(self.max_image_width, preprocessing.max_image_width)
+        # None is used in the trainer to mark unknown value, so we can't do an equality check. TODO: Distinguish.
+        if preprocessing.image_break_token is not None:
+            Assert.eq(self.image_break_token, preprocessing.image_break_token)
+        if preprocessing.image_end_token is not None:
+            Assert.eq(self.image_end_token, preprocessing.image_end_token)
+
     @property
     def num_channels(self) -> int:
         # assume 3 channels (RGB) for all images
         return 3
+
+    @functools.cached_property
+    def patch_shape(self) -> tuple[int, int, int]:
+        return self.num_channels, self.height, self.width
 
     @functools.cached_property
     def max_patches_height(self) -> int:

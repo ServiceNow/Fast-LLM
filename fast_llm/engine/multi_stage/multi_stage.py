@@ -427,6 +427,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         return self._stages_on_device
 
     @property
+    def stages_owned(self) -> dict[int, Stage]:
+        return self._stages_owned
+
+    @property
     def tied_parameters(self) -> dict[str, "TiedParameter"]:
         return self._tied_parameters
 
@@ -485,11 +489,14 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for shard_name in shard_names:
             shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
-            for shard_index, (stage, shard) in enumerate(zip(self._stages_owned.values(), shard_split, strict=True)):
-                for name, tensor in stage._export_shard(
-                    shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
-                ):  # noqa
-                    yield name, shard_name, tensor
+            for shard_index, ((stage_index, stage), shard) in enumerate(
+                zip(self._stages_on_device.items(), shard_split, strict=True)
+            ):
+                if stage_index in self._stages_owned:
+                    for name, tensor in stage._export_shard(
+                        shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
+                    ):  # noqa
+                        yield name, shard_name, tensor
 
     def import_state_tensor(self, parameter_name: str, shard_name: str, tensor: torch.Tensor | SafeTensorSlice):
         """

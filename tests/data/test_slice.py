@@ -31,15 +31,15 @@ GPT_SLICE_VALIDATION_SAMPLES = [
 
 def test_gpt_slice():
     # Make sure dataset splitting works and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
     memmap_config = GPTDatasetFromFileConfig.from_dict(config)._load_config()
     # samples[9:18]
     dataset = get_dataset_config(
         {"type": "slice", "dataset": memmap_config, "begin": 0.025, "end": 0.1},
         DatasetSliceConfig[LanguageModelSample],
-    ).build()
+    ).build(preprocessing)
     compare_indexed_dataset_tokens(dataset, 75, 3399, {i - 25: sample for i, sample in COMMON_DATASET_SAMPLES.items()})
-    sampled = dataset.sample(get_sampling_data(8, sequence_length=5))
+    sampled = dataset.sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_SLICE_VALIDATION_SAMPLES)
 
     # Test in data with multiple phases.
@@ -72,4 +72,5 @@ def test_gpt_slice():
             "training": GPT_SLICE_TRAINING_SAMPLES,
             "validation": GPT_SLICE_VALIDATION_SAMPLES,
         },
+        preprocessing=preprocessing,
     )

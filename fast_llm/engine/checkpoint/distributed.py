@@ -120,12 +120,15 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
         self_shards = {shard_name: self._model.get_shard(shard_name) for shard_name in loaded_shards}
 
-        for _, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
-            for _, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
-                counter = self_fsdp.copy_shard_overlaps(
-                    loaded_fsdp,
-                    self_fsdp_shards,
-                    loaded_fsdp_shards,
-                )
-                for parameter, count in counter.items():
-                    context.mark_as_loaded(count, parameter, True)
+        for loaded_stage, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
+            # Skip tied weight copies to avoid duplicate loads.
+            # We can't call `loaded_stage.is_tied_weight_copy` because the loaded model isn't setup.
+            if not loaded_stage.index not in loaded_model.stages_owned:
+                for self_stage, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
+                    counter = self_fsdp.copy_shard_overlaps(
+                        loaded_fsdp,
+                        self_fsdp_shards,
+                        loaded_fsdp_shards,
+                    )
+                    for parameter, count in counter.items():
+                        context.mark_as_loaded(count, parameter, True)
