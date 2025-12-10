@@ -63,6 +63,322 @@ from __future__ import annotations
 
 from fast_llm_external_models.apriel2.conversion.expr import Concat, Expr, ExprPlan, Init, Ref, Slice, W
 
+# =============================================================================
+# SECTION 1: Per-Mixer Plan Functions
+# =============================================================================
+# Each mixer type has ONE function that handles both random init and passthrough.
+# This is the single source of truth for each mixer's weight schema.
+
+
+def _plan_attention_mixer(
+    *,
+    prefix: W,
+    config: dict,
+    hidden_size: int,
+    source_prefix: W | None = None,
+) -> ExprPlan:
+    """Plan for attention/sliding_window mixer.
+
+    Weight schema:
+    - q_proj.weight: (q_size, hidden_size)
+    - k_proj.weight: (kv_size, hidden_size)
+    - v_proj.weight: (kv_size, hidden_size)
+    - o_proj.weight: (hidden_size, q_size)
+
+    Args:
+        prefix: Target weight path prefix.
+        config: Mixer config dict.
+        hidden_size: Model hidden size.
+        source_prefix: If provided, passthrough from source. If None, random init.
+    """
+    if source_prefix is not None:
+        # Passthrough
+        return ExprPlan(
+            mappings={
+                prefix / proj / "weight": Ref(key=source_prefix / proj / "weight")
+                for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]
+            }
+        )
+
+    # Random init
+    heads = config["heads"]
+    head_groups = config["head_groups"]
+    head_size = config["head_size"]
+    q_size = heads * head_size
+    kv_size = head_groups * head_size
+
+    return ExprPlan(
+        mappings={
+            prefix / "q_proj" / "weight": Init(shape=(q_size, hidden_size), init_type="kaiming"),
+            prefix / "k_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
+            prefix / "v_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
+            prefix / "o_proj" / "weight": Init(shape=(hidden_size, q_size), init_type="kaiming"),
+        }
+    )
+
+
+def _plan_mamba_mixer(
+    *,
+    prefix: W,
+    config: dict,
+    hidden_size: int,
+    source_prefix: W | None = None,
+) -> ExprPlan:
+    """Plan for mamba mixer.
+
+    Weight schema:
+    - in_proj.weight: (2*d_inner + 2*d_xb, hidden_size)
+    - out_proj.weight: (hidden_size, d_inner)
+    - dt_in_proj.weight: (dt_rank, hidden_size)
+    - dt_proj.weight: (d_inner, dt_rank)
+    - dt_proj.bias: (d_inner,) [optional]
+    - conv1d.weight: (conv_channels, 1, d_conv)
+    - conv1d.bias: (conv_channels,) [optional]
+    - A_log: (d_inner, d_state)
+    - D: (d_inner,)
+
+    Args:
+        prefix: Target weight path prefix.
+        config: Mixer config dict.
+        hidden_size: Model hidden size.
+        source_prefix: If provided, passthrough from source. If None, random init.
+    """
+    if source_prefix is not None:
+        # Passthrough - include all possible weights
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "in_proj.weight",
+                    "out_proj.weight",
+                    "dt_in_proj.weight",
+                    "dt_proj.weight",
+                    "dt_proj.bias",
+                    "conv1d.weight",
+                    "conv1d.bias",
+                    "A_log",
+                    "D",
+                ]
+            }
+        )
+
+    # Random init
+    d_inner = config["d_inner"]
+    d_state = config["d_state"]
+    dt_rank = config["dt_rank"]
+    d_xb = config["d_xb"]
+    d_conv = config["d_conv"]
+    repeat_kv_before_conv = config["repeat_kv_before_conv"]
+    conv_bias = config["conv_bias"]
+    dt_bias = config["dt_proj_bias"]
+    dt_min = config["dt_min"]
+    dt_max = config["dt_max"]
+    dt_init_floor = config["dt_init_floor"]
+
+    conv_channels = d_inner if repeat_kv_before_conv else d_xb
+
+    mappings: dict[W, Expr] = {
+        prefix / "in_proj" / "weight": Init(shape=(2 * d_inner + 2 * d_xb, hidden_size), init_type="kaiming"),
+        prefix / "out_proj" / "weight": Init(shape=(hidden_size, d_inner), init_type="kaiming"),
+        prefix / "dt_in_proj" / "weight": Init(shape=(dt_rank, hidden_size), init_type="kaiming"),
+        prefix / "dt_proj" / "weight": Init(shape=(d_inner, dt_rank), init_type="kaiming"),
+        prefix / "conv1d" / "weight": Init(shape=(conv_channels, 1, d_conv), init_type="kaiming"),
+        prefix / "A_log": Init(shape=(d_inner, d_state), init_type="s4d"),
+        prefix / "D": Init(shape=(d_inner,), init_type="ones"),
+    }
+
+    if conv_bias:
+        mappings[prefix / "conv1d" / "bias"] = Init(shape=(conv_channels,), init_type="zeros")
+    if dt_bias:
+        mappings[prefix / "dt_proj" / "bias"] = Init(
+            shape=(d_inner,),
+            init_type="dt_bias",
+            init_params={"dt_min": dt_min, "dt_max": dt_max, "dt_init_floor": dt_init_floor},
+        )
+
+    return ExprPlan(mappings=mappings)
+
+
+def _plan_gdn_mixer(
+    *,
+    prefix: W,
+    config: dict,
+    hidden_size: int,
+    source_prefix: W | None = None,
+) -> ExprPlan:
+    """Plan for gated_delta_net (GDN) mixer.
+
+    Weight schema:
+    - in_proj_qkvz.weight: (qkvz_size, hidden_size)
+    - in_proj_ba.weight: (2*num_v_heads, hidden_size)
+    - out_proj.weight: (hidden_size, value_dim)
+    - convolution.weight: (conv_dim, 1, kernel_size)
+    - A_log: (num_v_heads,)
+    - dt_bias: (num_v_heads,)
+    - norm.weight: (head_v_dim,)
+
+    Args:
+        prefix: Target weight path prefix.
+        config: Mixer config dict.
+        hidden_size: Model hidden size.
+        source_prefix: If provided, passthrough from source. If None, random init.
+    """
+    if source_prefix is not None:
+        # Passthrough
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "in_proj_qkvz.weight",
+                    "in_proj_ba.weight",
+                    "out_proj.weight",
+                    "convolution.weight",
+                    "A_log",
+                    "dt_bias",
+                    "norm.weight",
+                ]
+            }
+        )
+
+    # Random init
+    num_v_heads = config["value_heads"]
+    num_k_heads = config["key_heads"]
+    head_k_dim = config["key_head_dim"]
+    head_v_dim = config["value_head_dim"]
+    conv_kernel_size = config["convolution_layer"]["kernel_size"]
+
+    key_dim = head_k_dim * num_k_heads
+    value_dim = head_v_dim * num_v_heads
+    conv_dim = key_dim * 2 + value_dim
+    qkvz_size = key_dim * 2 + value_dim * 2  # Q, K both key_dim; V, Z both value_dim
+
+    return ExprPlan(
+        mappings={
+            prefix / "in_proj_qkvz" / "weight": Init(shape=(qkvz_size, hidden_size), init_type="kaiming"),
+            prefix / "in_proj_ba" / "weight": Init(shape=(num_v_heads * 2, hidden_size), init_type="zeros"),
+            prefix / "out_proj" / "weight": Init(shape=(hidden_size, value_dim), init_type="kaiming"),
+            prefix
+            / "convolution"
+            / "weight": Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
+            prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
+            prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
+        }
+    )
+
+
+def _plan_kda_mixer(
+    *,
+    prefix: W,
+    config: dict,
+    hidden_size: int,
+    source_prefix: W | None = None,
+) -> ExprPlan:
+    """Plan for Kimi Delta Attention (KDA) mixer.
+
+    Weight schema:
+    - q_proj.weight, k_proj.weight, v_proj.weight: (projection_size, hidden_size)
+    - o_proj.weight: (hidden_size, projection_size)
+    - q_conv.weight, k_conv.weight, v_conv.weight: (projection_size, 1, kernel_size)
+    - f_a_proj.weight: (head_dim, hidden_size)
+    - f_b_proj.weight: (projection_size, head_dim)
+    - g_a_proj.weight: (head_dim, hidden_size)
+    - g_b_proj.weight: (projection_size, head_dim)
+    - beta_proj.weight: (num_heads, hidden_size)
+    - A_log: (num_heads,)
+    - dt_bias: (projection_size,)
+    - norm.weight: (head_dim,)
+
+    Args:
+        prefix: Target weight path prefix.
+        config: Mixer config dict.
+        hidden_size: Model hidden size.
+        source_prefix: If provided, passthrough from source. If None, random init.
+    """
+    if source_prefix is not None:
+        # Passthrough
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "q_proj.weight",
+                    "k_proj.weight",
+                    "v_proj.weight",
+                    "o_proj.weight",
+                    "q_conv.weight",
+                    "k_conv.weight",
+                    "v_conv.weight",
+                    "f_a_proj.weight",
+                    "f_b_proj.weight",
+                    "g_a_proj.weight",
+                    "g_b_proj.weight",
+                    "beta_proj.weight",
+                    "A_log",
+                    "dt_bias",
+                    "norm.weight",
+                ]
+            }
+        )
+
+    # Random init
+    num_heads = config["heads"]
+    head_dim = config["head_dim"]
+    projection_size = num_heads * head_dim
+    conv_kernel_size = config.get("convolution_layer", {}).get("kernel_size", 4)
+
+    return ExprPlan(
+        mappings={
+            # Main projections
+            prefix / "q_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "k_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "v_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "o_proj" / "weight": Init(shape=(hidden_size, projection_size), init_type="kaiming"),
+            # Convolutions
+            prefix
+            / "q_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix
+            / "k_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix
+            / "v_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            # Gate kernels (low-rank factorization)
+            prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Output gate (low-rank factorization)
+            prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Beta projection
+            prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
+            # Learnable parameters
+            prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
+            prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
+            # Normalization
+            prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
+        }
+    )
+
+
+# Dispatcher for per-mixer plan functions
+_MIXER_PLANNERS = {
+    "attention": _plan_attention_mixer,
+    "sliding_window": _plan_attention_mixer,
+    "mamba": _plan_mamba_mixer,
+    "gdn": _plan_gdn_mixer,
+    "kda": _plan_kda_mixer,
+}
+
+# Types that are attention-like (can be source for MIL/DIL/KIL)
+_ATTENTION_TYPES = frozenset({"attention", "sliding_window"})
+
+
+# =============================================================================
+# SECTION 2: Cross-Type Converters (attention → X)
+# =============================================================================
+# These are public functions for converting from attention to other mixer types.
+# They handle the complex logic of slicing/tiling attention weights.
+
 
 def plan_mil_attention_to_mamba(
     *,
@@ -585,57 +901,6 @@ def _get_block_config(decoder_config: dict, layer_idx: int) -> dict:
         return {}
     else:
         return {}
-
-
-def plan_surgery(
-    source_config: dict,
-    target_config: dict,
-) -> ExprPlan:
-    """Build plan for Apriel2→Apriel2 surgery (MIL, DIL, stochastic mixers, etc.)."""
-    hidden_size = target_config.get("hidden_size", source_config.get("hidden_size"))
-    assert hidden_size is not None, "hidden_size must be specified in source or target config"
-
-    source_decoder = source_config.get("decoder", {})
-    target_decoder = target_config.get("decoder", {})
-
-    num_source_layers = source_decoder.get("num_blocks", 0)
-    num_target_layers = target_decoder.get("num_blocks", num_source_layers)
-
-    plan = _plan_non_decoder_weights(source_config)
-
-    for target_layer_idx in range(num_target_layers):
-        source_layer_idx = target_layer_idx % num_source_layers if num_source_layers > 0 else 0
-        source_block = _get_block_config(source_decoder, source_layer_idx)
-        target_block = _get_block_config(target_decoder, target_layer_idx)
-
-        plan += _plan_mixer(
-            target_layer_idx,
-            source_layer_idx,
-            source_block.get("mixer", {}),
-            target_block.get("mixer", {}),
-            hidden_size,
-        )
-        plan += _plan_mlp(
-            target_layer_idx,
-            source_layer_idx,
-            source_block.get("mlp", {}),
-            target_block.get("mlp", {}),
-            hidden_size,
-        )
-        plan += _plan_norms(
-            target_layer_idx,
-            source_layer_idx,
-            source_block,
-            target_block,
-            hidden_size,
-        )
-
-    return ExprPlan(
-        mappings=plan.mappings,
-        source_format="apriel2",
-        target_format="apriel2",
-        metadata=plan.metadata,
-    )
 
 
 def _plan_mixer(
