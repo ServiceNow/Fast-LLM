@@ -2,10 +2,12 @@
 #
 # This config loads a converted Apriel2 model and trains it on multimodal data.
 # The stochastic supernet includes attention, sliding window, gated delta net, and KDA mixers.
+# Training uses activation-level distillation from a teacher model (attention-only) to guide
+# the alternative mixers (GDN, KDA) to produce similar activations.
 #
 # Prerequisites:
 #
-# 1. Convert a source model to Apriel2 format with reduced layers:
+# 1. Convert the student model (stochastic supernet) with reduced layers:
 #    (Note: multiple --surgery flags are composed left-to-right)
 #
 #    python fast_llm_external_models/apriel2/convert.py \
@@ -14,7 +16,14 @@
 #        --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet.yaml \
 #        --surgery fast_llm_external_models/apriel2/examples/small.yaml
 #
-# 2. Create a multimodal dataset with matching patch size (16x16):
+# 2. Convert the teacher model (attention-only, same layer reduction):
+#
+#    python fast_llm_external_models/apriel2/convert.py \
+#        ServiceNow-AI/Apriel-1.5-15b-Thinker \
+#        /tmp/apriel2-teacher-small \
+#        --surgery fast_llm_external_models/apriel2/examples/small.yaml
+#
+# 3. Create a multimodal dataset with matching patch size (16x16):
 #
 #    python -c "
 #    from tests.utils.dataset import _get_test_dataset, DATASET_CACHE
@@ -32,7 +41,7 @@
 #    )
 #    "
 #
-# 3. Run training:
+# 4. Run training:
 #
 #    fast-llm train train_multimodal \
 #        -c fast_llm_external_models/apriel2/examples/train_supernet_small.yaml
@@ -40,7 +49,7 @@
 # The trained model will be exported to:
 #    /tmp/apriel2-supernet-small-trained/export/apriel2/{iteration}/
 #
-# 4. Load and test the trained model, then switch mixers at runtime:
+# 5. Load and test the trained model, then switch mixers at runtime:
 #
 #    python -c "
 #    import torch
@@ -88,13 +97,41 @@ pretrained:
 # Model config (mostly loaded from pretrained, but we need to specify some fast-llm specific settings)
 model:
   base_model:
+    # Freeze all components except the mixer by setting lr_scale: 0
+    # The mixer will train with the default learning rate (lr_scale: 1.0 implicitly)
+    decoder:
+      block:
+        mlp:
+          lr_scale: 0.0  # Freeze MLP
+        normalization:
+          lr_scale: 0.0  # Freeze layer norms (norm_1 and norm_2 in each block)
+        # Activation-level distillation: teach mixers to mimic teacher's attention outputs
+        distillation_model: teacher
+        activation_distillation_factor: 0.1
+    embeddings:
+      lr_scale: 0.0  # Freeze word embeddings
     head:
+      lr_scale: 0.0  # Freeze output head (includes final norm)
       cross_entropy_implementation: torch
+    vision_encoder:
+      lr_scale: 0.0  # Freeze vision encoder
   multi_stage:
     zero_stage: 2  # ZeRO stage 2 for memory efficiency
   distributed:
     compute_dtype: bf16
     seed: 42
+
+# Teacher model for activation-level distillation
+# Uses the same architecture but with standard attention (no stochastic mixer)
+reference_models:
+  teacher:
+    model:
+      type: multimodal
+    pretrained:
+      path: /tmp/apriel2-teacher-small
+      format: apriel2
+      model_weights: true
+      load_config: model
 
 # Batch configuration (small for single GPU)
 batch:
@@ -121,14 +158,14 @@ optimizer:
 
 # Training configuration
 training:
-  train_iters: 10  # Just a few iterations for testing
+  train_iters: 100  # Extended training run
   num_workers: 2
   logs:
     interval: 1
   checkpoint:
     interval: null  # Disable checkpointing for quick test
   export:
-    interval: 10    # Export at the end
+    interval: 100   # Export at the end
     format: apriel2 # Export back to Apriel2 HF format
   test_iters: 0
   evaluators: {}
