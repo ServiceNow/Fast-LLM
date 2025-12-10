@@ -1,4 +1,5 @@
 from fast_llm.data.dataset.gpt.config import GPTRandomDatasetConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
@@ -16,8 +17,9 @@ RANDOM_DATASET_EXPECTED_SAMPLES = [
 
 def test_gpt_random_dataset():
     # Make sure the random dataset works and check for unintended changes in behavior.
+    preprocessing = LanguageModelPreprocessingConfig(vocab_size=8192)
     sampled = get_dataset_config(config := {"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
-        get_sampling_data(4, sequence_length=7, vocab_size=8192)
+        get_sampling_data(4, sequence_length=7, preprocessing=preprocessing)
     )
     compare_sampled_dataset(sampled, RANDOM_DATASET_EXPECTED_SAMPLES)
 
@@ -26,6 +28,6 @@ def test_gpt_random_dataset():
         {"datasets": {"training": config}},
         4,
         sequence_length=7,
-        vocab_size=8192,
         expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
+        preprocessing=preprocessing,
     )

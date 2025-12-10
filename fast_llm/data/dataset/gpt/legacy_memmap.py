@@ -4,8 +4,8 @@ import struct
 import numpy as np
 import torch
 
-from fast_llm.data.dataset.gpt.config import GPTSamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
@@ -38,24 +38,27 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
         self,
         name: str,
         prefix: pathlib.Path | str,
+        preprocessing: LanguageModelPreprocessingConfig,
     ):
-        self._init(name, prefix)
+        self._init(name, prefix, preprocessing)
 
-    def _init(self, name: str, prefix: pathlib.Path | str) -> None:
+    def _init(self, name: str, prefix: pathlib.Path | str, preprocessing: LanguageModelPreprocessingConfig) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
-        self._has_spans = 0
-        self._has_preference_spans = False
+        has_loss_masking_spans = False
+        has_preference_spans = False
+        assert isinstance(preprocessing, LanguageModelPreprocessingConfig)
+        self._preprocessing = preprocessing
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
             assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
             if self._version >= 2:
-                self._has_spans = struct.unpack("<B", stream.read(1))[0]
+                has_loss_masking_spans = struct.unpack("<B", stream.read(1))[0]
             if self._version >= 3:
-                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
+                has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].torch
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -69,6 +72,7 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
         self._document_sizes = np.frombuffer(
             self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
         )
+        assert not self._preprocessing.use_image_patches
 
         # read pointers
         self._pointers = np.frombuffer(
@@ -79,8 +83,8 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
         )
 
         # read spans
-        self._spans = None
-        if self._has_spans and self._version >= 2:
+        if self._preprocessing.use_loss_masking_spans:
+            assert has_loss_masking_spans
             self._spans = []
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
@@ -101,9 +105,8 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
                 )
 
         # read preference spans
-        self._chosen_spans = None
-        self._rejected_spans = None
-        if self._has_preference_spans and self._version >= 3:
+        if self._preprocessing.use_preference_spans:
+            assert has_preference_spans
             self._chosen_spans = []
             self._rejected_spans = []
             chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
@@ -135,11 +138,12 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
 
         self._num_tokens = div(self._bin_buffer_mmap.size, self._dtype.itemsize)
 
-    def __getstate__(self) -> tuple[str, pathlib.Path]:
-        return (self._name, self._prefix)
+    def __getstate__(self) -> tuple[str, pathlib.Path, dict]:
+        return self._name, self._prefix, self._preprocessing.to_dict()
 
-    def __setstate__(self, state: tuple[str, pathlib.Path]):
-        self._init(*state)
+    def __setstate__(self, state: tuple[str, pathlib.Path, dict]):
+        name, prefix, preprocessing = state
+        self._init(name, prefix, LanguageModelPreprocessingConfig.from_dict(preprocessing))
 
     def __del__(self):
         if hasattr(self, "_bin_buffer_mmap"):
@@ -149,9 +153,7 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
-    ) -> SampleType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> SampleType:
         if end is None:
             end = self.get_document_size(index)
         sample_size = self._document_sizes[index].item()
@@ -169,22 +171,19 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
         if not self._dtype.is_signed:
             # Needed because torch doesn't yet support type promotion between signed and unsigned types. TODO: Remove when supported.
             token_ids = token_ids.to(torch.int64)
-        if parameters is not None and parameters.use_loss_masking_spans:
+        if self._preprocessing.use_loss_masking_spans:
             assert self._spans is not None
-            # Convert to in range format (begin, end).
-            sample_spans = RangeSample(
-                [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
-            ).crop(begin, end)
+            if hasattr(self, "_spans"):
+                # Convert to in range format (begin, end).
+                sample_spans = RangeSample(
+                    [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
+                ).crop(begin, end)
+            else:
+                sample_spans = RangeSample([], end - begin)
         else:
             sample_spans = None
 
-        if parameters is not None and parameters.use_preference_loss_spans:
-            if not self._has_preference_spans:
-                raise ValueError("No preference spans found in memmap dataset.")
-            elif self._has_preference_spans and self._chosen_spans is None:
-                raise ValueError("Failed to read chosen spans from memmap dataset.")
-            elif self._has_preference_spans and self._rejected_spans is None:
-                raise ValueError("Failed to read rejected spans from memmap dataset.")
+        if self._preprocessing.use_preference_spans:
             # Convert to in range format (begin, end).
             chosen_spans = RangeSample(
                 [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
