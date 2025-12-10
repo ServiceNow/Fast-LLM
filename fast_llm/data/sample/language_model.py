@@ -248,14 +248,8 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
                     " Assuming empty patch lists."
                 )
                 self._image_patches = EmptyPatchReader(
-                    PatchReaderConfig(
-                        begin=0,
-                        end=0,
-                        num_documents=0,
-                        num_patches=0,
-                        num_patch_groups=0,
-                        patch_shape=model_image_preprocessing.patch_shape,
-                        data_type=DataType.uint8,
+                    PatchReaderConfig.create_empty(
+                        patch_shape=model_image_preprocessing.patch_shape, data_type=DataType.uint8
                     ),
                     buffer,
                 )

@@ -170,6 +170,19 @@ class PatchReaderConfig(MemmapReaderConfig):
     patch_shape: tuple[int, ...] = Field()
     data_type: DataType = Field()
 
+    @classmethod
+    def create_empty(cls, patch_shape: tuple[int, ...], data_type: DataType) -> "PatchReaderConfig":
+        config = cls(
+            begin=0,
+            end=2 * torch.int32.itemsize + len(cls.header) + len(cls.footer),  # Minimal size with header and footer
+            num_documents=0,
+            num_patches=0,
+            num_patch_groups=0,
+            patch_shape=patch_shape,
+            data_type=data_type,
+        )
+        return config
+
     def __len__(self) -> int:
         return self.num_documents
 
@@ -260,6 +273,16 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
 
 
 class EmptyPatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        # Skip parent's __init__ to avoid buffer validation since we don't read from the buffer
+        # Just initialize the config directly
+        from fast_llm.config import Configurable
+        from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
+
+        Configurable.__init__(self, config)
+        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
+        # No buffer validation or reading needed for empty reader
+
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         return PatchSample(
             torch.empty(0, *self._config.patch_shape, dtype=self._config.data_type.torch),
