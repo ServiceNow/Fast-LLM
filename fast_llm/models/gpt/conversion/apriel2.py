@@ -9,7 +9,7 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig, Mamba2Config
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, Mamba2Config
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
@@ -271,6 +271,144 @@ class Apriel2GatedDeltaNetConverter:
         ]
 
 
+class Apriel2KimiDeltaAttentionConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        result = {
+            "type": "kda",
+            "heads": config["heads"],
+            "head_dim": config["head_dim"],
+        }
+        if "convolution_layer" in config:
+            result["convolution_layer"] = config["convolution_layer"]
+        if "normalization" in config:
+            result["normalization"] = config["normalization"]
+        return result
+
+    @classmethod
+    def export_config(cls, config: KimiDeltaAttentionConfig) -> dict:
+        return {
+            "type": "kda",
+            "heads": config.heads,
+            "head_dim": config.head_dim,
+            "convolution_layer": {
+                "kernel_size": config.convolution_layer.kernel_size,
+            },
+            "normalization": {
+                "epsilon": config.normalization.epsilon,
+            },
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: KimiDeltaAttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        # Fast-LLM KDA uses abbreviated names matching the external module:
+        # q_proj, k_proj, v_proj, q_conv, k_conv, v_conv, f_a_proj, f_b_proj,
+        # g_a_proj, g_b_proj, beta_proj, o_proj, A_log, dt_bias, norm
+        return [
+            # Q/K/V projections
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.q_proj",
+                f"{hf_prefix}.q_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.k_proj",
+                f"{hf_prefix}.k_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.v_proj",
+                f"{hf_prefix}.v_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # Convolutions (Q, K, V)
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.q_conv",
+                f"{hf_prefix}.q_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.k_conv",
+                f"{hf_prefix}.k_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.v_conv",
+                f"{hf_prefix}.v_conv",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # Gate projections (f_a, f_b, g_a, g_b)
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.f_a_proj",
+                f"{hf_prefix}.f_a_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.f_b_proj",
+                f"{hf_prefix}.f_b_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.g_a_proj",
+                f"{hf_prefix}.g_a_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.g_b_proj",
+                f"{hf_prefix}.g_b_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # Beta projection
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.beta_proj",
+                f"{hf_prefix}.beta_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # Output projection
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.o_proj",
+                f"{hf_prefix}.o_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # Learnable parameters
+            get_parameter_converter(
+                f"{fast_llm_prefix}.A_log",
+                f"{hf_prefix}.A_log",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.dt_bias",
+                f"{hf_prefix}.dt_bias",
+                drop_on_export=drop_on_export,
+            ),
+            # Normalization
+            *LlamaNormalizationConverter.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.norm",
+                f"{hf_prefix}.norm",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
 class Apriel2StochasticMixerConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -283,6 +421,8 @@ class Apriel2StochasticMixerConverter:
                 mixers[name] = Apriel2MambaConverter.import_config(sub_mixer_config)
             elif mixer_type == "gdn":
                 mixers[name] = Apriel2GatedDeltaNetConverter.import_config(sub_mixer_config)
+            elif mixer_type == "kda":
+                mixers[name] = Apriel2KimiDeltaAttentionConverter.import_config(sub_mixer_config)
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
@@ -306,6 +446,8 @@ class Apriel2StochasticMixerConverter:
                 mixers[name] = Apriel2MambaConverter.export_config(sub_mixer)
             elif mixer_type is GatedDeltaNetConfig:
                 mixers[name] = Apriel2GatedDeltaNetConverter.export_config(sub_mixer)
+            elif mixer_type is KimiDeltaAttentionConfig:
+                mixers[name] = Apriel2KimiDeltaAttentionConverter.export_config(sub_mixer)
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
@@ -336,6 +478,9 @@ class Apriel2StochasticMixerConverter:
             elif mixer_type is GatedDeltaNetConfig:
                 converter_class = Apriel2GatedDeltaNetConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
+            elif mixer_type is KimiDeltaAttentionConfig:
+                converter_class = Apriel2KimiDeltaAttentionConverter
+                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
             converters.extend(
@@ -364,6 +509,8 @@ class Apriel2BlockConverter:
             mixer = Apriel2StochasticMixerConverter.import_config(mixer_config)
         elif mixer_type == "gdn":
             mixer = Apriel2GatedDeltaNetConverter.import_config(mixer_config)
+        elif mixer_type == "kda":
+            mixer = Apriel2KimiDeltaAttentionConverter.import_config(mixer_config)
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
 
@@ -404,6 +551,8 @@ class Apriel2BlockConverter:
             mixer = Apriel2StochasticMixerConverter.export_config(config.mixer)
         elif mixer_type is GatedDeltaNetConfig:
             mixer = Apriel2GatedDeltaNetConverter.export_config(config.mixer)
+        elif mixer_type is KimiDeltaAttentionConfig:
+            mixer = Apriel2KimiDeltaAttentionConverter.export_config(config.mixer)
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
 
@@ -459,6 +608,9 @@ class Apriel2BlockConverter:
             hf_mixer_prefix = f"{hf_prefix}.mixer"
         elif mixer_type is GatedDeltaNetConfig:
             converter_class = Apriel2GatedDeltaNetConverter
+            hf_mixer_prefix = f"{hf_prefix}.mixer"
+        elif mixer_type is KimiDeltaAttentionConfig:
+            converter_class = Apriel2KimiDeltaAttentionConverter
             hf_mixer_prefix = f"{hf_prefix}.mixer"
         else:
             raise ValueError(f"Unknown mixer type: {mixer_type}")
