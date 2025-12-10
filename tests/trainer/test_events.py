@@ -4,6 +4,7 @@ import os
 import pathlib
 import subprocess
 import time
+import typing
 
 import pytest
 import safetensors
@@ -230,22 +231,110 @@ def convert_paths(obj):
         return obj
 
 
+def parallelism_variants(num_gpus: int) -> list[dict[str, int]]:
+    if num_gpus == 1:
+        return [{"tp": 1, "pp": 1, "sp": 1}]
+
+    if num_gpus == 2:
+        return [
+            # TODO:Default model does not work with pipeline parallelism
+            {"tp": 2, "pp": 1, "sp": 1},
+            # {"tp": 1, "pp": 2, "sp": 1},
+            {"tp": 1, "pp": 1, "sp": 2},
+        ]
+
+    if num_gpus == 4:
+        return [
+            # TODO:Default model does not work with pipeline parallelism
+            {"tp": 4, "pp": 1, "sp": 1},
+            # {"tp": 1, "pp": 4, "sp": 1},
+            {"tp": 1, "pp": 1, "sp": 4},
+            # {"tp": 2, "pp": 2, "sp": 1},
+            # {"tp": 1, "pp": 2, "sp": 2},
+            {"tp": 2, "pp": 1, "sp": 2},
+        ]
+
+    raise ValueError(f"Invalid gpu count for fast_llm parallelism {num_gpus}")
+
+
+def consumer_counts(num_gpus: int) -> int:
+    if num_gpus == 2:
+        return 1
+    if num_gpus == 3:
+        return 1
+    if num_gpus == 4:
+        return 2
+    if num_gpus == 5:
+        return 1
+    if num_gpus == 6:
+        return 2
+    if num_gpus == 7:
+        return 3
+    if num_gpus >= 8:
+        return 4
+
+
+def generate_variants(num_gpus: int) -> list[dict[str, typing.Any]]:
+    """
+    Generate all (consumer_count, tp/pp/sp) variants for given GPU count.
+    """
+    results = []
+
+    if num_gpus < 2:
+        return results
+    if num_gpus == 2:
+        num_gpus = [2]
+    elif num_gpus <= 4:
+        num_gpus = [2, num_gpus]
+    else:
+        num_gpus = [2, 4, min(num_gpus, 8)]
+
+    for gpus in num_gpus:
+        consumers = consumer_counts(gpus)
+        remaining = gpus - consumers
+        par_vars = parallelism_variants(remaining)
+        for pv in par_vars:
+            results.append(
+                {
+                    "total_gpus": gpus,
+                    "consumers_gpu_count": consumers,
+                    "fast_llm_gpus_count": remaining,
+                    "consumers_gpus": list(range(consumers)),
+                    "fast_llm_gpus": list(range(consumers, gpus)),
+                    "tensor_parallel": pv["tp"],
+                    "pipeline_parallel": pv["pp"],
+                    "sequence_data_parallel": pv["sp"],
+                }
+            )
+
+    return results
+
+
+variants = generate_variants(torch.cuda.device_count())
+
+
 @pytest.mark.slow
 @requires_cuda
-def test_trainer_events_with_streaming_2gpus(fake_redis_server, run_distributed_script_lean, result_path):
-    if torch.cuda.device_count() < 2:
-        pytest.skip(f"Skipping, not enough gpus, {torch.cuda.device_count()} of 2 needed")
-
+@pytest.mark.parametrize(
+    "variant",
+    variants,
+    ids=[
+        f"gpu{v['total_gpus']}_cgpus{v['consumers_gpu_count']}_fgpus{v['fast_llm_gpus_count']}"
+        f"_tp{v['tensor_parallel']}_pp{v['pipeline_parallel']}_sp{v['sequence_data_parallel']}"
+        for v in variants
+    ],
+)
+def test_trainer_events_with_streaming(fake_redis_server, variant, run_distributed_script_lean, result_path, request):
     stream_config, fake_redis_client, fake_redis_server_killer = fake_redis_server
-    test_result_path = result_path / "training_events_with_streaming_2gpus"
+    test_result_path = result_path / request.node.name
     test_result_path_fast_llm = test_result_path / "fast_llm"
     test_result_path_consumers = test_result_path / "consumers"
 
-    broadcast_world_size = 2
-    fake_consumers_broadcast_ranks = [0]
-    fake_consumers_assigned_gpus = [0]
-    fast_llm_broadcast_rank = 1
-    fast_llm_assigned_gpus = [1]
+    broadcast_world_size = variant["consumers_gpu_count"] + 1
+    fake_consumers_broadcast_ranks = list(range(variant["consumers_gpu_count"]))
+    fake_consumers_assigned_gpus = variant["consumers_gpus"]
+    fast_llm_broadcast_rank = variant["consumers_gpu_count"]
+    fast_llm_assigned_gpus = variant["fast_llm_gpus"]
     train_iters = 2
 
     model_config = copy.deepcopy(MODEL_CONFIGS["mistral"].config_dict)
@@ -256,6 +345,10 @@ def test_trainer_events_with_streaming_2gpus(fake_redis_server, run_distributed_
     model_config["batch"]["micro_batch_size"] = 1
     model_config["batch"]["truncate_documents"] = False
     model_config["run"]["experiment_dir"] = test_result_path_fast_llm
+    model_config["model"]["distributed"]["tensor_parallel"] = variant["tensor_parallel"]
+    model_config["model"]["distributed"]["pipeline_parallel"] = variant["pipeline_parallel"]
+    model_config["model"]["distributed"]["sequence_data_parallel"] = variant["sequence_data_parallel"]
+
     # We use same stream for messages in the test. Also make all fields explicit,
     #  so fake consumers can read them as well from this dict config
     model_config["events"] = {
