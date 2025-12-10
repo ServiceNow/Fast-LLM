@@ -13,7 +13,7 @@ Main Entry Point
     architecture modifications (adding Mamba layers, stochastic mixers, etc.).
 
     The surgery_spec's `init` field controls weight handling:
-    - `init: transfer` → use converters (MIL, DIL, passthrough)
+    - `init: transfer` → use converters (MIL, DIL, KIL, passthrough)
     - `init: random` → use random initialization
 
     If `init: transfer` is requested but no converter exists for the type pair
@@ -38,6 +38,10 @@ Conversion Types
     Converts attention → gated_delta_net by mapping Q/K/V/O projections
     to the fused in_proj_qkvz and out_proj, respecting GQA head grouping.
 
+**KIL (Kimi Initialization from LLM)**
+    Converts attention → kda by mapping Q/K/V/O projections directly,
+    with random initialization for gates, convolutions, and learnable params.
+
 Stochastic Mixer Handling
 =========================
 
@@ -61,7 +65,7 @@ from fast_llm_external_models.apriel2.conversion.expr import Concat, Expr, ExprP
 
 
 def plan_mil_attention_to_mamba(
-    layer_idx: int,
+    *,
     hidden_size: int,
     d_inner: int,
     d_xb: int,
@@ -77,8 +81,17 @@ def plan_mil_attention_to_mamba(
     source_prefix: W,
     target_prefix: W,
 ) -> ExprPlan:
-    """MIL: Q→C, K→B, V→x, O→out_proj, z/conv/dt/A_log/D→random."""
-    # in_proj layout: [z, x, B, C] sizes [d_inner, d_xb, d_xb, d_inner]
+    """MIL: Mamba Initialization from LLM.
+
+    Converts attention → mamba by mapping:
+    - Q → C (readout)
+    - K → B (input-dependent state transition)
+    - V → x (input)
+    - O → out_proj
+    - z, conv1d, dt_proj, A_log, D → random initialization
+
+    in_proj layout: [z, x, B, C] with sizes [d_inner, d_xb, d_xb, d_inner]
+    """
     in_proj_expr = Concat(
         exprs=(
             Init(shape=(d_inner, hidden_size), init_type="kaiming"),  # z: random
@@ -97,7 +110,7 @@ def plan_mil_attention_to_mamba(
 
     conv_channels = d_inner if repeat_kv_before_conv else d_xb
 
-    result = {
+    mappings: dict[W, Expr] = {
         target_prefix / "in_proj" / "weight": in_proj_expr,
         target_prefix / "out_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
         target_prefix / "dt_in_proj" / "weight": Init(shape=(dt_rank, hidden_size), init_type="kaiming"),
@@ -108,19 +121,19 @@ def plan_mil_attention_to_mamba(
     }
 
     if dt_bias:
-        result[target_prefix / "dt_proj" / "bias"] = Init(
+        mappings[target_prefix / "dt_proj" / "bias"] = Init(
             shape=(d_inner,),
             init_type="dt_bias",
             init_params={"dt_min": dt_min, "dt_max": dt_max, "dt_init_floor": dt_init_floor},
         )
 
     if conv_bias:
-        result[target_prefix / "conv1d" / "bias"] = Init(shape=(conv_channels,), init_type="zeros")
+        mappings[target_prefix / "conv1d" / "bias"] = Init(shape=(conv_channels,), init_type="zeros")
 
-    return ExprPlan(mappings=result)
+    return ExprPlan(mappings=mappings)
 
 
-def plan_attention_to_gated_delta_net(
+def plan_dil_attention_to_gdn(
     *,
     hidden_size: int,
     num_v_heads: int,
@@ -134,7 +147,10 @@ def plan_attention_to_gated_delta_net(
     source_prefix: W,
     target_prefix: W,
 ) -> ExprPlan:
-    """DIL: Q/K/V→in_proj_qkvz (tiled for GQA), O→out_proj, Z/ba/conv/A_log/dt_bias/norm→init.
+    """DIL: Delta-net Initialization from LLM.
+
+    Converts attention → gated_delta_net by mapping Q/K/V/O projections
+    to the fused in_proj_qkvz and out_proj, respecting GQA head grouping.
 
     Produces FLAT layout for in_proj_qkvz: [Q_all | K_all | V_all | Z_all]
     This matches Apriel2/Fast-LLM's expected layout.
@@ -149,7 +165,6 @@ def plan_attention_to_gated_delta_net(
     v_ref = Ref(key=source_prefix / "v_proj" / "weight")
 
     # Build FLAT layout: [Q_all | K_all | V_all | Z_all]
-    # Collect slices for each projection type across all heads
     q_slices: list[Expr] = []
     k_slices: list[Expr] = []
     v_slices: list[Expr] = []
@@ -201,26 +216,308 @@ def plan_attention_to_gated_delta_net(
         dim=0,
     )
 
-    # BA uses flat layout: [b_all | a_all]
-    in_proj_ba_expr = Init(shape=(2 * num_v_heads, hidden_size), init_type="zeros")  # b=a=0 → β=0.5
-    out_proj_expr = Ref(key=source_prefix / "o_proj" / "weight")
-    conv_weight_expr = Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv")
-    A_log_expr = Init(shape=(num_v_heads,), init_type="slow_decay")
-    dt_bias_expr = Init(shape=(num_v_heads,), init_type="zeros")
-    norm_weight_expr = Init(shape=(head_v_dim,), init_type="ones")
-
-    # Apriel2GatedDeltaNet is now inlined (no .gdn wrapper), uses 'convolution' to match Fast-LLM
     return ExprPlan(
         mappings={
             target_prefix / "in_proj_qkvz" / "weight": in_proj_qkvz_expr,
-            target_prefix / "in_proj_ba" / "weight": in_proj_ba_expr,
-            target_prefix / "out_proj" / "weight": out_proj_expr,
-            target_prefix / "convolution" / "weight": conv_weight_expr,
-            target_prefix / "A_log": A_log_expr,
-            target_prefix / "dt_bias": dt_bias_expr,
-            target_prefix / "norm" / "weight": norm_weight_expr,
+            target_prefix
+            / "in_proj_ba"
+            / "weight": Init(shape=(2 * num_v_heads, hidden_size), init_type="zeros"),  # b=a=0 → β=0.5
+            target_prefix / "out_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
+            target_prefix
+            / "convolution"
+            / "weight": Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
+            target_prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
+            target_prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
         }
     )
+
+
+def plan_kil_attention_to_kda(
+    *,
+    hidden_size: int,
+    num_heads: int,
+    head_dim: int,
+    conv_kernel_size: int,
+    source_num_q_heads: int,
+    source_num_kv_heads: int,
+    source_head_dim: int,
+    source_prefix: W,
+    target_prefix: W,
+) -> ExprPlan:
+    """KIL: Kimi Initialization from LLM.
+
+    Converts attention → KDA by transferring Q/K/V/O projections directly.
+    Gates, convolutions, and learnable parameters are randomly initialized.
+
+    Transfer (with GQA tiling if needed):
+    - q_proj: Transfer from attention.q_proj
+    - k_proj: Transfer from attention.k_proj (tiled if GQA)
+    - v_proj: Transfer from attention.v_proj (tiled if GQA)
+    - o_proj: Transfer from attention.o_proj
+
+    Random init (no attention analogue):
+    - f_a_proj, f_b_proj: Gate kernel (low-rank factorization)
+    - g_a_proj, g_b_proj: Output gate (low-rank factorization)
+    - beta_proj: Per-head beta gating
+    - q_conv, k_conv, v_conv: Causal convolutions (scaled identity)
+    - A_log: State matrix log (slow decay)
+    - dt_bias: Time step bias (zeros)
+    - norm: Gated RMS normalization (ones)
+    """
+    projection_size = num_heads * head_dim
+    source_q_size = source_num_q_heads * source_head_dim
+    source_kv_size = source_num_kv_heads * source_head_dim
+
+    q_ref = Ref(key=source_prefix / "q_proj" / "weight")
+    k_ref = Ref(key=source_prefix / "k_proj" / "weight")
+    v_ref = Ref(key=source_prefix / "v_proj" / "weight")
+
+    # Q: tile source Q heads to fill target projection_size
+    if source_q_size == projection_size:
+        q_expr: Expr = q_ref
+    else:
+        q_slices: list[Expr] = []
+        for h in range(num_heads):
+            src_h = h % source_num_q_heads
+            row_start = src_h * source_head_dim
+            q_slices.append(Slice(expr=q_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
+        q_expr = Concat(exprs=tuple(q_slices), dim=0)
+
+    # K: tile source KV heads to fill target projection_size
+    if source_kv_size == projection_size:
+        k_expr: Expr = k_ref
+    else:
+        k_slices: list[Expr] = []
+        for h in range(num_heads):
+            src_h = h % source_num_kv_heads
+            row_start = src_h * source_head_dim
+            k_slices.append(Slice(expr=k_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
+        k_expr = Concat(exprs=tuple(k_slices), dim=0)
+
+    # V: tile source KV heads to fill target projection_size
+    if source_kv_size == projection_size:
+        v_expr: Expr = v_ref
+    else:
+        v_slices: list[Expr] = []
+        for h in range(num_heads):
+            src_h = h % source_num_kv_heads
+            row_start = src_h * source_head_dim
+            v_slices.append(Slice(expr=v_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
+        v_expr = Concat(exprs=tuple(v_slices), dim=0)
+
+    return ExprPlan(
+        mappings={
+            # Transfer main projections
+            target_prefix / "q_proj" / "weight": q_expr,
+            target_prefix / "k_proj" / "weight": k_expr,
+            target_prefix / "v_proj" / "weight": v_expr,
+            target_prefix / "o_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
+            # Random init: convolutions (scaled identity for near-passthrough initially)
+            target_prefix
+            / "q_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix
+            / "k_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix
+            / "v_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            # Random init: gate kernels (low-rank factorization)
+            target_prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            target_prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Random init: output gate (low-rank factorization)
+            target_prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            target_prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Random init: beta projection
+            target_prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
+            # Random init: learnable parameters
+            target_prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
+            target_prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
+            # Random init: normalization
+            target_prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
+        }
+    )
+
+
+# =============================================================================
+# SECTION 3: Dispatch Logic
+# =============================================================================
+
+
+def _plan_mixer_transfer(
+    source_type: str,
+    target_type: str,
+    source_config: dict,
+    target_config: dict,
+    source_prefix: W,
+    target_prefix: W,
+    hidden_size: int,
+) -> ExprPlan:
+    """Transfer weights between mixer types.
+
+    For same-type transfers, uses passthrough via per-mixer plan functions.
+    For cross-type transfers, dispatches to MIL/DIL/KIL converters.
+    Raises ValueError if no converter exists for the type pair.
+    """
+    # Same-type: passthrough via unified per-mixer function
+    if source_type == target_type:
+        planner = _MIXER_PLANNERS.get(target_type)
+        if planner is not None:
+            return planner(
+                prefix=target_prefix,
+                config=target_config,
+                hidden_size=hidden_size,
+                source_prefix=source_prefix,
+            )
+
+    # Attention variants are interchangeable
+    if source_type in _ATTENTION_TYPES and target_type in _ATTENTION_TYPES:
+        return _plan_attention_mixer(
+            prefix=target_prefix,
+            config=target_config,
+            hidden_size=hidden_size,
+            source_prefix=source_prefix,
+        )
+
+    # Attention → Mamba (MIL)
+    if source_type in _ATTENTION_TYPES and target_type == "mamba":
+        return plan_mil_attention_to_mamba(
+            hidden_size=hidden_size,
+            d_inner=target_config.get("d_inner", 2 * hidden_size),
+            d_xb=target_config.get("d_xb", hidden_size // 4),
+            dt_rank=target_config.get("dt_rank", hidden_size // 16),
+            d_state=target_config["d_state"],
+            d_conv=target_config["d_conv"],
+            repeat_kv_before_conv=target_config["repeat_kv_before_conv"],
+            conv_bias=target_config["conv_bias"],
+            dt_bias=target_config["dt_proj_bias"],
+            dt_min=target_config["dt_min"],
+            dt_max=target_config["dt_max"],
+            dt_init_floor=target_config["dt_init_floor"],
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+        )
+
+    # Attention → GatedDeltaNet (DIL)
+    if source_type in _ATTENTION_TYPES and target_type == "gdn":
+        source_heads = source_config["heads"]
+        source_kv_heads = source_config["head_groups"]
+        source_head_size = source_config["head_size"]
+
+        return plan_dil_attention_to_gdn(
+            hidden_size=hidden_size,
+            num_v_heads=target_config.get("value_heads", source_heads),
+            num_k_heads=target_config.get("key_heads", source_kv_heads),
+            head_k_dim=target_config.get("key_head_dim", source_head_size),
+            head_v_dim=target_config.get("value_head_dim", source_head_size),
+            conv_kernel_size=target_config["convolution_layer"]["kernel_size"],
+            source_num_q_heads=source_heads,
+            source_num_kv_heads=source_kv_heads,
+            source_head_dim=source_head_size,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+        )
+
+    # Attention → KDA (KIL)
+    if source_type in _ATTENTION_TYPES and target_type == "kda":
+        source_heads = source_config["heads"]
+        source_kv_heads = source_config["head_groups"]
+        source_head_size = source_config["head_size"]
+
+        return plan_kil_attention_to_kda(
+            hidden_size=hidden_size,
+            num_heads=target_config.get("heads", source_heads),
+            head_dim=target_config.get("head_dim", source_head_size),
+            conv_kernel_size=target_config.get("convolution_layer", {}).get("kernel_size", 4),
+            source_num_q_heads=source_heads,
+            source_num_kv_heads=source_kv_heads,
+            source_head_dim=source_head_size,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+        )
+
+    raise ValueError(
+        f"No converter available for {source_type} -> {target_type}. "
+        f"Use 'init: random' to initialize randomly, or implement a converter."
+    )
+
+
+def _plan_random_mixer(
+    prefix: W,
+    mixer_type: str,
+    config: dict,
+    hidden_size: int,
+) -> ExprPlan:
+    """Random initialization for any mixer type.
+
+    Dispatches to the per-mixer plan function with source_prefix=None.
+    """
+    planner = _MIXER_PLANNERS.get(mixer_type)
+    if planner is None:
+        raise ValueError(f"Unknown mixer type: {mixer_type}")
+    return planner(prefix=prefix, config=config, hidden_size=hidden_size, source_prefix=None)
+
+
+# =============================================================================
+# SECTION 4: Main Entry Point
+# =============================================================================
+
+
+def plan_surgery(
+    source_config: dict,
+    target_config: dict,
+) -> ExprPlan:
+    """Build plan for Apriel2→Apriel2 surgery (MIL, DIL, KIL, stochastic mixers, etc.)."""
+    hidden_size = target_config.get("hidden_size", source_config.get("hidden_size"))
+    assert hidden_size is not None, "hidden_size must be specified in source or target config"
+
+    source_decoder = source_config.get("decoder", {})
+    target_decoder = target_config.get("decoder", {})
+
+    num_source_layers = source_decoder.get("num_blocks", 0)
+    num_target_layers = target_decoder.get("num_blocks", num_source_layers)
+
+    plan = _plan_non_decoder_weights(source_config)
+
+    for target_layer_idx in range(num_target_layers):
+        source_layer_idx = target_layer_idx % num_source_layers if num_source_layers > 0 else 0
+        source_block = _get_block_config(source_decoder, source_layer_idx)
+        target_block = _get_block_config(target_decoder, target_layer_idx)
+
+        plan += _plan_mixer(
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mixer", {}),
+            target_block.get("mixer", {}),
+            hidden_size,
+        )
+        plan += _plan_mlp(
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mlp", {}),
+            target_block.get("mlp", {}),
+            hidden_size,
+        )
+        plan += _plan_norms(
+            target_layer_idx,
+            source_layer_idx,
+            source_block,
+            target_block,
+            hidden_size,
+        )
+
+    return ExprPlan(
+        mappings=plan.mappings,
+        source_format="apriel2",
+        target_format="apriel2",
+        metadata=plan.metadata,
+    )
+
+
+# =============================================================================
+# SECTION 5: Non-Mixer Helpers
+# =============================================================================
 
 
 def _plan_non_decoder_weights(config: dict) -> ExprPlan:
@@ -348,6 +645,7 @@ def _plan_mixer(
     target_mixer: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Plan mixer weights, handling stochastic wrapper routing."""
     source_type = source_mixer.get("type", "attention")
     target_type = target_mixer.get("type", source_type)
 
@@ -440,200 +738,6 @@ def _plan_mixer(
         )
 
 
-def _plan_mixer_transfer(
-    source_type: str,
-    target_type: str,
-    source_config: dict,
-    target_config: dict,
-    source_prefix: W,
-    target_prefix: W,
-    hidden_size: int,
-) -> ExprPlan:
-    """Transfer weights. Raises ValueError if no converter for this type pair."""
-    # Attention → Attention
-    if source_type in ("attention", "sliding_window") and target_type in ("attention", "sliding_window"):
-        return ExprPlan(
-            mappings={
-                target_prefix / proj / "weight": Ref(key=source_prefix / proj / "weight")
-                for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]
-            }
-        )
-
-    # Attention → Mamba (MIL)
-    if source_type in ("attention", "sliding_window") and target_type == "mamba":
-        d_inner = target_config.get("d_inner", 2 * hidden_size)
-        dt_rank = target_config.get("dt_rank", hidden_size // 16)
-        d_xb = target_config.get("d_xb", hidden_size // 4)
-        d_state = target_config["d_state"]
-        d_conv = target_config["d_conv"]
-        repeat_kv_before_conv = target_config["repeat_kv_before_conv"]
-        conv_bias = target_config["conv_bias"]
-        dt_bias = target_config["dt_proj_bias"]
-        dt_min = target_config["dt_min"]
-        dt_max = target_config["dt_max"]
-        dt_init_floor = target_config["dt_init_floor"]
-
-        return plan_mil_attention_to_mamba(
-            layer_idx=0,
-            hidden_size=hidden_size,
-            d_inner=d_inner,
-            d_xb=d_xb,
-            dt_rank=dt_rank,
-            d_state=d_state,
-            d_conv=d_conv,
-            repeat_kv_before_conv=repeat_kv_before_conv,
-            conv_bias=conv_bias,
-            dt_bias=dt_bias,
-            dt_min=dt_min,
-            dt_max=dt_max,
-            dt_init_floor=dt_init_floor,
-            source_prefix=source_prefix,
-            target_prefix=target_prefix,
-        )
-
-    # Mamba → Mamba
-    if source_type == "mamba" and target_type == "mamba":
-        return ExprPlan(
-            mappings={
-                target_prefix / name: Ref(key=source_prefix / name)
-                for name in [
-                    "in_proj.weight",
-                    "out_proj.weight",
-                    "dt_in_proj.weight",
-                    "dt_proj.weight",
-                    "dt_proj.bias",
-                    "conv1d.weight",
-                    "conv1d.bias",
-                    "A_log",
-                    "D",
-                ]
-            }
-        )
-
-    # Attention → GatedDeltaNet (DIL)
-    if source_type in ("attention", "sliding_window") and target_type == "gdn":
-        source_heads = source_config["heads"]
-        source_kv_heads = source_config["head_groups"]
-        source_head_size = source_config["head_size"]
-        num_v_heads = target_config.get("value_heads", source_heads)
-        num_k_heads = target_config.get("key_heads", source_kv_heads)
-        head_k_dim = target_config.get("key_head_dim", source_head_size)
-        head_v_dim = target_config.get("value_head_dim", source_head_size)
-        conv_kernel_size = target_config["convolution_layer"]["kernel_size"]
-
-        return plan_attention_to_gated_delta_net(
-            hidden_size=hidden_size,
-            num_v_heads=num_v_heads,
-            num_k_heads=num_k_heads,
-            head_k_dim=head_k_dim,
-            head_v_dim=head_v_dim,
-            conv_kernel_size=conv_kernel_size,
-            source_num_q_heads=source_heads,
-            source_num_kv_heads=source_kv_heads,
-            source_head_dim=source_head_size,
-            source_prefix=source_prefix,
-            target_prefix=target_prefix,
-        )
-
-    # GatedDeltaNet → GatedDeltaNet (no .gdn wrapper, uses 'convolution' to match Fast-LLM)
-    if source_type == "gdn" and target_type == "gdn":
-        return ExprPlan(
-            mappings={
-                target_prefix / name: Ref(key=source_prefix / name)
-                for name in [
-                    "in_proj_qkvz.weight",
-                    "in_proj_ba.weight",
-                    "out_proj.weight",
-                    "convolution.weight",
-                    "A_log",
-                    "dt_bias",
-                    "norm.weight",
-                ]
-            }
-        )
-
-    raise ValueError(
-        f"No converter available for {source_type} -> {target_type}. "
-        f"Use 'init: random' to initialize randomly, or implement a converter."
-    )
-
-
-def _plan_random_mixer(
-    prefix: W,
-    mixer_type: str,
-    config: dict,
-    hidden_size: int,
-) -> ExprPlan:
-    mappings: dict[W, Expr] = {}
-
-    if mixer_type in ("attention", "sliding_window"):
-        heads = config["heads"]
-        head_groups = config["head_groups"]
-        head_size = config["head_size"]
-        q_size = heads * head_size
-        kv_size = head_groups * head_size
-
-        mappings[prefix / "q_proj" / "weight"] = Init(shape=(q_size, hidden_size), init_type="kaiming")
-        mappings[prefix / "k_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
-        mappings[prefix / "v_proj" / "weight"] = Init(shape=(kv_size, hidden_size), init_type="kaiming")
-        mappings[prefix / "o_proj" / "weight"] = Init(shape=(hidden_size, q_size), init_type="kaiming")
-
-    elif mixer_type == "mamba":
-        d_inner = config["d_inner"]
-        d_state = config["d_state"]
-        dt_rank = config["dt_rank"]
-        d_xb = config["d_xb"]
-        d_conv = config["d_conv"]
-        repeat_kv_before_conv = config["repeat_kv_before_conv"]
-        conv_bias = config["conv_bias"]
-        dt_bias = config["dt_proj_bias"]
-        dt_min = config["dt_min"]
-        dt_max = config["dt_max"]
-        dt_init_floor = config["dt_init_floor"]
-
-        conv_channels = d_inner if repeat_kv_before_conv else d_xb
-        mappings[prefix / "in_proj" / "weight"] = Init(
-            shape=(2 * d_inner + 2 * d_xb, hidden_size), init_type="kaiming"
-        )
-        mappings[prefix / "out_proj" / "weight"] = Init(shape=(hidden_size, d_inner), init_type="kaiming")
-        mappings[prefix / "dt_in_proj" / "weight"] = Init(shape=(dt_rank, hidden_size), init_type="kaiming")
-        mappings[prefix / "dt_proj" / "weight"] = Init(shape=(d_inner, dt_rank), init_type="kaiming")
-        mappings[prefix / "conv1d" / "weight"] = Init(shape=(conv_channels, 1, d_conv), init_type="kaiming")
-        if conv_bias:
-            mappings[prefix / "conv1d" / "bias"] = Init(shape=(conv_channels,), init_type="zeros")
-        if dt_bias:
-            mappings[prefix / "dt_proj" / "bias"] = Init(
-                shape=(d_inner,),
-                init_type="dt_bias",
-                init_params={"dt_min": dt_min, "dt_max": dt_max, "dt_init_floor": dt_init_floor},
-            )
-        mappings[prefix / "A_log"] = Init(shape=(d_inner, d_state), init_type="s4d")
-        mappings[prefix / "D"] = Init(shape=(d_inner,), init_type="ones")
-
-    elif mixer_type == "gdn":
-        num_v_heads = config["value_heads"]
-        num_k_heads = config["key_heads"]
-        head_k_dim = config["key_head_dim"]
-        head_v_dim = config["value_head_dim"]
-        conv_kernel_size = config["convolution_layer"]["kernel_size"]
-        key_dim = head_k_dim * num_k_heads
-        value_dim = head_v_dim * num_v_heads
-        conv_dim = key_dim * 2 + value_dim
-        # No .gdn wrapper, uses 'convolution' to match Fast-LLM naming
-        qkvz_size = key_dim * 2 + value_dim * 2  # Q, K both key_dim; V, Z both value_dim
-        mappings[prefix / "in_proj_qkvz" / "weight"] = Init(shape=(qkvz_size, hidden_size), init_type="kaiming")
-        mappings[prefix / "in_proj_ba" / "weight"] = Init(shape=(num_v_heads * 2, hidden_size), init_type="zeros")
-        mappings[prefix / "out_proj" / "weight"] = Init(shape=(hidden_size, value_dim), init_type="kaiming")
-        mappings[prefix / "convolution" / "weight"] = Init(
-            shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        )
-        mappings[prefix / "A_log"] = Init(shape=(num_v_heads,), init_type="slow_decay")
-        mappings[prefix / "dt_bias"] = Init(shape=(num_v_heads,), init_type="zeros")
-        mappings[prefix / "norm" / "weight"] = Init(shape=(head_v_dim,), init_type="ones")
-
-    return ExprPlan(mappings=mappings)
-
-
 def _plan_mlp(
     target_layer_idx: int,
     source_layer_idx: int,
@@ -641,6 +745,7 @@ def _plan_mlp(
     target_mlp: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Plan MLP weights."""
     if target_mlp.get("init") == "random":
         return _plan_random_mlp(target_layer_idx, target_mlp, hidden_size)
     return _plan_mlp_transfer(target_layer_idx, source_layer_idx, source_mlp, target_mlp, hidden_size)
@@ -653,6 +758,7 @@ def _plan_mlp_transfer(
     target_mlp: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Passthrough for MLP weights."""
     source_mlp_path = W("model", "decoder", "blocks", source_layer_idx, "mlp")
     target_mlp_path = W("model", "decoder", "blocks", target_layer_idx, "mlp")
 
@@ -665,12 +771,12 @@ def _plan_mlp_transfer(
             f"Use 'init: random' to initialize randomly."
         )
 
-    mappings: dict[W, Expr] = {
-        target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight")
-        for proj in ["gate_proj", "up_proj", "down_proj"]
-    }
-
-    return ExprPlan(mappings=mappings)
+    return ExprPlan(
+        mappings={
+            target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight")
+            for proj in ["gate_proj", "up_proj", "down_proj"]
+        }
+    )
 
 
 def _plan_random_mlp(
@@ -678,6 +784,7 @@ def _plan_random_mlp(
     target_mlp: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Random initialization for MLP."""
     target_mlp_path = W("model", "decoder", "blocks", target_layer_idx, "mlp")
     intermediate_size = target_mlp["intermediate_size"]
     return ExprPlan(
@@ -700,6 +807,7 @@ def _plan_norms(
     target_block: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Plan normalization layer weights."""
     target_norm = target_block.get("normalization", {})
     if target_norm.get("init") == "random":
         return _plan_random_norms(target_layer_idx, hidden_size)
@@ -713,6 +821,7 @@ def _plan_norms_transfer(
     target_block: dict,
     hidden_size: int,
 ) -> ExprPlan:
+    """Passthrough for normalization layer weights."""
     source_layer = W("model", "decoder", "blocks", source_layer_idx)
     target_layer = W("model", "decoder", "blocks", target_layer_idx)
 
@@ -728,18 +837,19 @@ def _plan_norms_transfer(
             f"Use 'init: random' to initialize randomly."
         )
 
-    mappings: dict[W, Expr] = {
-        target_layer / norm_name / "weight": Ref(key=source_layer / norm_name / "weight")
-        for norm_name in ["input_layernorm", "post_attention_layernorm"]
-    }
-
-    return ExprPlan(mappings=mappings)
+    return ExprPlan(
+        mappings={
+            target_layer / norm_name / "weight": Ref(key=source_layer / norm_name / "weight")
+            for norm_name in ["input_layernorm", "post_attention_layernorm"]
+        }
+    )
 
 
 def _plan_random_norms(
     target_layer_idx: int,
     hidden_size: int,
 ) -> ExprPlan:
+    """Random initialization for normalization layers."""
     target_layer = W("model", "decoder", "blocks", target_layer_idx)
     return ExprPlan(
         mappings={

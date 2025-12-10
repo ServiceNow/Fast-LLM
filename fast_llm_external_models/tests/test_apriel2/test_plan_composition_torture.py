@@ -903,6 +903,7 @@ class TestComprehensiveTortureChain:
 class TestPlanCompositionWithRealYAML:
     """Test plan composition using real YAML surgery files."""
 
+    @requires_cuda
     def test_stochastic_supernet_yaml_end_to_end(self, llava_pixtral_checkpoint):
         """Test full pipeline with stochastic_supernet.yaml."""
         import yaml

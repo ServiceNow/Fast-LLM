@@ -20,7 +20,8 @@ from fast_llm_external_models.apriel2.conversion import (
     full_slice,
     fuse,
     make_slice,
-    plan_attention_to_gated_delta_net,
+    plan_dil_attention_to_gdn,
+    plan_kil_attention_to_kda,
     plan_llava_to_apriel2,
     plan_mil_attention_to_mamba,
     plan_surgery,
@@ -667,7 +668,6 @@ class TestPlanBuilders:
     def test_plan_mil_attention_to_mamba(self):
         """MIL plan produces correct expressions."""
         exprs = plan_mil_attention_to_mamba(
-            layer_idx=0,
             hidden_size=64,
             d_inner=128,
             d_xb=32,
@@ -705,7 +705,6 @@ class TestPlanBuilders:
     def test_plan_mil_execution(self):
         """MIL plan executes correctly with actual weights."""
         plan = plan_mil_attention_to_mamba(
-            layer_idx=0,
             hidden_size=64,
             d_inner=128,
             d_xb=32,
@@ -747,10 +746,10 @@ class TestPlanBuilders:
         # out_proj should be 4.0
         assert torch.allclose(result[W("mamba.out_proj.weight")], torch.full((64, 128), 4.0))
 
-    def test_plan_attention_to_gated_delta_net(self):
+    def test_plan_dil_attention_to_gdn(self):
         """DIL plan produces correct per-head-group interleaved structure."""
         # MHA case: num_v_heads == num_k_heads (no GQA), 1 v_head per group
-        plan = plan_attention_to_gated_delta_net(
+        plan = plan_dil_attention_to_gdn(
             hidden_size=64,
             num_v_heads=4,
             num_k_heads=4,
@@ -835,11 +834,11 @@ class TestPlanBuilders:
         assert norm_weight.shape == (16,)  # head_v_dim
         assert norm_weight.init_type == "ones"
 
-    def test_plan_attention_to_gated_delta_net_gqa(self):
+    def test_plan_dil_attention_to_gdn_gqa(self):
         """DIL plan handles GQA with tiling (not padding)."""
         # GQA case: 4 v_heads, 2 k_heads → 2 v_heads per group
         # Source has 4 Q heads, 2 KV heads
-        plan = plan_attention_to_gated_delta_net(
+        plan = plan_dil_attention_to_gdn(
             hidden_size=64,
             num_v_heads=4,
             num_k_heads=2,
@@ -881,7 +880,7 @@ class TestPlanBuilders:
     def test_plan_dil_execution(self):
         """DIL plan executes correctly with FLAT layout [Q_all | K_all | V_all | Z_all]."""
         # MHA case: 4 k_heads, 4 v_heads (1 v_head per group)
-        plan = plan_attention_to_gated_delta_net(
+        plan = plan_dil_attention_to_gdn(
             hidden_size=64,
             num_v_heads=4,
             num_k_heads=4,
@@ -983,7 +982,7 @@ class TestPlanBuilders:
         """DIL plan executes correctly with GQA and FLAT layout."""
         # GQA: 4 v_heads, 2 k_heads → 2 v_heads per group
         # Source: 4 Q heads, 2 KV heads
-        plan = plan_attention_to_gated_delta_net(
+        plan = plan_dil_attention_to_gdn(
             hidden_size=64,
             num_v_heads=4,
             num_k_heads=2,
@@ -1053,6 +1052,159 @@ class TestPlanBuilders:
 
         # Z_all (rows 128-191): zeros
         assert torch.allclose(in_proj_qkvz[2 * key_dim + value_dim :], torch.zeros(value_dim, 64))
+
+    def test_plan_kil_attention_to_kda(self):
+        """AIK plan produces correct structure for attention → KDA conversion."""
+        plan = plan_kil_attention_to_kda(
+            hidden_size=64,
+            num_heads=4,
+            head_dim=16,
+            conv_kernel_size=4,
+            source_num_q_heads=4,
+            source_num_kv_heads=4,
+            source_head_dim=16,
+            source_prefix=W("attn"),
+            target_prefix=W(""),
+        )
+
+        # KDA has 15 weight tensors
+        assert len(plan.mappings) == 15
+
+        # Main projections transferred from attention
+        assert W("q_proj.weight") in plan.mappings
+        assert W("k_proj.weight") in plan.mappings
+        assert W("v_proj.weight") in plan.mappings
+        assert W("o_proj.weight") in plan.mappings
+
+        # Convolutions (random init)
+        assert W("q_conv.weight") in plan.mappings
+        assert W("k_conv.weight") in plan.mappings
+        assert W("v_conv.weight") in plan.mappings
+
+        # Gate kernels (random init)
+        assert W("f_a_proj.weight") in plan.mappings
+        assert W("f_b_proj.weight") in plan.mappings
+        assert W("g_a_proj.weight") in plan.mappings
+        assert W("g_b_proj.weight") in plan.mappings
+
+        # Beta projection (random init)
+        assert W("beta_proj.weight") in plan.mappings
+
+        # Learnable parameters
+        assert W("A_log") in plan.mappings
+        assert W("dt_bias") in plan.mappings
+
+        # Normalization
+        assert W("norm.weight") in plan.mappings
+
+        # Verify source refs for transferred weights
+        assert plan.mappings[W("q_proj.weight")].find_refs() == {W("attn.q_proj.weight")}
+        assert plan.mappings[W("o_proj.weight")].find_refs() == {W("attn.o_proj.weight")}
+
+        # Verify random init weights have no refs
+        assert plan.mappings[W("q_conv.weight")].find_refs() == set()
+        assert plan.mappings[W("A_log")].find_refs() == set()
+
+    def test_plan_kil_execution(self):
+        """AIK plan executes correctly for matching dimensions."""
+        plan = plan_kil_attention_to_kda(
+            hidden_size=64,
+            num_heads=4,
+            head_dim=16,
+            conv_kernel_size=4,
+            source_num_q_heads=4,
+            source_num_kv_heads=4,
+            source_head_dim=16,
+            source_prefix=W("attn"),
+            target_prefix=W(""),
+        )
+
+        projection_size = 64
+
+        # Create attention weights
+        q_weight = torch.randn(projection_size, 64)
+        k_weight = torch.randn(projection_size, 64)
+        v_weight = torch.randn(projection_size, 64)
+        o_weight = torch.randn(64, projection_size)
+
+        sources = {
+            W("attn.q_proj.weight"): q_weight,
+            W("attn.k_proj.weight"): k_weight,
+            W("attn.v_proj.weight"): v_weight,
+            W("attn.o_proj.weight"): o_weight,
+        }
+
+        result = execute(plan, sources, seed=42)
+
+        # Transferred weights should match exactly
+        assert torch.allclose(result[W("q_proj.weight")], q_weight)
+        assert torch.allclose(result[W("k_proj.weight")], k_weight)
+        assert torch.allclose(result[W("v_proj.weight")], v_weight)
+        assert torch.allclose(result[W("o_proj.weight")], o_weight)
+
+        # Random init weights should have correct shapes
+        assert result[W("q_conv.weight")].shape == (projection_size, 1, 4)
+        assert result[W("k_conv.weight")].shape == (projection_size, 1, 4)
+        assert result[W("v_conv.weight")].shape == (projection_size, 1, 4)
+        assert result[W("f_a_proj.weight")].shape == (16, 64)  # (head_dim, hidden_size)
+        assert result[W("f_b_proj.weight")].shape == (64, 16)  # (projection_size, head_dim)
+        assert result[W("g_a_proj.weight")].shape == (16, 64)
+        assert result[W("g_b_proj.weight")].shape == (64, 16)
+        assert result[W("beta_proj.weight")].shape == (4, 64)  # (num_heads, hidden_size)
+        assert result[W("A_log")].shape == (4,)  # (num_heads,)
+        assert result[W("dt_bias")].shape == (projection_size,)  # (projection_size,)
+        assert result[W("norm.weight")].shape == (16,)  # (head_dim,)
+
+    def test_plan_kil_execution_gqa(self):
+        """AIK plan executes correctly with GQA (tiling K/V from fewer source heads)."""
+        # Target: 4 heads (no GQA in KDA)
+        # Source: 4 Q heads, 2 KV heads (GQA)
+        plan = plan_kil_attention_to_kda(
+            hidden_size=64,
+            num_heads=4,
+            head_dim=16,
+            conv_kernel_size=4,
+            source_num_q_heads=4,
+            source_num_kv_heads=2,
+            source_head_dim=16,
+            source_prefix=W("attn"),
+            target_prefix=W(""),
+        )
+
+        # Create attention weights with distinct values per head
+        # Q: 4 heads, each head has value (head_idx + 1)
+        q_weight = torch.cat([torch.full((16, 64), float(i + 1)) for i in range(4)], dim=0)
+        # K: 2 heads, each head has value (head_idx + 1) * 10
+        k_weight = torch.cat([torch.full((16, 64), float(i + 1) * 10) for i in range(2)], dim=0)
+        # V: 2 heads, each head has value (head_idx + 1) * 100
+        v_weight = torch.cat([torch.full((16, 64), float(i + 1) * 100) for i in range(2)], dim=0)
+
+        sources = {
+            W("attn.q_proj.weight"): q_weight,
+            W("attn.k_proj.weight"): k_weight,
+            W("attn.v_proj.weight"): v_weight,
+            W("attn.o_proj.weight"): torch.randn(64, 64),
+        }
+
+        result = execute(plan, sources, seed=42)
+
+        # Q: direct copy (4 heads → 4 heads)
+        assert torch.allclose(result[W("q_proj.weight")], q_weight)
+
+        # K: tiled from 2 heads to 4 heads using modulo
+        # head 0 → src 0 (10), head 1 → src 1 (20), head 2 → src 0 (10), head 3 → src 1 (20)
+        k_result = result[W("k_proj.weight")]
+        assert torch.allclose(k_result[0:16], torch.full((16, 64), 10.0))
+        assert torch.allclose(k_result[16:32], torch.full((16, 64), 20.0))
+        assert torch.allclose(k_result[32:48], torch.full((16, 64), 10.0))
+        assert torch.allclose(k_result[48:64], torch.full((16, 64), 20.0))
+
+        # V: same tiling pattern
+        v_result = result[W("v_proj.weight")]
+        assert torch.allclose(v_result[0:16], torch.full((16, 64), 100.0))
+        assert torch.allclose(v_result[16:32], torch.full((16, 64), 200.0))
+        assert torch.allclose(v_result[32:48], torch.full((16, 64), 100.0))
+        assert torch.allclose(v_result[48:64], torch.full((16, 64), 200.0))
 
 
 class TestFullPipeline:
