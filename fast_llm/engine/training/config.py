@@ -16,6 +16,7 @@ from fast_llm.config import (
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
@@ -321,6 +322,114 @@ class TrainingConfig(Config):
         self.wandb.alert.assert_sub_interval(self.logs)
 
 
+@config_class()
+class RedisEventMessageConfig(RedisConfig):
+    """
+    Base configuration for sending a simple message into a Redis stream.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        desc="Flag indicating whether this event is enabled. If False, the event will be skipped.",
+        hint=FieldHint.feature,
+    )
+
+    stream_key: str = Field(
+        desc="Redis stream key where the message is published.",
+        hint=FieldHint.feature,
+    )
+
+    message_key: str = Field(
+        default="event",
+        desc="Key under which the message is stored inside the Redis payload dict.",
+        hint=FieldHint.feature,
+    )
+
+    message: str = Field(
+        desc="Value of the message stored under `message_key`.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class WeightsBroadcastConfig(RedisEventMessageConfig):
+    """
+    Event sent to indicate that updated weights are ready for broadcast.
+    """
+
+    # Default redis stream + message values
+    stream_key: str = FieldUpdate(
+        default="fast_llm_weights_broadcast",
+        desc="Redis stream where weight-broadcast notifications are published.",
+    )
+
+    message: str = FieldUpdate(
+        default="weights_ready",
+        desc="Message indicating that weights are ready to be broadcast.",
+    )
+
+    # NCCL rendezvous details
+    rdvz_master_address: str | None = Field(
+        default=None,
+        desc="Master address for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    rdvz_master_port: int | None = Field(
+        default=None,
+        desc="Master port for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    world_size: int | None = Field(
+        default=None,
+        desc="World size of the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    rank: int | None = Field(
+        default=None,
+        desc="Rank of this process in the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class TrainingFinishedEventConfig(RedisEventMessageConfig):
+    """
+    Event sent to indicate that training has completed.
+    """
+
+    stream_key: str = FieldUpdate(
+        default="fast_llm_training_events",
+        desc="Redis stream where training-finished events are published.",
+    )
+
+    message: str = FieldUpdate(
+        default="training_finished",
+        desc="Message indicating that training has finished.",
+    )
+
+
+@config_class()
+class TrainerEventsConfig(Config):
+    """
+    Aggregates all trainer-side Redis-based event configurations.
+    """
+
+    weights_broadcast: WeightsBroadcastConfig = Field(
+        default=None,
+        desc="Configuration for signaling weight-ready events via Redis.",
+        hint=FieldHint.feature,
+    )
+
+    training_finished: TrainingFinishedEventConfig = Field(
+        default=None,
+        desc="Configuration for signaling training-finished events via Redis.",
+        hint=FieldHint.feature,
+    )
+
+
 @config_class(registry=True, dynamic_type={RunnableConfig: "train"})
 class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     _abstract = True
@@ -349,6 +458,12 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     reference_models: dict[str, PretrainedFastLLMModelConfig] = Field(
         default_factory=dict,
         desc="Auxiliary models used during training, ex. for knowledge distillation.",
+        hint=FieldHint.feature,
+    )
+
+    events: TrainerEventsConfig = Field(
+        default=None,
+        desc="Optional Trainer event configurations (weight broadcast, training finished, etc.).",
         hint=FieldHint.feature,
     )
 
