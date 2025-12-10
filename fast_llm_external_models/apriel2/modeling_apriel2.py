@@ -211,13 +211,18 @@ class CausalConv1d(nn.Conv1d):
         """
         batch_size, dim, seq_len = x.shape
 
-        if self._use_fast_path(x):
+        # CUDA kernel limitation: return_final_states requires channel-last layout,
+        # which is impossible to achieve when seq_len==1. Fall back to PyTorch.
+        use_fast_path = self._use_fast_path(x) and not (return_final_state and seq_len == 1)
+
+        if use_fast_path:
             # CUDA fast path
             if return_final_state:
-                # causal_conv1d requires x.stride(1) == 1 (channel-last layout) for returning final states
-                # For shape [batch, dim, seq], we need dim to be the innermost (stride=1) dimension
-                # Transpose to [batch, seq, dim], make contiguous, transpose back
-                if x.stride(1) != 1:
+                # causal_conv1d requires channel-last layout for returning final states.
+                # Channel-last means: stride(1)==1 AND stride(2)==dim (channels are contiguous).
+                # For shape [batch, dim, seq], standard contiguous is (dim*seq, seq, 1).
+                # Channel-last is (dim*seq, 1, dim) - achieved via transpose+contiguous+transpose.
+                if x.stride(1) != 1 or x.stride(2) < dim:
                     x = x.transpose(1, 2).contiguous().transpose(1, 2)
                 # Allocate final state buffer with correct memory layout
                 # causal_conv1d requires final_states.stride(1) == 1
@@ -238,16 +243,38 @@ class CausalConv1d(nn.Conv1d):
             if return_final_state:
                 if isinstance(out, tuple):
                     out, final_state = out
+                # Return a contiguous copy (still in channel-last layout) so callers can modify it in-place
+                # final_state has shape [batch, dim, state_len] with channel-last strides
+                # We need to preserve the channel-last layout for subsequent CUDA kernel calls
+                if final_state.stride(1) != 1:
+                    # Already contiguous in channel-last
+                    pass
+                else:
+                    # Make a copy that's safe to modify in-place
+                    final_state = final_state.clone()
                 return out, final_state
             return out
         else:
             # PyTorch fallback
-            out = torch_causal_conv1d_fn(x, self._weight, bias=self.bias, activation=self._activation)
+            state_len = self.kernel_size[0] - 1
+
+            if conv_state is not None:
+                # Prepend state to input for proper convolution with history
+                x_with_state = torch.cat([conv_state, x], dim=-1)
+                out_with_state = torch_causal_conv1d_fn(
+                    x_with_state, self._weight, bias=self.bias, activation=self._activation
+                )
+                # Only keep outputs for the new input positions (not the state positions)
+                out = out_with_state[:, :, state_len:]
+            else:
+                out = torch_causal_conv1d_fn(x, self._weight, bias=self.bias, activation=self._activation)
 
             if return_final_state:
-                # Compute final state: last kernel_size-1 positions (with padding if needed)
-                state_len = self.kernel_size[0] - 1
-                if seq_len < state_len:
+                # Final state: last kernel_size-1 positions of input (with state if provided)
+                if conv_state is not None:
+                    combined = torch.cat([conv_state, x], dim=-1)
+                    final_state = combined[:, :, -state_len:].clone()
+                elif seq_len < state_len:
                     final_state = F.pad(x, (state_len - seq_len, 0))
                 else:
                     final_state = x[:, :, -state_len:].clone()
@@ -1339,8 +1366,7 @@ class KimiDeltaAttention(nn.Module):
 
         if chunk_kda is None or fused_kda_gate is None:
             raise ImportError(
-                "KimiDeltaAttention requires the `fla` package. "
-                "Please install it with `pip install -U fla-core`."
+                "KimiDeltaAttention requires the `fla` package. " "Please install it with `pip install -U fla-core`."
             )
 
         self.layer_idx = layer_idx
@@ -1354,6 +1380,7 @@ class KimiDeltaAttention(nn.Module):
         self.conv_kernel_size = conv_config.get("kernel_size", 4)
         norm_config = config_dict.get("normalization", {})
         self.norm_eps = norm_config.get("epsilon", 1e-5)
+        self.norm_activation = norm_config.get("activation", "sigmoid")
 
         # Derived dimensions
         self.projection_size = self.head_dim * self.num_heads
@@ -1412,11 +1439,13 @@ class KimiDeltaAttention(nn.Module):
 
         # Learnable parameters - match Fast-LLM shapes
         # A_log: 1D shape (num_heads,) to match Fast-LLM
-        self.A_log = nn.Parameter(torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log())
+        self.A_log = nn.Parameter(
+            torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log()
+        )
         self.dt_bias = nn.Parameter(torch.ones(self.projection_size, device=device, dtype=torch.float32))
 
         # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
-        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation="sigmoid")
+        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation=self.norm_activation)
 
     def _apply_conv(
         self, x: torch.Tensor, conv: CausalConv1d, conv_state: torch.Tensor | None, use_cache: bool

@@ -32,20 +32,6 @@ HEAD_DIM = 16
 KERNEL_SIZE = 4
 
 
-def _copy_weights(fast_layer, hf_layer):
-    """Copy weights from Apriel2 GDN to Fast-LLM GDN."""
-    with torch.no_grad():
-        fast_layer.in_proj_qkvz.weight.copy_(hf_layer.in_proj_qkvz.weight)
-        fast_layer.in_proj_ba.weight.copy_(hf_layer.in_proj_ba.weight)
-        fast_layer.convolution.weight.copy_(hf_layer.convolution.weight)
-        if fast_layer.convolution.bias is not None and hf_layer.convolution.bias is not None:
-            fast_layer.convolution.bias.copy_(hf_layer.convolution.bias)
-        fast_layer.out_proj.weight.copy_(hf_layer.out_proj.weight)
-        fast_layer.A_log.copy_(hf_layer.A_log)
-        fast_layer.dt_bias.copy_(hf_layer.dt_bias)
-        fast_layer.norm.weight.copy_(hf_layer.norm.weight)
-
-
 @pytest.mark.slow
 @requires_cuda
 @pytest.mark.skipif(Apriel2GatedDeltaNet is None, reason="Apriel2 GDN not available")
@@ -104,8 +90,8 @@ def test_fast_llm_gdn_matches_apriel2_forward():
     fast_layer.to(device=device, dtype=dtype)
     fast_layer.eval()
 
-    # Copy weights
-    _copy_weights(fast_layer, hf_layer)
+    # Copy weights: parameter names match exactly, so use load_state_dict
+    hf_layer.load_state_dict(fast_layer.state_dict())
 
     # Verify all parameters match
     hf_state = hf_layer.state_dict()
