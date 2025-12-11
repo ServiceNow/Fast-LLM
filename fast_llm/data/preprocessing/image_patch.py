@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    import PIL.Image
     import torch
 
 
@@ -57,12 +58,21 @@ class ImagePatchConfig(PreprocessingConfig):
         "If `image_break_token` is also defined, only `image_end_token` is added after the last row.",
         hint=FieldHint.optional,
     )
-    image_format: str = Field(
-        default="bytes",
-        desc="Format of the input images. 'bytes' expects raw image bytes, 'pil' expects PIL Image objects, "
-        "'dict' expects a dictionary with a 'bytes' key containing the image bytes.",
-        hint=FieldHint.optional,
-    )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Backward compatibility: remove image_format field if present (used in older datasets)
+        if "image_format" in default:
+            import warnings
+
+            warnings.warn(
+                "The 'image_format' field is deprecated and will be ignored. "
+                "Image format is now automatically inferred from the image type.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            default.pop("image_format")
+        return super()._from_dict(default, strict)
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, ImagePatchConfig)
@@ -100,7 +110,7 @@ class ImagePatchConfig(PreprocessingConfig):
         Assert.gt(self.max_patches_width, 0)
 
     def get_patches_from_images(
-        self, images: list["torch.Tensor|bytes|dict"], token_data_type: DataType = DataType.int64
+        self, images: list["torch.Tensor|bytes|dict|PIL.Image.Image"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
@@ -126,7 +136,7 @@ class ImagePatchConfig(PreprocessingConfig):
             )
 
     def _get_patches_from_image(
-        self, image: "torch.Tensor|bytes|dict", token_data_type: DataType = DataType.int64
+        self, image: "torch.Tensor|bytes|dict|PIL.Image.Image", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import torch
 
@@ -137,23 +147,30 @@ class ImagePatchConfig(PreprocessingConfig):
             import PIL.Image
             import PIL.PngImagePlugin
 
-            # Load the image based on format
+            # Load the image based on type inference
             # Set a larger limit for decompression to handle images with large ICC profiles
             PIL.Image.MAX_IMAGE_PIXELS = None
             original_max_text_chunk = PIL.PngImagePlugin.MAX_TEXT_CHUNK
             PIL.PngImagePlugin.MAX_TEXT_CHUNK = 10 * (1024**2)  # 10 MB
 
             try:
-                if self.image_format == "bytes":
+                # Infer format from image type
+                if isinstance(image, bytes):
+                    # Raw image bytes
                     image_ctx = PIL.Image.open(io.BytesIO(image))
-                elif self.image_format == "pil":
-                    image_ctx = contextlib.nullcontext(image)
-                elif self.image_format == "dict":
+                elif isinstance(image, dict):
+                    # Dictionary with 'bytes' key
+                    if "bytes" not in image:
+                        raise ValueError("Dictionary image format must contain a 'bytes' key.")
                     image_bytes = image["bytes"]
                     image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
+                elif isinstance(image, PIL.Image.Image):
+                    # PIL Image object
+                    image_ctx = contextlib.nullcontext(image)
                 else:
                     raise ValueError(
-                        f"Unsupported image_format: {self.image_format}. Must be 'bytes', 'pil', or 'dict'."
+                        f"Unsupported image type: {type(image).__name__}. "
+                        f"Expected bytes, dict with 'bytes' key, or PIL.Image.Image."
                     )
             finally:
                 PIL.PngImagePlugin.MAX_TEXT_CHUNK = original_max_text_chunk
