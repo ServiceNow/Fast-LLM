@@ -39,6 +39,6 @@ class LanguageModelPreprocessingConfig(PreprocessingConfig):
             Assert.leq(self.vocab_size, preprocessing.vocab_size)
         if preprocessing.use_preference_spans:
             # Preference spans are strictly needed for DPO loss.
-            assert self.use_preference_spans
+            assert self.use_preference_spans, "The dataset is missing required preference spans"
         if preprocessing.use_image_patches and self.use_image_patches:
             self.image_patches.check_compatibility(preprocessing.image_patches)
