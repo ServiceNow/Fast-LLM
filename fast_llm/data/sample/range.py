@@ -38,7 +38,7 @@ class RangeSample(Sample):
         sample_size = 0
         for document in documents:
             for begin, end in document.ranges:
-                ranges.extend((begin + sample_size, end + sample_size))
+                ranges.append((begin + sample_size, end + sample_size))
             sample_size += document.sample_size
         return cls(ranges, sample_size)
 
