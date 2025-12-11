@@ -7,8 +7,10 @@
 # - Pure sliding window attention (transfer with window override)
 # - Pure mamba (MIL conversion from attention)
 # - Pure gdn (DIL conversion from attention)
+# - Pure kda (KIL conversion from attention)
 # - Stochastic mixer: attention + mamba
 # - Stochastic mixer: swa + gdn
+# - Stochastic mixer: attention + kda
 #
 # Usage:
 #   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
@@ -24,44 +26,44 @@ decoder:
     - stoch_am    # 3
     - swa         # 4
     - stoch_sg    # 5
-    - gdn         # 6
+    - kda         # 6
     - attn        # 7
-    - stoch_sg    # 8
+    - stoch_ak    # 8
     - mamba       # 9
     - swa         # 10
     - stoch_am    # 11
     - gdn         # 12
-    - stoch_sg    # 13
+    - stoch_ak    # 13
     - attn        # 14
     - mamba       # 15
     - stoch_am    # 16
     - swa         # 17
-    - gdn         # 18
+    - kda         # 18
     - attn        # 19
     - stoch_sg    # 20
     - mamba       # 21
-    - stoch_am    # 22
+    - stoch_ak    # 22
     - swa         # 23
     - attn        # 24
     - gdn         # 25
-    - stoch_sg    # 26
+    - stoch_ak    # 26
     - mamba       # 27
     - swa         # 28
     - stoch_am    # 29
-    - gdn         # 30
+    - kda         # 30
     - attn        # 31
     - mamba       # 32
     - stoch_sg    # 33
     - swa         # 34
-    - stoch_am    # 35
+    - stoch_ak    # 35
     - attn        # 36
     - gdn         # 37
     - mamba       # 38
-    - stoch_sg    # 39
+    - stoch_ak    # 39
     - stoch_am    # 40
     - swa         # 41
     - attn        # 42
-    - gdn         # 43
+    - kda         # 43
     - mamba       # 44
     - stoch_sg    # 45
     - swa         # 46
@@ -168,6 +170,41 @@ decoder:
           gdn:
             type: gdn
             init: transfer  # DIL
+            convolution_layer:
+              kernel_size: 4
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Pure kimi delta attention - KIL conversion from attention
+    kda:
+      mixer:
+        type: kda
+        init: transfer  # Uses KIL conversion
+        # Required param (cannot be derived)
+        convolution_layer:
+          kernel_size: 4
+        # Optional - defaults derived from source attention if not specified
+        # heads: 32         # defaults to source heads
+        # head_dim: 160     # defaults to source head_size
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    # Stochastic: attention + kimi delta attention
+    stoch_ak:
+      mixer:
+        type: stochastic
+        main_mixer_name: attention
+        mixers:
+          attention:
+            type: attention
+            init: transfer
+          kda:
+            type: kda
+            init: transfer  # KIL
             convolution_layer:
               kernel_size: 4
       mlp:

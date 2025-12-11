@@ -27,7 +27,9 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
         peft: PeftConfig | None,
     ):
         super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
-        vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
+        # Internal hidden dimension for embeddings and encoder (may differ from output hidden_dim for adapter)
+        self._vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
+        vision_hidden_dim = self._vision_hidden_dim
         self.embeddings = self._config.embeddings.get_layer(
             distributed_config,
             vision_hidden_dim,

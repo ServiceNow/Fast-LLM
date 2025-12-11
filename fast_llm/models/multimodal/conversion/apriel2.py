@@ -406,7 +406,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
                 "auto_map": {
                     "AutoConfig": "configuration_apriel2.Apriel2Config",
                     "AutoModel": "modeling_apriel2.Apriel2Model",
-                    "AutoModelForCausalLM": "modeling_apriel2.Apriel2ForConditionalGeneration",
+                    "AutoModelForImageTextToText": "modeling_apriel2.Apriel2ForConditionalGeneration",
                 },
             },
         )

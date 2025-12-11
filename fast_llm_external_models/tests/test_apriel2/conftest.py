@@ -497,6 +497,126 @@ def apriel2_config_all_mixers():
 
 
 @pytest.fixture
+def apriel2_config_kda():
+    """Apriel2 config with pure KDA (Kimi Delta Attention) layers.
+
+    Tests KDA-specific cache behavior:
+    - Tuple conv states (q, k, v) instead of single tensor
+    - Recurrent state handling
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "kda",
+                    "heads": 4,
+                    "head_dim": 16,
+                    "convolution_layer": {"kernel_size": 4},
+                    "normalization": {"epsilon": 1e-5},
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def apriel2_config_all_mixers_with_kda():
+    """Apriel2 config with all 5 mixer types including KDA.
+
+    This config exercises:
+    - All mixer types (attention, swa, mamba, gdn, kda)
+    - KDA's tuple conv state handling in stochastic context
+    - Cache isolation between all mixer types
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "pattern",
+            "num_blocks": 2,
+            "pattern": ["attn", "all_mixers"],
+            "blocks": {
+                "attn": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+                "all_mixers": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                            },
+                            "swa": {
+                                "type": "attention",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "window_size": 2048,
+                                "rotary": {"type": "mistral_1d", "theta": 1000000.0},
+                            },
+                            "mamba": {
+                                "type": "mamba",
+                                "d_inner": 128,
+                                "d_state": 16,
+                                "dt_rank": 4,
+                                "d_xb": 32,
+                                "d_conv": 4,
+                                "repeat_kv_before_conv": True,
+                                "conv_bias": True,
+                                "dt_proj_bias": True,
+                                "dt_min": 0.001,
+                                "dt_max": 0.1,
+                                "dt_init_floor": 1e-4,
+                            },
+                            "gdn": {
+                                "type": "gdn",
+                                "value_heads": 4,
+                                "key_heads": 2,
+                                "key_head_dim": 16,
+                                "value_head_dim": 16,
+                                "convolution_layer": {"kernel_size": 4},
+                            },
+                            "kda": {
+                                "type": "kda",
+                                "heads": 4,
+                                "head_dim": 16,
+                                "convolution_layer": {"kernel_size": 4},
+                                "normalization": {"epsilon": 1e-5},
+                            },
+                        },
+                    },
+                    "mlp": {"type": "mlp", "intermediate_size": 256, "gated": True},
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        },
+    )
+
+
+@pytest.fixture
 def apriel2_config_comprehensive():
     """Comprehensive Apriel2 config combining all features for thorough testing.
 
@@ -750,7 +870,7 @@ def comprehensive_torture_chain():
     This is the REAL stress test. It exercises:
     - Fixed → Pattern decoder transitions
     - Per-layer heterogeneity
-    - All type conversions: FA ↔ SWA ↔ Mamba ↔ GDN
+    - All type conversions: FA ↔ SWA ↔ Mamba ↔ GDN ↔ KDA
     - Stochastic wrapping/unwrapping
     - Both init: transfer and init: random
     - Destructive operations (remove sub-mixers, collapse stochastic)
@@ -809,17 +929,17 @@ def comprehensive_torture_chain():
             },
         },
         # =====================================================================
-        # STEP 2: Add stochastic wrappers with MIL/DIL conversions
+        # STEP 2: Add stochastic wrappers with MIL/DIL/KIL conversions
         # Layer 0: stochastic{attn, mamba:MIL}
         # Layer 1: swa (unchanged)
         # Layer 2: stochastic{attn, gdn:DIL}
         # Layer 3: swa (unchanged)
-        # Layer 4: attn (unchanged)
+        # Layer 4: stochastic{attn, kda:KIL}
         # =====================================================================
         {
             "decoder": {
                 "type": "pattern",
-                "pattern": ["stoch_am", "swa", "stoch_ag", "swa", "attn"],
+                "pattern": ["stoch_am", "swa", "stoch_ag", "swa", "stoch_ak"],
                 "blocks": {
                     "stoch_am": {
                         "mixer": {
@@ -862,8 +982,20 @@ def comprehensive_torture_chain():
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
-                    "attn": {
-                        "mixer": {"type": "attention", "init": "transfer"},
+                    "stoch_ak": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "kda": {
+                                    "type": "kda",
+                                    "init": "transfer",  # KIL conversion
+                                    "convolution_layer": {"kernel_size": 4},
+                                    "normalization": {"epsilon": 1e-5},
+                                },
+                            },
+                        },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
@@ -876,12 +1008,12 @@ def comprehensive_torture_chain():
         # Layer 1: mamba (MIL from swa!)
         # Layer 2: stoch{attn, gdn} (unchanged)
         # Layer 3: gdn (DIL from swa!)
-        # Layer 4: attn (unchanged)
+        # Layer 4: stoch{attn, kda} (unchanged)
         # =====================================================================
         {
             "decoder": {
                 "type": "pattern",
-                "pattern": ["stoch_am", "mamba", "stoch_ag", "gdn", "attn"],
+                "pattern": ["stoch_am", "mamba", "stoch_ag", "gdn", "stoch_ak"],
                 "blocks": {
                     "stoch_am": {
                         "mixer": {
@@ -929,8 +1061,20 @@ def comprehensive_torture_chain():
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
-                    "attn": {
-                        "mixer": {"type": "attention", "init": "transfer"},
+                    "stoch_ak": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"type": "attention", "init": "transfer"},
+                                "kda": {
+                                    "type": "kda",
+                                    "init": "transfer",
+                                    "convolution_layer": {"kernel_size": 4},
+                                    "normalization": {"epsilon": 1e-5},
+                                },
+                            },
+                        },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
@@ -943,12 +1087,12 @@ def comprehensive_torture_chain():
         # Layer 1: mamba (unchanged)
         # Layer 2: stoch{attn, gdn, mamba:RANDOM}
         # Layer 3: gdn (unchanged)
-        # Layer 4: stoch{attn, swa:RANDOM} (wrap in stochastic!)
+        # Layer 4: stoch{attn, kda, swa:RANDOM} (add swa to existing stoch_ak)
         # =====================================================================
         {
             "decoder": {
                 "type": "pattern",
-                "pattern": ["stoch_ams", "mamba", "stoch_agm", "gdn", "stoch_as"],
+                "pattern": ["stoch_ams", "mamba", "stoch_agm", "gdn", "stoch_aks"],
                 "blocks": {
                     "stoch_ams": {
                         "mixer": {
@@ -1006,12 +1150,18 @@ def comprehensive_torture_chain():
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
-                    "stoch_as": {
+                    "stoch_aks": {
                         "mixer": {
                             "type": "stochastic",
                             "main_mixer_name": "attention",
                             "mixers": {
                                 "attention": {"type": "attention", "init": "transfer"},
+                                "kda": {
+                                    "type": "kda",
+                                    "init": "transfer",
+                                    "convolution_layer": {"kernel_size": 4},
+                                    "normalization": {"epsilon": 1e-5},
+                                },
                                 "swa": {
                                     "type": "attention",
                                     "init": "random",  # Random init!
@@ -1035,12 +1185,12 @@ def comprehensive_torture_chain():
         # Layer 1: attn (random init - type change from mamba!)
         # Layer 2: gdn (collapse stochastic, keep gdn)
         # Layer 3: swa (random init - type change from gdn!)
-        # Layer 4: stoch{attn, swa} (unchanged)
+        # Layer 4: kda (collapse stochastic, keep kda - tests KDA passthrough)
         # =====================================================================
         {
             "decoder": {
                 "type": "pattern",
-                "pattern": ["stoch_ms", "attn", "gdn", "swa", "stoch_as"],
+                "pattern": ["stoch_ms", "attn", "gdn", "swa", "kda"],
                 "blocks": {
                     "stoch_ms": {
                         "mixer": {
@@ -1093,18 +1243,12 @@ def comprehensive_torture_chain():
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
                     },
-                    "stoch_as": {
+                    "kda": {
                         "mixer": {
-                            "type": "stochastic",
-                            "main_mixer_name": "attention",
-                            "mixers": {
-                                "attention": {"type": "attention", "init": "transfer"},
-                                "swa": {
-                                    "type": "attention",
-                                    "init": "transfer",
-                                    "window_size": 128,
-                                },
-                            },
+                            "type": "kda",
+                            "init": "transfer",  # Transfer from stoch's kda
+                            "convolution_layer": {"kernel_size": 4},
+                            "normalization": {"epsilon": 1e-5},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},
@@ -1119,14 +1263,14 @@ def comprehensive_torture_chain():
         #   Layer 1: attention
         #   Layer 2: gdn
         #   Layer 3: swa
-        #   Layer 4: stoch{attention (main), swa}
-        # Layers 1,3,4 have attention-based sources → can MIL/DIL to full supernet
-        # Layers 0,2 have mamba/gdn sources → keep structure, just transfer
+        #   Layer 4: kda
+        # Layers 1,3 have attention-based sources → can MIL/DIL/KIL to full supernet
+        # Layers 0,2,4 have mamba/gdn/kda sources → keep structure, just transfer
         # =====================================================================
         {
             "decoder": {
                 "type": "pattern",
-                "pattern": ["stoch_ms", "supernet", "gdn", "supernet", "supernet"],
+                "pattern": ["stoch_ms", "supernet", "gdn", "supernet", "kda"],
                 "blocks": {
                     "stoch_ms": {
                         # Layer 0: preserve stoch{mamba, swa}
@@ -1156,7 +1300,7 @@ def comprehensive_torture_chain():
                         "normalization": {"init": "transfer"},
                     },
                     "supernet": {
-                        # Layers 1,3,4: full supernet via MIL/DIL from attention
+                        # Layers 1,3: full supernet via MIL/DIL/KIL from attention
                         # NOTE: Explicit geometry required because this is a NEW block
                         # and the default base (stoch_ms) is mamba-based, so geometry
                         # can't be derived via cross-type composition.
@@ -1191,7 +1335,26 @@ def comprehensive_torture_chain():
                                     "value_head_dim": 32,
                                     "convolution_layer": {"kernel_size": 4},
                                 },
+                                "kda": {
+                                    "type": "kda",
+                                    "init": "transfer",  # KIL conversion
+                                    "heads": 8,
+                                    "head_dim": 32,
+                                    "convolution_layer": {"kernel_size": 4},
+                                    "normalization": {"epsilon": 1e-5},
+                                },
                             },
+                        },
+                        "mlp": {"init": "transfer"},
+                        "normalization": {"init": "transfer"},
+                    },
+                    "kda": {
+                        # Layer 4: preserve pure kda
+                        "mixer": {
+                            "type": "kda",
+                            "init": "transfer",
+                            "convolution_layer": {"kernel_size": 4},
+                            "normalization": {"epsilon": 1e-5},
                         },
                         "mlp": {"init": "transfer"},
                         "normalization": {"init": "transfer"},

@@ -203,6 +203,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "save": True,
                 "show": False,
             },
+            # Uncomment to enable model debug logging:
+            # "model_debug_level": _LOG_LEVEL,
         },
         "training": {
             "logs": {"interval": 1},
@@ -930,6 +932,11 @@ _update_and_add_testing_config(
                                 "d_xb": 256,
                                 "add_linear_biases": False,
                             },
+                            "kda": {
+                                "type": "kda",
+                                "heads": 4,
+                                "head_dim": 16,
+                            },
                         },
                         "sampling_strategy": "uniform",
                         "main_mixer_name": "attn",
@@ -957,9 +964,17 @@ _update_and_add_testing_config(
                         "value_head_dim": 16,
                     },
                 },
+                "kda": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "kda",
+                        "heads": 4,
+                        "head_dim": 16,
+                    },
+                },
             },
-            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "stochastic"],
-            "num_blocks": 6,
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "kda", "stochastic"],
+            "num_blocks": 7,
         },
     },
     megatron_args=None,
