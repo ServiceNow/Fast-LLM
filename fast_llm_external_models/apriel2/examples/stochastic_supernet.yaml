@@ -15,7 +15,6 @@
 
 decoder:
   type: fixed
-  num_blocks: 5
   block:
     mixer:
       type: stochastic
