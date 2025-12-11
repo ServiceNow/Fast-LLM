@@ -9,6 +9,7 @@ from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
+    MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
@@ -92,16 +93,6 @@ class PatchSample(Sample):
             [],
         )
 
-    @classmethod
-    def get_empty(cls, size: int, shape: tuple[int, ...]) -> typing.Self:
-        return PatchSample(
-            self.patches.new_empty((0, *shape[1:])),
-            self.token_map.new_empty(0),
-            self.positions.new_empty([0, len(shape) - 2]),
-            size,
-            [],
-        )
-
 
 class PatchBatch(Batch):
     def __init__(
@@ -159,29 +150,28 @@ class PatchBatch(Batch):
         self.positions = self.positions.to(device, non_blocking=True)
 
 
-@config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
-class PatchReaderConfig(MemmapReaderConfig):
+@config_class()
+class PatchReaderBaseConfig(MemmapReaderBaseConfig):
     _abstract = False
+    patch_shape: tuple[int, ...] = Field()
+    data_type: DataType = Field()
+
+    @property
+    def patch_size(self) -> int:
+        return math.prod(self.patch_shape)
+
+    @property
+    def grid_dims(self) -> int:
+        return len(self.patch_shape) - 1
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
+class PatchReaderConfig(PatchReaderBaseConfig, MemmapReaderConfig):
     header: typing.ClassVar[bytes] = b"patch begin"
     footer: typing.ClassVar[bytes] = b"patch end"
     num_documents: int = Field()
     num_patches: int = Field()
     num_patch_groups: int = Field()
-    patch_shape: tuple[int, ...] = Field()
-    data_type: DataType = Field()
-
-    @classmethod
-    def create_empty(cls, patch_shape: tuple[int, ...], data_type: DataType) -> "PatchReaderConfig":
-        config = cls(
-            begin=0,
-            end=2 * torch.int32.itemsize + len(cls.header) + len(cls.footer),  # Minimal size with header and footer
-            num_documents=0,
-            num_patches=0,
-            num_patch_groups=0,
-            patch_shape=patch_shape,
-            data_type=data_type,
-        )
-        return config
 
     def __len__(self) -> int:
         return self.num_documents
@@ -193,14 +183,6 @@ class PatchReaderConfig(MemmapReaderConfig):
     @property
     def writer_class(self) -> "type[PatchWriter]":
         return PatchWriter
-
-    @property
-    def patch_size(self) -> int:
-        return math.prod(self.patch_shape)
-
-    @property
-    def grid_dims(self) -> int:
-        return len(self.patch_shape) - 1
 
     @property
     def _expected_buffer_size(self) -> int:
@@ -272,17 +254,7 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
         )
 
 
-class EmptyPatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
-        # Skip parent's __init__ to avoid buffer validation since we don't read from the buffer
-        # Just initialize the config directly
-        from fast_llm.config import Configurable
-        from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-
-        Configurable.__init__(self, config)
-        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
-        # No buffer validation or reading needed for empty reader
-
+class EmptyPatchReader[ConfigType: PatchReaderBaseConfig](MemmapReaderBase[ConfigType]):
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         return PatchSample(
             torch.empty(0, *self._config.patch_shape, dtype=self._config.data_type.torch),
