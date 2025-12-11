@@ -9,11 +9,12 @@ import pytest
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
-from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_TEXT
-from tests.utils.dataset import get_test_dataset_with_image_patches
+from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_SAMPLES, COMMON_DATASET_TEXT
+from tests.utils.dataset import get_common_test_dataset, get_test_dataset_with_image_patches
 
 DATASET_WITH_IMAGE_PATCHES_TOKENS = [55750, 56809, 59145, 59145]
 DATASET_WITH_IMAGE_PATCHES_IMAGE_MD5 = {
@@ -167,3 +168,17 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
             hashlib.md5(document.image_patches.patches.numpy().tobytes()).hexdigest(),
             DATASET_WITH_IMAGE_PATCHES_PATCHES_MD5[index],
         )
+
+
+@pytest.mark.slow
+def test_gpt_data_with_missing_image_patches():
+    path, config, hf_path, _ = get_common_test_dataset()
+    _, _, _, preprocessing = get_test_dataset_with_image_patches(config_only=True)
+    LanguageModelPreprocessingConfig
+    with pytest.warns(match="The model uses image patches"):
+        dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
+
+    for index in COMMON_DATASET_SAMPLES:
+        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
+        Assert.eq(document.image_patches.patches.shape, (0,) + preprocessing.image_patches.patch_shape)

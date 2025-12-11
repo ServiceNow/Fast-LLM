@@ -20,8 +20,22 @@ from fast_llm.data.sample.abstract import (
     NullReaderConfig,
     Sample,
 )
-from fast_llm.data.sample.patch import EmptyPatchReader, PatchBatch, PatchReaderConfig, PatchSample, PatchWriter
-from fast_llm.data.sample.range import EmptyRangeReader, RangeBatch, RangeReaderConfig, RangeSample, RangeWriter
+from fast_llm.data.sample.patch import (
+    EmptyPatchReader,
+    PatchBatch,
+    PatchReaderBaseConfig,
+    PatchReaderConfig,
+    PatchSample,
+    PatchWriter,
+)
+from fast_llm.data.sample.range import (
+    EmptyRangeReader,
+    RangeBatch,
+    RangeReaderBaseConfig,
+    RangeReaderConfig,
+    RangeSample,
+    RangeWriter,
+)
 from fast_llm.data.sample.token import TokenBatch, TokenReaderConfig, TokenSample, TokenWriter
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
@@ -230,9 +244,8 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
                     f"The model uses loss masking spans, but the dataset does not specify any."
                     " Assuming empty span lists."
                 )
-                self._loss_masking_spans = EmptyRangeReader(
-                    RangeReaderConfig(begin=0, end=0, num_documents=0, num_ranges=0), buffer
-                )
+                # TODO: this might have the same issue as empty PatchReaderConfig, so RangeReaderConfig.create_empty might be needed
+                self._loss_masking_spans = EmptyRangeReader(RangeReaderBaseConfig())
             else:
                 self._loss_masking_spans = self._config.loss_masking_spans.get_reader(buffer)
 
@@ -248,16 +261,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
                     " Assuming empty patch lists."
                 )
                 self._image_patches = EmptyPatchReader(
-                    PatchReaderConfig(
-                        begin=0,
-                        end=0,
-                        num_documents=0,
-                        num_patches=0,
-                        num_patch_groups=0,
-                        patch_shape=model_image_preprocessing.patch_shape,
-                        data_type=DataType.uint8,
-                    ),
-                    buffer,
+                    PatchReaderBaseConfig(patch_shape=model_image_preprocessing.patch_shape, data_type=DataType.uint8),
                 )
             else:
                 self._image_patches = self._config.image_patches.get_reader(buffer)
