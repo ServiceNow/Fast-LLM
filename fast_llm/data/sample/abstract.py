@@ -160,7 +160,13 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
         return self.reader_class(self, buffer, model_preprocessing)
 
 
-class MemmapReader[ConfigType: MemmapReaderConfig](Configurable[ConfigType]):
+class MemmapReaderBase[ConfigType: MemmapReaderBaseConfig](Configurable[ConfigType]):
+    @abc.abstractmethod
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        pass
+
+
+class MemmapReader[ConfigType: MemmapReaderConfig](MemmapReaderBase[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
         super().__init__(config)
         # Note: This is the requirement at reading time (ex. from the model),
@@ -172,10 +178,6 @@ class MemmapReader[ConfigType: MemmapReaderConfig](Configurable[ConfigType]):
         Assert.eq(buffer[self._config.begin : buffer_begin].tobytes(), self._config.header)
         Assert.eq(buffer[buffer_end : self._config.end].tobytes(), self._config.footer)
         self._buffer = buffer[buffer_begin:buffer_end]
-
-    @abc.abstractmethod
-    def get_document(self, index: int, begin: int, end: int) -> Sample:
-        pass
 
 
 class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](MemmapReader[ConfigType]):

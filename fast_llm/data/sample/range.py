@@ -64,9 +64,13 @@ class RangeBatch(Batch):
         return self.__class__([crop_ranges(sample_ranges, begin, end) for sample_ranges in self.ranges], end - begin)
 
 
-@config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
-class RangeReaderConfig(MemmapReaderConfig):
+@config_class()
+class RangeReaderBaseConfig(MemmapReaderBaseConfig):
     _abstract = False
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
+class RangeReaderConfig(RangeReaderBaseConfig, MemmapReaderConfig):
     header: typing.ClassVar[bytes] = b"range begin"
     footer: typing.ClassVar[bytes] = b"range end"
     num_documents: int = Field()
@@ -110,16 +114,6 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
 
 
 class EmptyRangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
-        # Skip parent's __init__ to avoid buffer validation since we don't read from the buffer
-        # Just initialize the config directly
-        from fast_llm.config import Configurable
-        from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-
-        Configurable.__init__(self, config)
-        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
-        # No buffer validation or reading needed for empty reader
-
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         return RangeSample([], end - begin)
 

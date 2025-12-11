@@ -1034,7 +1034,9 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "bf4", "df4", TP_NO_STP),
+    # bf2_df2 depends on df4, so must also be skipped.
+    skip_tests=("sdp", "ms", "bf4", "df4", "bf2_df2", TP_NO_STP),
+    auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
 

@@ -1,29 +1,49 @@
+"""Test numerical equivalence between Fast-LLM GDN and Apriel2 GatedDeltaNet."""
+
 import pytest
 import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
+try:
+    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+except ImportError:
+    Apriel2GatedDeltaNet = None
+
+try:
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+
+    _gdn_kernel_available = True
+except ImportError:
+    _gdn_kernel_available = False
+
+# Test constants
 VOCAB_SIZE = 500
-HIDDEN_SIZE = 16
+HIDDEN_SIZE = 64
 SEQ_LEN = 65
+BATCH_SIZE = 2
 NUM_V_HEADS = 4
 NUM_K_HEADS = 2
-HEAD_DIM = 4
+HEAD_DIM = 16
 KERNEL_SIZE = 4
 
 
 @pytest.mark.slow
 @requires_cuda
+@pytest.mark.skipif(Apriel2GatedDeltaNet is None, reason="Apriel2 GDN not available")
+@pytest.mark.skipif(not _gdn_kernel_available, reason="GDN CUDA kernels not available")
 def test_fast_llm_gdn_matches_apriel2_forward():
-    torch.manual_seed(0)
+    """Verify Fast-LLM GDN output matches Apriel2 GatedDeltaNet."""
+    torch.manual_seed(42)
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
-    config_gdn = {
+    # Create Apriel2 GDN layer
+    gdn_config = {
         "value_heads": NUM_V_HEADS,
         "key_heads": NUM_K_HEADS,
         "key_head_dim": HEAD_DIM,
@@ -31,11 +51,10 @@ def test_fast_llm_gdn_matches_apriel2_forward():
         "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
         "norm_eps": 1e-5,
     }
+    hf_layer = Apriel2GatedDeltaNet(HIDDEN_SIZE, gdn_config, layer_idx=0, dtype=dtype).to(device=device, dtype=dtype)
+    hf_layer.eval()
 
-    hf_layer = (
-        Apriel2GatedDeltaNet(HIDDEN_SIZE, config_gdn, layer_idx=0, dtype=dtype).to(device=device, dtype=dtype).eval()
-    )
-
+    # Create Fast-LLM GDN layer
     config = GPTBaseModelConfig.from_dict(
         {
             "decoder": {
@@ -68,35 +87,35 @@ def test_fast_llm_gdn_matches_apriel2_forward():
     )
     fast_layer = model.decoder[0].mixer
     get_stage([fast_layer], distributed, [], {})
-    fast_layer.to(device=device, dtype=dtype).eval()
+    fast_layer.to(device=device, dtype=dtype)
+    fast_layer.eval()
 
-    with torch.no_grad():
-        fast_layer.in_proj_qkvz.weight.copy_(hf_layer.in_proj_qkvz.weight)
-        fast_layer.in_proj_ba.weight.copy_(hf_layer.in_proj_ba.weight)
-        fast_layer.convolution.weight.copy_(hf_layer.convolution.weight)
-        if fast_layer.convolution.bias is not None and hf_layer.convolution.bias is not None:
-            fast_layer.convolution.bias.copy_(hf_layer.convolution.bias)
-        fast_layer.out_proj.weight.copy_(hf_layer.out_proj.weight)
-        fast_layer.A_log.copy_(hf_layer.A_log)
-        fast_layer.dt_bias.copy_(hf_layer.dt_bias)
-        fast_layer.norm.weight.copy_(hf_layer.norm.weight)
+    # Copy weights: parameter names match exactly, so use load_state_dict
+    hf_layer.load_state_dict(fast_layer.state_dict())
 
-    hidden_states = torch.randn(1, SEQ_LEN, HIDDEN_SIZE, device=device, dtype=dtype, requires_grad=False)
-    hf_state_dict = hf_layer.state_dict()
-    for k, p in fast_layer.state_dict().items():
-        torch.testing.assert_close(p, hf_state_dict[k], atol=1e-5, rtol=1e-5)
+    # Verify all parameters match
+    hf_state = hf_layer.state_dict()
+    for name, fast_param in fast_layer.state_dict().items():
+        assert name in hf_state, f"Parameter {name} missing in HF layer"
+        hf_param = hf_state[name]
+        if fast_param.shape != hf_param.shape:
+            hf_param = hf_param.reshape_as(fast_param)
+        Assert.all_equal(fast_param, hf_param)
+
+    # Forward passes
+    hidden_states = torch.randn(BATCH_SIZE, SEQ_LEN, HIDDEN_SIZE, device=device, dtype=dtype, requires_grad=False)
 
     hf_out = hf_layer(hidden_states)[0]
 
-    sequence_lengths = [[SEQ_LEN] for _ in range(hidden_states.size(0))]
     fast_kwargs = {
         BlockKwargs.device: device,
         BlockKwargs.sequence_first: False,
         BlockKwargs.hidden_dims: (HIDDEN_SIZE,),
         BlockKwargs.sequence_length: SEQ_LEN,
-        BlockKwargs.sequence_lengths: sequence_lengths,
+        BlockKwargs.sequence_lengths: [[SEQ_LEN] for _ in range(BATCH_SIZE)],
     }
     fast_layer.preprocess(fast_kwargs)
     fast_out, _ = fast_layer(hidden_states, fast_kwargs)
 
-    torch.testing.assert_close(fast_out, hf_out, atol=1e-5, rtol=1e-5)
+    # Compare outputs
+    Assert.rms_close(fast_out, hf_out, 1e-5)
