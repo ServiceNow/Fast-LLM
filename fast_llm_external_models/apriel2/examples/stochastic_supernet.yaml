@@ -1,4 +1,4 @@
-# Example: Stochastic supernet with attention + sliding window + gated delta net
+# Example: Stochastic supernet with attention + sliding window + gated delta net + kda
 #
 # Converts a homogeneous attention model to a stochastic supernet
 # where each layer can sample from multiple mixer types during training.
@@ -7,6 +7,7 @@
 # - Full attention (direct weight transfer)
 # - Sliding window attention (transfer with window size override)
 # - Gated delta net (DIL initialization from attention weights)
+# - Kimi delta attention (KIL initialization from attention weights)
 #
 # Usage:
 #   python convert.py ServiceNow-AI/Apriel-1.5-15b-Thinker output/ \
@@ -39,6 +40,16 @@ decoder:
         #   value_head_dim <- head_size (128 for Apriel 1.5)
         gdn:
           type: gdn
+          init: transfer
+          convolution_layer:
+            kernel_size: 4
+
+        # Kimi delta attention - KIL initialization maps Q/K/V/O -> KDA projections
+        # KDA dimensions are derived from source attention:
+        #   heads <- heads (40 for Apriel 1.5)
+        #   head_dim <- head_size (128 for Apriel 1.5)
+        kda:
+          type: kda
           init: transfer
           convolution_layer:
             kernel_size: 4

@@ -137,5 +137,8 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             transposed_layer_2_weight=self.layer_2.transposed_weight,
         )
         bias = self.layer_2.bias if self._parallel_dim.group else None
-        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs, bias=bias)
+        # Use None for dims when output_dim differs from hidden_dim (e.g., adapter projections)
+        # to let _debug infer dims from actual tensor shape
+        dims = None if self._output_dim != self._hidden_dim else kwargs.get(BlockKwargs.hidden_dims)
+        self._debug(out, None, dims, kwargs, bias=bias)
         return out, bias

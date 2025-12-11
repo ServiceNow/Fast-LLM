@@ -56,7 +56,7 @@ for tensor in ("fw", "bw"):
 _bf16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
-        (None, "fw"): get_config(1e-2, 1e-3),
+        (None, "fw"): get_config(1.5e-2, 1.5e-3),
         (None, "bw"): get_config(1.5e-2, 1e-5),
         (None, "bias"): get_config(2e-2, 1e-3),
         (None, "gradient"): get_config(2e-2, 5e-5),

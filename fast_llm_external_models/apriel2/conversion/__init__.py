@@ -120,8 +120,9 @@ from fast_llm_external_models.apriel2.conversion.io import (
 
 # Plan builders (generic)
 from fast_llm_external_models.apriel2.conversion.converters import (
-    plan_attention_to_gated_delta_net,
     plan_mil_attention_to_mamba,
+    plan_dil_attention_to_gdn,
+    plan_kil_attention_to_kda,
     plan_surgery,
 )
 
@@ -170,7 +171,8 @@ __all__ = [
     # Plan builders (generic)
     "plan_surgery",
     "plan_mil_attention_to_mamba",
-    "plan_attention_to_gated_delta_net",
+    "plan_dil_attention_to_gdn",
+    "plan_kil_attention_to_kda",
     # Config composition
     "compose_configs",
     # Source-specific converters

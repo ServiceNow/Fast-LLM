@@ -202,6 +202,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "save": True,
                 "show": False,
             },
+            # Uncomment to enable model debug logging:
+            # "model_debug_level": _LOG_LEVEL,
         },
         "training": {
             "logs": {"interval": 1},
@@ -929,6 +931,11 @@ _update_and_add_testing_config(
                                 "d_xb": 256,
                                 "add_linear_biases": False,
                             },
+                            "kda": {
+                                "type": "kda",
+                                "heads": 4,
+                                "head_dim": 16,
+                            },
                         },
                         "sampling_strategy": "uniform",
                         "main_mixer_name": "attn",
@@ -956,9 +963,17 @@ _update_and_add_testing_config(
                         "value_head_dim": 16,
                     },
                 },
+                "kda": {
+                    **copy.deepcopy(_llama_block),
+                    "mixer": {
+                        "type": "kda",
+                        "heads": 4,
+                        "head_dim": 16,
+                    },
+                },
             },
-            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "stochastic"],
-            "num_blocks": 6,
+            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "kda", "stochastic"],
+            "num_blocks": 7,
         },
     },
     megatron_args=None,
@@ -1018,7 +1033,9 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    skip_tests=("sdp", "ms", "bf4", "df4", TP_NO_STP),
+    # bf2_df2 depends on df4, so must also be skipped.
+    skip_tests=("sdp", "ms", "bf4", "df4", "bf2_df2", TP_NO_STP),
+    auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
 
