@@ -79,7 +79,6 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
     out_torch, grad_torch = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.torch)
     out_fused, grad_fused = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.fused)
 
-    Assert.rms_close(out_fused, out_torch, 5e-3)
     _compare_cross_entropy_outputs(out_fused, out_torch, grad_output is not None, grad_fused, grad_torch)
 
     if num_columns > 65536:
