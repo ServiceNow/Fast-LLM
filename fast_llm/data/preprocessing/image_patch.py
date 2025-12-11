@@ -57,6 +57,12 @@ class ImagePatchConfig(PreprocessingConfig):
         "If `image_break_token` is also defined, only `image_end_token` is added after the last row.",
         hint=FieldHint.optional,
     )
+    image_format: str = Field(
+        default="bytes",
+        desc="Format of the input images. 'bytes' expects raw image bytes, 'pil' expects PIL Image objects, "
+        "'dict' expects a dictionary with a 'bytes' key containing the image bytes.",
+        hint=FieldHint.optional,
+    )
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, ImagePatchConfig)
@@ -94,7 +100,7 @@ class ImagePatchConfig(PreprocessingConfig):
         Assert.gt(self.max_patches_width, 0)
 
     def get_patches_from_images(
-        self, images: list["torch.Tensor|bytes"], token_data_type: DataType = DataType.int64
+        self, images: list["torch.Tensor|bytes|dict"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
@@ -120,19 +126,43 @@ class ImagePatchConfig(PreprocessingConfig):
             )
 
     def _get_patches_from_image(
-        self, image: "torch.Tensor|bytes", token_data_type: DataType = DataType.int64
+        self, image: "torch.Tensor|bytes|dict", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import torch
 
         if not torch.is_tensor(image):
+            import contextlib
+
             import numpy as np
             import PIL.Image
+            import PIL.PngImagePlugin
 
-            with PIL.Image.open(io.BytesIO(image)) as image:
-                if image.mode != "RGB":
-                    # Convert all images to RGB
-                    image = image.convert("RGB")
-                image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
+            # Load the image based on format
+            # Set a larger limit for decompression to handle images with large ICC profiles
+            PIL.Image.MAX_IMAGE_PIXELS = None
+            original_max_text_chunk = PIL.PngImagePlugin.MAX_TEXT_CHUNK
+            PIL.PngImagePlugin.MAX_TEXT_CHUNK = 10 * (1024**2)  # 10 MB
+
+            try:
+                if self.image_format == "bytes":
+                    image_ctx = PIL.Image.open(io.BytesIO(image))
+                elif self.image_format == "pil":
+                    image_ctx = contextlib.nullcontext(image)
+                elif self.image_format == "dict":
+                    image_bytes = image["bytes"]
+                    image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
+                else:
+                    raise ValueError(
+                        f"Unsupported image_format: {self.image_format}. Must be 'bytes', 'pil', or 'dict'."
+                    )
+            finally:
+                PIL.PngImagePlugin.MAX_TEXT_CHUNK = original_max_text_chunk
+
+            # Convert to RGB and tensor
+            with image_ctx as pil_image:
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                image = torch.tensor(np.array(pil_image)).permute(2, 0, 1)  # HWC to CHW
                 Assert.eq(image.dtype, torch.uint8)
 
         if self.do_resize:
