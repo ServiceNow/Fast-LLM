@@ -264,6 +264,8 @@ def test_lm_head(
             distributed,
             tied_parameter_duplicates=[head.output_weights.tensor_name] if is_duplicate else [],
             tied_parameter_duplicate_buffers={head.output_weights.tensor_name: logit_weight} if is_duplicate else {},
+            # Names must be kept as-is for tied weights.
+            set_names=False,
         )
 
         # Get reference outputs and grads

@@ -43,13 +43,15 @@ def get_stage(
     distributed: Distributed,
     tied_parameter_duplicates: typing.Iterable[str] = (),
     tied_parameter_duplicate_buffers: dict[str, torch.nn.Parameter] | None = None,
+    set_names: bool = True,
 ):
 
     for layer in layers:
         if not layer._is_setup:
             layer.setup(distributed)
-    # Normally called in `BaseModelConfig.get_base_model`, but may be missing here.
-    set_model_names(torch.nn.ModuleList(layers))
+    if set_names:
+        # Normally called in `BaseModelConfig.get_base_model`, but may be missing here.
+        set_model_names(torch.nn.ModuleList(layers))
     # Create a fast-llm stage which allocates and initializes meta tensors correctly.
     stage = Stage(
         config=StageConfig(),
