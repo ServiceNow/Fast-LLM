@@ -118,7 +118,13 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         mixer_name = self._sample_mixer_name(kwargs)
 
         if get_model_debug_level() > 0:
-            logger.debug(f"StochasticMixer selecting mixer {mixer_name}: {type(self.mixers[mixer_name]).__name__}")
+            from fast_llm.layers.block.config import BlockKwargs
+
+            iteration = kwargs.get(BlockKwargs.iteration, "?")
+            logger.info(
+                f"StochasticMixer iter={iteration} selecting mixer '{mixer_name}' "
+                f"({type(self.mixers[mixer_name]).__name__})"
+            )
 
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 

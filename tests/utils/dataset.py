@@ -280,20 +280,24 @@ def get_split_sharded_test_dataset() -> (
     )
 
 
-def get_test_dataset_with_loss_masking_spans() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
-):
-    return _get_test_dataset(DATASET_CACHE / "dataset_with_loss_masking_spans", seed=1234, max_loss_masking_spans=5)
+def get_test_dataset_with_loss_masking_spans(
+    config_only: bool = False,
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+    return _get_test_dataset(
+        DATASET_CACHE / "dataset_with_loss_masking_spans", seed=1234, max_loss_masking_spans=5, config_only=config_only
+    )
 
 
-def get_test_dataset_with_preference_spans() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
-):
-    return _get_test_dataset(DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True)
+def get_test_dataset_with_preference_spans(
+    config_only: bool = False,
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+    return _get_test_dataset(
+        DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True, config_only=config_only
+    )
 
 
 def get_test_dataset_with_image_patches(
-    image_break_token: int | None = None, image_end_token: int | None = None
+    image_break_token: int | None = None, image_end_token: int | None = None, config_only: bool = False
 ) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / f"dataset_with_image_patches_{image_break_token}_{image_end_token}",
@@ -307,6 +311,7 @@ def get_test_dataset_with_image_patches(
             image_break_token=image_break_token,
             image_end_token=image_end_token,
         ),
+        config_only=config_only,
     )
 
 

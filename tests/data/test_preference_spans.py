@@ -11,7 +11,7 @@ from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
 from tests.data.test_preparator import COMMON_DATASET_LENGTH
-from tests.utils.dataset import get_test_dataset_with_preference_spans
+from tests.utils.dataset import get_common_test_dataset, get_test_dataset_with_preference_spans
 from tests.utils.global_variables import TOKENIZER_NAME
 
 DATASET_WITH_PREFERENCE_SPAN_TOKENS = 62163
@@ -104,3 +104,11 @@ def test_gpt_data_with_spans():
         document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
         Assert.eq(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])
+
+
+@pytest.mark.slow
+def test_gpt_data_with_missing_preference_spans():
+    path, config, hf_path, _ = get_common_test_dataset()
+    _, _, _, preprocessing = get_test_dataset_with_preference_spans(config_only=True)
+    with pytest.raises(AssertionError, match="The dataset is missing required preference spans"):
+        get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)

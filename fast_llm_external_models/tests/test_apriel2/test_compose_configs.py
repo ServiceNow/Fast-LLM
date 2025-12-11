@@ -166,6 +166,31 @@ class TestComposeConfigsLaws:
         assert mixer["d_state"] == 64
         assert mixer["d_conv"] == 4
 
+    def test_cross_type_attention_to_kda(self, source_config):
+        """attention→kda derives KDA dims from attention geometry."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "kda",
+                        "init": "transfer",
+                        "convolution_layer": {"kernel_size": 4},
+                        "normalization": {"epsilon": 1e-5},
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config, surgery)
+
+        mixer = result["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "kda"
+        # Derived from source attention geometry
+        assert mixer["heads"] == 8  # from heads
+        assert mixer["head_dim"] == 32  # from head_size
+        # From surgery
+        assert mixer["convolution_layer"]["kernel_size"] == 4
+        assert mixer["normalization"]["epsilon"] == 1e-5
+
     def test_stochastic_submixer_inheritance(self, source_config):
         """Law 6: Sub-mixers inherit from base mixer when wrapping in stochastic."""
         surgery = {

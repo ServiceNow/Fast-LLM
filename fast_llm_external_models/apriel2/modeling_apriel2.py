@@ -38,6 +38,14 @@ try:
 except ImportError:
     rms_norm_gated = None
 
+# KDA implementation - matches Fast-LLM's kda.py
+try:
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
+except ImportError:
+    chunk_kda = None
+    fused_recurrent_kda = None
+    fused_kda_gate = None
 
 is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
@@ -87,15 +95,35 @@ def torch_causal_conv1d_fn(x, weight, bias=None, activation="silu"):
 
 @torch.compile
 def torch_causal_conv1d_update(x, conv_state, weight, bias=None, activation="silu"):
+    """
+    Single-step causal convolution update.
+
+    Args:
+        x: New input [batch, dim]
+        conv_state: Previous state [batch, dim, kernel_size-1], updated in-place
+        weight: Convolution kernel [dim, kernel_size]
+        bias: Optional bias [dim]
+        activation: Activation function name
+
+    Returns:
+        Output [batch, dim]
+    """
     assert activation == "silu", f"Only silu activation is supported, got {activation}"
 
     dtype = x.dtype
-    conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))
-    conv_state[:, :, -1] = x
-    x = torch.sum(conv_state * weight.unsqueeze(0), dim=-1)
+    # Concatenate state with new input to get full kernel_size window
+    # conv_state: [batch, dim, kernel_size-1], x: [batch, dim] -> full: [batch, dim, kernel_size]
+    full_state = torch.cat([conv_state, x.unsqueeze(-1)], dim=-1)
+
+    # Convolve: sum over last dimension
+    out = torch.sum(full_state * weight.unsqueeze(0), dim=-1)
     if bias is not None:
-        x = x + bias
-    return F.silu(x).to(dtype=dtype)
+        out = out + bias
+
+    # Update state in-place: shift left and add new value
+    conv_state.copy_(full_state[:, :, 1:])
+
+    return F.silu(out).to(dtype=dtype)
 
 
 def torch_selective_scan_fn(
@@ -109,14 +137,181 @@ def torch_selective_state_update(state, x, dt, A, B, C, D=None, z=None, dt_bias=
 
 
 if is_fast_path_available:
-    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
+    from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
     from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 else:
-    causal_conv1d_fn = torch_causal_conv1d_fn
-    causal_conv1d_update = torch_causal_conv1d_update
+    _causal_conv1d_fn = None
+    _causal_conv1d_update = None
     selective_scan_fn = torch_selective_scan_fn
     selective_state_update = torch_selective_state_update
+
+
+class CausalConv1d(nn.Conv1d):
+    """
+    Causal 1D convolution that pads only on the left side.
+
+    Subclasses nn.Conv1d for weight storage/checkpoint compatibility, but overrides
+    forward to use proper causal (left-only) padding instead of nn.Conv1d's symmetric padding.
+
+    Supports:
+    - Prefill mode: process full sequence, optionally return final state for caching
+    - Decode mode: single-token update using cached conv state
+    - CUDA fast path (causal_conv1d library) with automatic CPU/fallback support
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        activation: str = "silu",
+        **kwargs,
+    ):
+        # Remove padding from kwargs since we handle it ourselves
+        kwargs.pop("padding", None)
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=0,  # No built-in padding; we handle it in forward
+            **kwargs,
+        )
+        self._activation = activation
+
+    @property
+    def _weight(self) -> torch.Tensor:
+        """Weight in [dim, kernel_size] format for causal_conv1d functions."""
+        return self.weight.squeeze(1)
+
+    def _use_fast_path(self, x: torch.Tensor) -> bool:
+        """Check if we can use CUDA fast path."""
+        return _causal_conv1d_fn is not None and x.device.type == "cuda"
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        conv_state: torch.Tensor | None = None,
+        return_final_state: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply causal convolution.
+
+        Args:
+            x: Input tensor [batch, dim, seq_len]
+            conv_state: Previous conv state [batch, dim, kernel_size-1] for continuing
+                        from cached state. If None, starts fresh.
+            return_final_state: If True, return (output, final_state) tuple where
+                                final_state can be used for subsequent decode steps.
+
+        Returns:
+            If return_final_state is False: output tensor [batch, dim, seq_len]
+            If return_final_state is True: (output, final_state) tuple
+        """
+        batch_size, dim, seq_len = x.shape
+
+        # CUDA kernel limitation: return_final_states requires channel-last layout,
+        # which is impossible to achieve when seq_len==1. Fall back to PyTorch.
+        use_fast_path = self._use_fast_path(x) and not (return_final_state and seq_len == 1)
+
+        if use_fast_path:
+            # CUDA fast path
+            if return_final_state:
+                # causal_conv1d requires channel-last layout for returning final states.
+                # Channel-last means: stride(1)==1 AND stride(2)==dim (channels are contiguous).
+                # For shape [batch, dim, seq], standard contiguous is (dim*seq, seq, 1).
+                # Channel-last is (dim*seq, 1, dim) - achieved via transpose+contiguous+transpose.
+                if x.stride(1) != 1 or x.stride(2) < dim:
+                    x = x.transpose(1, 2).contiguous().transpose(1, 2)
+                # Allocate final state buffer with correct memory layout
+                # causal_conv1d requires final_states.stride(1) == 1
+                final_state = x.new_zeros(batch_size, self.kernel_size[0] - 1, dim).transpose(1, 2)
+            else:
+                final_state = None
+
+            out = _causal_conv1d_fn(
+                x,
+                self._weight,
+                bias=self.bias,
+                initial_states=conv_state,
+                return_final_states=return_final_state,
+                final_states_out=final_state,
+                activation=self._activation,
+            )
+
+            if return_final_state:
+                if isinstance(out, tuple):
+                    out, final_state = out
+                # Return a contiguous copy (still in channel-last layout) so callers can modify it in-place
+                # final_state has shape [batch, dim, state_len] with channel-last strides
+                # We need to preserve the channel-last layout for subsequent CUDA kernel calls
+                if final_state.stride(1) != 1:
+                    # Already contiguous in channel-last
+                    pass
+                else:
+                    # Make a copy that's safe to modify in-place
+                    final_state = final_state.clone()
+                return out, final_state
+            return out
+        else:
+            # PyTorch fallback
+            state_len = self.kernel_size[0] - 1
+
+            if conv_state is not None:
+                # Prepend state to input for proper convolution with history
+                x_with_state = torch.cat([conv_state, x], dim=-1)
+                out_with_state = torch_causal_conv1d_fn(
+                    x_with_state, self._weight, bias=self.bias, activation=self._activation
+                )
+                # Only keep outputs for the new input positions (not the state positions)
+                out = out_with_state[:, :, state_len:]
+            else:
+                out = torch_causal_conv1d_fn(x, self._weight, bias=self.bias, activation=self._activation)
+
+            if return_final_state:
+                # Final state: last kernel_size-1 positions of input (with state if provided)
+                if conv_state is not None:
+                    combined = torch.cat([conv_state, x], dim=-1)
+                    final_state = combined[:, :, -state_len:].clone()
+                elif seq_len < state_len:
+                    final_state = F.pad(x, (state_len - seq_len, 0))
+                else:
+                    final_state = x[:, :, -state_len:].clone()
+                return out, final_state
+            return out
+
+    def update(
+        self,
+        x: torch.Tensor,
+        conv_state: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Single-token decode step using cached conv state.
+
+        Args:
+            x: Input tensor [batch, dim] (single token)
+            conv_state: Conv state [batch, dim, kernel_size-1], will be updated in-place
+
+        Returns:
+            Output tensor [batch, dim]
+        """
+        if self._use_fast_path(x):
+            return _causal_conv1d_update(
+                x,
+                conv_state,
+                self._weight,
+                bias=self.bias,
+                activation=self._activation,
+            )
+        else:
+            return torch_causal_conv1d_update(
+                x,
+                conv_state,
+                self._weight,
+                bias=self.bias,
+                activation=self._activation,
+            )
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -407,8 +602,8 @@ def get_mixer_class(mixer_type: str) -> type:
         return Apriel2Mamba
     elif mixer_type == "gdn":
         return Apriel2GatedDeltaNet
-    elif mixer_type == "kimi_linear_attention":
-        return KimiLinearAttention
+    elif mixer_type == "kda":
+        return KimiDeltaAttention
     elif mixer_type == "stochastic":
         return Apriel2StochasticMixer
     else:
@@ -429,7 +624,7 @@ def create_mixer(mixer_config: dict, hidden_size: int, layer_idx: int, config, a
             raise ValueError("Stochastic mixers cannot contain nested stochastic mixers")
         return mixer_class(mixer_config, config, layer_idx)
     else:
-        # mamba, gdn, kimi_linear_attention all have same signature
+        # mamba, gdn, kda all have same signature
         return mixer_class(hidden_size, mixer_config, layer_idx=layer_idx)
 
 
@@ -476,28 +671,28 @@ class Apriel2Mamba(nn.Module):
         self.layer_idx = layer_idx
         self.repeat_kv_before_conv = repeat_kv_before_conv
 
+        self.activation = "silu"  # Hardcoded for Mamba
+
         if self.repeat_kv_before_conv:
-            self.conv1d = nn.Conv1d(
+            self.conv1d = CausalConv1d(
                 in_channels=self.d_inner,
                 out_channels=self.d_inner,
                 bias=conv_bias,
                 kernel_size=d_conv,
                 groups=self.d_inner,
-                padding=d_conv - 1,
+                activation=self.activation,
                 **factory_kwargs,
             )
         else:
-            self.conv1d = nn.Conv1d(
+            self.conv1d = CausalConv1d(
                 in_channels=self.d_xb,
                 out_channels=self.d_xb,
                 bias=conv_bias,
                 kernel_size=d_conv,
                 groups=self.d_xb,
-                padding=d_conv - 1,
+                activation=self.activation,
                 **factory_kwargs,
             )
-
-        self.activation = "silu"  # Hardcoded for Mamba
 
         self.num_xb_head = self.d_xb // self.d_state
         self.num_C_head = self.d_inner // self.d_state
@@ -607,16 +802,11 @@ class Apriel2Mamba(nn.Module):
             x = repeat_kv(x, self.repeat_group)
             x = rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
 
-        if conv_state is not None:
-            conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
-
         # Compute short convolution
-        x = causal_conv1d_fn(
-            x=x,
-            weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-            bias=self.conv1d.bias,
-            activation=self.activation,
-        )
+        if conv_state is not None:
+            # Store padded input for future decode steps (convention: state size = d_conv)
+            conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
+        x = self.conv1d(x)
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -691,13 +881,7 @@ class Apriel2Mamba(nn.Module):
             x = rearrange(x, "b n_group dstate -> b (n_group dstate)")
 
         # Conv step
-        x = causal_conv1d_update(
-            x,
-            conv_state,
-            rearrange(self.conv1d.weight, "d 1 w -> d w"),
-            self.conv1d.bias,
-            self.activation,
-        )
+        x = self.conv1d.update(x, conv_state)
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
@@ -843,12 +1027,18 @@ class GatedRMSNormalization(nn.Module):
     """
     Gated RMS normalization layer matching Fast-LLM's implementation.
     Uses fla.modules.fused_norm_gate.rms_norm_gated when available.
+
+    Args:
+        hidden_size: Size of the hidden dimension
+        eps: Epsilon for numerical stability
+        activation: Gating activation function ("silu" or "sigmoid")
     """
 
-    def __init__(self, hidden_size: int, eps: float = 1e-5):
+    def __init__(self, hidden_size: int, eps: float = 1e-5, activation: str = "silu"):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
+        self.activation = activation
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         # Use PyTorch fallback on CPU since fla requires CUDA
@@ -863,7 +1053,7 @@ class GatedRMSNormalization(nn.Module):
             gate,
             self.weight,
             None,
-            activation="silu",
+            activation=self.activation,
             eps=self.eps,
             residual=None,
             prenorm=False,
@@ -877,7 +1067,11 @@ class GatedRMSNormalization(nn.Module):
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
         hidden_states = self.weight * hidden_states.to(input_dtype)
-        return hidden_states * F.silu(gate)
+        # Apply gating with configured activation
+        if self.activation == "sigmoid":
+            return hidden_states * torch.sigmoid(gate)
+        else:  # silu
+            return hidden_states * F.silu(gate)
 
 
 class Apriel2GatedDeltaNet(nn.Module):
@@ -926,13 +1120,13 @@ class Apriel2GatedDeltaNet(nn.Module):
         self.out_proj = nn.Linear(self.value_dim, d_model, bias=False, device=device, dtype=dtype)
 
         # Convolution - named 'convolution' to match Fast-LLM
-        self.convolution = nn.Conv1d(
+        self.convolution = CausalConv1d(
             in_channels=self.conv_dim,
             out_channels=self.conv_dim,
             bias=False,
             kernel_size=self.conv_kernel_size,
             groups=self.conv_dim,
-            padding=self.conv_kernel_size - 1,
+            activation=self.activation,
             device=device,
             dtype=dtype,
         )
@@ -1027,32 +1221,19 @@ class Apriel2GatedDeltaNet(nn.Module):
 
         # Apply causal convolution
         if use_precomputed_states:
-            # Single token update - use cached conv state
-            # torch_causal_conv1d_update expects [batch, conv_dim] not [batch, conv_dim, 1]
-            mixed_qkv = torch_causal_conv1d_update(
+            # Single token decode - use cached conv state
+            mixed_qkv = self.convolution.update(
                 mixed_qkv.squeeze(2),  # [batch, conv_dim, 1] -> [batch, conv_dim]
                 conv_state,
-                self.convolution.weight.squeeze(1),
-                None,  # bias
-                "silu",
-            ).unsqueeze(
-                2
-            )  # [batch, conv_dim] -> [batch, conv_dim, 1]
+            ).unsqueeze(2)  # [batch, conv_dim] -> [batch, conv_dim, 1]
         else:
-            # Prefill - store padded state for future decoding
-            if past_key_values is not None:
-                # Pad to kernel size and store for future decoding
-                padded = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
-                past_key_values.conv_states[self.layer_idx] = padded[:, :, -self.conv_kernel_size :]
-            # Apply convolution
-            # note, using F.silu(self.convolution(mixed_qkv)[:, :, :seq_len]) is numerically different than applying causal_conv1d_fn
-            # which failed the test test_fast_llm_gdn_matches_apriel2_forward
-            mixed_qkv = causal_conv1d_fn(
-                x=mixed_qkv,
-                weight=self.convolution.weight.squeeze(1),
-                bias=self.convolution.bias,
-                activation=self.activation,
-            )
+            # Prefill mode
+            use_cache = past_key_values is not None
+            if use_cache:
+                mixed_qkv, final_state = self.convolution(mixed_qkv, return_final_state=True)
+                past_key_values.conv_states[self.layer_idx] = final_state
+            else:
+                mixed_qkv = self.convolution(mixed_qkv)
 
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
 
@@ -1156,8 +1337,22 @@ class Apriel2GatedDeltaNet(nn.Module):
         return {}
 
 
-class KimiLinearAttention(nn.Module):
-    """KimiLinearAttention mixer - stub for future implementation."""
+class KimiDeltaAttention(nn.Module):
+    """
+    Kimi Delta Attention (KDA) implementation matching Fast-LLM's kda.py.
+
+    Weight names match Fast-LLM:
+    - q_proj, k_proj, v_proj, o_proj - main projections
+    - f_a_proj, f_b_proj - gate kernel (low-rank)
+    - g_a_proj, g_b_proj - output gate (low-rank)
+    - beta_proj - beta gating
+    - q_conv, k_conv, v_conv - CausalConv1d modules
+    - A_log, dt_bias - learnable parameters
+    - norm - gated RMS normalization
+
+    Uses fla.ops.kda.chunk_kda and fused_recurrent_kda kernels.
+    Uses CausalConv1d for convolutions (CUDA fast path with PyTorch fallback).
+    """
 
     def __init__(
         self,
@@ -1168,7 +1363,205 @@ class KimiLinearAttention(nn.Module):
         dtype=None,
     ):
         super().__init__()
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+
+        if chunk_kda is None or fused_kda_gate is None:
+            raise ImportError(
+                "KimiDeltaAttention requires the `fla` package. " "Please install it with `pip install -U fla-core`."
+            )
+
+        self.layer_idx = layer_idx
+        self.hidden_size = d_model
+        self.mode = "chunk"
+
+        # Config params - match Fast-LLM naming
+        self.num_heads = config_dict.get("heads", 32)
+        self.head_dim = config_dict.get("head_dim", 64)
+        conv_config = config_dict.get("convolution_layer", {})
+        self.conv_kernel_size = conv_config.get("kernel_size", 4)
+        norm_config = config_dict.get("normalization", {})
+        self.norm_eps = norm_config.get("epsilon", 1e-5)
+        self.norm_activation = norm_config.get("activation", "sigmoid")
+
+        # Derived dimensions
+        self.projection_size = self.head_dim * self.num_heads
+
+        # Projection layers - names match Fast-LLM exactly
+        self.q_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.k_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.v_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Convolutions - use CausalConv1d for proper left-only padding
+        # Named to match Fast-LLM (q_conv, k_conv, v_conv)
+        self.q_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,  # depthwise
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+        self.k_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+        self.v_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+
+        # Gate kernel projections (low-rank: hidden -> head_dim -> projection)
+        self.f_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.f_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Output gate projections (low-rank)
+        self.g_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.g_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Beta projection - named beta_proj to match Fast-LLM (not b_proj)
+        self.beta_proj = nn.Linear(d_model, self.num_heads, bias=False, device=device, dtype=dtype)
+
+        # Output projection
+        self.o_proj = nn.Linear(self.projection_size, d_model, bias=False, device=device, dtype=dtype)
+
+        # Learnable parameters - match Fast-LLM shapes
+        # A_log: 1D shape (num_heads,) to match Fast-LLM
+        self.A_log = nn.Parameter(
+            torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log()
+        )
+        self.dt_bias = nn.Parameter(torch.ones(self.projection_size, device=device, dtype=torch.float32))
+
+        # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
+        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation=self.norm_activation)
+
+    def _apply_conv(
+        self, x: torch.Tensor, conv: CausalConv1d, conv_state: torch.Tensor | None, use_cache: bool
+    ):
+        """
+        Apply causal convolution with cache support.
+
+        Args:
+            x: Input tensor [batch, seq, dim]
+            conv: CausalConv1d module
+            conv_state: Previous conv state [batch, dim, kernel_size-1] or None
+            use_cache: Whether to output final state for caching
+
+        Returns:
+            (output, new_conv_state) tuple
+        """
+        seq_len = x.shape[1]
+        x = x.transpose(1, 2)  # [batch, dim, seq]
+
+        # Single token decode with existing cache
+        if conv_state is not None and seq_len == 1:
+            out = conv.update(x.squeeze(2), conv_state)
+            return out.unsqueeze(1), conv_state  # [batch, 1, dim]
+
+        # Prefill mode
+        if use_cache:
+            out, final_state = conv(x, conv_state=conv_state, return_final_state=True)
+        else:
+            out = conv(x, conv_state=conv_state)
+            final_state = None
+
+        return out.transpose(1, 2), final_state  # [batch, seq, dim]
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_values=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        batch_size, seq_len, _ = hidden_states.shape
+        mode = "fused_recurrent" if seq_len <= 64 else self.mode
+        if self.training:
+            mode = "chunk"
+
+        # Get cache states if available
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        use_cache = past_key_values is not None
+
+        if past_key_values is not None:
+            conv_states = past_key_values.conv_states[self.layer_idx]
+            if conv_states is not None:
+                conv_state_q, conv_state_k, conv_state_v = conv_states
+            recurrent_state = past_key_values.recurrent_states[self.layer_idx]
+
+        # Project Q, K, V and apply convolutions
+        q, conv_state_q = self._apply_conv(self.q_proj(hidden_states), self.q_conv, conv_state_q, use_cache)
+        k, conv_state_k = self._apply_conv(self.k_proj(hidden_states), self.k_conv, conv_state_k, use_cache)
+        v, conv_state_v = self._apply_conv(self.v_proj(hidden_states), self.v_conv, conv_state_v, use_cache)
+
+        # Gate kernel computation
+        g = self.f_b_proj(self.f_a_proj(hidden_states))
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+        g = fused_kda_gate(g, self.A_log.float(), dt_bias=self.dt_bias)
+
+        # Beta gating
+        beta = self.beta_proj(hidden_states).float().sigmoid()
+
+        # Reshape Q, K, V to head format
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Run KDA kernel
+        if mode == "chunk":
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=False,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+            )
+
+        # Update cache
+        if past_key_values is not None:
+            past_key_values.recurrent_states[self.layer_idx] = recurrent_state
+            past_key_values.conv_states[self.layer_idx] = (conv_state_q, conv_state_k, conv_state_v)
+
+        # Output gating and normalization
+        g_out = self.g_b_proj(self.g_a_proj(hidden_states))
+        g_out = rearrange(g_out, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Flatten for normalization, then reshape back
+        o_shape = o.shape
+        o = self.norm(o.reshape(-1, o.shape[-1]), g_out.reshape(-1, g_out.shape[-1]))
+        o = o.reshape(o_shape)
+
+        # Reshape and project output
+        o = rearrange(o, "b t h d -> b t (h d)")
+        o = self.o_proj(o)
+
+        return (o,)
 
     @classmethod
     def setup(
@@ -1177,11 +1570,8 @@ class KimiLinearAttention(nn.Module):
         hidden_size: int,
         max_position_embeddings: int,
     ) -> nn.ModuleDict:
-        """KimiLinearAttention setup not implemented."""
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
-
-    def forward(self, hidden_states: torch.Tensor, **kwargs):
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+        """KimiDeltaAttention has no setup resources - returns empty ModuleDict."""
+        return nn.ModuleDict()
 
     def preprocess(
         self,
@@ -1189,8 +1579,8 @@ class KimiLinearAttention(nn.Module):
         resources: Optional[nn.ModuleDict],
         **kwargs: Unpack[BlockSequenceKwargs],
     ) -> PreprocessingOutput:
-        """KimiLinearAttention preprocessing not implemented."""
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+        """KimiDeltaAttention has no preprocessing - returns empty dict."""
+        return {}
 
 
 class Apriel2BlockSequence(nn.Module):
