@@ -21,6 +21,13 @@ def dtype_from_string(name: str) -> torch.dtype:
 class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[SampleType]):
     def __init__(self, config: StreamingDatasetConfig, distributed: Distributed):
         super().__init__()
+        if distributed.config.pipeline_parallel > 1:
+            # NOTE: It is not yet clear whether the issue comes from the streaming dataset
+            # itself or from the distributed data-loader wrappers, but currently it
+            # interferes with pipeline-parallel training and causes a timeout during
+            # the training step.
+            raise NotImplementedError("Streaming dataset support is not implemented for pipeline-parallel training.")
+
         self._name = f"redis[{config.redis.host}:{config.redis.port}]({config.redis.stream_key}|{config.redis.group_name})[{config.data_key}]"
         self._config = config
         self.batch_data_rank = distributed.config.batch_data_rank

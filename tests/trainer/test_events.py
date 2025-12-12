@@ -237,7 +237,7 @@ def parallelism_variants(num_gpus: int) -> list[dict[str, int]]:
 
     if num_gpus == 2:
         return [
-            # TODO:Default model does not work with pipeline parallelism
+            # NOTE: Streaming dataset is currently not compatible with pipeline parallelism.
             {"tp": 2, "pp": 1, "sp": 1},
             # {"tp": 1, "pp": 2, "sp": 1},
             {"tp": 1, "pp": 1, "sp": 2},
@@ -245,7 +245,7 @@ def parallelism_variants(num_gpus: int) -> list[dict[str, int]]:
 
     if num_gpus == 4:
         return [
-            # TODO:Default model does not work with pipeline parallelism
+            # NOTE: Streaming dataset is currently not compatible with pipeline parallelism.
             {"tp": 4, "pp": 1, "sp": 1},
             # {"tp": 1, "pp": 4, "sp": 1},
             {"tp": 1, "pp": 1, "sp": 4},
