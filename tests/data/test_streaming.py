@@ -12,7 +12,6 @@ import pytest
 import torch
 
 from fast_llm.data.dataset.config import (
-    RedisStreamDatasetConfig,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
@@ -23,6 +22,7 @@ from fast_llm.data.dataset.streaming import StreamingDataset
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.redis.config import RedisConfig
 from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
@@ -108,13 +108,13 @@ def fake_redis_server(stream_config):
 
 def get_stream_config():
     return StreamingDatasetConfig(
-        redis=RedisStreamDatasetConfig(
+        redis=RedisConfig(
             host="localhost",
             port=6379,
             stream_key="test_stream",
-            group_name="test_group",
-            consumer_name_prefix="consumer",
         ),
+        group_name="test_group",
+        consumer_name_prefix="consumer",
         data_key="data",
     )
 
@@ -260,7 +260,7 @@ def redis_batch_producer(
     def producer_loop():
         try:
             stream = stream_config.redis.stream_key
-            group = stream_config.redis.group_name
+            group = stream_config.group_name
             batch_idx = 0
             while not stop_event.is_set():
                 if num_batches is not None and batch_idx >= num_batches:

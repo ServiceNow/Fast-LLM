@@ -28,7 +28,7 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
             # the training step.
             raise NotImplementedError("Streaming dataset support is not implemented for pipeline-parallel training.")
 
-        self._name = f"redis[{config.redis.host}:{config.redis.port}]({config.redis.stream_key}|{config.redis.group_name})[{config.data_key}]"
+        self._name = f"redis[{config.redis.host}:{config.redis.port}]({config.redis.stream_key}|{config.group_name})[{config.data_key}]"
         self._config = config
         self.batch_data_rank = distributed.config.batch_data_rank
         self.is_batch_data_group_leader = (
@@ -71,7 +71,7 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
         # If the stream already exists, XGROUP CREATE will fail unless we add mkstream=True
         try:
             r.xgroup_create(
-                name=self._config.redis.stream_key, groupname=self._config.redis.group_name, id="0", mkstream=True
+                name=self._config.redis.stream_key, groupname=self._config.group_name, id="0", mkstream=True
             )
         except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" in str(e):
@@ -85,8 +85,8 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
             # COUNT: max number of messages to fetch at once
             # BLOCK: wait for new messages (milliseconds)
             messages = r.xreadgroup(
-                groupname=self._config.redis.group_name,
-                consumername=f"{self._config.redis.consumer_name_prefix}_{self.batch_data_rank}",
+                groupname=self._config.group_name,
+                consumername=f"{self._config.consumer_name_prefix}_{self.batch_data_rank}",
                 # ">" means read only new messages that were never delivered to this consumer
                 streams={self._config.redis.stream_key: ">"},
                 count=1,
@@ -98,7 +98,7 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
                 for stream_key, msgs in messages:
                     assert stream_key == self._config.redis.stream_key.encode()
                     for msg_id, msg_data in msgs:
-                        r.xack(self._config.redis.stream_key, self._config.redis.group_name, msg_id)
+                        r.xack(self._config.redis.stream_key, self._config.group_name, msg_id)
                         data = orjson.loads(msg_data[self._config.data_key.encode()])
                         yield self._sample_from_dict(data)
 

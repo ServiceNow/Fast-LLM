@@ -16,7 +16,6 @@ from fast_llm.config import (
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
@@ -30,6 +29,7 @@ from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
+from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
