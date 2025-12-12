@@ -14,6 +14,7 @@ if typing.TYPE_CHECKING:
 
     from fast_llm.layers.ssm.gdn import GatedDeltaNet
     from fast_llm.layers.ssm.kda import KimiDeltaAttention
+    from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
 
 
@@ -231,7 +232,7 @@ class MambaConfig(MixerConfig):
     )
     d_xb: int = Field(
         default=1024,
-        desc="Dimension of the xB in Mamba2 blocks.",
+        desc="Dimension of the xB .",
         hint=FieldHint.architecture,
     )
     # Model dimensions
@@ -249,7 +250,7 @@ class MambaConfig(MixerConfig):
     )
     repeat_kv_before_conv: bool = Field(
         default=True,
-        desc="Whether to repeat x and B before (True) or after (False) the conv1d in Mamba2 blocks.",
+        desc="Whether to repeat x and B before (True) or after (False) the conv1d in blocks.",
         hint=FieldHint.architecture,
     )
     cross_document_attention: bool = Field(
@@ -260,10 +261,10 @@ class MambaConfig(MixerConfig):
     )
 
     @property
-    def layer_class(self) -> "type[Mamba2]":
-        from fast_llm.layers.ssm.mamba import Mamba2
+    def layer_class(self) -> "type[Mamba]":
+        from fast_llm.layers.ssm.mamba import Mamba
 
-        return Mamba2
+        return Mamba
 
 
 @config_class(dynamic_type={InitializationConfig: "mamba_dt_bias"})
@@ -273,21 +274,18 @@ class MambaDTBiasInitializationConfig(InitializationConfig):
     """
 
     _abstract = False
-    # dt_bias_initialization_min [Mamba, Mamba2]
     min_step_size: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_max [Mamba, Mamba2]
     max_step_size: float = Field(
         default=0.1,
         desc="Maximum step size for discretization",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_floor [Mamba, Mamba2]
     floor: float = Field(
         default=1e-4,
         desc="Minimum value for initializing dt",
@@ -311,13 +309,11 @@ class MambaAInitializationConfig(InitializationConfig):
     """
 
     _abstract = False
-    # dt_bias_initialization_min [Mamba, Mamba2]
     state_size: int = Field(
         desc="State size. Needs to be repeated here so the initializer knows about it.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_max [Mamba, Mamba2]
     d_inner: int = Field(
         desc="Inner dimension. Needs to be repeated here so the initializer knows about it.",
         hint=FieldHint.core,

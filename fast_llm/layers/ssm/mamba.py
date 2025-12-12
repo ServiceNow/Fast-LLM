@@ -37,7 +37,7 @@ except (ImportError, RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-class Mamba2[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
+class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """

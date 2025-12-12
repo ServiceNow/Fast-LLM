@@ -4,10 +4,8 @@ Import these submodules to ensure classes are added to the dynamic class registr
 
 from fast_llm.layers.attention.config import AttentionConfig  # isort: skip
 from fast_llm.layers.ssm.config import (  # isort: skip
-    DiscreteMamba2Config,
     GatedDeltaNetConfig,
     KimiDeltaAttentionConfig,
-    Mamba2Config,
     MambaConfig,
 )
 
