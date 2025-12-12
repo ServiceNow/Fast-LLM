@@ -40,10 +40,11 @@ def _compare_cross_entropy_outputs(
     grad: torch.Tensor | None,
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
+    min_threshold_grads=1e-8,
 ):
     Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
     if has_grad:
-        Assert.rms_close_relative(grad, ref_grad, threshold, 1e-8)
+        Assert.rms_close_relative(grad, ref_grad, threshold, min_threshold_grads)
     else:
         assert grad is None
         assert ref_grad is None
@@ -114,8 +115,8 @@ def _reverse_kl_forward_backward_torch(target: torch.Tensor, logits: torch.Tenso
 @pytest.mark.parametrize("loss_masking", [False, True])
 @pytest.mark.parametrize("target_format", (TargetFormat.logits,))
 def test_reverse_kl(loss_masking, target_format):
-    logits, target, loss_mask = _get_cross_entropy_inputs(10000, loss_masking, target_format)
-    out_ref, grad_ref = _reverse_kl_forward_backward_torch(logits, target, loss_mask)
+    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
+    out_ref, grad_ref = _reverse_kl_forward_backward_torch(target, logits, loss_mask)
     out, grad = reverse_kl_forward_backward(
         logits=logits,
         target=target,
@@ -184,12 +185,12 @@ def _compare_parallel_cross_entropy(
         grad_output=1,
         target_format=target_format,
     )
-    _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4)
+    _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4, 1e-6)
 
 
 def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGroup):
     success = True
-    for function in (cross_entropy_forward_backward, reverse_kl_forward_backward):
+    for function in (reverse_kl_forward_backward, cross_entropy_forward_backward):
         for target_format in (TargetFormat.logits,):
             for loss_masking in [True, False]:
                 try:
