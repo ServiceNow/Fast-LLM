@@ -350,6 +350,16 @@ class WeightsBroadcastEventConfig(TrainerEvent):
         hint=FieldHint.feature,
     )
 
+    initial_weights_step_message_includes_weights: bool = Field(
+        default=False,
+        desc=(
+            "Whether to include the loaded model weights in the initial event message. "
+            "Useful when training restarts from an internal checkpoint format that "
+            "which does not have an exported checkpoint for that step."
+        ),
+        hint=FieldHint.feature,
+    )
+
     weights_ready_message_type: str = Field(
         default="weights_ready",
         desc="Message indicating that weights are ready to be broadcast.",

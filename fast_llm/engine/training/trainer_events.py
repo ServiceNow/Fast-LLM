@@ -67,31 +67,38 @@ class TrainerEvents:
         else:
             self.weights_pg = None
 
+    def send_initial_weights_step(self, step: int, model: FastLLMModel, export_config: TrainingExportConfig):
+        if self.config.weights_broadcast.enabled:
+            self.sender.send(
+                msg_type=self.config.weights_broadcast.initial_weights_step_message_type, payload={"step": step}
+            )
+            if self.config.weights_broadcast.initial_weights_step_message_includes_weights:
+                self._broadcast_weights(model, export_config)
+
     def send_weights(self, step: int, model: FastLLMModel, export_config: TrainingExportConfig):
         if self.config.weights_broadcast.enabled:
+            self.sender.send(msg_type=self.config.weights_broadcast.weights_ready_message_type, payload={"step": step})
+            self._broadcast_weights(model, export_config)
+
+    def send_training_finished(self):
+        self.sender.send(msg_type=self.config.training_finished.training_finished_message_type)
+
+        if is_main_rank() and self.config.weights_broadcast.enabled:
+            torch.distributed.destroy_process_group()
+
+    def _broadcast_weights(self, model: FastLLMModel, export_config: TrainingExportConfig):
+        for shard_name, layer_name, tensor in model.iter_checkpoint(export_config.get_save_config("", 10), {}):
             if is_main_rank():
-                self.sender.send(
-                    msg_type=self.config.weights_broadcast.weights_ready_message_type, payload={"step": step}
-                )
-            # broadcast weights
-            for shard_name, layer_name, tensor in model.iter_checkpoint(export_config.get_save_config("", 10), {}):
-                if is_main_rank():
-                    meta = [(shard_name, layer_name, tensor.shape, tensor.dtype)]
-                    torch.distributed.broadcast_object_list(
-                        meta, group=self.weights_pg, group_src=self.config.weights_broadcast.rank
-                    )
-                    torch.distributed.broadcast(
-                        tensor, group=self.weights_pg, group_src=self.config.weights_broadcast.rank
-                    )
-            # Broadcast end of weights broadcast
-            if is_main_rank():
-                meta = [None]
+                meta = [(shard_name, layer_name, tensor.shape, tensor.dtype)]
                 torch.distributed.broadcast_object_list(
                     meta, group=self.weights_pg, group_src=self.config.weights_broadcast.rank
                 )
-
-    def send_training_finished(self):
+                torch.distributed.broadcast(
+                    tensor, group=self.weights_pg, group_src=self.config.weights_broadcast.rank
+                )
+        # Broadcast end of weights broadcast
         if is_main_rank():
-            self.sender.send(msg_type=self.config.training_finished.training_finished_message_type)
-            if self.config.weights_broadcast.enabled:
-                torch.distributed.destroy_process_group()
+            meta = [None]
+            torch.distributed.broadcast_object_list(
+                meta, group=self.weights_pg, group_src=self.config.weights_broadcast.rank
+            )

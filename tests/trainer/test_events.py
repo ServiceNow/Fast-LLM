@@ -211,6 +211,9 @@ def check_events_results(
     for consumer_idx in range(consumer_count):
         consumer_test_results_path = test_results_path_consumers / str(consumer_idx) / "results"
         assert (consumer_test_results_path / "training_finished").is_file()
+        assert (consumer_test_results_path / "initial_weights_step").is_file()
+        # NOTE: We do not test the initial weights broadcast result when enabled,
+        #       because it is identical to subsequent broadcasts.
         for training_step in range(1, training_steps + 1):
             compare_test_tensors_to_checkpoint(
                 consumer_test_results_path / f"{training_step}.safetensors",
@@ -361,6 +364,7 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
         "weights_broadcast": {
             "enabled": True,
             "initial_weights_step_message_type": "initial_weights_step",
+            "initial_weights_step_message_includes_weights": True,
             "weights_ready_message_type": "weights_ready",
             "rdvz_master_address": "127.0.0.1",
             "rdvz_master_port": 19999,

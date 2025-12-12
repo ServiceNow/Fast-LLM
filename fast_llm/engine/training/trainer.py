@@ -357,6 +357,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # TODO: Synchronization is probably unnecessary.
         safe_barrier(self._distributed.world_group, "train begin")
+
+        self.trainer_events.send_initial_weights_step(
+            self._completed_steps, self._multi_stage, self._config.training.export
+        )
+
         torch.cuda.synchronize()
         start_time = time.perf_counter()
         last_time = start_time

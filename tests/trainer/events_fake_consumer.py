@@ -69,7 +69,10 @@ def main():
             assert msg_key in msg
             msg = orjson.loads(msg[msg_key].decode())
             print(f"{consumer_id} msg received: {msg}")
-            if msg["type"] == config["events"]["weights_broadcast"]["weights_ready_message_type"]:
+            if msg["type"] == config["events"]["weights_broadcast"]["weights_ready_message_type"] or (
+                msg["type"] == config["events"]["weights_broadcast"]["initial_weights_step_message_type"]
+                and config["events"]["weights_broadcast"]["initial_weights_step_message_includes_weights"]
+            ):
                 weights = {}
                 while True:
                     meta = [None]
@@ -94,6 +97,8 @@ def main():
                 return
             else:
                 raise RuntimeError(f"{consumer_id} Received unknown message type {msg}")
+            if msg["type"] == config["events"]["weights_broadcast"]["initial_weights_step_message_type"]:
+                (results_path / "initial_weights_step").touch()
 
 
 if __name__ == "__main__":
