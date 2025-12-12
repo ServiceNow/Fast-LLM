@@ -8,7 +8,12 @@ import torch
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig, MemmapWriter, Sample
+from fast_llm.data.sample.abstract import (
+    MemmapIndexDatasetReaderConfig,
+    MemmapIndexedDatasetReader,
+    MemmapWriter,
+    Sample,
+)
 
 FILE_HEADER = b"fast_llm_prepared_dataset"
 
@@ -81,6 +86,10 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
 
     def get_document_size(self, index: int) -> int:
         return self._reader.get_document_size(index)
+
+    @property
+    def reader(self) -> MemmapIndexedDatasetReader:
+        return self._reader
 
     @classmethod
     def write_dataset(
