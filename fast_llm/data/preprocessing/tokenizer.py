@@ -137,9 +137,13 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     ) -> tuple["torch.Tensor", list[int]]:
         if not text_splits:
             return self.tokenize(text, begin, end, data_type=data_type), []
+        import numpy as np
         import torch
 
-        Assert.eq(sorted(text_splits), text_splits)
+        # Sort the splits
+        text_splits = np.array(text_splits)
+        text_splits = text_splits[order := np.argsort(text_splits)].tolist()
+
         input_ids = []
         text_splits = [0, *text_splits, len(text)]
         token_splits = []
@@ -157,7 +161,8 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
             total_tokens += len(split_tokens)
             token_splits.append(total_tokens)
 
-        return torch.cat(input_ids), token_splits[:-1]
+        # Undo the sorting with double argsort.
+        return torch.cat(input_ids), np.array(token_splits[:-1])[np.argsort(order)].tolist()
 
     def detokenize(
         self, tokens: "int | list[int] | np.ndarray | torch.Tensor", begin: bool = False, end: bool = False
