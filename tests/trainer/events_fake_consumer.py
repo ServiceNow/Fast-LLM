@@ -34,14 +34,8 @@ def main():
 
     assert config["events"]["weights_broadcast"]["enabled"]
     assert config["events"]["training_finished"]["enabled"]
-    assert config["events"]["weights_broadcast"]["host"] == config["events"]["training_finished"]["host"]
-    assert config["events"]["weights_broadcast"]["port"] == config["events"]["training_finished"]["port"]
-    assert config["events"]["weights_broadcast"]["stream_key"] == config["events"]["training_finished"]["stream_key"]
-    assert config["events"]["weights_broadcast"]["message_key"] == config["events"]["training_finished"]["message_key"]
 
-    redis_client = redis.Redis(
-        host=config["events"]["weights_broadcast"]["host"], port=config["events"]["weights_broadcast"]["port"]
-    )
+    redis_client = redis.Redis(host=config["events"]["redis"]["host"], port=config["events"]["redis"]["port"])
 
     print(f"{consumer_id} waiting for pg rendezvous...")
     weights_pg = torch.distributed.init_process_group(
@@ -54,8 +48,8 @@ def main():
     broadcast_source_rank = config["events"]["weights_broadcast"]["rank"]
 
     last_id = "0-0"
-    msg_key = config["events"]["weights_broadcast"]["message_key"].encode()
-    stream_key = config["events"]["weights_broadcast"]["stream_key"]
+    msg_key = config["events"]["redis"]["payload_key"].encode()
+    stream_key = config["events"]["redis"]["stream_key"]
 
     print(f"{consumer_id} waiting for messages...")
     while True:
@@ -75,7 +69,7 @@ def main():
             assert msg_key in msg
             msg = orjson.loads(msg[msg_key].decode())
             print(f"{consumer_id} msg received: {msg}")
-            if msg["type"] == config["events"]["weights_broadcast"]["message"]:
+            if msg["type"] == config["events"]["weights_broadcast"]["weights_ready_message_type"]:
                 weights = {}
                 while True:
                     meta = [None]
@@ -94,7 +88,7 @@ def main():
                         weights[layer_name] = tensor
                 safetensors.torch.save_file(weights, results_path / f"{msg["step"]}.safetensors")
 
-            elif msg["type"] == config["events"]["training_finished"]["message"]:
+            elif msg["type"] == config["events"]["training_finished"]["training_finished_message_type"]:
                 torch.distributed.destroy_process_group()
                 (results_path / "training_finished").touch()
                 return

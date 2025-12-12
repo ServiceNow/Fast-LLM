@@ -6,53 +6,31 @@ import torch.distributed
 
 from fast_llm.engine.config_utils.run import is_main_rank
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.engine.training.config import RedisEventMessageConfig, TrainerEventsConfig, TrainingExportConfig
+from fast_llm.engine.training.config import TrainerEventsConfig, TrainerEventsRedisConfig, TrainingExportConfig
 
 logger = logging.getLogger(__name__)
 
 
-class OptionalEventSender:
-    """
-    Internal helper: wraps a single event config and a redis client.
-    If config is None, .send() becomes a no-op.
-    """
-
-    def __init__(self, config: RedisEventMessageConfig):
+class RedisEventSender:
+    def __init__(self, config: TrainerEventsRedisConfig):
         self.config = config
         self.client = None
 
-        if self.config.enabled and is_main_rank():
-            # Each event may use a separate Redis server
+        if is_main_rank():
             self.client = redis.Redis(
                 host=config.host,
                 port=config.port,
             )
 
-    @property
-    def enabled(self):
-        return self.client.enabled
-
-    def send(self, payload: dict | None = None):
-        """
-        Send an event message as a Redis stream entry.
-        If config is None → does nothing.
-        """
-        if not self.config.enabled or not is_main_rank():
-            return  # No event configured or not main rank → skip
-
-        msg_key = self.config.message_key
-        msg_val = self.config.message
+    def send(self, msg_type: str, payload: dict | None = None):
+        if not is_main_rank():
+            return
 
         if not payload:
             payload = {}
+        payload.update({"type": msg_type})
 
-        payload.update({"type": msg_val})
-
-        payload = {msg_key: orjson.dumps(payload)}
-
-        # Final message dict to send
-
-        self.client.xadd(self.config.stream_key, payload)
+        self.client.xadd(self.config.stream_key, {self.config.payload_key: orjson.dumps(payload)})
 
 
 class TrainerEvents:
@@ -69,8 +47,10 @@ class TrainerEvents:
     def __init__(self, config: TrainerEventsConfig):
         self.config = config
 
-        self.weights_broadcast = OptionalEventSender(config.weights_broadcast)
-        self.training_finished = OptionalEventSender(config.training_finished)
+        if config.weights_broadcast.enabled or config.training_finished.enabled:
+            self.sender = RedisEventSender(config.redis)
+        else:
+            self.sender = None
 
         if config.weights_broadcast.enabled and is_main_rank():
             init_method = (
@@ -90,7 +70,9 @@ class TrainerEvents:
     def send_weights(self, step: int, model: FastLLMModel, export_config: TrainingExportConfig):
         if self.config.weights_broadcast.enabled:
             if is_main_rank():
-                self.weights_broadcast.send({"step": step})
+                self.sender.send(
+                    msg_type=self.config.weights_broadcast.weights_ready_message_type, payload={"step": step}
+                )
             # broadcast weights
             for shard_name, layer_name, tensor in model.iter_checkpoint(export_config.get_save_config("", 10), {}):
                 if is_main_rank():
@@ -110,6 +92,6 @@ class TrainerEvents:
 
     def send_training_finished(self):
         if is_main_rank():
-            self.training_finished.send()
+            self.sender.send(msg_type=self.config.training_finished.training_finished_message_type)
             if self.config.weights_broadcast.enabled:
                 torch.distributed.destroy_process_group()

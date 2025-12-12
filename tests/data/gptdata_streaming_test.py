@@ -9,7 +9,7 @@ from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
-from tests.data.test_streaming import get_stream_config, make_sampling
+from tests.utils.redis import get_stream_config, make_sampling
 
 
 def distributed_gptdata_streaming_test(

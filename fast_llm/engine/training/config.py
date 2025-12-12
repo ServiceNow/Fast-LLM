@@ -323,49 +323,37 @@ class TrainingConfig(Config):
 
 
 @config_class()
-class RedisEventMessageConfig(RedisConfig):
-    """
-    Base configuration for sending a simple message into a Redis stream.
-    """
+class TrainerEventsRedisConfig(RedisConfig):
+    stream_key: str = FieldUpdate(default="fast_llm_events")
 
+    payload_key: str = FieldUpdate(default="event")
+
+
+@config_class()
+class TrainerEvent(Config):
     enabled: bool = Field(
         default=False,
         desc="Flag indicating whether this event is enabled. If False, the event will be skipped.",
         hint=FieldHint.feature,
     )
 
-    stream_key: str = Field(
-        desc="Redis stream key where the message is published.",
-        hint=FieldHint.feature,
-    )
-
-    message_key: str = Field(
-        default="event",
-        desc="Key under which the message is stored inside the Redis payload dict.",
-        hint=FieldHint.feature,
-    )
-
-    message: str = Field(
-        desc="Value of the message stored under `message_key`.",
-        hint=FieldHint.feature,
-    )
-
 
 @config_class()
-class WeightsBroadcastConfig(RedisEventMessageConfig):
+class WeightsBroadcastEventConfig(TrainerEvent):
     """
     Event sent to indicate that updated weights are ready for broadcast.
     """
 
-    # Default redis stream + message values
-    stream_key: str = FieldUpdate(
-        default="fast_llm_weights_broadcast",
-        desc="Redis stream where weight-broadcast notifications are published.",
+    initial_weights_step_message_type: str = Field(
+        default="initial_weights_step",
+        desc="Message indicating that weights the training starting/ continuing from.",
+        hint=FieldHint.feature,
     )
 
-    message: str = FieldUpdate(
+    weights_ready_message_type: str = Field(
         default="weights_ready",
         desc="Message indicating that weights are ready to be broadcast.",
+        hint=FieldHint.feature,
     )
 
     # NCCL rendezvous details
@@ -395,19 +383,15 @@ class WeightsBroadcastConfig(RedisEventMessageConfig):
 
 
 @config_class()
-class TrainingFinishedEventConfig(RedisEventMessageConfig):
+class TrainingFinishedEventConfig(TrainerEvent):
     """
     Event sent to indicate that training has completed.
     """
 
-    stream_key: str = FieldUpdate(
-        default="fast_llm_training_events",
-        desc="Redis stream where training-finished events are published.",
-    )
-
-    message: str = FieldUpdate(
+    training_finished_message_type: str = Field(
         default="training_finished",
-        desc="Message indicating that training has finished.",
+        desc="Message indicating that weights the training starting/ continuing from.",
+        hint=FieldHint.feature,
     )
 
 
@@ -417,7 +401,12 @@ class TrainerEventsConfig(Config):
     Aggregates all trainer-side Redis-based event configurations.
     """
 
-    weights_broadcast: WeightsBroadcastConfig = Field(
+    redis: TrainerEventsRedisConfig = Field(
+        desc="Redis connection and stream settings used to fetch incoming training data.",
+        hint=FieldHint.core,
+    )
+
+    weights_broadcast: WeightsBroadcastEventConfig = Field(
         default=None,
         desc="Configuration for signaling weight-ready events via Redis.",
         hint=FieldHint.feature,

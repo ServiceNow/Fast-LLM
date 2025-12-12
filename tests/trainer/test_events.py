@@ -11,8 +11,8 @@ import safetensors
 import torch
 import yaml
 
-from tests.data.test_streaming import redis_batch_producer
 from tests.utils.model_configs import MODEL_CONFIGS
+from tests.utils.redis import redis_batch_producer
 from tests.utils.utils import requires_cuda
 
 
@@ -352,13 +352,16 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
     # We use same stream for messages in the test. Also make all fields explicit,
     #  so fake consumers can read them as well from this dict config
     model_config["events"] = {
-        "weights_broadcast": {
-            "enabled": True,
+        "redis": {
             "host": stream_config.redis.host,
             "port": stream_config.redis.port,
             "stream_key": "fast_llm_events",
-            "message_key": "event",
-            "message": "weights_ready",
+            "payload_key": "event",
+        },
+        "weights_broadcast": {
+            "enabled": True,
+            "initial_weights_step_message_type": "initial_weights_step",
+            "weights_ready_message_type": "weights_ready",
             "rdvz_master_address": "127.0.0.1",
             "rdvz_master_port": 19999,
             "world_size": broadcast_world_size,
@@ -366,11 +369,7 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
         },
         "training_finished": {
             "enabled": True,
-            "host": stream_config.redis.host,
-            "port": stream_config.redis.port,
-            "stream_key": "fast_llm_events",
-            "message_key": "event",
-            "message": "training_finished",
+            "training_finished_message_type": "training_finished",
         },
     }
 
