@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    import PIL.Image
     import torch
 
 
@@ -58,6 +59,21 @@ class ImagePatchConfig(PreprocessingConfig):
         hint=FieldHint.optional,
     )
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Backward compatibility: remove image_format field if present (used in older datasets)
+        if "image_format" in default:
+            import warnings
+
+            warnings.warn(
+                "The 'image_format' field is deprecated and will be ignored. "
+                "Image format is now automatically inferred from the image type.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            default.pop("image_format")
+        return super()._from_dict(default, strict)
+
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, ImagePatchConfig)
         Assert.eq(self.height, preprocessing.height)
@@ -94,7 +110,7 @@ class ImagePatchConfig(PreprocessingConfig):
         Assert.gt(self.max_patches_width, 0)
 
     def get_patches_from_images(
-        self, images: list["torch.Tensor|bytes"], token_data_type: DataType = DataType.int64
+        self, images: list["torch.Tensor|bytes|dict|PIL.Image.Image"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
@@ -120,19 +136,50 @@ class ImagePatchConfig(PreprocessingConfig):
             )
 
     def _get_patches_from_image(
-        self, image: "torch.Tensor|bytes", token_data_type: DataType = DataType.int64
+        self, image: "torch.Tensor|bytes|dict|PIL.Image.Image", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
         import torch
 
         if not torch.is_tensor(image):
+            import contextlib
+
             import numpy as np
             import PIL.Image
+            import PIL.PngImagePlugin
 
-            with PIL.Image.open(io.BytesIO(image)) as image:
-                if image.mode != "RGB":
-                    # Convert all images to RGB
-                    image = image.convert("RGB")
-                image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
+            # Load the image based on type inference
+            # Set a larger limit for decompression to handle images with large ICC profiles
+            PIL.Image.MAX_IMAGE_PIXELS = None
+            original_max_text_chunk = PIL.PngImagePlugin.MAX_TEXT_CHUNK
+            PIL.PngImagePlugin.MAX_TEXT_CHUNK = 10 * (1024**2)  # 10 MB
+
+            try:
+                # Infer format from image type
+                if isinstance(image, bytes):
+                    # Raw image bytes
+                    image_ctx = PIL.Image.open(io.BytesIO(image))
+                elif isinstance(image, dict):
+                    # Dictionary with 'bytes' key
+                    if "bytes" not in image:
+                        raise ValueError("Dictionary image format must contain a 'bytes' key.")
+                    image_bytes = image["bytes"]
+                    image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
+                elif isinstance(image, PIL.Image.Image):
+                    # PIL Image object
+                    image_ctx = contextlib.nullcontext(image)
+                else:
+                    raise ValueError(
+                        f"Unsupported image type: {type(image).__name__}. "
+                        f"Expected bytes, dict with 'bytes' key, or PIL.Image.Image."
+                    )
+            finally:
+                PIL.PngImagePlugin.MAX_TEXT_CHUNK = original_max_text_chunk
+
+            # Convert to RGB and tensor
+            with image_ctx as pil_image:
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                image = torch.tensor(np.array(pil_image)).permute(2, 0, 1)  # HWC to CHW
                 Assert.eq(image.dtype, torch.uint8)
 
         if self.do_resize:

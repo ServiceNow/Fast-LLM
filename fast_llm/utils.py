@@ -160,7 +160,9 @@ class Assert:
         scale = (torch.sum(x**2 + y**2) / (2 * x.numel())) ** 0.5
         threshold = max(threshold * scale, min_threshold)
         rms = rms_diff(x, y).item()
-        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}" + (
+        assert (
+            rms <= threshold
+        ), f"Rms diff too big ({rms:.2e} > {threshold:.2e}, scale = {scale:.2e}) between tensors {x} and {y}" + (
             "" if msg is None else f"| {msg}"
         )
 

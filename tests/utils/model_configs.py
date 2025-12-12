@@ -45,6 +45,7 @@ _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
 TP_NO_STP = r"(?:^|(?<=[^s]))tp"
+GRAD_ACC = r"df(?!16)|bf"
 
 
 class ModelTestingGroup(enum.StrEnum):
@@ -643,7 +644,7 @@ _update_and_add_testing_config(
     compare_factor=8,
     # Modes not supported with reference models and/or activation distillation.
     # TODO: Fix gradient accumulation and fp16, add TP support.
-    skip_tests=("sdp", "ms", "pp", "tp", "df", "bf", "fp16"),
+    skip_tests=("sdp", "ms", "pp", "tp", GRAD_ACC, "fp16"),
 )
 
 _update_and_add_testing_config(
@@ -837,7 +838,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
     # TODO: Gradient accumulation works but comparison is broken.
-    skip_tests=("sdp", "ms", "bf4", "df"),
+    skip_tests=("sdp", "ms", GRAD_ACC),
     auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
@@ -1055,9 +1056,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    # bf2_df2 depends on df4, so must also be skipped.
-    skip_tests=("sdp", "ms", "bf4", "df4", "bf2_df2", TP_NO_STP),
-    auto_model_class=transformers.AutoModelForImageTextToText,
+    skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
 )
 
 
