@@ -5,7 +5,7 @@ import torch.utils.data
 from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
 from fast_llm.data.dataset.config import SamplingData, StreamingDatasetConfig
 from fast_llm.data.dataset.sampled import NaiveSampledIterableDataset
-from fast_llm.data.sample.pipeline_rl import PipelineRLSample
+from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.distributed.distributed import Distributed
@@ -18,7 +18,7 @@ def dtype_from_string(name: str) -> torch.dtype:
         raise ValueError(f"Unknown torch dtype: {name}")
 
 
-class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[SampleType]):
+class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset[SampleType]):
     def __init__(self, config: StreamingDatasetConfig, distributed: Distributed):
         super().__init__()
         if distributed.config.pipeline_parallel > 1:
@@ -39,7 +39,7 @@ class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[Sa
     def name(self) -> str:
         return self._name
 
-    def sample(self, config: SamplingData) -> SampledIterableDataset[PipelineRLSample]:
+    def sample(self, config: SamplingData) -> SampledIterableDataset[LanguageModelSample]:
         # TODO: actually sample the dataset and not return docs
         return NaiveSampledIterableDataset(self, config)
 
@@ -53,7 +53,7 @@ class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[Sa
         self.batch_data_rank = batch_data_rank
         self.is_batch_data_group_leader = is_batch_data_group_leader
 
-    def __iter__(self) -> typing.Iterator[PipelineRLSample]:
+    def __iter__(self) -> typing.Iterator[LanguageModelSample]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None and worker_info.num_workers > 1:
             raise RuntimeError("StreamingDataset can work only with one instance per rank")
@@ -102,7 +102,7 @@ class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[Sa
                         data = orjson.loads(msg_data[self._config.data_key.encode()])
                         yield self._sample_from_dict(data)
 
-    def _sample_from_dict(cls, data: dict) -> PipelineRLSample:
+    def _sample_from_dict(cls, data: dict) -> LanguageModelSample:
         tokens = torch.tensor(data["tokens"], dtype=dtype_from_string(data["tokens_dtype"]))
         sample_size = len(tokens)
         if "loss_masking_spans" in data:
@@ -117,7 +117,7 @@ class StreamingDataset[SampleType: PipelineRLSample](SamplableIterableDataset[Sa
             rejected_spans = [tuple(el) for el in data["rejected_spans"]]
         else:
             rejected_spans = None
-        return PipelineRLSample(
+        return LanguageModelSample(
             TokenSample(tokens, [sample_size]),
             RangeSample(loss_masking_spans, sample_size) if loss_masking_spans is not None else None,
             RangeSample(chosen_spans, sample_size) if chosen_spans is not None else None,

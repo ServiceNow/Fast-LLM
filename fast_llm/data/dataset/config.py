@@ -8,10 +8,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
-from fast_llm.data.dataset.abstract import (
-    SamplableDataset,
-    SampledDataset,
-)
+from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
@@ -19,7 +16,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
     from fast_llm.data.sample.language_model import LanguageModelSample
-    from fast_llm.data.sample.pipeline_rl import PipelineRLSample
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
@@ -346,7 +342,7 @@ class RedisStreamDatasetConfig(RedisConfig):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
-class StreamingDatasetConfig[SampleType: PipelineRLSample](SamplableDatasetConfig[SampleType]):
+class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     """
     Configuration for a streaming dataset that reads training data from a Redis stream.
     """

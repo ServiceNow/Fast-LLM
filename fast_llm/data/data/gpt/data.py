@@ -16,7 +16,6 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSamplingParamet
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.sample.language_model import LanguageModelBatch
-from fast_llm.data.sample.pipeline_rl import PipelineRLBatch
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -151,7 +150,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     num_workers=0 if num_workers == 0 else 1,
                     prefetch_factor=prefetch_factor,
                     pin_memory=True,
-                    collate_fn=PipelineRLBatch.from_samples,
+                    collate_fn=LanguageModelBatch.from_samples,
                     multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
                 )
             else:

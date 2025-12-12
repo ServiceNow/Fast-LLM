@@ -20,7 +20,7 @@ from fast_llm.data.dataset.config import (
     StreamingDatasetConfig,
 )
 from fast_llm.data.dataset.streaming import StreamingDataset
-from fast_llm.data.sample.pipeline_rl import PipelineRLSample
+from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from tests.utils.utils import requires_cuda
@@ -163,7 +163,9 @@ def generate_parallelism_variants(total_gpus: int):
                 if gpus_per_group % tp != 0:
                     continue
                 rem_after_tp = gpus_per_group // tp
-                for pp in range(1, rem_after_tp + 1):
+                # TODO: currently streaming dataset does not support pipeline parallel setup
+                # for pp in range(1, rem_after_tp + 1):
+                for pp in range(1, 2):
                     if rem_after_tp % pp != 0:
                         continue
                     sp = rem_after_tp // pp
@@ -404,7 +406,7 @@ def check_distributed_gptdata_streaming_test_results(
 
 
 def test_streaming_dataset_reads_single_message(monkeypatched_redis, stream_config):
-    """StreamingDataset should read a message and convert it into PipelineRLSample."""
+    """StreamingDataset should read a message and convert it into LanguageModelSample."""
     fake_redis = monkeypatched_redis
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
@@ -416,7 +418,7 @@ def test_streaming_dataset_reads_single_message(monkeypatched_redis, stream_conf
     it = iter(dataset)
     sample = next(it)
 
-    assert isinstance(sample, PipelineRLSample)
+    assert isinstance(sample, LanguageModelSample)
     assert torch.equal(sample.tokens.tokens, torch.tensor([1, 2, 3], dtype=torch.int64))
     assert sample.tokens.lengths == [3]
     assert sample.loss_masking_spans is None
@@ -425,7 +427,7 @@ def test_streaming_dataset_reads_single_message(monkeypatched_redis, stream_conf
 
 
 def test_streaming_dataset_reads_multiple_messages(monkeypatched_redis, stream_config):
-    """StreamingDataset should read a message and convert it into PipelineRLSample."""
+    """StreamingDataset should read a message and convert it into LanguageModelSample."""
     fake_redis = monkeypatched_redis
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
@@ -440,7 +442,7 @@ def test_streaming_dataset_reads_multiple_messages(monkeypatched_redis, stream_c
     for i in range(3):
         sample = next(it)
 
-        assert isinstance(sample, PipelineRLSample)
+        assert isinstance(sample, LanguageModelSample)
         assert torch.equal(sample.tokens.tokens, torch.tensor([1, 2, 3], dtype=torch.int64))
         assert sample.tokens.lengths == [3]
         assert sample.loss_masking_spans is None
@@ -459,7 +461,7 @@ def test_sampling_1_doc_exact_fit(monkeypatched_redis, stream_config):
 
     out = next(iter(sampler))
 
-    assert isinstance(out, PipelineRLSample)
+    assert isinstance(out, LanguageModelSample)
     assert len(out) == 10
     assert out.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
@@ -477,7 +479,7 @@ def test_sampling_2_docs_exact_fit(monkeypatched_redis, stream_config):
 
     out = next(iter(sampler))
 
-    assert isinstance(out, PipelineRLSample)
+    assert isinstance(out, LanguageModelSample)
     assert len(out) == 10
     assert out.tokens.tokens.tolist() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
