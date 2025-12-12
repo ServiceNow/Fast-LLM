@@ -33,6 +33,9 @@ class RangeSample(Sample):
 
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
+        """
+        Used to merge ranges from multiple documents, i.e. when multiple docuemnts are packed together.
+        """
         document: RangeSample
         ranges = []
         sample_size = 0
