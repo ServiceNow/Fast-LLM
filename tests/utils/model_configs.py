@@ -26,7 +26,11 @@ from fast_llm.models.gpt.conversion.config import (
     Qwen2CheckpointFormat,
 )
 from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat, LlavaCheckpointFormat
-from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
+from tests.utils.dataset import (
+    get_model_test_dataset,
+    get_multimodal_test_dataset,
+    get_test_dataset_with_loss_masking_spans,
+)
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 
@@ -402,6 +406,24 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+)
+
+_update_and_add_testing_config(
+    "llama",
+    "llama_with_loss_masking",
+    updates={
+        ("batch", "use_loss_masking_spans"): True,
+    },
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=1.5,  # Loss masking seem to induce slight numerical variation between dtypes
+    get_dataset=get_test_dataset_with_loss_masking_spans,
 )
 
 _update_and_add_testing_config(
