@@ -37,15 +37,12 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def push_msg(redis_client, config, tokens=None, is_eof=False):
+def push_msg(redis_client, config, tokens=None):
     """Push a message into FakeRedis stream."""
-    if is_eof:
-        msg = {"eof": True}
-    else:
-        msg = {
-            "tokens": tokens,
-            "tokens_dtype": "int64",
-        }
+    msg = {
+        "tokens": tokens,
+        "tokens_dtype": "int64",
+    }
     redis_client.xadd(config.redis.stream_key, {config.redis.payload_key: orjson.dumps(msg)})
 
 
