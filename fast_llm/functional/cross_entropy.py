@@ -288,6 +288,7 @@ def _reverse_kl_forward_backward(
         loss /= valid_tokens
 
         if grad_output is not None:
+            # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
             log_ratio = student_log_probs - teacher_log_probs
             expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
             grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
