@@ -109,7 +109,7 @@ class Apriel2MambaConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         result = {
-            "type": "mamba_2",
+            "type": "mamba",
             "state_size": config["state_size"],
             "d_inner": config["d_inner"],
             "add_linear_biases": config["add_linear_biases"],

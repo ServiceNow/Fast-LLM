@@ -812,7 +812,7 @@ _update_and_add_testing_config(
                 "mamba": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "mamba_2",
+                        "type": "mamba",
                         "d_inner": 512,
                         "state_size": 16,
                         "dt_rank": 16,
@@ -841,7 +841,7 @@ _update_and_add_testing_config(
                                 "value_head_dim": 16,
                             },
                             "mamba": {
-                                "type": "mamba_2",
+                                "type": "mamba",
                                 "d_inner": 512,
                                 "state_size": 16,
                                 "dt_rank": 16,

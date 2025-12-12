@@ -26,7 +26,7 @@ class AprielMambaConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "type": "mamba_2",
+            "type": "mamba",
             "state_size": config["ssm_cfg"]["d_state"],
             "d_inner": config["ssm_cfg"].get("d_inner") or config["hidden_size"] * config["ssm_cfg"].get("expand", 1),
             "add_linear_biases": config["ssm_cfg"]["bias"],

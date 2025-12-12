@@ -173,7 +173,7 @@ class KimiDeltaAttentionConfig(MixerConfig):
         return KimiDeltaAttention
 
 
-@config_class(dynamic_type={MixerConfig: "mamba_2"})
+@config_class(dynamic_type={MixerConfig: "mamba"})
 class MambaConfig(MixerConfig):
     _abstract = False
     # Layers
