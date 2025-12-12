@@ -47,6 +47,7 @@ class FSDP:
     ):
         self._name = name
         self._parameter_metas = {parameter_meta.tensor_name: parameter_meta for parameter_meta in parameter_metas}
+        Assert.eq(len(self._parameter_metas), len(parameter_metas))  # `set_model_names` ensure unique names.
         self._distributed_config = distributed_config
         self._fsdp_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.data)
         self._is_tied_weight_copy = is_tied_weight_copy

@@ -9,10 +9,12 @@ from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.attention.config import MixerKwargs
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig, LinearAttentionKwargs
+from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig
 from fast_llm.tensor import ParameterMeta, TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -229,8 +231,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         sequence_first = kwargs[BlockKwargs.sequence_first]
         hidden_states = input_
 
-        cu_seqlens = kwargs.get(LinearAttentionKwargs.cu_seqlens, None)
-        seq_idx = kwargs.get(LinearAttentionKwargs.seq_idx, None)
         # TODO: can be made more efficeint by rearranging hidden states directly and only once
         residual_dtype = hidden_states.dtype
 
@@ -250,9 +250,10 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
 
         # because we use cu_seqlens, chunk_kda requires batch size to be 1 (flatten, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303)
         # similarly to ShortConvolution from fla we already operate on flattened batches here (https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914)
-        q = self._apply_conv(q, self.q_conv, seq_idx=seq_idx)
-        k = self._apply_conv(k, self.k_conv, seq_idx=seq_idx)
-        v = self._apply_conv(v, self.v_conv, seq_idx=seq_idx)
+        seq_idx = kwargs[MixerKwargs.seq_idx].unsqueeze(0)
+        q = self._apply_conv(q, self.q_conv, seq_idx)
+        k = self._apply_conv(k, self.k_conv, seq_idx)
+        v = self._apply_conv(v, self.v_conv, seq_idx)
 
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
         if sequence_first:
@@ -281,7 +282,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
-            cu_seqlens=cu_seqlens,
+            cu_seqlens=kwargs[MixerKwargs.cu_seqlens_q],
         )
 
         attn_out = attn_out.to(residual_dtype)
@@ -303,44 +304,10 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
-    def _preprocess_for_varlen(self, kwargs: dict[str, typing.Any]) -> None:
-        sequence_lengths = kwargs[LinearAttentionKwargs.sequence_lengths]
-        device = kwargs.get("device", None)
-        if sequence_lengths is None:
-            raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
-
-        seqlens = torch.tensor(
-            [
-                0,
-                *(
-                    sequence_length
-                    for sequence_lengths in kwargs[LinearAttentionKwargs.sequence_lengths]
-                    for sequence_length in sequence_lengths  # bs
-                ),
-            ],
-            dtype=torch.int32,
-        )
-        cu_seqlens = seqlens.cumsum_(0).to(device)
-        # this is supposed to be flattened, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303
-        # also whenever cu_seqlens is used, batchs size must be forced to 1: see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L347
-        kwargs[LinearAttentionKwargs.cu_seqlens] = cu_seqlens
-        # seq_idx has to be (bs, seqlen), but bs is forced to 1
-        kwargs[LinearAttentionKwargs.seq_idx] = (
-            (
-                torch.cat(
-                    [
-                        torch.arange(n, dtype=cu_seqlens.dtype, device=cu_seqlens.device)
-                        for n in (torch.diff(cu_seqlens).to(torch.int32))
-                    ],
-                    dim=0,
-                )
-                .eq(0)
-                .cumsum(0)
-                - 1
-            )
-            .to(torch.int32)
-            .unsqueeze(0)
-        )
-
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        self._preprocess_for_varlen(kwargs)
+        preprocess_for_varlen(
+            kwargs,
+            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
+            return_cu_seqlens=True,
+            return_seq_idx=True,
+        )

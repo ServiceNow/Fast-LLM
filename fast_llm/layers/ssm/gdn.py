@@ -10,10 +10,12 @@ from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.attention.config import MixerKwargs
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig, LinearAttentionKwargs
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import div
 
@@ -293,9 +295,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         # TODO: fuse soome of the reshapes into rearranges
         hidden_states = input_
 
-        cu_seqlens = kwargs.get(LinearAttentionKwargs.cu_seqlens, None)
-        seq_idx = kwargs.get(LinearAttentionKwargs.seq_idx, None)
-
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
         if sequence_first:
@@ -315,9 +314,8 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         mixed_qkv = torch.cat((query, key, value), dim=-1)
         mixed_qkv = rearrange(mixed_qkv, "b s ... -> (b s) ...").unsqueeze(0)  # 1 s d
         mixed_qkv = rearrange(mixed_qkv, "b t d -> b d t")  # mixed_qkv.transpose(1, 2)
-        mixed_qkv = self.convolution(
-            mixed_qkv, seq_idx=seq_idx
-        )  # conv func. gets sequence dim as last dim, see https://github.com/Dao-AILab/causal-conv1d/blob/22a4577d8ace9d5703daea91a7fb56695492152b/causal_conv1d/causal_conv1d_interface.py#L110
+        # conv func. gets sequence dim as last dim, see https://github.com/Dao-AILab/causal-conv1d/blob/22a4577d8ace9d5703daea91a7fb56695492152b/causal_conv1d/causal_conv1d_interface.py#L110
+        mixed_qkv = self.convolution(mixed_qkv, seq_idx=kwargs[MixerKwargs.seq_idx].unsqueeze(0))
         mixed_qkv = rearrange(mixed_qkv, "b d t -> b t d")  # mixed_qkv.transpose(1, 2)
         query, key, value = torch.split(
             mixed_qkv,
@@ -351,7 +349,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
-            cu_seqlens=cu_seqlens,
+            cu_seqlens=kwargs[MixerKwargs.cu_seqlens_q],
         )
 
         z_shape_og = z.shape
@@ -368,56 +366,13 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         return output
 
-    def _preprocess_for_varlen(self, kwargs: dict[str, typing.Any]) -> None:
-        """
-        Creates seqlens and cu_seqlens for packed forward.
-        This assumes that forward pass is performed on a fully packed sequence, i.e. where sequences are flattened out into BS = 1.
-        Note: padding tokens are always on the right and get their own entry in LinearAttentionKwargs.sequence_lengths --> they are treated as seperate sequence.
-
-        Sets:
-        - seq_idx to [1, BS x T] tensor, where each elemnt is the sequence index of the corresponding token
-        - cu_seqlens to [N+1] tensor, where N is the total number of sequences in the batch, each element is the cumulative sequence length of packed sequences sofar
-        """
-
-        sequence_lengths = kwargs[LinearAttentionKwargs.sequence_lengths]
-        device = kwargs.get("device", None)
-        if sequence_lengths is None:
-            raise ValueError("sequence_lengths must be provided in kwargs for variable-length sequences.")
-        seqlens = torch.tensor(
-            [
-                0,
-                *(
-                    sequence_length
-                    for sequence_lengths in kwargs[LinearAttentionKwargs.sequence_lengths]
-                    for sequence_length in sequence_lengths
-                ),
-            ],
-            dtype=torch.int32,
-        )
-        cu_seqlens = seqlens.cumsum_(0).to(device)
-        # this is supposed to be flattened, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303
-        # also whenever cu_seqlens is used, batchs size must be forced to 1: see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L347
-        kwargs[LinearAttentionKwargs.cu_seqlens] = cu_seqlens
-        # seq_idx has to be (bs, seqlen), but bs is forced to 1
-        kwargs[LinearAttentionKwargs.seq_idx] = (
-            (
-                torch.cat(
-                    [
-                        torch.arange(n, dtype=cu_seqlens.dtype, device=cu_seqlens.device)
-                        for n in (torch.diff(cu_seqlens).to(torch.int32))
-                    ],
-                    dim=0,
-                )
-                .eq(0)
-                .cumsum(0)
-                - 1
-            )
-            .to(torch.int32)
-            .unsqueeze(0)
-        )
-
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        self._preprocess_for_varlen(kwargs)
+        preprocess_for_varlen(
+            kwargs,
+            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
+            return_cu_seqlens=True,
+            return_seq_idx=True,
+        )
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()

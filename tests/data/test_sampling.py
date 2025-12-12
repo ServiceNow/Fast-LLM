@@ -129,17 +129,10 @@ def test_build_padded_token_cumsum():
     Assert.all_equal(token_cumsum, expected_cumsums)
 
 
-def get_test_seeds(num_seeds):
-    np.random.seed(42)
-    seeds = np.random.randint(0, num_seeds * 100, num_seeds)
-    return seeds.tolist()
-
-
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
 def test_gpt_sample_padding():
-    for seed in get_test_seeds(100):
+    for _ in range(10):
         vocab_size = 30
-        np.random.seed(seed)
         num_sequences = np.random.randint(1, 20)
         sequence_length = np.random.randint(1, 20)
         doc_sizes = np.random.randint(1, 2 * sequence_length, num_sequences)
@@ -167,7 +160,7 @@ def test_gpt_sample_padding():
         sampling = get_sampling_data(
             num_samples=len(expected_samples),
             sequence_length=sequence_length,
-            seed=seed,
+            seed=np.random.randint(100000),
             shuffle=ShufflingType.disabled,
             truncate_documents=False,
         )

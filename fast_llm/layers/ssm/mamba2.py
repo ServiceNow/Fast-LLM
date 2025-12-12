@@ -1,3 +1,4 @@
+import inspect
 import logging
 import typing
 
@@ -8,6 +9,8 @@ from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.attention.config import MixerKwargs
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -19,8 +22,17 @@ try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
     _mamba_available = True
+    sig = inspect.signature(selective_scan_fn)
+    # for training with packing install https://github.com/jxiw/varlen_mamba
+    # see https://github.com/jxiw/M1/blob/main/HYBRID_PACK.md
+    if "position_indices" in sig.parameters:
+        _mamba_varlen_available = True
+    else:
+        _mamba_varlen_available = False
+
 except (ImportError, RuntimeError):
     _mamba_available = False
+    _mamba_varlen_available = False
 
 logger = logging.getLogger(__name__)
 
@@ -181,15 +193,19 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
 
         # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
+        convolution_kwargs = (
+            {} if self._config.cross_document_attention else {"seq_idx": kwargs[MixerKwargs.seq_idx].unsqueeze(0)}
+        )
         if self._config.repeat_kv_before_conv:
             x = self.convolution(
                 x.unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
-                .flatten(1, 2)
+                .flatten(1, 2),
+                **convolution_kwargs,
             )
         else:
             x = (
-                self.convolution(x)
+                self.convolution(x, **convolution_kwargs)
                 .unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
@@ -214,6 +230,9 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
         self._debug(c, "c", self._bc_dims, kwargs)
         self._debug(dt, "dt", self._xz_dims, kwargs)
 
+        scan_kwargs = (
+            {} if self._config.cross_document_attention else {"position_indices": kwargs[MixerKwargs.position_ids]}
+        )
         y = selective_scan_fn(
             x,
             dt,
@@ -224,6 +243,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
             z,
             delta_bias=None if self.dt_proj.bias is None else self.dt_proj.bias.float(),
             delta_softplus=True,
+            **scan_kwargs,
         )
 
         self._debug(y, "y", self._xz_dims, kwargs)
@@ -242,3 +262,15 @@ class Mamba2[ConfigType: Mamba2Config](BlockWithBias[ConfigType]):
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Implement.
         raise NotImplementedError()
+
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        if not self._config.cross_document_attention:
+            assert (
+                _mamba_varlen_available
+            ), f"Varlen mamba requires custom mamba installation from `https://github.com/jxiw/varlen_mamba`"
+            preprocess_for_varlen(
+                kwargs,
+                kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
+                return_seq_idx=True,
+                return_position_ids=True,
+            )
