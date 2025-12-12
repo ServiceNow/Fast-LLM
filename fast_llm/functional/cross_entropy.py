@@ -58,13 +58,11 @@ def _fused_softmax_base(
         logits *= logits_scale_factor
     logits_max = torch.max(logits, dim=dim, keepdim=True)[0]
     if group is not None:
-        # Use autograd-aware all_reduce with correct gradient behavior
         all_reduce(logits_max, op=ReduceOp.MAX, group=group)
     logits_norm = (logits - logits_max).float()
     exp_logits = logits_norm.exp()
     sum_exp_logits = exp_logits.sum(dim=dim, keepdim=True)
     if group is not None:
-        # Use autograd-aware all_reduce with correct gradient behavior
         all_reduce(sum_exp_logits, op=ReduceOp.SUM, group=group)
     return logits_norm, exp_logits, sum_exp_logits
 
