@@ -22,12 +22,14 @@ from tests.utils.utils import get_stage, requires_cuda
     "config",
     [
         AttentionConfig(heads=4, head_groups=2, head_size=16, cross_document_attention=False),
-        Mamba2Config(
-            d_inner=128,
-            d_xb=64,
-            state_size=16,
-            dt_rank=8,
-            cross_document_attention=False,
+        pytest.param(
+            Mamba2Config(
+                d_inner=128,
+                d_xb=64,
+                state_size=16,
+                dt_rank=8,
+                cross_document_attention=False,
+            ),
             marks=pytest.mark.skip("Mamba varlen kernel not available"),
         ),
         pytest.param(
