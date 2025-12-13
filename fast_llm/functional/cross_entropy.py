@@ -294,7 +294,6 @@ def _reverse_kl_forward_backward(
                 all_reduce(expected, op=ReduceOp.SUM, group=group)
             grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
 
-            # Apply mask to gradients, not to log_probs!
             if loss_mask is not None:
                 valid = loss_mask.to(logits.dtype).unsqueeze(-1)
                 grad_base = grad_base * valid
