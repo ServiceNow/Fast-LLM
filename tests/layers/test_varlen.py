@@ -10,7 +10,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import gdn as gdn_module
 from fast_llm.layers.ssm import kda as kda_module
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, Mamba2Config
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage, requires_cuda
 
@@ -23,7 +23,7 @@ from tests.utils.utils import get_stage, requires_cuda
     [
         AttentionConfig(heads=4, head_groups=2, head_size=16, cross_document_attention=False),
         pytest.param(
-            Mamba2Config(
+            MambaConfig(
                 d_inner=128,
                 d_xb=64,
                 state_size=16,
