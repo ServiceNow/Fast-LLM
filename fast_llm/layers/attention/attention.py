@@ -7,12 +7,13 @@ from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
-from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
 from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.common.linear.linear import concatenate_linear_layers
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
@@ -106,13 +107,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         head_size_dim = TensorDim("head_size", self._config.head_size)
         query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, head_size_dim))
-        key_value_dim = ConcatenatedTensorDim(
-            "key_value",
-            (
-                CompositeTensorDim("key", (head_group_dim, head_size_dim)),
-                CompositeTensorDim("value", (head_group_dim, head_size_dim)),
-            ),
-        )
+        key_dim = CompositeTensorDim("key", (head_group_dim, head_size_dim))
+        value_dim = CompositeTensorDim("value", (head_group_dim, head_size_dim))
+
         dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, head_size_dim))
 
         self._softmax_scale = self._config.head_size ** (-self._config.softmax_scale_power)
@@ -128,22 +125,30 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        # TODO: Use value config.
-        self.key_value = self._config.key_layer.get_layer(
+        key = self._config.key_layer.get_layer(
             hidden_dim,
-            key_value_dim,
+            key_dim,
             default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
             default_add_bias=self._config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
-            peft=None if self._config.key_layer.apply_peft is None else self._peft,
+            peft=None,
         )
-        if self._peft is not None and self._config.key_layer.apply_peft is None:
-            # Default: Apply to value only.
-            # TODO: Avoid this hack.
-            self.key_value = self._peft.apply_linear(
-                self.key_value, True, out_channel_begin=div(key_value_dim.global_size, 2)
-            )
+        value = self._config.key_layer.get_layer(
+            hidden_dim,
+            value_dim,
+            default_weight_initialization=init_normal_(std=self._hidden_size**-0.5),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
+            lr_scale=self._lr_scale,
+            peft=None,
+        )
+        self.key_value = concatenate_linear_layers(
+            (key, value),
+            (self._config.key_layer, self._config.value_layer),
+            default_apply_peft=(False, True),
+            peft=peft,
+        )
 
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
