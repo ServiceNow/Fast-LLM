@@ -40,11 +40,10 @@ def _compare_cross_entropy_outputs(
     grad: torch.Tensor | None,
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
-    min_threshold_grads=1e-8,
 ):
     Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
     if has_grad:
-        Assert.rms_close_relative(grad, ref_grad, threshold, min_threshold_grads)
+        Assert.rms_close_relative(grad, ref_grad, threshold, 1e-8)
     else:
         assert grad is None
         assert ref_grad is None
@@ -188,14 +187,14 @@ def _compare_parallel_cross_entropy(
         grad_output=1,
         target_format=target_format,
     )
-    _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4, 1e-6)
+    _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4)
 
 
 def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGroup):
     success = True
     for function in (reverse_kl_forward_backward, cross_entropy_forward_backward):
         for target_format in (TargetFormat.logits,):
-            for loss_masking in [True, False]:
+            for loss_masking in [False, True]:
                 try:
                     _compare_parallel_cross_entropy(rank, group, target_format, function, loss_masking)
                 except Exception:

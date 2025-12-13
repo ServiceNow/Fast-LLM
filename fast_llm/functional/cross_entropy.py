@@ -262,8 +262,8 @@ def _reverse_kl_forward_backward(
     # Compute log probabilities
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
     with torch.enable_grad():
-        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
-        student_log_probs = distributed_log_softmax(logits_, group=group)
+        # logits_ = logits.float()#.detach().requires_grad_(grad_output is not None)
+        student_log_probs = distributed_log_softmax(logits, group=group)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         loss_terms = torch.nn.functional.kl_div(
@@ -289,6 +289,9 @@ def _reverse_kl_forward_backward(
             # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
             log_ratio = student_log_probs - teacher_log_probs
             expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
+            # expected E_q(log s - log t) -- this is actually dependent on the full vocab!
+            if group is not None:
+                all_reduce(expected, op=ReduceOp.SUM, group=group)
             grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
 
             # Apply mask to gradients, not to log_probs!
