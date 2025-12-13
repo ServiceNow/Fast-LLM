@@ -73,6 +73,13 @@ class MemmapReaderBaseConfig(Config):
         """
         raise NotImplementedError()
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        raise NotImplementedError()
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        raise NotImplementedError()
+
 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "none"})
 class NullReaderConfig(MemmapReaderBaseConfig):
@@ -159,6 +166,13 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig) -> "MemmapIndexedDatasetReader":
         return self.reader_class(self, buffer, model_preprocessing)
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {"num_tokens": self.num_tokens}
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {"num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata)}
+
 
 class MemmapReaderBase[ConfigType: MemmapReaderBaseConfig](Configurable[ConfigType]):
     @abc.abstractmethod
@@ -195,6 +209,9 @@ class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](Mem
     @abc.abstractmethod
     def get_document_size(self, index: int) -> int:
         pass
+
+    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
+        raise NotImplementedError()
 
 
 class MemmapWriter(abc.ABC):

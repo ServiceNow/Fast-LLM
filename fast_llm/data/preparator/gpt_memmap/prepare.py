@@ -39,7 +39,7 @@ from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
+from fast_llm.utils import normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
 
@@ -346,16 +346,18 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Create the config file(s) on rank 0
             dataset_configs, reader_configs = zip(*dataset_and_reader_configs)
             if self._config.splits:
-                for split_name, split_config in self._split_and_blend_dataset_configs(
+                for split_name, (split_config, metadata) in self._split_and_blend_dataset_configs(
                     dataset_configs, reader_configs, self._config.splits, self._config.output_path
                 ).items():
                     self._save_dataset_config(
-                        split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
+                        split_config,
+                        metadata,
+                        output_path=self._config.output_path / f"fast_llm_config_{split_name}.yaml",
                     )
             else:
                 self._save_dataset_config(
-                    self._blend_dataset_configs(dataset_configs, reader_configs),
-                    self._config.output_path / f"fast_llm_config.yaml",
+                    *self._blend_dataset_configs(dataset_configs, reader_configs),
+                    output_path=self._config.output_path / f"fast_llm_config.yaml",
                 )
 
             # Save metadata on rank 0
@@ -368,29 +370,30 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _save_dataset_config(
-        cls, dataset_config: IndexedDatasetConfig[_sample_type], output_path: pathlib.Path
+        cls,
+        dataset_config: IndexedDatasetConfig[_sample_type],
+        metadata: dict[str, typing.Any],
+        output_path: pathlib.Path,
     ) -> None:
         logger.info(f"Saving config to {output_path}")
-        yaml.safe_dump(
-            dataset_config.to_dict(),
-            output_path.open("w"),
-        )
+        yaml.safe_dump({"config": dataset_config.to_dict(), "metadata": metadata}, output_path.open("w"))
 
     @classmethod
     def _blend_dataset_configs(
         cls,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         reader_configs: list[MemmapIndexDatasetReaderConfig],
-    ) -> IndexedDatasetConfig[_sample_type]:
+    ) -> tuple[IndexedDatasetConfig[_sample_type], dict[str, typing.Any]]:
+        datasets_metadata = [reader_config.get_metadata() for reader_config in reader_configs]
         if len(dataset_configs) == 1:
-            return dataset_configs[0]
+            return dataset_configs[0], datasets_metadata[0]
         return SampledDatasetConfig[cls._sample_type].from_dict(
             {
                 "type": "blended",
                 "datasets": dataset_configs,
                 "weights": [reader_config.num_tokens for reader_config in reader_configs],
             }
-        )
+        ), reader_configs[0].blend_metadata(datasets_metadata)
 
     def _split_and_blend_dataset_configs(
         self,
@@ -398,7 +401,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
-    ) -> dict[str, SampledDatasetConfig[_sample_type]]:
+    ) -> dict[str, tuple[SampledDatasetConfig[_sample_type], dict[str, typing.Any]]]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [reader_config.num_tokens for reader_config in reader_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
@@ -407,7 +410,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         for split_index, split_name in enumerate(splits):
             datasets_in_split = []
-            dataset_tokens_in_split = []
+            datasets_metadata = []
             for dataset_index, (dataset_config, reader_config) in enumerate(
                 zip(dataset_configs, reader_configs, strict=True)
             ):
@@ -424,17 +427,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 if split_begin_in_dataset == 0 and split_end_in_dataset == 1:
                     # All the dataset belongs to the split.
                     datasets_in_split.append(dataset_configs[dataset_index])
-                    dataset_tokens_in_split.append(dataset_sizes[dataset_index])
+                    datasets_metadata.append(reader_config.get_metadata())
+
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
                         self._preprocessing_config
                     )
-                    sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
-                    Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
+                    begin_index, end_index, metadata = dataset.reader.get_split(
+                        split_begin_in_dataset, split_end_in_dataset
+                    )
                     if end_index > begin_index:
                         datasets_in_split.append(
                             DatasetSliceConfig[self._sample_type].from_dict(
@@ -446,10 +449,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                                 }
                             )
                         )
-                        dataset_tokens_in_split.append(
-                            sizes_cumsum[end_index - 1].item()
-                            - (sizes_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
-                        )
+                        datasets_metadata.append(metadata)
 
                 # [else] None of the dataset belongs to the split.
 
@@ -457,14 +457,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 # This is a big problem, but we don't want to crash the whole run.
                 logger.error(f"Datasets split {split_name} is empty!")
             elif len(datasets_in_split) == 1:
-                dataset_splits[split_name] = datasets_in_split[0]
+                dataset_splits[split_name] = (datasets_in_split[0], datasets_metadata[0])
             else:
-                dataset_splits[split_name] = BlendedDatasetConfig[self._sample_type].from_dict(
-                    {
-                        "type": "blended",
-                        "datasets": datasets_in_split,
-                        "weights": dataset_tokens_in_split,
-                    }
+                dataset_splits[split_name] = (
+                    BlendedDatasetConfig[self._sample_type].from_dict(
+                        {
+                            "type": "blended",
+                            "datasets": datasets_in_split,
+                            "weights": [dataset_metadata["num_tokens"] for dataset_metadata in datasets_metadata],
+                        }
+                    ),
+                    reader_configs[0].blend_metadata(datasets_metadata),
                 )
 
         return dataset_splits

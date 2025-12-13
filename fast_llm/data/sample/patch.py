@@ -192,6 +192,27 @@ class PatchReaderConfig(PatchReaderBaseConfig, MemmapReaderConfig):
             * torch.int32.itemsize
         )
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_documents": self.num_documents,
+            "num_patches": self.num_patches,
+            "num_patch_groups": self.num_patch_groups,
+            "num_pixels": self.patch_size * self.num_patches,
+            "patch_shape": self.patch_shape,
+            "data_type": str(self.data_type),
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "num_patches": sum(metadata_["num_patches"] for metadata_ in metadata),
+            "num_patch_groups": sum(metadata_["num_patch_groups"] for metadata_ in metadata),
+            "num_pixels": sum(metadata_["num_pixels"] for metadata_ in metadata),
+            "patch_shape": get_unique(metadata_["patch_shape"] for metadata_ in metadata),
+            "data_type": get_unique(metadata_["data_type"] for metadata_ in metadata),
+        }
+
 
 class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
@@ -252,6 +273,19 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
                 patch_filter,
             ),
         )
+
+    def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])
+        num_patches = self._patch_count_cumsums[end_index].item() - self._patch_count_cumsums[begin_index].item()
+        return {
+            "num_documents": end_index - begin_index,
+            "num_patches": num_patches,
+            "num_patch_groups": self._group_count_cumsums[end_index].item()
+            - self._group_count_cumsums[begin_index].item(),
+            "num_pixels": self._config.patch_size * num_patches,
+            "patch_shape": self._config.patch_shape,
+            "data_type": str(self._config.data_type),
+        }
 
 
 class EmptyPatchReader[ConfigType: PatchReaderBaseConfig](MemmapReaderBase[ConfigType]):
