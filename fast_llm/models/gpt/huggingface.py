@@ -4,7 +4,9 @@ import re
 import typing
 
 import torch
+import transformers.cache_utils
 import transformers.modeling_outputs
+import transformers.utils
 
 from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.data.sample.token import TokenBatch
@@ -36,13 +38,13 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
-        past_key_values=None,
+        past_key_values: transformers.cache_utils.Cache | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
+        labels: torch.Tensor | None = None,
         use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
+        cache_position: torch.Tensor | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs: typing.Unpack[transformers.utils.TransformersKwargs],
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
             self._get_batch(input_ids, attention_mask, position_ids),
@@ -50,9 +52,9 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             inputs_embeds,
             labels,
             use_cache,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
+            cache_position,
+            logits_to_keep,
+            **kwargs,
         )
 
     def _get_batch(
@@ -82,20 +84,26 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
     def _inner_forward(
         self,
         batch: LanguageModelBatch,
-        past_key_values=None,
+        past_key_values: transformers.cache_utils.Cache | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
+        labels: torch.Tensor | None = None,
         use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: list[str | re.Pattern] | bool | None = None,
-        return_dict: bool | None = None,
+        cache_position: torch.Tensor | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs: typing.Unpack[transformers.utils.TransformersKwargs],
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         # TODO: Most of this is generalizable.
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            kwargs["output_attentions"]
+            if "output_attentions" in kwargs and kwargs["output_attentions"] is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            kwargs["output_hidden_states"]
+            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"] is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = kwargs["return_dict"] if "return_dict" in kwargs else self.config.use_return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
         if output_attentions:
@@ -103,6 +111,12 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         if inputs_embeds is not None:
             raise NotImplementedError()
         if labels is not None:
+            raise NotImplementedError()
+        # TODO: seems cache_position are always provided even if use_cache is false
+        #       check if it is the case and implement support to it.
+        # if cache_position is not None:
+        #     raise NotImplementedError()
+        if isinstance(logits_to_keep, torch.Tensor) or logits_to_keep > 0:
             raise NotImplementedError()
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
@@ -122,33 +136,33 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             # kwargs is shallow-copied so changes will propagate back to the main namespace.
             kwargs_meta[BlockKwargs.output_hidden_states] = [re.compile(pattern) for pattern in output_hidden_states]
 
-        ((input_, kwargs),) = self.fast_llm_base_model.preprocess_batch(
+        ((input_, batch_kwargs),) = self.fast_llm_base_model.preprocess_batch(
             batch, [(input_meta, kwargs_meta)], phase=PhaseType.inference, iteration=iteration
         )
 
         if past_key_values is not None:
             # The transformers will use the past keys and values to this list.
-            kwargs[AttentionKwargs.past_key_values] = past_key_values
+            batch_kwargs[AttentionKwargs.past_key_values] = past_key_values
             # TODO: preprocess needs to know about the past.
             raise NotImplementedError()
         if use_cache:
             # The transformers will save the present keys and values to this list.
-            kwargs[AttentionKwargs.presents] = []
+            batch_kwargs[AttentionKwargs.presents] = []
 
-        kwargs["global_logits"] = True
+        batch_kwargs["global_logits"] = True
 
-        self._inference_runner.forward(input_, kwargs, iteration=iteration)
+        self._inference_runner.forward(input_, batch_kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
-        if kwargs[AttentionKwargs.sequence_first]:
-            logits = kwargs["logits"].transpose(0, 1)
+        if batch_kwargs[AttentionKwargs.sequence_first]:
+            logits = batch_kwargs["logits"].transpose(0, 1)
         else:
-            logits = kwargs["logits"]
+            logits = batch_kwargs["logits"]
 
         if output_hidden_states:
             hidden_states = {
                 key: tensor if meta is None else meta.local_to_global(tensor)[0]
-                for key, (meta, tensor) in kwargs["hidden_states"].items()
+                for key, (meta, tensor) in batch_kwargs["hidden_states"].items()
             }
         else:
             hidden_states = None
@@ -167,5 +181,5 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         return transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
             hidden_states=hidden_states,
-            past_key_values=kwargs[AttentionKwargs.presents],
+            past_key_values=batch_kwargs[AttentionKwargs.presents],
         )
