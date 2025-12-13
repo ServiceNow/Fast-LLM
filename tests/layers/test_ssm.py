@@ -8,12 +8,21 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import kda as kda_module
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, Mamba2Config
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.utils import Assert
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba
 from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
-from fast_llm_external_models.apriel_hybrid_ssm.modeling_apriel_hybrid_ssm import KimiDeltaAttention
 from tests.utils.utils import get_stage, requires_cuda
+
+try:
+    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba
+except ImportError:
+    Apriel2GatedDeltaNet = None
+    Apriel2Mamba = None
+
+try:
+    from fast_llm_external_models.apriel_hybrid_ssm.modeling_apriel_hybrid_ssm import KimiDeltaAttention
+except ImportError:
+    KimiDeltaAttention = None
 
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
@@ -73,6 +82,7 @@ def _compare_mixers(
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(Apriel2GatedDeltaNet is None, reason="Apriel GDN deps missing")
 @requires_cuda
 def test_gdn():
     device = torch.device("cuda")
@@ -165,8 +175,8 @@ def test_mamba(add_linear_biases, repeat_kv_before_conv):
     }
     hf_layer = Apriel2Mamba(HIDDEN_SIZE, mamba_config, layer_idx=0)
 
-    # Create Fast-LLM Mamba2 layer
-    fast_llm_config = Mamba2Config(
+    # Create Fast-LLM Mamba layer
+    fast_llm_config = MambaConfig(
         convolution_layer={"kernel_size": D_CONV},
         **config_common,
     )

@@ -883,7 +883,10 @@ class Config(metaclass=ConfigMeta):
         fn: typing.Callable | None = None,
     ) -> None:
         if old_name in default:
-            warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
+            warnings.warn(
+                f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.",
+                DeprecationWarning,
+            )
             value = pop_nested_dict_value(default, old_name)
             if fn is not None:
                 value = fn(value)
