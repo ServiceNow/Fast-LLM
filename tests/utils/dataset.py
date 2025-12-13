@@ -226,7 +226,7 @@ def _get_test_dataset(
         preparator_config.run()
 
     config = (
-        {"type": "file", "path": config_paths[0]}  # TODO: shouldn't this be {"training": {...}}?
+        {"type": "file", "path": config_paths[0]}
         if splits is None
         else {
             split: {"type": "file", "path": config_path}
@@ -280,18 +280,6 @@ def get_split_sharded_test_dataset() -> (
     )
 
 
-def get_dataset_with_loss_masking_spans(
-    config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
-    return _get_test_dataset(
-        DATASET_CACHE / "dataset_with_loss_masking_spans",
-        seed=1234,
-        max_loss_masking_spans=5,
-        config_only=config_only,
-        splits={"training": 969, "validation": 30, "test": 1},
-    )
-
-
 def get_test_dataset_with_loss_masking_spans(
     config_only: bool = False,
 ) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
@@ -330,10 +318,11 @@ def get_test_dataset_with_image_patches(
     )
 
 
-def get_model_test_dataset(config_only: bool = False):
+def get_model_test_dataset(config_only: bool = False, use_loss_masking: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
+        max_loss_masking_spans=5 if use_loss_masking else 0,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         splits={"training": 969, "validation": 30, "test": 1},
         config_only=config_only,

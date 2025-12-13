@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import typing
+from functools import partial
 
 import pytest
 import transformers
@@ -26,11 +27,7 @@ from fast_llm.models.gpt.conversion.config import (
     Qwen2CheckpointFormat,
 )
 from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat, LlavaCheckpointFormat
-from tests.utils.dataset import (
-    get_dataset_with_loss_masking_spans,
-    get_model_test_dataset,
-    get_multimodal_test_dataset,
-)
+from tests.utils.dataset import get_model_test_dataset, get_multimodal_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import MODEL_TEST_VOCAB_SIZE
 
@@ -423,7 +420,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=1.5,  # Loss masking seem to induce slight numerical variation between dtypes
-    get_dataset=get_dataset_with_loss_masking_spans,
+    get_dataset=partial(get_model_test_dataset, use_loss_masking=True),
 )
 
 _update_and_add_testing_config(

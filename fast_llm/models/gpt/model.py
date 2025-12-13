@@ -247,7 +247,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
                         for begin, end in loss_masking_spans:
                             loss_mask[sample_index, begin:end] = False
-                    if self._config.head.distillation_model is not None:
+                    if (
+                        self._config.head.distillation_model is not None
+                        and self._config.decoder.block.distillation_model is not None
+                    ):
                         kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     labels = torch.where(loss_mask, labels, -100)
 
