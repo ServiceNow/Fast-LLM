@@ -109,6 +109,7 @@ def _reverse_kl_forward_backward_torch(target: torch.Tensor, logits: torch.Tenso
     return output, logits.grad
 
 
+@requires_cuda
 @pytest.mark.slow
 # TODO: Support the same parameterization as above in the reference implementation.
 @pytest.mark.parametrize("loss_masking", [False, True])
@@ -207,6 +208,7 @@ def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGr
         raise RuntimeError("Test failed")
 
 
+@requires_cuda
 @pytest.mark.slow
 def test_distillation_losses():
     _spawn_dist(2, compare_parallel_cross_entropy)
