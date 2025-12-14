@@ -63,7 +63,7 @@ Example Usage
     target_config = compose_configs(source_config, surgery_spec)
 
     # 2. Build plan for weight transformation
-    plan = plan_surgery(source_config, surgery_spec)
+    plan = plan_surgery(source_config, target_config)
 
     # 3. Execute plan to transform weights
     target_weights = execute(plan, source_weights, seed=42)

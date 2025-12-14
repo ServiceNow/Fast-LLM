@@ -1980,3 +1980,151 @@ class TestCyclingSurgeryGeneration:
 
         # After cycling and restore, we should be back to the same state
         assert current_config == config_after_original
+
+
+class TestBiasSurgeryChain:
+    """Torture tests for per-layer bias inheritance through surgery operations.
+
+    Uses apriel2_config_with_bias + bias_surgery_chain to test that:
+    - Qwen-style per-layer attention bias (QKV enabled, O disabled) survives surgery
+    - Non-gated MLP per-layer bias (layer_1 enabled, layer_2 disabled) survives surgery
+    - Bias settings are correctly inherited by new sub-mixers
+    - Bias is correctly tracked in surgery plans
+    """
+
+    @pytest.fixture
+    def bias_source_config(self, apriel2_config_with_bias):
+        """Convert Apriel2Config to dict for surgery operations."""
+        return apriel2_config_with_bias.to_dict()
+
+    def test_bias_survives_stochastic_wrapper(self, bias_source_config, bias_surgery_chain):
+        """Test that bias settings survive wrapping in stochastic mixer."""
+        # Apply first surgery (wrap in stochastic)
+        result = compose_configs(bias_source_config, bias_surgery_chain[0])
+
+        # Check attention sub-mixer inherited bias settings
+        mixer = result["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "stochastic"
+
+        attn_mixer = mixer["mixers"]["attention"]
+        assert attn_mixer["query_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["key_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["value_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["dense_layer"]["bias"]["enabled"] is False
+
+        # Check MLP bias survived
+        mlp = result["decoder"]["block"]["mlp"]
+        assert mlp["layer_1"]["bias"]["enabled"] is True
+        assert mlp["layer_2"]["bias"]["enabled"] is False
+
+    def test_new_submixer_inherits_bias(self, bias_source_config, bias_surgery_chain):
+        """Test that new sub-mixers inherit bias from source attention."""
+        # Apply S1 + S2 (wrap in stochastic, add sliding_window)
+        config = bias_source_config
+        for surgery in bias_surgery_chain[:2]:
+            config = compose_configs(config, surgery)
+
+        # sliding_window should inherit bias from source attention
+        mixer = config["decoder"]["block"]["mixer"]
+        sw_mixer = mixer["mixers"]["sliding_window"]
+
+        assert sw_mixer["query_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["key_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["value_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["dense_layer"]["bias"]["enabled"] is False
+
+    def test_full_bias_chain_produces_valid_config(self, bias_source_config, bias_surgery_chain):
+        """Test that full bias surgery chain produces valid config."""
+        config = bias_source_config
+        for surgery in bias_surgery_chain:
+            config = compose_configs(config, surgery)
+
+        # Verify final config structure
+        mixer = config["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "stochastic"
+        assert "attention" in mixer["mixers"]
+        assert "sliding_window" in mixer["mixers"]
+        assert "full_bias_attn" in mixer["mixers"]
+
+        # attention and sliding_window inherit Qwen-style bias
+        for name in ["attention", "sliding_window"]:
+            sub = mixer["mixers"][name]
+            assert sub["query_layer"]["bias"]["enabled"] is True
+            assert sub["dense_layer"]["bias"]["enabled"] is False
+
+        # full_bias_attn has add_linear_biases=True but per-layer settings inherited from
+        # source take precedence, so O bias is still disabled
+        full_bias = mixer["mixers"]["full_bias_attn"]
+        assert full_bias.get("add_linear_biases") is True
+        # Per-layer dense_layer.bias.enabled=False inherited from source takes precedence
+        assert full_bias["dense_layer"]["bias"]["enabled"] is False
+
+    def test_bias_plan_has_correct_mappings(self, bias_source_config, bias_surgery_chain):
+        """Test that surgery plan correctly includes/excludes bias weight mappings."""
+        # Compose config first to get full target config with inherited bias settings
+        target_config = compose_configs(bias_source_config, bias_surgery_chain[0])
+        plan = plan_surgery(bias_source_config, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have q_proj.bias (enabled)
+        q_bias = [m for m in mapping_strs if "q_proj.bias" in m]
+        assert len(q_bias) > 0, "Should have q_proj.bias mappings"
+
+        # Should NOT have o_proj.bias (disabled)
+        o_bias = [m for m in mapping_strs if "o_proj.bias" in m]
+        assert len(o_bias) == 0, "Should not have o_proj.bias mappings"
+
+        # Should have up_proj.bias (layer_1 enabled)
+        up_bias = [m for m in mapping_strs if "up_proj.bias" in m]
+        assert len(up_bias) > 0, "Should have up_proj.bias mappings"
+
+        # Should NOT have down_proj.bias (layer_2 disabled)
+        down_bias = [m for m in mapping_strs if "down_proj.bias" in m]
+        assert len(down_bias) == 0, "Should not have down_proj.bias mappings"
+
+    def test_bias_chain_produces_working_model(self, bias_source_config, bias_surgery_chain):
+        """Test that bias surgery chain produces a working model."""
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+
+        # Apply full chain
+        config = bias_source_config
+        for surgery in bias_surgery_chain:
+            config = compose_configs(config, surgery)
+
+        # Create model
+        apriel_config = Apriel2Config(**config)
+        model = Apriel2ForCausalLM(apriel_config)
+        model.eval()
+
+        # Verify model structure has correct biases
+        block = model.model.decoder.blocks[0]
+
+        # attention sub-mixer should have QKV bias, no O bias
+        attn = block.mixer.mixers["attention"]
+        assert attn.q_proj.bias is not None
+        assert attn.k_proj.bias is not None
+        assert attn.v_proj.bias is not None
+        assert attn.o_proj.bias is None
+
+        # sliding_window should also inherit bias settings
+        sw = block.mixer.mixers["sliding_window"]
+        assert sw.q_proj.bias is not None
+        assert sw.o_proj.bias is None
+
+        # full_bias_attn inherits per-layer bias from source (even with add_linear_biases=True,
+        # per-layer settings take precedence in same-type inheritance)
+        full_bias = block.mixer.mixers["full_bias_attn"]
+        assert full_bias.q_proj.bias is not None
+        # O bias is disabled because inherited per-layer dense_layer.bias.enabled=False
+        # takes precedence over add_linear_biases=True
+        assert full_bias.o_proj.bias is None
+
+        # MLP should have layer_1 bias, no layer_2 bias
+        assert block.mlp.up_proj.bias is not None
+        assert block.mlp.down_proj.bias is None
+
+        # Forward pass should work
+        input_ids = torch.randint(0, config["vocab_size"], (1, 10))
+        with torch.no_grad():
+            outputs = model(input_ids, use_cache=False)
+        assert outputs.logits.shape == (1, 10, config["vocab_size"])

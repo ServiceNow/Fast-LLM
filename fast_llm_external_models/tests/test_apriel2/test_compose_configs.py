@@ -288,6 +288,163 @@ class TestComposeConfigsLaws:
         assert mixer["window_size"] == 512
 
 
+class TestBiasConfigInheritance:
+    """Test per-layer bias inheritance through surgery composition.
+
+    These tests verify that the per-layer bias configuration (mirroring Fast-LLM's
+    AffineLinearConfig) is correctly inherited through surgery operations:
+    - query_layer.bias.enabled, key_layer.bias.enabled, etc. for attention
+    - layer_1.bias.enabled, layer_2.bias.enabled for MLP
+    """
+
+    @pytest.fixture
+    def source_config_with_bias(self):
+        """Source config with Qwen-style bias (QKV enabled, O disabled)."""
+        return {
+            "model_type": "apriel2",
+            "architectures": ["Apriel2ForCausalLM"],
+            "hidden_size": 256,
+            "vocab_size": 1000,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 4,
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                        # Qwen-style per-layer bias
+                        "query_layer": {"bias": {"enabled": True}},
+                        "key_layer": {"bias": {"enabled": True}},
+                        "value_layer": {"bias": {"enabled": True}},
+                        "dense_layer": {"bias": {"enabled": False}},
+                    },
+                    "mlp": {
+                        "type": "mlp",
+                        "intermediate_size": 512,
+                        "gated": False,
+                        # Per-layer MLP bias
+                        "layer_1": {"bias": {"enabled": True}},
+                        "layer_2": {"bias": {"enabled": False}},
+                    },
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+    def test_same_type_inherits_attention_bias(self, source_config_with_bias):
+        """Same-type surgery inherits per-layer attention bias settings."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "window_size": 512,  # Add sliding window behavior
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config_with_bias, surgery)
+
+        mixer = result["decoder"]["block"]["mixer"]
+        assert mixer["query_layer"]["bias"]["enabled"] is True
+        assert mixer["key_layer"]["bias"]["enabled"] is True
+        assert mixer["value_layer"]["bias"]["enabled"] is True
+        assert mixer["dense_layer"]["bias"]["enabled"] is False
+
+    def test_same_type_inherits_mlp_bias(self, source_config_with_bias):
+        """Same-type surgery inherits per-layer MLP bias settings."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mlp": {
+                        "intermediate_size": 1024,  # Change size
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config_with_bias, surgery)
+
+        mlp = result["decoder"]["block"]["mlp"]
+        assert mlp["layer_1"]["bias"]["enabled"] is True
+        assert mlp["layer_2"]["bias"]["enabled"] is False
+        assert mlp["intermediate_size"] == 1024
+
+    def test_cross_type_attention_to_sliding_window_preserves_bias(self, source_config_with_bias):
+        """attention→sliding_window cross-type preserves per-layer bias."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "sliding_window",  # Cross-type derivation
+                        "window_size": 512,
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config_with_bias, surgery)
+
+        mixer = result["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "sliding_window"
+        # Bias settings preserved through cross-type
+        assert mixer["query_layer"]["bias"]["enabled"] is True
+        assert mixer["key_layer"]["bias"]["enabled"] is True
+        assert mixer["value_layer"]["bias"]["enabled"] is True
+        assert mixer["dense_layer"]["bias"]["enabled"] is False
+
+    def test_stochastic_wrapper_inherits_bias(self, source_config_with_bias):
+        """Wrapping in stochastic inherits bias settings to all sub-mixers."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                            "sliding_window": {
+                                "type": "sliding_window",
+                                "window_size": 512,
+                                "init": "transfer",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config_with_bias, surgery)
+
+        mixers = result["decoder"]["block"]["mixer"]["mixers"]
+
+        # Attention sub-mixer inherits bias
+        assert mixers["attention"]["query_layer"]["bias"]["enabled"] is True
+        assert mixers["attention"]["dense_layer"]["bias"]["enabled"] is False
+
+        # Sliding window sub-mixer also inherits bias
+        assert mixers["sliding_window"]["query_layer"]["bias"]["enabled"] is True
+        assert mixers["sliding_window"]["dense_layer"]["bias"]["enabled"] is False
+
+    def test_surgery_can_override_bias(self, source_config_with_bias):
+        """Surgery can explicitly override inherited bias settings."""
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "dense_layer": {"bias": {"enabled": True}},  # Override O bias
+                    },
+                },
+            },
+        }
+        result = compose_configs(source_config_with_bias, surgery)
+
+        mixer = result["decoder"]["block"]["mixer"]
+        # Q/K/V unchanged
+        assert mixer["query_layer"]["bias"]["enabled"] is True
+        # O bias overridden
+        assert mixer["dense_layer"]["bias"]["enabled"] is True
+
+
 class TestComposeConfigsRealYAML:
     """Test compose_configs with real YAML surgery files."""
 

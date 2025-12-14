@@ -3,7 +3,6 @@
 from fast_llm_external_models.apriel2.conversion.expr import (
     Expr,
     ExprPlan,
-    Init,
     Ref,
     W,
 )
@@ -23,15 +22,19 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
         model.layers.{i}.input_layernorm.weight  -> model.decoder.blocks.{i}.input_layernorm.weight
         model.layers.{i}.post_attention_layernorm.weight -> model.decoder.blocks.{i}.post_attention_layernorm.weight
         model.layers.{i}.self_attn.q_proj.weight -> model.decoder.blocks.{i}.mixer.q_proj.weight
+        model.layers.{i}.self_attn.q_proj.bias   -> model.decoder.blocks.{i}.mixer.q_proj.bias
         model.layers.{i}.self_attn.k_proj.weight -> model.decoder.blocks.{i}.mixer.k_proj.weight
+        model.layers.{i}.self_attn.k_proj.bias   -> model.decoder.blocks.{i}.mixer.k_proj.bias
         model.layers.{i}.self_attn.v_proj.weight -> model.decoder.blocks.{i}.mixer.v_proj.weight
+        model.layers.{i}.self_attn.v_proj.bias   -> model.decoder.blocks.{i}.mixer.v_proj.bias
         model.layers.{i}.self_attn.o_proj.weight -> model.decoder.blocks.{i}.mixer.o_proj.weight
         model.layers.{i}.mlp.gate_proj.weight    -> model.decoder.blocks.{i}.mlp.gate_proj.weight
         model.layers.{i}.mlp.up_proj.weight      -> model.decoder.blocks.{i}.mlp.up_proj.weight
         model.layers.{i}.mlp.down_proj.weight    -> model.decoder.blocks.{i}.mlp.down_proj.weight
 
-    Note: Qwen2 has QKV biases but no O bias. We skip the biases in the conversion
-    since Apriel2 is configured with add_linear_biases=False for uniform handling.
+    Note: Qwen2 has QKV biases but no O bias. The Apriel2 config uses per-layer
+    bias settings (query_layer.bias.enabled=True, dense_layer.bias.enabled=False)
+    to match this exactly - no workarounds needed.
 
     Args:
         qwen2_config: HuggingFace Qwen2Config as dict
@@ -42,7 +45,6 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
     mappings: dict[str, Expr] = {}
 
     num_layers = qwen2_config["num_hidden_layers"]
-    hidden_size = qwen2_config["hidden_size"]
 
     # Static mappings (embeddings and final norm)
     # Note: Qwen2 safetensor keys have "model." prefix
@@ -66,8 +68,7 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
         qwen_layer = W("model", "layers", layer)
         apriel_layer = W("model", "decoder", "blocks", layer)
 
-        # Attention projections (weights and biases)
-        # Qwen2 has QKV bias but no O bias
+        # Attention projection weights
         for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
             src = qwen_layer / "self_attn" / proj / "weight"
             tgt = apriel_layer / "mixer" / proj / "weight"
@@ -79,12 +80,7 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
             tgt = apriel_layer / "mixer" / proj / "bias"
             mappings[tgt] = Ref(key=src)
 
-        # O bias - Qwen2 doesn't have this, so initialize to zeros
-        # Shape is hidden_size (d_model)
-        mappings[apriel_layer / "mixer" / "o_proj" / "bias"] = Init(
-            shape=(hidden_size,),
-            init_type="zeros",
-        )
+        # Note: o_proj has no bias in Qwen2, and Apriel2 config has dense_layer.bias.enabled=False
 
         # MLP projections
         for proj in ["gate_proj", "up_proj", "down_proj"]:

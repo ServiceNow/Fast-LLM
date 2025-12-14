@@ -23,11 +23,7 @@ def convert_config(qwen2_config: dict) -> dict:
     num_key_value_heads = qwen2_config.get("num_key_value_heads", num_attention_heads)
     head_dim = hidden_size // num_attention_heads
 
-    # Qwen2 uses QKV bias but not O bias
-    # The add_linear_biases in Apriel2 attention config controls all biases uniformly,
-    # but we can set it to True and the o_proj bias will just be missing from weights
-    # (handled by strict=False loading or explicit handling in the plan)
-
+    # Qwen2 uses QKV bias but not O bias - mirror Fast-LLM's per-layer config
     return {
         "model_type": "apriel2_text",
         "architectures": ["Apriel2ForCausalLM"],
@@ -48,9 +44,11 @@ def convert_config(qwen2_config: dict) -> dict:
                     "heads": num_attention_heads,
                     "head_groups": num_key_value_heads,
                     "head_size": head_dim,
-                    # Qwen2 has QKV bias but not O bias
-                    # We set True and handle O bias separately
-                    "add_linear_biases": True,
+                    # Per-layer bias config matching Fast-LLM structure
+                    "query_layer": {"bias": {"enabled": True}},
+                    "key_layer": {"bias": {"enabled": True}},
+                    "value_layer": {"bias": {"enabled": True}},
+                    "dense_layer": {"bias": {"enabled": False}},
                     "rotary": {
                         "type": "mistral_1d",
                         "theta": qwen2_config.get("rope_theta", 1000000.0),

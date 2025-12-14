@@ -10,16 +10,40 @@ from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConf
 from fast_llm_external_models.apriel2.cache import _AttentionCache, _SSMCache
 
 
+# Register custom marks
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+
+
+def _can_import_fast_llm():
+    """Check if Fast-LLM is available."""
+    try:
+        from fast_llm.engine.checkpoint.convert import ConvertConfig
+        return True
+    except ImportError:
+        return False
+
+
 # Skip marker for tests that require CUDA for Mamba forward pass
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(),
     reason="SSM mixers (Mamba) require CUDA for forward pass"
 )
 
+# Skip marker for tests that require Fast-LLM
+requires_fastllm = pytest.mark.skipif(
+    not _can_import_fast_llm(),
+    reason="Fast-LLM not available"
+)
 
-@pytest.fixture(autouse=True)
+
+@pytest.fixture(scope="module", autouse=True)
 def set_default_device():
-    """Set default device to CUDA for all tests (Mamba requires CUDA)."""
+    """Set default device to CUDA for all tests (Mamba requires CUDA).
+
+    Module-scoped to ensure it runs before any module-scoped fixtures
+    that load models (e.g., qwen2_model_and_tokenizer).
+    """
     if torch.cuda.is_available():
         old_device = torch.get_default_device()
         torch.set_default_device("cuda")
@@ -29,9 +53,12 @@ def set_default_device():
         yield
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def set_default_dtype():
-    """Set default dtype to float32 for numerical comparison tests."""
+    """Set default dtype to float32 for numerical comparison tests.
+
+    Module-scoped to ensure it runs before any module-scoped fixtures.
+    """
     old_dtype = torch.get_default_dtype()
     torch.set_default_dtype(torch.float32)
     yield
@@ -764,6 +791,52 @@ def apriel2_config_comprehensive():
 
 
 @pytest.fixture
+def apriel2_config_with_bias():
+    """Apriel2 config with Qwen-style per-layer bias and non-gated MLP.
+
+    This config exercises:
+    - Per-layer attention bias (QKV bias enabled, O bias disabled)
+    - Non-gated MLP with per-layer bias (layer_1 enabled, layer_2 disabled)
+    - Config structure parity with Fast-LLM's AffineLinearConfig
+
+    Critical for testing bias inheritance through surgery operations.
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 4,
+                    "head_groups": 2,
+                    "head_size": 16,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                    # Qwen-style: QKV bias enabled, O bias disabled
+                    "query_layer": {"bias": {"enabled": True}},
+                    "key_layer": {"bias": {"enabled": True}},
+                    "value_layer": {"bias": {"enabled": True}},
+                    "dense_layer": {"bias": {"enabled": False}},
+                },
+                "mlp": {
+                    "type": "mlp",
+                    "intermediate_size": 256,
+                    "gated": False,  # Non-gated MLP (SimpleMLP)
+                    # Per-layer MLP bias
+                    "layer_1": {"bias": {"enabled": True}},
+                    "layer_2": {"bias": {"enabled": False}},
+                },
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
 def apriel2_cache(apriel2_config_tiny):
     """Create empty Apriel2Cache from tiny config."""
     from fast_llm_external_models.apriel2.cache import Apriel2Cache
@@ -856,6 +929,77 @@ def additive_surgery_chain():
                                 "type": "gdn",
                                 "init": "transfer",
                                 "convolution_layer": {"kernel_size": 4},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    ]
+
+
+@pytest.fixture
+def bias_surgery_chain():
+    """Surgery chain that exercises bias inheritance through surgery operations.
+
+    Designed to be used with apriel2_config_with_bias as the source config.
+    Tests that per-layer bias settings (Qwen-style QKV bias, non-gated MLP bias)
+    are correctly inherited through:
+    - Stochastic wrapper creation
+    - Adding new sub-mixers that inherit from source
+    - Cross-type derivation (attention → sliding_window)
+
+    Source config has:
+    - Attention: query/key/value bias enabled, dense bias disabled
+    - MLP: layer_1 bias enabled, layer_2 bias disabled (non-gated)
+    """
+    return [
+        # S1: Wrap in stochastic - bias should transfer to attention sub-mixer
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                        },
+                    },
+                    "mlp": {"init": "transfer"},
+                    "normalization": {"init": "transfer"},
+                },
+            },
+        },
+        # S2: Add sliding_window - should inherit bias from source attention
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "sliding_window": {
+                                "type": "attention",
+                                "init": "transfer",
+                                "window_size": 512,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S3: Add new attention with DIFFERENT bias config (random init)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "full_bias_attn": {
+                                "type": "attention",
+                                "init": "random",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                                "add_linear_biases": True,  # All biases enabled
                             },
                         },
                     },

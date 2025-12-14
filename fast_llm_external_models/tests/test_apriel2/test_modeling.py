@@ -12,7 +12,8 @@ class TestApriel2Modeling:
         "apriel2_config_tiny",
         "apriel2_config_stochastic",
         "apriel2_config_multi_mixer",
-        "apriel2_config_all_mixers"  # Tests all 4 mixer types
+        "apriel2_config_all_mixers",  # Tests all 4 mixer types
+        "apriel2_config_with_bias",  # Tests per-layer bias and non-gated MLP
     ])
     def test_model_end_to_end(self, config_name, request):
         """Test instantiation, forward pass, cache correctness, and generation.

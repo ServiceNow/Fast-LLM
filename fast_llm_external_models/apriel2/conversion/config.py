@@ -1,56 +1,59 @@
 """Config composition for Apriel2 architecture transformations.
 
 This module handles STRUCTURAL composition of configs, independent of weight handling.
-The `init` field in surgery specs is preserved as metadata for the plan builder but
-does not affect how configs are composed.
+The `init` field in surgery specs is metadata for plan_surgery(), not for composition.
+
+Algebraic Structure
+===================
+
+The system has a precise algebraic structure with two interacting components:
+
+**Surgery Specs (Monoid)**
+    Partial config dicts form a monoid under deep merge:
+    - Identity: {} (empty dict)
+    - Operation: compose_configs(partial1, partial2) = deep_merge(partial1, partial2)
+    - Associativity: (a ∘ b) ∘ c = a ∘ (b ∘ c)
+
+**Complete Configs (Monoid Action)**
+    Surgery specs ACT on complete configs:
+    - Action: compose_configs(complete, partial) → complete
+    - For additive surgeries: (s · t₁) · t₂ = s · (t₁ ∘ t₂)
+    - For replacement surgeries: action law intentionally fails (last-write-wins)
+
+This separation is fundamental: surgery specs compose declaratively (what fields to
+merge), while the action on configs interprets those fields with inheritance semantics.
 
 Composition Cases
 =================
 
-compose_configs(base, overlay) handles four cases based on completeness:
+compose_configs(base, overlay) dispatches based on completeness:
 
-1. **Complete + Partial** → Apply surgery semantics (inheritance, cross-type derivation)
-2. **Partial + Partial** → Deep merge (monoid operation on surgery specs)
-3. **Partial + Complete** → Overlay wins (complete config replaces partial)
-4. **Complete + Complete** → Deep merge, then strip `init` fields
+1. **Complete + Partial** → Monoid action (inheritance, cross-type derivation)
+2. **Partial + Partial** → Monoid operation (deep merge)
+3. **Partial + Complete** → Overlay wins (complete replaces partial)
+4. **Complete + Complete** → Deep merge, strip `init` fields
 
-A config is "complete" if it has `hidden_size` and `decoder` (i.e., it's a full model
-config, not a surgery spec).
+A config is "complete" if it has `hidden_size` and `decoder`.
 
-Surgery Semantics
-=================
+Inheritance Semantics
+=====================
 
-When applying a surgery spec to a complete config:
+When the monoid action applies a surgery to a complete config:
 
-**Inheritance**
-    Unspecified parameters inherit from the source config. New blocks inherit
-    from the "default" block (first block in pattern, or the single fixed block).
-
-**Cross-Type Derivation**
-    When changing mixer types, geometric parameters are derived where possible:
-    - attention → sliding_window: preserve heads, head_groups, head_size
-    - attention → gdn: heads → value_heads, head_groups → key_heads
-    - attention → mamba: derive d_inner, d_xb, dt_rank from hidden_size
-    - attention → kda: preserve heads, head_size → head_dim
-
-**Stochastic Mixer Composition**
-    Two semantics based on whether surgery declares `type: stochastic`:
-    - Replacement: surgery declares type → only surgery's sub-mixers included
-    - Additive: surgery omits type → source sub-mixers preserved, surgery adds/modifies
-
-    This distinction means the monoid action law holds for additive surgeries but
-    intentionally fails for replacement surgeries (they have "last-write-wins" semantics).
+- Unspecified fields inherit from source
+- New blocks inherit from the "default" block
+- Cross-type derivation maps geometry (attention.heads → gdn.value_heads, etc.)
+- Stochastic mixers: additive (no type decl) preserves source, replacement replaces
 
 The `init` Field
 ================
 
-The `init` field is metadata for the plan builder, NOT for config composition:
-- `init: transfer` → plan builder creates weight transfer mappings
-- `init: random` → plan builder creates random initialization
+The `init` field is metadata for plan_surgery(), NOT for config composition:
+- `init: transfer` → plan uses weight transfer/conversion
+- `init: random` → plan uses random initialization
 
-After surgery is applied to produce a complete config, ALL `init` fields are stripped.
-This ensures configs are purely structural and plan creation is Markovian (depends only
-on current config + surgery, not on history).
+After composition produces a complete config, ALL `init` fields are stripped.
+This ensures configs are purely structural and plan creation is Markovian.
 """
 
 from __future__ import annotations
@@ -65,14 +68,49 @@ def is_complete(config: dict) -> bool:
 
 
 def compose_configs(base: dict, overlay: dict | None) -> dict:
-    """Compose two configs.
+    """Compose two configs using monoid or monoid action semantics.
+
+    This function implements two algebraic operations depending on argument types:
+
+    1. **Monoid Action** (complete + partial): Apply surgery to a complete config.
+       Unspecified fields inherit from base; `init` fields are stripped from result.
+
+    2. **Monoid Operation** (partial + partial): Merge two surgery specs.
+       Deep merge with overlay winning on conflicts; `init` fields preserved.
 
     Args:
-        base: Base config (complete or partial surgery spec).
-        overlay: Overlay config (complete or partial surgery spec).
+        base: Base config (complete) or surgery spec (partial).
+        overlay: Surgery spec to apply (partial) or config to merge.
 
     Returns:
-        Composed config.
+        - If base is complete: Complete config with surgery applied, `init` stripped.
+        - If both partial: Merged surgery spec with `init` preserved.
+
+    Algebraic Properties:
+        Surgery specs form a monoid: (a ∘ b) ∘ c = a ∘ (b ∘ c), identity = {}
+
+        For additive surgeries, the action law holds:
+            compose(compose(s, t1), t2) == compose(s, compose(t1, t2))
+
+        For replacement surgeries (declaring type:), action law intentionally fails.
+
+    Example:
+        # Apply surgery to complete config (monoid action)
+        source = {"hidden_size": 256, "decoder": {...}}  # complete
+        surgery = {"decoder": {"block": {"mixer": {"type": "mamba"}}}}  # partial
+
+        target = compose_configs(source, surgery)
+        # target is complete with inherited fields, init stripped
+
+        # Merge two surgery specs (monoid operation)
+        s1 = {"decoder": {"block": {"mixer": {"mixers": {"a": {...}}}}}}
+        s2 = {"decoder": {"block": {"mixer": {"mixers": {"b": {...}}}}}}
+
+        merged = compose_configs(s1, s2)
+        # merged has both mixers a and b, init preserved
+
+        # Use composed config with plan_surgery
+        plan = plan_surgery(source, target)
     """
     if not overlay:
         return copy.deepcopy(base)
@@ -134,20 +172,24 @@ def _strip_keys(config: Any, keys_to_strip: set[str]) -> None:
 
 
 def apply_surgery(source_config: dict, surgery_config: dict | None) -> dict:
-    """Apply surgery specification to a complete source config.
+    """Apply surgery spec to complete config (the monoid action).
 
-    This handles:
-    - Top-level scalar overrides
-    - Decoder composition (fixed vs pattern)
-    - Stochastic mixer sub-mixer inheritance
-    - Cross-type derivation (attention → gdn, attention → mamba)
+    This is the internal implementation of the monoid action: surgery specs
+    acting on complete configs. Called by compose_configs when base is complete
+    and overlay is partial.
+
+    Implements inheritance semantics:
+    - Unspecified fields inherit from source
+    - Cross-type derivation maps geometry (attention → gdn, etc.)
+    - Stochastic sub-mixers inherit from source's main mixer
+    - All `init` fields stripped from result
 
     Args:
-        source_config: Complete Apriel2 config.
-        surgery_config: Partial surgery specification.
+        source_config: Complete Apriel2 config (the state being acted on).
+        surgery_config: Partial surgery spec (the monoid element acting).
 
     Returns:
-        Complete Apriel2 config with surgery applied.
+        Complete config with surgery applied, `init` fields stripped.
     """
     if not surgery_config:
         return copy.deepcopy(source_config)
@@ -392,6 +434,12 @@ def _compose_single_mixer(source: dict, surgery: dict, hidden_size: int) -> dict
                     result[key] = surgery[key]
                 elif key in source:
                     result[key] = source[key]
+            # Copy per-layer bias settings (query_layer, key_layer, value_layer, dense_layer)
+            for key in ["query_layer", "key_layer", "value_layer", "dense_layer", "add_linear_biases"]:
+                if key in surgery:
+                    result[key] = surgery[key]
+                elif key in source:
+                    result[key] = copy.deepcopy(source[key])
             # Preserve init
             if "init" in surgery:
                 result["init"] = surgery["init"]

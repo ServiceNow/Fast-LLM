@@ -24,8 +24,8 @@ from transformers.utils.import_utils import (
     is_torch_flex_attn_available,
 )
 
-from fast_llm_external_models.apriel2.cache import Apriel2Cache
-from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config, Apriel2TextConfig
+from .cache import Apriel2Cache
+from .configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 
 # GDN implementation - matches Fast-LLM's gdn.py exactly
 try:
@@ -395,14 +395,30 @@ class Apriel2Attention(nn.Module):
         # cross_document_attention: if False, use cu_seqlens to isolate sequences (e.g., images)
         self.cross_document_attention = mixer_config.get("cross_document_attention", True)
 
-        # Whether to add biases to linear projections
-        add_bias = mixer_config.get("add_linear_biases", False)
+        # Bias configuration mirroring Fast-LLM's structure:
+        # - add_linear_biases: bool (default for all projections)
+        # - query_layer: {"bias": {"enabled": bool}} (per-layer override)
+        # - key_layer: {"bias": {"enabled": bool}}
+        # - value_layer: {"bias": {"enabled": bool}}
+        # - dense_layer: {"bias": {"enabled": bool}}
+        default_bias = mixer_config.get("add_linear_biases", False)
 
-        # Projections (Fast-LLM weight names: q_proj, k_proj, v_proj, o_proj)
-        self.q_proj = nn.Linear(d_model, self.num_heads * self.head_dim, bias=add_bias)
-        self.k_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=add_bias)
-        self.v_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=add_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, d_model, bias=add_bias)
+        def get_layer_bias(layer_name: str) -> bool:
+            layer_cfg = mixer_config.get(layer_name, {})
+            bias_cfg = layer_cfg.get("bias", {})
+            enabled = bias_cfg.get("enabled")
+            return default_bias if enabled is None else enabled
+
+        q_bias = get_layer_bias("query_layer")
+        k_bias = get_layer_bias("key_layer")
+        v_bias = get_layer_bias("value_layer")
+        o_bias = get_layer_bias("dense_layer")
+
+        # Projections
+        self.q_proj = nn.Linear(d_model, self.num_heads * self.head_dim, bias=q_bias)
+        self.k_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=k_bias)
+        self.v_proj = nn.Linear(d_model, self.num_key_value_heads * self.head_dim, bias=v_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, d_model, bias=o_bias)
 
     @classmethod
     def setup(
@@ -1828,16 +1844,36 @@ class Apriel2Block(nn.Module):
         self.post_attention_layernorm = self._create_norm(norm_config, hidden_size, rms_norm_eps)
 
     def _create_mlp(self, mlp_config: dict, hidden_size: int):
-        """Create MLP based on config."""
+        """Create MLP based on config.
+
+        Supports per-layer bias configuration mirroring Fast-LLM:
+        - add_linear_biases: default bias setting for all layers
+        - layer_1.bias.enabled: override for up_proj/gate_proj
+        - layer_2.bias.enabled: override for down_proj
+        """
         mlp_type = mlp_config.get("type", "mlp")
 
         if mlp_type == "mlp":
             intermediate_size = mlp_config["intermediate_size"]
             activation = mlp_config.get("activation", "silu")
-            gated = mlp_config["gated"]
-            bias = mlp_config.get("add_linear_biases", False)
+            gated = mlp_config.get("gated", False)
+
+            # Per-layer bias configuration (mirrors Fast-LLM structure)
+            default_bias = mlp_config.get("add_linear_biases", False)
+
+            def get_layer_bias(layer_name: str) -> bool:
+                layer_cfg = mlp_config.get(layer_name, {})
+                bias_cfg = layer_cfg.get("bias", {})
+                enabled = bias_cfg.get("enabled")
+                return default_bias if enabled is None else enabled
+
+            layer_1_bias = get_layer_bias("layer_1")
+            layer_2_bias = get_layer_bias("layer_2")
 
             if gated:
+                # MistralMLP uses gate_proj, up_proj, down_proj (all bias controlled together)
+                # For now, we use the default bias setting for gated MLPs
+                # TODO: Add per-layer bias support to gated MLP
                 mlp_cfg = SimpleNamespace(
                     hidden_size=hidden_size,
                     intermediate_size=intermediate_size,
@@ -1845,7 +1881,13 @@ class Apriel2Block(nn.Module):
                 )
                 return MistralMLP(mlp_cfg)
             else:
-                return SimpleMLP(hidden_size, intermediate_size, activation, bias)
+                return SimpleMLP(
+                    hidden_size,
+                    intermediate_size,
+                    activation,
+                    layer_1_bias=layer_1_bias,
+                    layer_2_bias=layer_2_bias,
+                )
         else:
             raise ValueError(f"Unknown MLP type: {mlp_type}")
 
@@ -2179,6 +2221,8 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
 class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
     """Apriel2 model with a language modeling head (text-only)."""
 
+    _tied_weights_keys = ["lm_head.weight"]
+
     def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
         self.model = Apriel2TextModel(config)
@@ -2186,6 +2230,7 @@ class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
+        # post_init() calls init_weights() which calls tie_weights() if config.tie_word_embeddings
         self.post_init()
 
     def get_input_embeddings(self):
@@ -2583,14 +2628,26 @@ class Apriel2VisionEncoder(nn.Module):
 
 
 class SimpleMLP(nn.Module):
-    """Non-gated MLP: up_proj -> activation -> down_proj."""
+    """Non-gated MLP: up_proj -> activation -> down_proj.
 
-    def __init__(self, hidden_size: int, intermediate_size: int, activation: str = "silu", bias: bool = False):
+    Supports per-layer bias configuration mirroring Fast-LLM:
+    - layer_1_bias: bias for up_proj (layer_1 in Fast-LLM naming)
+    - layer_2_bias: bias for down_proj (layer_2 in Fast-LLM naming)
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        activation: str = "silu",
+        layer_1_bias: bool = False,
+        layer_2_bias: bool = False,
+    ):
         super().__init__()
         from transformers.activations import ACT2FN
 
-        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=bias)
-        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=bias)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=layer_1_bias)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=layer_2_bias)
         self.act_fn = ACT2FN[activation]
 
     def forward(self, x):
