@@ -1,5 +1,6 @@
 import enum
 import typing
+import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
@@ -100,11 +101,15 @@ class MixerConfig(BlockWithBiasConfig):
 
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
-        if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
+        if (type := default.get("type")) == "mamba_2":
+            warnings.warn("Mixer name `mamba_2` is deprecated. Please use `mamba` instead.", DeprecationWarning)
+            default["type"] = "mamba"
+        if cls is MixerConfig and cls.get_subclass(type) is None:
             from fast_llm.layers.attention.config import AttentionConfig
 
             # Default subclass.
             return AttentionConfig._from_dict(default, strict)
+
         return super()._from_dict(default, strict=strict)
 
 

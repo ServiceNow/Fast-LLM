@@ -9,15 +9,15 @@ from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
-from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, Mamba2Config
+from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
+    KeyValueWeightConverter,
     LlamaEmbeddingsConverter,
     LlamaNormalizationConverter,
     MLPLayer2Converter,
     QueryWeightConverter,
-    KeyValueWeightConverter,
     SplitWeightConverter,
     get_parameter_converter,
     get_weight_and_bias_converters,
@@ -149,7 +149,7 @@ class Apriel2MambaConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         result = {
-            "type": "mamba_2",
+            "type": "mamba",
             "state_size": config["state_size"],
             "d_inner": config["d_inner"],
             "add_linear_biases": config["add_linear_biases"],
@@ -161,7 +161,7 @@ class Apriel2MambaConverter:
         return result
 
     @classmethod
-    def export_config(cls, config: Mamba2Config) -> dict:
+    def export_config(cls, config: MambaConfig) -> dict:
         exported = {
             "type": "mamba",
             "state_size": config.state_size,
@@ -183,7 +183,7 @@ class Apriel2MambaConverter:
     @classmethod
     def get_converters(
         cls,
-        config: Mamba2Config,
+        config: MambaConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
@@ -482,7 +482,7 @@ class Apriel2StochasticMixerConverter:
             mixer_type = type(sub_mixer)
             if mixer_type is AttentionConfig:
                 mixers[name] = Apriel2AttentionConverter.export_config(sub_mixer)
-            elif mixer_type is Mamba2Config:
+            elif mixer_type is MambaConfig:
                 mixers[name] = Apriel2MambaConverter.export_config(sub_mixer)
             elif mixer_type is GatedDeltaNetConfig:
                 mixers[name] = Apriel2GatedDeltaNetConverter.export_config(sub_mixer)
@@ -512,7 +512,7 @@ class Apriel2StochasticMixerConverter:
             if mixer_type is AttentionConfig:
                 converter_class = Apriel2AttentionConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
-            elif mixer_type is Mamba2Config:
+            elif mixer_type is MambaConfig:
                 converter_class = Apriel2MambaConverter
                 hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
             elif mixer_type is GatedDeltaNetConfig:
@@ -582,16 +582,16 @@ class Apriel2BlockConverter:
     @classmethod
     def export_config(cls, config: DecoderBlockConfig) -> dict:
         from fast_llm.layers.common.normalization.config import (
-            RMSNormalizationConfig,
             LayerNormalizationConfig,
             NoNormalizationConfig,
+            RMSNormalizationConfig,
         )
 
         mixer_type = type(config.mixer)
 
         if mixer_type is AttentionConfig:
             mixer = Apriel2AttentionConverter.export_config(config.mixer)
-        elif mixer_type is Mamba2Config:
+        elif mixer_type is MambaConfig:
             mixer = Apriel2MambaConverter.export_config(config.mixer)
         elif mixer_type is StochasticMixerConfig:
             mixer = Apriel2StochasticMixerConverter.export_config(config.mixer)
@@ -651,7 +651,7 @@ class Apriel2BlockConverter:
         if mixer_type is AttentionConfig:
             converter_class = Apriel2AttentionConverter
             hf_mixer_prefix = f"{hf_prefix}.mixer"
-        elif mixer_type is Mamba2Config:
+        elif mixer_type is MambaConfig:
             converter_class = Apriel2MambaConverter
             hf_mixer_prefix = f"{hf_prefix}.mixer"
         elif mixer_type is StochasticMixerConfig:
@@ -722,20 +722,22 @@ class Apriel2BlockConverter:
                 ),
             ])
 
-        converters.extend([
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.input_layernorm",
-                drop_on_export=drop_on_export,
-            ),
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.post_attention_layernorm",
-                drop_on_export=drop_on_export,
-            ),
-        ])
+        converters.extend(
+            [
+                *LlamaNormalizationConverter.get_converters(
+                    config.normalization,
+                    f"{fast_llm_prefix}.norm_1",
+                    f"{hf_prefix}.input_layernorm",
+                    drop_on_export=drop_on_export,
+                ),
+                *LlamaNormalizationConverter.get_converters(
+                    config.normalization,
+                    f"{fast_llm_prefix}.norm_2",
+                    f"{hf_prefix}.post_attention_layernorm",
+                    drop_on_export=drop_on_export,
+                ),
+            ]
+        )
 
         return converters
 
@@ -937,10 +939,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
     @classmethod
     def get_model_files(cls) -> tuple[str, str, str | None]:
-        from fast_llm_external_models.apriel2 import (
-            configuration_apriel2,
-            modeling_apriel2,
-        )
+        from fast_llm_external_models.apriel2 import configuration_apriel2, modeling_apriel2
 
         return configuration_apriel2.__file__, modeling_apriel2.__file__, None
 

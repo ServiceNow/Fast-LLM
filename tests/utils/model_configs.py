@@ -654,50 +654,9 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests hybrid Mamba, llamba converter.
-    "llama",
-    "hybrid_mamba",
-    updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "mamba",
-                        "d_inner": 512,
-                        "state_size": 16,
-                        "dt_rank": 16,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m"],
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
-    },
-    compare_factor=2.0,
-    # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
-)
-
-_update_and_add_testing_config(
     # Tests hybrid Mamba 2.
     "llama",
-    "hybrid_mamba_2",
+    "hybrid_mamba",
     updates={
         ("model", "base_model", "decoder"): {
             "type": "pattern",
@@ -706,7 +665,7 @@ _update_and_add_testing_config(
                 "m2": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "mamba_2",
+                        "type": "mamba",
                         "dt_layer": {"bias": {"enabled": True}},
                         "d_inner": 512,
                         "state_size": 8,
@@ -734,49 +693,6 @@ _update_and_add_testing_config(
     # Micro-sequence split not supported.
     skip_tests=("sdp", "ms"),
 )
-
-
-_update_and_add_testing_config(
-    # Tests hybrid discrete Mamba 2.
-    "llama",
-    "hybrid_discrete_mamba_2",
-    updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m2d": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "discrete_mamba_2",
-                        "d_inner": 512,
-                        "state_size": 8,
-                        "n_qk_heads": 8,
-                        "n_v_heads": 16,
-                        "chunk_size": 32,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m2d"],
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
-    compare_factor=2.0,
-    # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sdp", "ms"),
-)
-
 
 _update_and_add_testing_config(
     # Tests vision multimodal.
@@ -896,7 +812,7 @@ _update_and_add_testing_config(
                 "mamba": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "mamba_2",
+                        "type": "mamba",
                         "d_inner": 512,
                         "state_size": 16,
                         "dt_rank": 16,
@@ -925,7 +841,7 @@ _update_and_add_testing_config(
                                 "value_head_dim": 16,
                             },
                             "mamba": {
-                                "type": "mamba_2",
+                                "type": "mamba",
                                 "d_inner": 512,
                                 "state_size": 16,
                                 "dt_rank": 16,
