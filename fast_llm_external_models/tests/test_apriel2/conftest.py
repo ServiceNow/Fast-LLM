@@ -7,6 +7,8 @@ import pytest
 import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
 
+from fast_llm_external_models.apriel2.cache import _AttentionCache, _SSMCache
+
 
 # Skip marker for tests that require CUDA for Mamba forward pass
 requires_cuda = pytest.mark.skipif(
@@ -1532,3 +1534,188 @@ def torture_surgery_chain():
             },
         },
     ]
+
+
+# =============================================================================
+# Cache Test Fixtures - Tensor Dimensions
+# =============================================================================
+
+
+@pytest.fixture
+def batch_size():
+    """Default batch size for cache tests."""
+    return 2
+
+
+@pytest.fixture
+def num_heads():
+    """Default number of attention heads for cache tests."""
+    return 4
+
+
+@pytest.fixture
+def head_dim():
+    """Default head dimension for cache tests."""
+    return 16
+
+
+@pytest.fixture
+def make_kv(batch_size, num_heads, head_dim):
+    """Factory fixture for creating KV tensors."""
+
+    def _make_kv(seq_len):
+        return (
+            torch.randn(batch_size, num_heads, seq_len, head_dim),
+            torch.randn(batch_size, num_heads, seq_len, head_dim),
+        )
+
+    return _make_kv
+
+
+# =============================================================================
+# Cache Test Fixtures - HuggingFace Cache Layers
+# =============================================================================
+
+
+@pytest.fixture
+def hf_dynamic_layer():
+    """HuggingFace DynamicLayer for full attention contract testing."""
+    from transformers.cache_utils import DynamicLayer
+
+    return DynamicLayer()
+
+
+@pytest.fixture
+def hf_sliding_layer(window_size):
+    """HuggingFace DynamicSlidingWindowLayer for sliding window contract testing."""
+    from transformers.cache_utils import DynamicSlidingWindowLayer
+
+    return DynamicSlidingWindowLayer(sliding_window=window_size)
+
+
+# =============================================================================
+# Cache Test Fixtures - Apriel2 Low-level Caches
+# =============================================================================
+
+
+@pytest.fixture
+def apriel_attention_cache():
+    """Apriel2 attention cache without window (full attention)."""
+    return _AttentionCache(window=None)
+
+
+@pytest.fixture
+def apriel_sliding_cache(window_size):
+    """Apriel2 attention cache with sliding window."""
+    return _AttentionCache(window=window_size)
+
+
+@pytest.fixture
+def ssm_cache():
+    """Apriel2 SSM cache for Mamba/GDN/KDA layers."""
+    return _SSMCache()
+
+
+# =============================================================================
+# Cache Test Fixtures - Apriel2 Configs (Simple Versions)
+# =============================================================================
+
+
+@pytest.fixture
+def attention_config():
+    """Pure attention config (2 layers, no sliding window)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {"type": "attention", "heads": 4, "head_groups": 2, "head_size": 16},
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def swa_config():
+    """Sliding window attention config (2 layers, window=8)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 4,
+                    "head_groups": 2,
+                    "head_size": 16,
+                    "window_size": 8,
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def ssm_config():
+    """Pure SSM config (2 layers)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {"type": "mamba", "state_size": 16},
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def stochastic_config():
+    """Stochastic mixer config with attention and mamba (2 layers)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "stochastic",
+                    "main_mixer_name": "attention",
+                    "mixers": {
+                        "attention": {"type": "attention", "heads": 4, "head_groups": 2, "head_size": 16},
+                        "mamba": {"type": "mamba", "state_size": 16},
+                    },
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+# Parameterized window size fixture (used by hf_sliding_layer and apriel_sliding_cache)
+@pytest.fixture(params=[4, 8, 16, 32])
+def window_size(request):
+    """Parameterized window sizes for sliding window tests."""
+    return request.param

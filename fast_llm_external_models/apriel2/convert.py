@@ -15,6 +15,7 @@ This produces: Source -> Apriel2 -> surgery1 -> surgery2 -> surgery3
 
 Supported source formats:
 - llava: Llava/Pixtral models
+- qwen2: Qwen2/Qwen2.5 models
 - apriel2: Apriel2 models (surgery-only mode - no conversion, just apply surgeries)
 """
 
@@ -46,6 +47,7 @@ from fast_llm_external_models.apriel2.conversion import (
 
 # Import source-specific converters
 from fast_llm_external_models.apriel2.conversion import llava as llava_converter
+from fast_llm_external_models.apriel2.conversion import qwen2 as qwen2_converter
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,7 @@ def _identity_plan(config: dict) -> ExprPlan:
 # Each entry maps format name to (config_converter, plan_builder)
 SOURCE_FORMATS: dict[str, tuple[Callable[[dict], dict], Callable[[dict], ExprPlan]]] = {
     "llava": (llava_converter.convert_config, llava_converter.plan_llava_to_apriel2),
+    "qwen2": (qwen2_converter.convert_config, qwen2_converter.plan_qwen2_to_apriel2),
     "apriel2": (_identity_config, _identity_plan),
 }
 
@@ -88,8 +91,12 @@ def detect_source_format(config: dict) -> str | None:
     if model_type in ("llava", "pixtral") or "text_config" in config:
         return "llava"
 
+    # Qwen2/Qwen2.5 detection
+    if model_type == "qwen2":
+        return "qwen2"
+
     # Apriel2 detection - check for Apriel2-specific structure
-    if model_type == "apriel2" or "decoder" in config:
+    if model_type in ("apriel2", "apriel2_text") or "decoder" in config:
         return "apriel2"
 
     return None

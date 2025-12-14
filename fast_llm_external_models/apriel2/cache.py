@@ -4,14 +4,18 @@ from transformers.cache_utils import Cache
 
 
 class _AttentionCache:
-    __slots__ = ["key", "value", "window"]
+    __slots__ = ["key", "value", "window", "cumulative_length"]
 
     def __init__(self, window=None):
         self.key = None
         self.value = None
         self.window = window
+        self.cumulative_length = 0
 
     def update(self, key, value):
+        new_tokens = key.shape[-2]
+        self.cumulative_length += new_tokens
+
         if self.key is None:
             if self.window and key.shape[-2] > self.window:
                 self.key = key[..., -self.window :, :].contiguous()
@@ -35,6 +39,40 @@ class _AttentionCache:
             return cache
         return torch.cat([cache, new], -2)[..., -self.window :, :].contiguous()
 
+    def reset(self):
+        self.key = None
+        self.value = None
+        self.cumulative_length = 0
+
+    def reorder(self, beam_idx):
+        if self.key is not None:
+            self.key = self.key.index_select(0, beam_idx.to(self.key.device))
+            self.value = self.value.index_select(0, beam_idx.to(self.value.device))
+
+    def crop(self, max_length):
+        if self.key is not None:
+            self.key = self.key[..., :max_length, :]
+            self.value = self.value[..., :max_length, :]
+            self.cumulative_length = self.key.shape[-2]
+
+    def batch_repeat(self, repeats):
+        if self.key is not None:
+            self.key = self.key.repeat_interleave(repeats, dim=0)
+            self.value = self.value.repeat_interleave(repeats, dim=0)
+
+    def batch_select(self, indices):
+        if self.key is not None:
+            self.key = self.key.index_select(0, indices.to(self.key.device))
+            self.value = self.value.index_select(0, indices.to(self.value.device))
+
+    @property
+    def is_initialized(self):
+        return self.key is not None
+
+    @property
+    def batch_size(self):
+        return self.key.shape[0] if self.key is not None else None
+
 
 class _SSMCache:
     __slots__ = ["conv", "recurrent"]
@@ -42,6 +80,52 @@ class _SSMCache:
     def __init__(self):
         self.conv = None
         self.recurrent = None
+
+    def reset(self):
+        self.conv = None
+        self.recurrent = None
+
+    def reorder(self, beam_idx):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.index_select(0, beam_idx.to(c.device)) for c in self.conv)
+            else:
+                self.conv = self.conv.index_select(0, beam_idx.to(self.conv.device))
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.index_select(0, beam_idx.to(self.recurrent.device))
+
+    def crop(self, max_length):
+        pass  # SSM caches don't have sequence dimension to crop
+
+    def batch_repeat(self, repeats):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.repeat_interleave(repeats, dim=0) for c in self.conv)
+            else:
+                self.conv = self.conv.repeat_interleave(repeats, dim=0)
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.repeat_interleave(repeats, dim=0)
+
+    def batch_select(self, indices):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.index_select(0, indices.to(c.device)) for c in self.conv)
+            else:
+                self.conv = self.conv.index_select(0, indices.to(self.conv.device))
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.index_select(0, indices.to(self.recurrent.device))
+
+    @property
+    def is_initialized(self):
+        return self.conv is not None
+
+    @property
+    def batch_size(self):
+        if self.conv is None:
+            return None
+        if isinstance(self.conv, tuple):
+            return self.conv[0].shape[0]
+        return self.conv.shape[0]
 
 
 class _DummyCacheLayer:
@@ -93,14 +177,19 @@ class Apriel2Cache(Cache):
         self.active_mixers[layer_idx] = mixer_name
 
     def get_seq_length(self, layer_idx=0):
+        """Returns the cumulative sequence length of tokens seen by the cache.
+
+        For sliding window caches, this returns the total tokens seen (not just cached).
+        This matches HuggingFace's DynamicSlidingWindowLayer behavior.
+        """
         layer = self.layers[layer_idx]
         if isinstance(layer, dict):
             mixer = self.active_mixers[layer_idx]
             if mixer and isinstance(layer[mixer], _AttentionCache):
-                return layer[mixer].key.shape[-2] if layer[mixer].key is not None else 0
+                return layer[mixer].cumulative_length
             return 0
         if isinstance(layer, _AttentionCache):
-            return layer.key.shape[-2] if layer.key is not None else 0
+            return layer.cumulative_length
         return 0
 
     def get_max_cache_shape(self, layer_idx=0):
@@ -114,22 +203,61 @@ class Apriel2Cache(Cache):
         return None
 
     def get_mask_sizes(self, cache_position, layer_idx):
+        """Return the length and offset of the cache, used to generate the attention mask.
+
+        For standard (non-sliding) attention:
+            kv_offset = 0 (KV[0] corresponds to sequence position 0)
+            kv_length = cumulative_length + query_length
+
+        For sliding window attention:
+            kv_offset = max(cumulative_length - window + 1, 0)
+            kv_length = min(cumulative_length, window - 1) + query_length
+
+        For SSM/linear layers:
+            kv_offset = 0, kv_length = query_length (no KV cache to attend to)
+        """
         query_length = cache_position.shape[0]
-        past_seen_tokens = self.get_seq_length(layer_idx)
-        kv_length = query_length + past_seen_tokens
-        kv_offset = past_seen_tokens
-        return kv_length, kv_offset
+        layer = self.layers[layer_idx]
+
+        # Handle stochastic layers by getting the active mixer's cache
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[layer_idx]
+            if mixer is None:
+                # No active mixer set, return defaults
+                return query_length, 0
+            cache = layer[mixer]
+        else:
+            cache = layer
+
+        # SSM layers don't have KV cache for attention mask purposes
+        if isinstance(cache, _SSMCache):
+            return query_length, 0
+
+        # Attention cache - check if sliding window
+        if isinstance(cache, _AttentionCache):
+            cumulative = cache.cumulative_length
+            window = cache.window
+
+            if window is not None:
+                # Sliding window attention
+                kv_offset = max(cumulative - window + 1, 0)
+                if cumulative >= window:
+                    kv_length = window - 1 + query_length
+                else:
+                    kv_length = cumulative + query_length
+            else:
+                # Full attention
+                kv_offset = 0
+                kv_length = cumulative + query_length
+
+            return kv_length, kv_offset
+
+        # Fallback
+        return query_length, 0
 
     @property
     def has_previous_state(self):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    if isinstance(cache, _SSMCache) and cache.conv is not None:
-                        return True
-            elif isinstance(layer, _SSMCache) and layer.conv is not None:
-                return True
-        return False
+        return any(isinstance(cache, _SSMCache) and cache.conv is not None for cache in self._iter_caches())
 
     @property
     def key_cache(self):
@@ -147,101 +275,33 @@ class Apriel2Cache(Cache):
     def recurrent_states(self):
         return _LayerListAccessor(self, "recurrent")
 
-    def reorder_cache(self, beam_idx):
-        for i, layer in enumerate(self.layers):
+    def _iter_caches(self):
+        """Iterate over all leaf cache objects (flattening stochastic layer dicts)."""
+        for layer in self.layers:
             if isinstance(layer, dict):
-                for cache in layer.values():
-                    self._reorder_cache_obj(cache, beam_idx)
+                yield from layer.values()
             else:
-                self._reorder_cache_obj(layer, beam_idx)
+                yield layer
 
-    def _reorder_cache_obj(self, cache, beam_idx):
-        if isinstance(cache, _AttentionCache):
-            if cache.key is not None:
-                cache.key = cache.key.index_select(0, beam_idx.to(cache.key.device))
-                cache.value = cache.value.index_select(0, beam_idx.to(cache.value.device))
-        elif isinstance(cache, _SSMCache):
-            if cache.conv is not None:
-                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
-                if isinstance(cache.conv, tuple):
-                    cache.conv = tuple(c.index_select(0, beam_idx.to(c.device)) for c in cache.conv)
-                else:
-                    cache.conv = cache.conv.index_select(0, beam_idx.to(cache.conv.device))
-            if cache.recurrent is not None:
-                cache.recurrent = cache.recurrent.index_select(0, beam_idx.to(cache.recurrent.device))
+    def reorder_cache(self, beam_idx):
+        for cache in self._iter_caches():
+            cache.reorder(beam_idx)
 
     def reset(self):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    self._reset_cache_obj(cache)
-            else:
-                self._reset_cache_obj(layer)
-
-    def _reset_cache_obj(self, cache):
-        if isinstance(cache, _AttentionCache):
-            cache.key = None
-            cache.value = None
-        elif isinstance(cache, _SSMCache):
-            cache.conv = None
-            cache.recurrent = None
+        for cache in self._iter_caches():
+            cache.reset()
 
     def crop(self, max_length):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    if isinstance(cache, _AttentionCache) and cache.key is not None:
-                        cache.key = cache.key[..., :max_length, :]
-                        cache.value = cache.value[..., :max_length, :]
-            elif isinstance(layer, _AttentionCache) and layer.key is not None:
-                layer.key = layer.key[..., :max_length, :]
-                layer.value = layer.value[..., :max_length, :]
+        for cache in self._iter_caches():
+            cache.crop(max_length)
 
     def batch_repeat_interleave(self, repeats):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    self._batch_repeat_cache_obj(cache, repeats)
-            else:
-                self._batch_repeat_cache_obj(layer, repeats)
-
-    def _batch_repeat_cache_obj(self, cache, repeats):
-        if isinstance(cache, _AttentionCache):
-            if cache.key is not None:
-                cache.key = cache.key.repeat_interleave(repeats, dim=0)
-                cache.value = cache.value.repeat_interleave(repeats, dim=0)
-        elif isinstance(cache, _SSMCache):
-            if cache.conv is not None:
-                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
-                if isinstance(cache.conv, tuple):
-                    cache.conv = tuple(c.repeat_interleave(repeats, dim=0) for c in cache.conv)
-                else:
-                    cache.conv = cache.conv.repeat_interleave(repeats, dim=0)
-            if cache.recurrent is not None:
-                cache.recurrent = cache.recurrent.repeat_interleave(repeats, dim=0)
+        for cache in self._iter_caches():
+            cache.batch_repeat(repeats)
 
     def batch_select_indices(self, indices):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    self._batch_select_cache_obj(cache, indices)
-            else:
-                self._batch_select_cache_obj(layer, indices)
-
-    def _batch_select_cache_obj(self, cache, indices):
-        if isinstance(cache, _AttentionCache):
-            if cache.key is not None:
-                cache.key = cache.key.index_select(0, indices.to(cache.key.device))
-                cache.value = cache.value.index_select(0, indices.to(cache.value.device))
-        elif isinstance(cache, _SSMCache):
-            if cache.conv is not None:
-                # Handle both single tensor (GDN/Mamba) and tuple (KDA) conv states
-                if isinstance(cache.conv, tuple):
-                    cache.conv = tuple(c.index_select(0, indices.to(c.device)) for c in cache.conv)
-                else:
-                    cache.conv = cache.conv.index_select(0, indices.to(cache.conv.device))
-            if cache.recurrent is not None:
-                cache.recurrent = cache.recurrent.index_select(0, indices.to(cache.recurrent.device))
+        for cache in self._iter_caches():
+            cache.batch_select(indices)
 
     @property
     def is_compileable(self):
@@ -249,19 +309,7 @@ class Apriel2Cache(Cache):
 
     @property
     def is_initialized(self):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    if isinstance(cache, _AttentionCache) and cache.key is not None:
-                        return True
-                    if isinstance(cache, _SSMCache) and cache.conv is not None:
-                        return True
-            else:
-                if isinstance(layer, _AttentionCache) and layer.key is not None:
-                    return True
-                if isinstance(layer, _SSMCache) and layer.conv is not None:
-                    return True
-        return False
+        return any(cache.is_initialized for cache in self._iter_caches())
 
     @property
     def is_sliding(self):
@@ -280,39 +328,20 @@ class Apriel2Cache(Cache):
 
     @property
     def max_batch_size(self):
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    if isinstance(cache, _AttentionCache) and cache.key is not None:
-                        return cache.key.shape[0]
-                    if isinstance(cache, _SSMCache) and cache.conv is not None:
-                        # Handle both single tensor and tuple conv states
-                        if isinstance(cache.conv, tuple):
-                            return cache.conv[0].shape[0]
-                        return cache.conv.shape[0]
-            else:
-                if isinstance(layer, _AttentionCache) and layer.key is not None:
-                    return layer.key.shape[0]
-                if isinstance(layer, _SSMCache) and layer.conv is not None:
-                    # Handle both single tensor and tuple conv states
-                    if isinstance(layer.conv, tuple):
-                        return layer.conv[0].shape[0]
-                    return layer.conv.shape[0]
+        for cache in self._iter_caches():
+            bs = cache.batch_size
+            if bs is not None:
+                return bs
         return None
 
     @property
     def max_cache_len(self):
-        max_len = None
-        for layer in self.layers:
-            if isinstance(layer, dict):
-                for cache in layer.values():
-                    if isinstance(cache, _AttentionCache):
-                        if cache.window is not None:
-                            max_len = cache.window if max_len is None else min(max_len, cache.window)
-            elif isinstance(layer, _AttentionCache):
-                if layer.window is not None:
-                    max_len = layer.window if max_len is None else min(max_len, layer.window)
-        return max_len
+        windows = [
+            cache.window
+            for cache in self._iter_caches()
+            if isinstance(cache, _AttentionCache) and cache.window is not None
+        ]
+        return min(windows) if windows else None
 
     def __len__(self):
         return len(self.layers)
