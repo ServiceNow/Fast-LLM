@@ -276,7 +276,7 @@ def _reverse_kl_forward_backward(
             # loss mask is the same on all ranks for TP over vocab.
             valid = loss_mask.to(loss_terms.dtype)
             loss_terms = loss_terms * valid
-            valid_tokens = torch.tensor(valid.sum(), device=loss_terms.device, dtype=loss_terms.dtype)
+            valid_tokens = valid.sum()
         else:
             valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
         loss = loss_terms.sum()  # sums over batch and seq. len.
