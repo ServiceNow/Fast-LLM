@@ -267,15 +267,6 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         """
         if not messages:
             return "", []
-
-        return self._apply_chat_template(messages, add_generation_prompt)
-
-    def _apply_chat_template(
-        self,
-        messages: list[dict[str, str]],
-        add_generation_prompt: bool,
-    ) -> tuple[str, list[tuple[int, int]]]:
-        """Use HF's return_assistant_tokens_mask for precise token-level masking."""
         # Get tokens and assistant mask
         result = self.tokenizer.apply_chat_template(
             messages,
