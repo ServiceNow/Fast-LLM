@@ -227,7 +227,7 @@ def distributed_log_softmax(
     return logits_norm - sum_exp_logits.log()  # log_softmax
 
 
-def _torch_reverse_kl_forward_backward(
+def _reverse_kl_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
     loss_mask: torch.Tensor | None,
@@ -261,10 +261,9 @@ def _torch_reverse_kl_forward_backward(
 
     # Compute log probabilities
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
-    # batch_size = logits.shape[0]
     with torch.enable_grad():
-        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
-        student_log_probs = distributed_log_softmax(logits_, group=group)
+        # logits_ = logits.float()#.detach().requires_grad_(grad_output is not None)
+        student_log_probs = distributed_log_softmax(logits, group=group)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         loss_terms = torch.nn.functional.kl_div(
@@ -287,8 +286,20 @@ def _torch_reverse_kl_forward_backward(
         loss /= valid_tokens
 
         if grad_output is not None:
-            loss.backward(torch.full_like(loss, grad_output))
-            grad = logits_.grad.to(logits.dtype)
+            # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
+            log_ratio = student_log_probs - teacher_log_probs
+            expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
+            # expected E_q(log s - log t) -- this is actually dependent on the full vocab!
+            if group is not None:
+                all_reduce(expected, op=ReduceOp.SUM, group=group)
+            grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
+
+            if loss_mask is not None:
+                valid = loss_mask.to(logits.dtype).unsqueeze(-1)
+                grad_base = grad_base * valid
+
+            grad = grad_base.mul(grad_output / valid_tokens)
+            grad = grad.to(logits.dtype)
         else:
             grad = None
 
@@ -339,7 +350,7 @@ def reverse_kl_forward_backward(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # TODO: implement fused?
-    distillation_loss, distillation_grad = _torch_reverse_kl_forward_backward(
+    distillation_loss, distillation_grad = _reverse_kl_forward_backward(
         logits=logits,
         target=target,
         loss_mask=loss_mask,
