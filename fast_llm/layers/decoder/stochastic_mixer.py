@@ -94,6 +94,10 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
                 if hasattr(param, "allow_no_grad"):
                     param.allow_no_grad = True
 
+        # Track mixer selection counts for logging actual proportions during training
+        self._mixer_counts_total = {name: 0 for name in self.mixers.keys()}
+        self._last_selected_mixer = None
+
     def setup(self, distributed: Distributed) -> None:
         """Setup all mixers with the distributed context."""
         super().setup(distributed)
@@ -116,6 +120,24 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         mixer_name = self._sample_mixer_name(kwargs)
+
+        if self.training:
+            self._mixer_counts_total[mixer_name] += 1
+            self._last_selected_mixer = mixer_name
+
+            if metrics is not None:
+                # Use module_name as prefix to distinguish between different layer indices
+                metric_prefix = f"{self.module_name}/stochastic"
+
+                # Instantaneous metric: last selected mixer
+                metrics[f"{metric_prefix}/last_selected"] = mixer_name
+
+                # Cumulative metrics: total counts and proportions
+                total_count = sum(self._mixer_counts_total.values())
+                for name, count in self._mixer_counts_total.items():
+                    proportion = count / total_count if total_count > 0 else 0.0
+                    metrics[f"{metric_prefix}/{name}_count_total"] = count
+                    metrics[f"{metric_prefix}/{name}_proportion_total"] = proportion
 
         if get_model_debug_level() > 0:
             from fast_llm.layers.block.config import BlockKwargs

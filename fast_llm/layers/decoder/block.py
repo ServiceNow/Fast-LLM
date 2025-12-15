@@ -136,9 +136,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         fw_input = input_
         hidden_states = self.norm_1(input_)
         self._debug(hidden_states, "norm_1", kwargs.get(BlockKwargs.hidden_dims), kwargs)
-        hidden_states, bias = self.mixer(hidden_states, kwargs)
+        hidden_states, bias = self.mixer(hidden_states, kwargs, metrics=metrics)
 
-        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
+        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses, metrics)
 
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
@@ -154,7 +154,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
 
-    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses):
+    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses, metrics):
         """
         Maybe apply activation distillation loss and setup backward hooks.
         """
@@ -178,17 +178,52 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # L2 loss
             activation_loss_factor = self._config.activation_distillation_factor
             # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
-            # TODO: handle possible padding?
-            local_loss_sum = torch.sum(torch.norm(mixer_output - teacher_tensor, p=2, dim=(2)))
-            # mixer_output.shape is (batch, sequence, hidden) or (sequence, batch, hidden)
-            # In either case, dims 0 and 1 are batch and sequence
-            total_count = mixer_output.shape[0] * mixer_output.shape[1]
+
+            # Handle possible padding by creating a mask based on sequence_lengths
+            sequence_first = kwargs.get(BlockKwargs.sequence_first, False)
+            sequence_lengths = kwargs.get(BlockKwargs.sequence_lengths)
+
+            if sequence_lengths is not None:
+                # Create mask: 1 for valid positions, 0 for padding
+                # sequence_lengths is a list of lists: [[len1, len2, ...], [len1, len2, ...], ...]
+                # where outer list is batch, inner lists are document lengths within each sample
+                device = mixer_output.device
+                batch_size = len(sequence_lengths)
+                max_seq_len = mixer_output.shape[0] if sequence_first else mixer_output.shape[1]
+                mask = torch.zeros(batch_size, max_seq_len, device=device, dtype=mixer_output.dtype)
+                for batch_idx, sample_lens in enumerate(sequence_lengths):
+                    # Mark valid positions (non-padding) as 1
+                    total_len = sum(sample_lens)
+                    mask[batch_idx, :total_len] = 1.0
+                if sequence_first:
+                    # (batch, sequence) -> (sequence, batch)
+                    mask = mask.T
+
+                # Compute masked L2 loss: norm over hidden dim, then apply mask
+                per_token_loss = torch.norm(
+                    mixer_output - teacher_tensor, p=2, dim=-1
+                )  # (batch, sequence) or (sequence, batch)
+                masked_loss = per_token_loss * mask
+                local_loss_sum = torch.sum(masked_loss)
+                total_count = int(mask.sum().item())
+            else:
+                # No sequence_lengths available, compute loss without masking
+                local_loss_sum = torch.sum(torch.norm(mixer_output - teacher_tensor, p=2, dim=(2)))
+                # mixer_output.shape is (batch, sequence, hidden) or (sequence, batch, hidden)
+                # In either case, dims 0 and 1 are batch and sequence
+                total_count = mixer_output.shape[0] * mixer_output.shape[1]
 
             # All-reduce across tensor-parallel group if sequence-parallel is enabled
             if self._sequence_parallel and self._distributed.tensor_group is not None:
                 all_reduce(local_loss_sum, group=self._distributed.tensor_group, op=ReduceOp.SUM)
-                # Assume all ranks contribute the same count (not the case if padding)
-                total_count *= self._distributed.tensor_group.size()
+                if sequence_lengths is not None:
+                    # Different ranks may have different amounts of padding
+                    total_count_tensor = torch.tensor(total_count, device=mixer_output.device, dtype=torch.int64)
+                    all_reduce(total_count_tensor, group=self._distributed.tensor_group, op=ReduceOp.SUM)
+                    total_count = int(total_count_tensor.item())
+                else:
+                    # All ranks contribute the same count
+                    total_count *= self._distributed.tensor_group.size()
 
             activation_loss = activation_loss_factor * (local_loss_sum / total_count)
 
@@ -198,6 +233,19 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # Logging
             if losses is not None and self._activation_distillation_loss_name in losses:
                 losses[self._activation_distillation_loss_name].append(activation_loss.detach())
+            # Per-layer metrics
+            if metrics is not None:
+                metrics[f"{self.module_name}/activation_distillation_loss"] = activation_loss.detach()
+
+                # If using stochastic mixer, also log per-mixer-type activation distillation loss
+                from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+                if isinstance(self.mixer, StochasticMixer):
+                    # Get the selected mixer name (deterministic based on same generator)
+                    selected_mixer = self.mixer._sample_mixer_name(kwargs)
+                    metrics[f"{self.module_name}/activation_distillation_loss/{selected_mixer}"] = (
+                        activation_loss.detach()
+                    )
         return hidden_states, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
