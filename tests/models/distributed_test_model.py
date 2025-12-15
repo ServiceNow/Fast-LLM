@@ -22,7 +22,7 @@ def main(args: list[str] | None = None) -> None:
     # TODO: Why are barriers needed?
     with ProcessGroupPool(
         timeout=60,
-        backend=DistributedBackend(model_testing_config.config_dict["model"]["distributed"]["backend"]),
+        backend=DistributedBackend(model_testing_config.distributed_backend),
     ) as pool:
         failures = []
         world_size = DistributedConfig.default_world_size
