@@ -6,7 +6,11 @@ import pytest
 from fast_llm.data.dataset.config import BlendedDatasetConfig, MemmapDatasetConfig, SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparator.gpt_memmap.config import (
+    ConversationSourceConfig,
+    GPTMemmapDatasetPreparatorConfig,
+    LanguageModelSourceConfig,
+)
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
@@ -198,3 +202,28 @@ def test_dataset_preparator_from_hub():
             tokenizer.detokenize(dataset.get_document(index).tokens.tokens),
             f"<|endoftext|>{hf_dataset[index]["answer"]}<|endoftext|>",
         )
+
+
+# =============================================================================
+# Conversation Format Tests
+# =============================================================================
+
+
+def test_conversation_source_config():
+    """Test conversation source schema configuration."""
+    config = LanguageModelSourceConfig.from_dict({"type": "conversation"})
+    Assert.custom(isinstance, config, ConversationSourceConfig)
+    Assert.eq(config.messages, "messages")
+    Assert.eq(config.has_conversation, True)
+    Assert.eq(config.has_loss_masking_span, True)
+    Assert.eq(config.columns, ["messages"])
+
+
+def test_conversation_config_validation():
+    """Test conversation config validation errors."""
+    with pytest.raises(ValueError, match="Images are not yet supported"):
+        LanguageModelSourceConfig.from_dict({
+            "type": "conversation",
+            "images": "images",
+            "image_positions": "positions",
+        })

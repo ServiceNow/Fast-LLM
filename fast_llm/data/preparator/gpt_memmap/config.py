@@ -15,11 +15,14 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 
 
-@config_class()
+@config_class(registry=True)
 class LanguageModelSourceConfig(Config):
     """
     A schema holding the name of each relevant column in the dataset.
     Setting optional entries will enable the associated feature.
+
+    This is the base class for source schemas. Use `type: text` (default) for
+    plain text datasets, or `type: conversation` for chat/conversation datasets.
     """
 
     text: str = Field(
@@ -48,6 +51,8 @@ class LanguageModelSourceConfig(Config):
             columns.append(self.loss_masking_spans)
         if self.has_preference_spans:
             columns.extend([self.chosen_span, self.rejected_span])
+        if self.has_images:
+            columns.extend([self.images, self.image_positions])
         return columns
 
     @functools.cached_property
@@ -64,10 +69,109 @@ class LanguageModelSourceConfig(Config):
         Assert.eq(self.images is None, self.image_positions is None)
         return self.images is not None
 
+    @functools.cached_property
+    def has_conversation(self) -> bool:
+        """Whether this is a conversation source schema."""
+        return False
+
     def _validate(self):
         super()._validate()
         if self.has_preference_spans and self.has_loss_masking_span:
             raise ValueError(f"Can not enable both loss masking and preference spans.")
+
+
+@config_class(dynamic_type={LanguageModelSourceConfig: "text"})
+class TextSourceConfig(LanguageModelSourceConfig):
+    """
+    Source schema for plain text datasets (default).
+
+    The dataset should have a text column containing the document text.
+    Optionally, it can have additional columns for loss masking spans,
+    preference spans (for DPO), or images.
+    """
+
+    pass
+
+
+@config_class(dynamic_type={LanguageModelSourceConfig: "conversation"})
+class ConversationSourceConfig(LanguageModelSourceConfig):
+    """
+    Source schema for chat/conversation datasets (e.g., Tulu 3, ShareGPT, OpenAI format).
+
+    The dataset should have a messages column containing a list of message dicts,
+    where each message has 'role' and 'content' keys. Common roles include:
+    - 'system': System prompt
+    - 'user': User input
+    - 'assistant': Model response (trained on by default)
+    - 'tool': Tool/function results
+    - 'ipython': Code execution results
+
+    The conversation is formatted using the tokenizer's chat template, which must
+    contain {% generation %}...{% endgeneration %} markers to define which content
+    to train on. Loss masking spans are automatically computed from these markers.
+
+    Example dataset format:
+        {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hi there!"},
+            ]
+        }
+    """
+
+    # Override text field - not used directly for conversation format
+    text: None | str = Field(
+        default=None,
+        desc="Not used for conversation format. Text is generated from messages.",
+        hint=FieldHint.optional,
+    )
+
+    # Conversation-specific fields
+    messages: str = Field(
+        default="messages",
+        desc="Field containing the conversation messages list. Each message should have 'role' and 'content' keys.",
+        hint=FieldHint.core,
+    )
+
+    add_generation_prompt: bool = Field(
+        default=False,
+        desc="Whether to add a generation prompt at the end of the conversation. "
+        "Typically False for training data.",
+        hint=FieldHint.optional,
+    )
+
+    @functools.cached_property
+    def columns(self) -> list[str]:
+        # For conversation format, we read the messages column, not text
+        columns = [self.messages]
+        # Images can still be used with conversation format
+        if self.has_images:
+            columns.extend([self.images, self.image_positions])
+        return columns
+
+    @functools.cached_property
+    def has_conversation(self) -> bool:
+        return True
+
+    @functools.cached_property
+    def has_loss_masking_span(self) -> bool:
+        # Conversation format always generates loss masking spans
+        return True
+
+    def _validate(self):
+        # Skip parent validation that checks text field
+        Config._validate(self)
+        if self.has_preference_spans:
+            raise ValueError("Preference spans are not supported with conversation format.")
+        if self.has_images:
+            # Images with conversation format would require computing image positions in the
+            # chat-template-formatted text, which is complex and format-dependent.
+            # For VLM training with conversations, preprocess the data to plain text format first.
+            raise ValueError(
+                "Images are not yet supported with conversation format. "
+                "For multimodal conversation data, preprocess to plain text format with image positions."
+            )
 
 
 @config_class()

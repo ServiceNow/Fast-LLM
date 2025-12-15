@@ -213,3 +213,111 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     @property
     def eod(self):
         return self.eod_id
+
+    @staticmethod
+    def _has_generation_markers(template: str | None) -> bool:
+        """Check if a template has generation markers."""
+        return template is not None and "{% generation %}" in template
+
+    def validate_chat_template(self) -> None:
+        """
+        Validate the tokenizer's chat template has generation markers.
+
+        Raises:
+            ValueError: If the tokenizer lacks a chat template or generation markers.
+        """
+        template = self.tokenizer.chat_template
+
+        if template is None:
+            raise ValueError(
+                "Tokenizer does not have a chat template. "
+                "Conversation format requires a tokenizer with a built-in chat template "
+                "containing {% generation %}...{% endgeneration %} markers."
+            )
+
+        if not self._has_generation_markers(template):
+            raise ValueError(
+                "Tokenizer's chat template does not contain {% generation %}...{% endgeneration %} markers. "
+                "These markers are required to determine which tokens to train on. "
+                "Please use a tokenizer with generation markers in its chat template."
+            )
+
+    def apply_chat_template_with_spans(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        add_generation_prompt: bool = False,
+    ) -> tuple[str, list[tuple[int, int]]]:
+        """
+        Apply the tokenizer's chat template to messages and compute loss masking spans.
+
+        This method converts a list of messages (OpenAI/Tulu format) into formatted
+        text and computes character-level spans that should be MASKED (not trained on).
+
+        Note: Call validate_chat_template() once before using this method to ensure
+        the tokenizer has a valid chat template with generation markers.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys.
+            add_generation_prompt: Whether to add a generation prompt at the end.
+
+        Returns:
+            Tuple of (formatted_text, loss_masking_spans) where loss_masking_spans
+            is a list of (start, end) character positions to MASK (not train on).
+        """
+        if not messages:
+            return "", []
+
+        return self._apply_chat_template(messages, add_generation_prompt)
+
+    def _apply_chat_template(
+        self,
+        messages: list[dict[str, str]],
+        add_generation_prompt: bool,
+    ) -> tuple[str, list[tuple[int, int]]]:
+        """Use HF's return_assistant_tokens_mask for precise token-level masking."""
+        # Get tokens and assistant mask
+        result = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            add_generation_prompt=add_generation_prompt,
+        )
+
+        tokens = result["input_ids"]
+        train_mask = result["assistant_masks"]
+
+        # Get text for output
+        full_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
+
+        # Convert token mask to character spans using detokenization
+        # We need spans for tokens where train_mask=0 (should be masked/not trained on)
+        loss_masking_spans = []
+        current_span_start = None
+
+        # Track character positions by decoding incrementally
+        char_positions = [0]
+        for i in range(len(tokens)):
+            decoded = self.tokenizer.decode(tokens[: i + 1])
+            char_positions.append(len(decoded))
+
+        for i, is_train in enumerate(train_mask):
+            if not is_train:  # This token should be masked
+                if current_span_start is None:
+                    current_span_start = char_positions[i]
+            else:  # This token should be trained on
+                if current_span_start is not None:
+                    loss_masking_spans.append((current_span_start, char_positions[i]))
+                    current_span_start = None
+
+        # Close any open span
+        if current_span_start is not None:
+            loss_masking_spans.append((current_span_start, char_positions[-1]))
+
+        return full_text, loss_masking_spans
+
