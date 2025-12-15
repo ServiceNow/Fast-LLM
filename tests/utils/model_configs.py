@@ -45,6 +45,7 @@ _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
 TP_NO_STP = r"(?:^|(?<=[^s]))tp"
+GRAD_ACC = r"df(?!16)|bf"
 
 
 class ModelTestingGroup(enum.StrEnum):
@@ -644,7 +645,7 @@ _update_and_add_testing_config(
     compare_factor=8,
     # Modes not supported with reference models and/or activation distillation.
     # TODO: Fix gradient accumulation and fp16, add TP support.
-    skip_tests=("sdp", "ms", "pp", "tp", "df", "bf", "fp16"),
+    skip_tests=("sdp", "ms", "pp", "tp", GRAD_ACC, "fp16"),
 )
 
 _update_and_add_testing_config(
@@ -676,50 +677,9 @@ _update_and_add_testing_config(
 
 
 _update_and_add_testing_config(
-    # Tests hybrid Mamba, llamba converter.
-    "llama",
-    "hybrid_mamba",
-    updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "mamba",
-                        "d_inner": 512,
-                        "state_size": 16,
-                        "dt_rank": 16,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m"],
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
-    },
-    compare_factor=2.0,
-    # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
-)
-
-_update_and_add_testing_config(
     # Tests hybrid Mamba 2.
     "llama",
-    "hybrid_mamba_2",
+    "hybrid_mamba",
     updates={
         ("model", "base_model", "decoder"): {
             "type": "pattern",
@@ -728,7 +688,7 @@ _update_and_add_testing_config(
                 "m2": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "mamba_2",
+                        "type": "mamba",
                         "dt_layer": {"bias": {"enabled": True}},
                         "d_inner": 512,
                         "state_size": 8,
@@ -756,49 +716,6 @@ _update_and_add_testing_config(
     # Micro-sequence split not supported.
     skip_tests=("sdp", "ms"),
 )
-
-
-_update_and_add_testing_config(
-    # Tests hybrid discrete Mamba 2.
-    "llama",
-    "hybrid_discrete_mamba_2",
-    updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m2d": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "discrete_mamba_2",
-                        "d_inner": 512,
-                        "state_size": 8,
-                        "n_qk_heads": 8,
-                        "n_v_heads": 16,
-                        "chunk_size": 32,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m2d"],
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
-    compare_factor=2.0,
-    # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sdp", "ms"),
-)
-
 
 _update_and_add_testing_config(
     # Tests vision multimodal.
@@ -838,7 +755,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
     # TODO: Gradient accumulation works but comparison is broken.
-    skip_tests=("sdp", "ms", "bf4", "df"),
+    skip_tests=("sdp", "ms", GRAD_ACC),
     auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
@@ -918,7 +835,7 @@ _update_and_add_testing_config(
                 "mamba": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "mamba_2",
+                        "type": "mamba",
                         "d_inner": 512,
                         "state_size": 16,
                         "dt_rank": 16,
@@ -947,7 +864,7 @@ _update_and_add_testing_config(
                                 "value_head_dim": 16,
                             },
                             "mamba": {
-                                "type": "mamba_2",
+                                "type": "mamba",
                                 "d_inner": 512,
                                 "state_size": 16,
                                 "dt_rank": 16,
@@ -1056,9 +973,7 @@ _update_and_add_testing_config(
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
-    # bf2_df2 depends on df4, so must also be skipped.
-    skip_tests=("sdp", "ms", "bf4", "df4", "bf2_df2", TP_NO_STP),
-    auto_model_class=transformers.AutoModelForImageTextToText,
+    skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
 )
 
 

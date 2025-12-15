@@ -4,8 +4,7 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.parameter import ParameterConfig
-from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig
 from fast_llm.layers.common.normalization.config import GatedRMSNormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
@@ -13,16 +12,10 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     import torch
 
-    from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.gdn import GatedDeltaNet
     from fast_llm.layers.ssm.kda import KimiDeltaAttention
     from fast_llm.layers.ssm.mamba import Mamba
     from fast_llm.tensor import ParameterMeta
-
-
-class LinearAttentionKwargs(BlockKwargs):
-    cu_seqlens = "cu_seqlens"
-    seq_idx = "seq_idx"
 
 
 @config_class(dynamic_type={MixerConfig: "gdn"})
@@ -179,76 +172,39 @@ class KimiDeltaAttentionConfig(MixerConfig):
 
         return KimiDeltaAttention
 
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            if "activation" not in self.normalization._explicit_fields:
-                self.normalization.activation = "sigmoid"
 
-        super()._validate()
-
-
-@config_class()
-class SSMConfig(MixerConfig):
+@config_class(dynamic_type={MixerConfig: "mamba"})
+class MambaConfig(MixerConfig):
+    _abstract = False
     # Layers
-    # [Mamba, Mamba2, DiscreteMamba2]
     z_layer: AffineLinearConfig = Field(
         desc="Configuration for the z layer.",
         hint=FieldHint.architecture,
     )
-    # [Mamba, Mamba2, DiscreteMamba2]
     x_layer: AffineLinearConfig = Field(
         desc="Configuration for the x layer.",
         hint=FieldHint.architecture,
     )
-    # [Mamba, Mamba2, DiscreteMamba2]
+    b_layer: AffineLinearConfig = Field(
+        desc="Configuration for the b layer.",
+        hint=FieldHint.architecture,
+    )
+    c_layer: AffineLinearConfig = Field(
+        desc="Configuration for the c layer.",
+        hint=FieldHint.architecture,
+    )
     convolution_layer: CausalConv1dConfig = Field(
         desc="Configuration for the convolution layer.",
         hint=FieldHint.architecture,
     )
-    # [Mamba, Mamba2, DiscreteMamba2]
     d_weight: ParameterConfig = Field(
         desc='Configuration for the D "skip" weight.',
         hint=FieldHint.architecture,
     )
-    # [Mamba, Mamba2, DiscreteMamba2]
     output_layer: AffineLinearConfig = Field(
         desc="Configuration for the output layer.",
         hint=FieldHint.architecture,
     )
-
-    # Model dimensions
-    # head_size [Mamba, Mamba2, DiscreteMamba2]
-    state_size: int = Field(
-        default=16,
-        desc="State size.",
-        hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
-    )
-    # [Mamba, Mamba2, DiscreteMamba2]
-    # c_size [Mamba, Mamba2, DiscreteMamba2]?
-    d_inner: int = Field(
-        default=2048,
-        desc="Inner dimension.",
-        hint=FieldHint.core,
-    )
-
-    # Model options
-    add_linear_biases: bool = Field(
-        default=True,
-        desc="Add biases to linear layers. May be overridden for individual layers.",
-        hint=FieldHint.architecture,
-    )
-
-
-@config_class()
-class MambaBaseConfig(SSMConfig):
-    """
-    Common configuration for Mamba and Mamba2.
-    """
-
-    _abstract = False
-
-    # Layers
     dt_layer: AffineLinearConfig = Field(
         desc="Configuration for the dt layer.",
         hint=FieldHint.architecture,
@@ -257,135 +213,58 @@ class MambaBaseConfig(SSMConfig):
         desc="Configuration for the a_log layer weight.",
         hint=FieldHint.architecture,
     )
-
-    # Model dimensions
-    #  [Mamba, Mamba2]
-    dt_rank: int = Field(
-        default=64,
-        desc="Rank of the Δ projection matrix.",
-        hint=FieldHint.architecture,
-    )
-
-
-@config_class(dynamic_type={MixerConfig: "mamba"})
-class MambaConfig(MambaBaseConfig):
-    """
-    Configuration for Mamba.
-    """
-
-    # Layers
-    # TODO: Can be confused with `x_layer`
-    x_projection_layer: LinearConfig = Field(
-        desc="Configuration for the x projection layer.",
-        hint=FieldHint.architecture,
-    )
-
-    def _validate(self) -> None:
-        super()._validate()
-        Assert.none(self.convolution_layer.activation)
-        # TODO: (Oleksiy) If bias is used there is a problem in the MambaInnerFn.backward for the bias grads.
-        #  I think this bias is not used in other mamba repos.
-        assert not self.output_layer.bias.enabled
-
-    @property
-    def layer_class(self) -> "type[Mamba]":
-        from fast_llm.layers.ssm.mamba import Mamba
-
-        return Mamba
-
-
-@config_class(dynamic_type={MixerConfig: "mamba_2"})
-class Mamba2Config(MambaBaseConfig):
-    """
-    Configuration for Mamba2.
-    TODO: Actually a variation of Mamba 2.
-    """
-
-    _abstract = False
-
-    # Layers
-    # [Mamba2, DiscreteMamba2]
-    b_layer: AffineLinearConfig = Field(
-        desc="Configuration for the b layer.",
-        hint=FieldHint.architecture,
-    )
-    # [Mamba2, DiscreteMamba2]
-    c_layer: AffineLinearConfig = Field(
-        desc="Configuration for the c layer.",
-        hint=FieldHint.architecture,
-    )
     dt_input_layer: AffineLinearConfig = Field(
         desc="Configuration for the dt input projection layer.",
         hint=FieldHint.architecture,
     )
 
     # Model dimensions
-    # xb_size [Mamba2]
+    state_size: int = Field(
+        default=16,
+        desc="State size.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    d_inner: int = Field(
+        default=2048,
+        desc="Inner dimension.",
+        hint=FieldHint.core,
+    )
     d_xb: int = Field(
         default=1024,
-        desc="Dimension of the xB in Mamba2 blocks.",
+        desc="Dimension of the xB .",
+        hint=FieldHint.architecture,
+    )
+    # Model dimensions
+    dt_rank: int = Field(
+        default=64,
+        desc="Rank of the Δ projection matrix.",
         hint=FieldHint.architecture,
     )
 
     # Model options
-    # repeat_xb_before_conv [Mamba2]
+    add_linear_biases: bool = Field(
+        default=True,
+        desc="Add biases to linear layers. May be overridden for individual layers.",
+        hint=FieldHint.architecture,
+    )
     repeat_kv_before_conv: bool = Field(
         default=True,
-        desc="Whether to repeat x and B before (True) or after (False) the conv1d in Mamba2 blocks.",
+        desc="Whether to repeat x and B before (True) or after (False) the conv1d in blocks.",
         hint=FieldHint.architecture,
+    )
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Allow for cross-document attention.",
+        doc="Disable to prevent attention between tokens belonging to different documents.",
+        hint=FieldHint.feature,
     )
 
     @property
-    def layer_class(self) -> "type[Mamba2]":
-        from fast_llm.layers.ssm.mamba2 import Mamba2
+    def layer_class(self) -> "type[Mamba]":
+        from fast_llm.layers.ssm.mamba import Mamba
 
-        return Mamba2
-
-
-@config_class(dynamic_type={MixerConfig: "discrete_mamba_2"})
-class DiscreteMamba2Config(SSMConfig):
-    """
-    Configuration for DiscreteMamba2.
-    """
-
-    _abstract = False
-    # Layers
-    # [Mamba2, DiscreteMamba2]
-    b_layer: AffineLinearConfig = Field(
-        desc="Configuration for the b layer.",
-        hint=FieldHint.architecture,
-    )
-    # [Mamba2, DiscreteMamba2]
-    c_layer: AffineLinearConfig = Field(
-        desc="Configuration for the c layer.",
-        hint=FieldHint.architecture,
-    )
-
-    # Model dimensions
-    # head_groups [DiscreteMamba2]
-    n_qk_heads: int = Field(
-        default=32,
-        desc="Number of QK heads.",
-        hint=FieldHint.architecture,
-    )
-    # heads [DiscreteMamba2]
-    n_v_heads: int = Field(
-        default=32,
-        desc="Number of V heads.",
-        hint=FieldHint.architecture,
-    )
-    # chunk_size [DiscreteMamba2]
-    chunk_size: int = Field(
-        default=256,
-        desc="Chunk size for Mamba2 blocks.",
-        hint=FieldHint.architecture,
-    )
-
-    @property
-    def layer_class(self) -> "type[DiscreteMamba2]":
-        from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-
-        return DiscreteMamba2
+        return Mamba
 
 
 @config_class(dynamic_type={InitializationConfig: "mamba_dt_bias"})
@@ -395,21 +274,18 @@ class MambaDTBiasInitializationConfig(InitializationConfig):
     """
 
     _abstract = False
-    # dt_bias_initialization_min [Mamba, Mamba2]
     min_step_size: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_max [Mamba, Mamba2]
     max_step_size: float = Field(
         default=0.1,
         desc="Maximum step size for discretization",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_floor [Mamba, Mamba2]
     floor: float = Field(
         default=1e-4,
         desc="Minimum value for initializing dt",
@@ -433,13 +309,11 @@ class MambaAInitializationConfig(InitializationConfig):
     """
 
     _abstract = False
-    # dt_bias_initialization_min [Mamba, Mamba2]
     state_size: int = Field(
         desc="State size. Needs to be repeated here so the initializer knows about it.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # dt_bias_initialization_max [Mamba, Mamba2]
     d_inner: int = Field(
         desc="Inner dimension. Needs to be repeated here so the initializer knows about it.",
         hint=FieldHint.core,
