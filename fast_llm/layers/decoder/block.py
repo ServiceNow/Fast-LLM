@@ -136,9 +136,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         fw_input = input_
         hidden_states = self.norm_1(input_)
         self._debug(hidden_states, "norm_1", kwargs.get(BlockKwargs.hidden_dims), kwargs)
-        hidden_states, bias = self.mixer(hidden_states, kwargs)
+        hidden_states, bias = self.mixer(hidden_states, kwargs, metrics=metrics)
 
-        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses)
+        hidden_states, bias = self.activation_distillation_loss(hidden_states, bias, kwargs, losses, metrics)
 
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
@@ -154,7 +154,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
 
-    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses):
+    def activation_distillation_loss(self, hidden_states, bias, kwargs, losses, metrics):
         """
         Maybe apply activation distillation loss and setup backward hooks.
         """
@@ -198,6 +198,19 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # Logging
             if losses is not None and self._activation_distillation_loss_name in losses:
                 losses[self._activation_distillation_loss_name].append(activation_loss.detach())
+            # Per-layer metrics
+            if metrics is not None:
+                metrics[f"{self.module_name}/activation_distillation_loss"] = activation_loss.detach()
+
+                # If using stochastic mixer, also log per-mixer-type activation distillation loss
+                from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+                if isinstance(self.mixer, StochasticMixer):
+                    # Get the selected mixer name (deterministic based on same generator)
+                    selected_mixer = self.mixer._sample_mixer_name(kwargs)
+                    metrics[f"{self.module_name}/activation_distillation_loss/{selected_mixer}"] = (
+                        activation_loss.detach()
+                    )
         return hidden_states, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
