@@ -12,7 +12,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
     FastLLMCheckpointFormat,
 )
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.utils import Assert, header
@@ -56,7 +56,10 @@ def main(args: list[str] | None = None) -> None:
             "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
         )
 
-    with ProcessGroupPool(timeout=20) as pool:
+    with ProcessGroupPool(
+        timeout=20,
+        backend=DistributedBackend(model_testing_config.config_dict["model"]["distributed"]["backend"]),
+    ) as pool:
         failures = []
         world_size = DistributedConfig.default_world_size
         rank = DistributedConfig.default_rank

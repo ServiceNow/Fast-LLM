@@ -254,6 +254,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "distributed": {
                 "reproducible_init": True,
                 "timeout": 20,
+                "backend": "nccl",
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
