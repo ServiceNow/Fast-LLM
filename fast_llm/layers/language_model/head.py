@@ -409,14 +409,23 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             distillation_loss, distillation_grad = None, None
 
-        # TODO: de-allocate earlier.
-        del logits
-
         # TODO: Accumulate grads in-place to reduce memory and compute overhead.
         grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
 
         # TODO: Return individual losses?
         loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
+
+        # When using only activation distillation, loss and grad are None.
+        # Create zero tensors to allow activation distillation gradients to flow through.
+        if loss is None:
+            loss = torch.zeros(1, device=input_.device, dtype=input_.dtype, requires_grad=True)
+        if grad is None:
+            # Zero gradient means no loss at the head, but activation distillation gradients
+            grad = torch.zeros_like(logits)
+
+        # TODO: de-allocate earlier.
+        del logits
+
         if self.training and losses is not None:
             if dpo_loss is not None:
                 losses[self._dpo_loss_name].append(dpo_loss.detach())
@@ -502,11 +511,12 @@ def _format_name(name: str) -> str:
     return name.replace("_", " ")
 
 
-def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor:
+def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor | None:
     tensors = [tensor for tensor in tensors if tensor is not None]
     if len(tensors) > 1:
         return sum(tensors)
     elif len(tensors) == 1:
         return tensors[0]
     else:
-        raise RuntimeError()
+        # All tensors are None - this is valid when using only activation distillation
+        return None
