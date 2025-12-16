@@ -100,7 +100,3 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
 
     for name, parameter, grad_packed in zip(names, parameters, grads_packed, strict=True):
         Assert.rms_close_relative(grad_packed, parameter.grad_buffer, 1e-3, 1e-4, msg=name)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
