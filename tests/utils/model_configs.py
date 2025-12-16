@@ -249,6 +249,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "debug_layer_outputs": _LOG_LEVEL,
                 "debug_layer_gradients": _LOG_LEVEL,
                 "debug_all_param_gradients": _LOG_LEVEL,
+                "debug_losses": _LOG_LEVEL,
                 "debug_tensor_parallel": True,
             },
             "distributed": {
@@ -571,7 +572,7 @@ _update_and_add_testing_config(
     },
     compare_factor=1.5,
     # modes not supported with reference models
-    # TODO: ce4: cross_entropy_splits is broken, skipping it for nwo since its low priority and almost never used
+    # TODO: ce4: cross_entropy_splits is broken, skipping it for now since its low priority and almost never used
     skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2", "ce4"),
 )
 
@@ -593,7 +594,7 @@ _update_and_add_testing_config(
     },
     compare_factor=2,
     # Modes not supported with reference models
-    # TODO: ce4: cross_entropy_splits is broken, skipping it for nwo since its low priority and almost never used
+    # TODO: ce4: cross_entropy_splits is broken, skipping it for now since its low priority and almost never used
     skip_tests=("sdp", "ms", "pp", "ce4"),
 )
 

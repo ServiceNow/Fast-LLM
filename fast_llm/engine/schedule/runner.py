@@ -19,7 +19,7 @@ from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.config import EventType, ScheduleConfig, StepType, StreamType
 from fast_llm.engine.schedule.schedule import Schedule, Step
-from fast_llm.logging import log_memory_usage
+from fast_llm.logging import log_memory_usage, log_tensor
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
@@ -297,6 +297,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             else:
                 reduced_loss = 0.0
             reduced_losses[name] = reduced_loss
+        if isinstance(reduced_loss, torch.Tensor) and self._multi_stage.config.multi_stage.debug_losses:
+            log_tensor(
+                f"loss: {name}", reduced_loss, level=self._multi_stage.config.multi_stage.debug_losses, log_fn=None
+            )
         return {
             name: reduced_loss.item() if isinstance(reduced_loss, torch.Tensor) else reduced_loss
             for name, reduced_loss in reduced_losses.items()
