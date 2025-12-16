@@ -1,4 +1,5 @@
 import functools
+import logging
 import typing
 import warnings
 
@@ -8,11 +9,13 @@ from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.block.block import BlockBase
     from fast_llm.layers.block.sequence import FixedBlockSequence, PatternBlockSequence
+
+logger = logging.getLogger(__name__)
 
 
 class BlockDimNames:
@@ -37,7 +40,11 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
+    activation_distillation_targets = "activation_distillation_targets"
+    iteration = "iteration"
     device = "device"
+    hidden_states = "hidden_states"
+    output_hidden_states = "output_hidden_states"
 
 
 @config_class(registry=True)
@@ -84,6 +91,9 @@ class BlockConfig(ModuleConfig):
             peft=peft,
         )
 
+    def get_distillation_models(self) -> set[str]:
+        return set()
+
 
 @config_class(registry=True)
 class BlockSequenceConfig(BlockConfig):
@@ -114,6 +124,9 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
         from fast_llm.layers.block.sequence import FixedBlockSequence
 
         return FixedBlockSequence
+
+    def get_distillation_models(self) -> set[str]:
+        return self.block.get_distillation_models()
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
@@ -161,3 +174,21 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
     def preprocessing_layers(self) -> dict[str, int]:
         # The index at which each block first appears. These blocks are used for preprocessing.
         return {name: self.expanded_pattern.index(name) for name in set(self.expanded_pattern)}
+
+    def get_distillation_models(self) -> set[str]:
+        models = set()
+        for block in self.blocks.values():
+            models.update(block.get_distillation_models())
+        return models
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Patch creeping type parameters from pretrained model
+        # TODO: fix this
+        if "block" in default:
+            removed = default.pop("block")
+            log(
+                f"Removing 'block' from default dict in PatternBlockSequenceConfig._from_dict: {removed}",
+                log_fn=logger.warning,
+            )
+        return super()._from_dict(default, strict=strict)

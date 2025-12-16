@@ -1,3 +1,10 @@
 [tool.black]
 line-length = 119
 target-version = ['py312']
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",                              # Fast-LLM core tests
+    "fast_llm_external_models/tests"      # External models tests
+]
+norecursedirs = ["Megatron-LM"]

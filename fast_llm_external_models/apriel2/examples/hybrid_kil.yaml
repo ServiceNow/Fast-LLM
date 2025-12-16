@@ -1,0 +1,96 @@
+# Example: Hybrid architecture with KIL conversion
+#
+# Converts attention-only model to a hybrid with:
+# - First 8 layers: pure attention (keep for long-range)
+# - Middle 32 layers: stochastic mixer with attention + kda (KIL converted)
+# - Last 8 layers: pure attention (keep for output quality)
+#
+# The kda branches are initialized from attention weights via KIL.
+
+decoder:
+  type: pattern
+  # Pattern: 8x attention, then 32x stochastic, then 8x attention
+  # Total 48 layers for Apriel 1.5
+  pattern:
+    - attn  # 0
+    - attn  # 1
+    - attn  # 2
+    - attn  # 3
+    - attn  # 4
+    - attn  # 5
+    - attn  # 6
+    - attn  # 7
+    - hybrid  # 8
+    - hybrid  # 9
+    - hybrid  # 10
+    - hybrid  # 11
+    - hybrid  # 12
+    - hybrid  # 13
+    - hybrid  # 14
+    - hybrid  # 15
+    - hybrid  # 16
+    - hybrid  # 17
+    - hybrid  # 18
+    - hybrid  # 19
+    - hybrid  # 20
+    - hybrid  # 21
+    - hybrid  # 22
+    - hybrid  # 23
+    - hybrid  # 24
+    - hybrid  # 25
+    - hybrid  # 26
+    - hybrid  # 27
+    - hybrid  # 28
+    - hybrid  # 29
+    - hybrid  # 30
+    - hybrid  # 31
+    - hybrid  # 32
+    - hybrid  # 33
+    - hybrid  # 34
+    - hybrid  # 35
+    - hybrid  # 36
+    - hybrid  # 37
+    - hybrid  # 38
+    - hybrid  # 39
+    - attn  # 40
+    - attn  # 41
+    - attn  # 42
+    - attn  # 43
+    - attn  # 44
+    - attn  # 45
+    - attn  # 46
+    - attn  # 47
+
+  blocks:
+    attn:
+      # Pure attention - transfer weights directly
+      mixer:
+        type: attention
+        init: transfer
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer
+
+    hybrid:
+      # Stochastic mixer with attention (transferred) and kda (KIL)
+      mixer:
+        type: stochastic
+        main_mixer_name: attention
+        mixers:
+          attention:
+            type: attention
+            init: transfer
+            # Full attention for global context
+          kda:
+            type: kda
+            init: transfer  # Uses KIL conversion from attention
+            convolution_layer:
+              kernel_size: 4  # required, no default
+            # KDA dimensions can be configured or derived from source
+            # heads: 32         # defaults to source heads
+            # head_dim: 128     # defaults to source head_size
+      mlp:
+        init: transfer
+      normalization:
+        init: transfer

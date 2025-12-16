@@ -4,19 +4,23 @@ import math
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    import PIL.Image
     import torch
 
 
-@config_class()
-class ImagePatchConfig(Config):
+@config_class(dynamic_type={PreprocessingConfig: "image_patch"})
+class ImagePatchConfig(PreprocessingConfig):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
     """
+
+    _abstract = False
 
     height: int = Field(
         default=16,
@@ -30,16 +34,17 @@ class ImagePatchConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    do_resize: bool = Field(default=True, desc="Whether to resize the image.")
     max_image_height: int = Field(
         default=1024,
         desc="Maximum height of the complete image, in pixels."
-        "If the original image is larger than this, it will be resized to this height.",
+        "If the original image is larger than this and resizing is enabled, it will be resized to this height.",
         hint=FieldHint.optional,
     )
     max_image_width: int = Field(
         default=1024,
         desc="Maximum width of the complete image, in pixels."
-        "If the original image is larger than this, it will be resized to this width.",
+        "If the original image is larger than this and resizing is enabled, it will be resized to this width.",
         hint=FieldHint.optional,
     )
     image_break_token: int | None = Field(
@@ -54,10 +59,42 @@ class ImagePatchConfig(Config):
         hint=FieldHint.optional,
     )
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Backward compatibility: remove image_format field if present (used in older datasets)
+        if "image_format" in default:
+            import warnings
+
+            warnings.warn(
+                "The 'image_format' field is deprecated and will be ignored. "
+                "Image format is now automatically inferred from the image type.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            default.pop("image_format")
+        return super()._from_dict(default, strict)
+
+    def check_compatibility(self, preprocessing: typing.Self) -> None:
+        Assert.custom(isinstance, preprocessing, ImagePatchConfig)
+        Assert.eq(self.height, preprocessing.height)
+        Assert.eq(self.width, preprocessing.width)
+        Assert.eq(self.do_resize, preprocessing.do_resize)
+        Assert.leq(self.max_image_height, preprocessing.max_image_height)
+        Assert.leq(self.max_image_width, preprocessing.max_image_width)
+        # None is used in the trainer to mark unknown value, so we can't do an equality check. TODO: Distinguish.
+        if preprocessing.image_break_token is not None:
+            Assert.eq(self.image_break_token, preprocessing.image_break_token)
+        if preprocessing.image_end_token is not None:
+            Assert.eq(self.image_end_token, preprocessing.image_end_token)
+
     @property
     def num_channels(self) -> int:
         # assume 3 channels (RGB) for all images
         return 3
+
+    @functools.cached_property
+    def patch_shape(self) -> tuple[int, int, int]:
+        return self.num_channels, self.height, self.width
 
     @functools.cached_property
     def max_patches_height(self) -> int:
@@ -72,14 +109,14 @@ class ImagePatchConfig(Config):
         Assert.gt(self.max_patches_height, 0)
         Assert.gt(self.max_patches_width, 0)
 
-    def get_patches(
-        self, images: list[bytes], token_data_type: DataType = DataType.int64
+    def get_patches_from_images(
+        self, images: list["torch.Tensor|bytes|dict|PIL.Image.Image"], token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", list["torch.Tensor"], list[int]]:
         import torch
 
         if len(images) > 0:
             image_patches, image_positions, image_token_maps, image_token_ids = zip(
-                *(self._get_patches(image, token_data_type) for image in images)
+                *(self._get_patches_from_image(image, token_data_type) for image in images)
             )
             return (
                 torch.cat(image_patches),
@@ -98,28 +135,68 @@ class ImagePatchConfig(Config):
                 [0],
             )
 
-    def _get_patches(
-        self, image_bytes: bytes, token_data_type: DataType = DataType.int64
+    def _get_patches_from_image(
+        self, image: "torch.Tensor|bytes|dict|PIL.Image.Image", token_data_type: DataType = DataType.int64
     ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
-        import numpy as np
-        import PIL.Image
         import torch
 
-        with PIL.Image.open(io.BytesIO(image_bytes)) as image:
-            if image.mode != "RGB":
-                # Convert all images to RGB
-                image = image.convert("RGB")
-            image = torch.tensor(np.array(image)).permute(2, 0, 1)  # HWC to CHW
-            Assert.eq(image.dtype, torch.uint8)
+        if not torch.is_tensor(image):
+            import contextlib
 
-        # Resize to a multiple of patch size smaller or equal to max size.
-        image = self._resize(image)
+            import numpy as np
+            import PIL.Image
+            import PIL.PngImagePlugin
+
+            # Load the image based on type inference
+            # Set a larger limit for decompression to handle images with large ICC profiles
+            PIL.Image.MAX_IMAGE_PIXELS = None
+            original_max_text_chunk = PIL.PngImagePlugin.MAX_TEXT_CHUNK
+            PIL.PngImagePlugin.MAX_TEXT_CHUNK = 10 * (1024**2)  # 10 MB
+
+            try:
+                # Infer format from image type
+                if isinstance(image, bytes):
+                    # Raw image bytes
+                    image_ctx = PIL.Image.open(io.BytesIO(image))
+                elif isinstance(image, dict):
+                    # Dictionary with 'bytes' key
+                    if "bytes" not in image:
+                        raise ValueError("Dictionary image format must contain a 'bytes' key.")
+                    image_bytes = image["bytes"]
+                    image_ctx = PIL.Image.open(io.BytesIO(image_bytes))
+                elif isinstance(image, PIL.Image.Image):
+                    # PIL Image object
+                    image_ctx = contextlib.nullcontext(image)
+                else:
+                    raise ValueError(
+                        f"Unsupported image type: {type(image).__name__}. "
+                        f"Expected bytes, dict with 'bytes' key, or PIL.Image.Image."
+                    )
+            finally:
+                PIL.PngImagePlugin.MAX_TEXT_CHUNK = original_max_text_chunk
+
+            # Convert to RGB and tensor
+            with image_ctx as pil_image:
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                image = torch.tensor(np.array(pil_image)).permute(2, 0, 1)  # HWC to CHW
+                Assert.eq(image.dtype, torch.uint8)
+
+        if self.do_resize:
+            # Resize to a multiple of patch size smaller or equal to max size.
+            image = self._resize(image)
+        else:
+            # Crop the image to ensure its shape is a multiple of the patch size.
+            image = image[
+                :, : image.size(1) - image.size(1) % self.height, : image.size(2) - image.size(2) % self.width
+            ]
+
         num_patches_height = div(image.size(1), self.height)
         num_patches_width = div(image.size(2), self.width)
         # Convert to patches. (`torch.nn.functional.unfold` not supported for uint8.)
         patches = (
-            image.view(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
-            .permute(3, 1, 0, 2, 4)
+            image.reshape(self.num_channels, num_patches_height, self.height, num_patches_width, self.width)
+            .permute(1, 3, 0, 2, 4)
             .flatten(0, 1)
         )
 

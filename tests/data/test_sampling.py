@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.config import ShufflingType
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingParameters
+from fast_llm.data.dataset.config import SamplingParameters, ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
@@ -38,10 +38,10 @@ GPT_MEMMAP_SAMPLES = [
 
 def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
     sampled = get_dataset_config(
         dataset_config := config, GPTDatasetFromFileConfig[LanguageModelSample]
-    ).build_and_sample(get_sampling_data(8, sequence_length=5))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
 
     # Test in data.
@@ -50,6 +50,7 @@ def test_gpt_sampled():
         8,
         sequence_length=5,
         expected_samples=GPT_MEMMAP_SAMPLES,
+        preprocessing=preprocessing,
     )
 
 
@@ -59,7 +60,7 @@ class SimpleGPTIndexedDataset[SampleType: LanguageModelSample](IndexedDataset[Sa
         self._samples = samples
 
     def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: GPTSamplingParameters | None = None
+        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
     ) -> SampleType:
         if end is None:
             end = len(self._samples[index])
@@ -98,7 +99,14 @@ def test_gpt_sample(seed, shuffle):
     previous_samples = None
     # Loop instead of parametrizing for the check below.
     for num_samples in (20, 10, 6, 5, 2, 1):
-        sampled = TEST_DATASET.sample(get_sampling_data(num_samples, sequence_length=5, seed=seed, shuffle=shuffle))
+        sampled = TEST_DATASET.sample(
+            get_sampling_data(
+                num_samples,
+                sequence_length=5,
+                seed=seed,
+                shuffle=shuffle,
+            )
+        )
         samples = validate_indexed_dataset_sampling(sampled)
         if previous_samples is not None and shuffle != ShufflingType.full:
             # Check that the sequence is independent of `num_sample`.
@@ -121,17 +129,10 @@ def test_build_padded_token_cumsum():
     Assert.all_equal(token_cumsum, expected_cumsums)
 
 
-def get_test_seeds(num_seeds):
-    np.random.seed(42)
-    seeds = np.random.randint(0, num_seeds * 100, num_seeds)
-    return seeds.tolist()
-
-
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
 def test_gpt_sample_padding():
-    for seed in get_test_seeds(100):
+    for _ in range(10):
         vocab_size = 30
-        np.random.seed(seed)
         num_sequences = np.random.randint(1, 20)
         sequence_length = np.random.randint(1, 20)
         doc_sizes = np.random.randint(1, 2 * sequence_length, num_sequences)
@@ -159,7 +160,7 @@ def test_gpt_sample_padding():
         sampling = get_sampling_data(
             num_samples=len(expected_samples),
             sequence_length=sequence_length,
-            seed=seed,
+            seed=np.random.randint(100000),
             shuffle=ShufflingType.disabled,
             truncate_documents=False,
         )

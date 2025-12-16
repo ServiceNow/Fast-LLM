@@ -1,14 +1,17 @@
+import inspect
 import logging
 import typing
 
 import torch
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
-from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.attention.config import MixerKwargs
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import MambaConfig, init_a, init_dtprojbias
@@ -16,23 +19,29 @@ from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 try:
-    from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
     _mamba_available = True
+    sig = inspect.signature(selective_scan_fn)
+    # for training with packing install https://github.com/jxiw/varlen_mamba
+    # see https://github.com/jxiw/M1/blob/main/HYBRID_PACK.md
+    if "position_indices" in sig.parameters:
+        _mamba_varlen_available = True
+    else:
+        _mamba_varlen_available = False
+
 except (ImportError, RuntimeError):
     _mamba_available = False
+    _mamba_varlen_available = False
 
 logger = logging.getLogger(__name__)
 
-"""
-Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
-For now it only supports training and not inference.
-This works with triton 3.1.0
-"""
-
 
 class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
-    _mixer_name: typing.ClassVar[str] = "mamba"
+    """
+    This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
+    """
+
     _config: MambaConfig
 
     def __init__(
@@ -48,48 +57,69 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         super().__init__(
             config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft, return_bias=return_bias
         )
-        assert self._distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for Mamba"
 
-        # Tensor dims:
-        heads_dim = TensorDim("heads", div(self._config.d_inner, self._config.state_size))
+        num_heads = div(self._config.d_inner, self._config.state_size)
+        num_head_groups = div(self._config.d_xb, self._config.state_size)
+
         state_dim = TensorDim("state", self._config.state_size)
-        inner_dim = CompositeTensorDim("inner", (heads_dim, state_dim))
-        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
-        inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
-        x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
 
-        # TODO: Use x_layer
-        self.in_proj = self._config.z_layer.get_layer(
-            hidden_dim,
-            inner_projection_dim,
-            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
-            default_add_bias=self._config.add_linear_biases,
-            lr_scale=self._lr_scale,
-            peft=self._peft,
+        head_groups_dim = TensorDim(
+            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         )
+        group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
+
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
+
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, state_dim))
+        xb_dim = CompositeTensorDim("xb", (head_groups_dim, state_dim))
+
+        # DT projection
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, xb_dim, xb_dim, inner_dim),
+        )
+
+        self._local_heads = heads_dim.size
+        self._local_head_groups = head_groups_dim.size
+        self._group_heads = div(self._local_heads, self._local_head_groups)
+        self._local_inner_size = inner_dim.size
+        self._local_xb_size = xb_dim.size
+        convolution_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
+
         self.convolution = self._config.convolution_layer.get_layer(
-            inner_dim,
-            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            convolution_dim,
             default_add_bias=self._config.add_linear_biases,
             default_activation=ActivationType.silu,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        self.x_proj = self._config.x_projection_layer.get_layer(
-            inner_dim,
-            x_projection_dim,
-            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+        # TODO: Use x_layer, b_layer, c_layer
+        self.in_proj = self._config.z_layer.get_layer(
+            hidden_dim,
+            inner_projection_dim,
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-
-        # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
+        self.dt_in_proj = self._config.dt_input_layer.get_layer(
+            hidden_dim,
+            dt_rank_dim,
+            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_add_bias=self._config.add_linear_biases,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
         self.dt_proj = self._config.dt_layer.get_layer(
             dt_rank_dim,
             inner_dim,
-            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_weight_initialization=init_uniform_centered_(self._config.dt_rank**-0.5),
             default_bias_initialization=init_dtprojbias(),
             default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -111,10 +141,24 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         self.out_proj = self._config.output_layer.get_layer(
             inner_dim,
             hidden_dim,
-            default_weight_initialization=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
             default_add_bias=self._config.add_linear_biases,
+            sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
+        )
+
+        # Debug dims
+        self._xz_dims = (
+            BlockDimNames.batch,
+            inner_dim,
+            BlockDimNames.sequence_q,
+        )
+        self._bc_dims = (
+            BlockDimNames.batch,
+            heads_dim,
+            state_dim,
+            BlockDimNames.sequence_q,
         )
 
     def _forward(
@@ -125,29 +169,107 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
-        in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[BlockKwargs.sequence_first] else (0, 2, 1))
 
-        # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        # If we wanbt to support inference, we would need to implement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
-        out = _mamba_inner_fn(
-            in_proj,
-            self.convolution.weight,
-            self.convolution.bias,
-            self.x_proj.weight,
-            self.dt_proj.weight,
-            self.out_proj.weight,
-            self.out_proj.bias,  # is None here
+        # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
+        #   -> (batch/sequence, sequence/batch, local_inner_projection)
+        inner_projection = self.in_proj(input_)
+        dt = self.dt_proj(self.dt_in_proj(input_))
+        # Standardize to (batch, sequence, local_inner_projection)
+        if kwargs[BlockKwargs.sequence_first]:
+            inner_projection = inner_projection.transpose(0, 1)
+            dt = dt.transpose(0, 1)
+
+        sequence_length = inner_projection.size(1)
+
+        z, x, b, c = torch.split(
+            inner_projection,
+            [self._local_inner_size, self._local_xb_size, self._local_xb_size, self._local_inner_size],
+            dim=2,
+        )
+
+        # z: (batch, sequence, local_heads * state) -> (batch, local_heads * state, sequence)
+        z = z.transpose(1, 2)
+
+        # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
+        x = x.transpose(1, 2)
+        convolution_kwargs = (
+            {} if self._config.cross_document_attention else {"seq_idx": kwargs[MixerKwargs.seq_idx].unsqueeze(0)}
+        )
+        if self._config.repeat_kv_before_conv:
+            x = self.convolution(
+                x.unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+                .flatten(1, 2),
+                **convolution_kwargs,
+            )
+        else:
+            x = (
+                self.convolution(x, **convolution_kwargs)
+                .unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+                .flatten(1, 2)
+            )
+
+        # b: (batch, sequence, local_head_groups * state) -> (batch, local_heads, state, sequence)
+        b = (
+            b.transpose(1, 2)
+            .unflatten(1, (self._local_head_groups, self._config.state_size))
+            .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
+        )
+
+        # c: (batch, sequence, heads * state) -> (batch, heads, state, sequence)
+        c = c.transpose(1, 2).unflatten(1, (self._local_heads, self._config.state_size))
+
+        # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
+        dt = dt.transpose(1, 2)
+
+        self._debug(z, "z", self._xz_dims, kwargs)
+        self._debug(x, "x", self._xz_dims, kwargs)
+        self._debug(b, "b", self._bc_dims, kwargs)
+        self._debug(c, "c", self._bc_dims, kwargs)
+        self._debug(dt, "dt", self._xz_dims, kwargs)
+
+        scan_kwargs = (
+            {} if self._config.cross_document_attention else {"position_indices": kwargs[MixerKwargs.position_ids]}
+        )
+        y = selective_scan_fn(
+            x,
+            dt,
             -torch.exp(self.A_log.float()),
-            None,  # input-dependent B
-            None,  # input-dependent C
+            b,
+            c,
             self.D.float(),
+            z,
             delta_bias=None if self.dt_proj.bias is None else self.dt_proj.bias.float(),
             delta_softplus=True,
+            **scan_kwargs,
         )
+
+        self._debug(y, "y", self._xz_dims, kwargs)
+
+        # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
+        y = y.transpose(1, 2)[:, :sequence_length]
         if kwargs[BlockKwargs.sequence_first]:
-            out = out.transpose(0, 1)
-        return out, None
+            # TODO: Is contiguous needed?
+            y = y.transpose(0, 1).contiguous()
+        # (batch/sequence, sequence/batch, local_heads * state)
+        #   -> (batch/local_sequence, local_sequence/batch, hidden)
+        out, bias = self.out_proj(y)
+        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+        return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Implement.
         raise NotImplementedError()
+
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        if not self._config.cross_document_attention:
+            assert (
+                _mamba_varlen_available
+            ), f"Varlen mamba requires custom mamba installation from `https://github.com/jxiw/varlen_mamba`"
+            preprocess_for_varlen(
+                kwargs,
+                kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
+                return_seq_idx=True,
+                return_position_ids=True,
+            )

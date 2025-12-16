@@ -17,16 +17,17 @@ def triton_rotary_kernel(
     num_heads: tl_constexpr,
     rotary_block_size: tl_constexpr,
     head_block_size: tl_constexpr,
+    seq_len: tl_constexpr,
     backward: tl_constexpr,
 ):
     # TODO: Int64 ptr if needed?
-    pid_0 = tl.program_id(axis=0)
-    pid_1 = tl.program_id(axis=1)
-    pid_2 = tl.program_id(axis=2)
+    pid_0 = tl.program_id(axis=0)  # Folded (batch * seq) index
+    pid_1 = tl.program_id(axis=1)  # Head index
+    position_id = pid_0 % seq_len
 
     offsets = tl.arange(0, rotary_block_size)
-    head_offsets = pid_2 * head_block_size + tl.arange(0, head_block_size)[:, None]
-    input_offsets = stride_0 * pid_0 + stride_1 * pid_1 + stride_2 * head_offsets + offsets[None, :]
+    head_offsets = pid_1 * head_block_size + tl.arange(0, head_block_size)[:, None]
+    input_offsets = stride_0 * (pid_0 // seq_len) + stride_1 * position_id + stride_2 * head_offsets + offsets[None, :]
     input_re_ptr = input_ptr + input_offsets
     input_im_ptr = input_re_ptr + rotary_dim
 
@@ -39,7 +40,7 @@ def triton_rotary_kernel(
         input_im = tl.load(input_im_ptr, mask=mask).to(tl.float32)
 
     # Computing frequencies here is faster but hurts precision, so we load pre-computed ones instead.
-    frequencies_offsets = 2 * rotary_dim * pid_1 + offsets
+    frequencies_offsets = 2 * rotary_dim * position_id + offsets
     frequencies_re_ptr = frequencies_ptr + frequencies_offsets
     frequencies_im_ptr = frequencies_re_ptr + rotary_dim
     frequencies_re = tl.load(frequencies_re_ptr)
@@ -76,7 +77,8 @@ def triton_rotary_(
     if head_block_size > num_heads:
         head_block_size = triton.next_power_of_2(num_heads)
 
-    triton_rotary_kernel[(batch_size, seq_len, triton.cdiv(num_heads, head_block_size))](
+    # Folded the large y dim into the x dim as gridDim.x is 32 bit while gridDim.y and gridDim.z are 16 bit registers
+    triton_rotary_kernel[(batch_size * seq_len, triton.cdiv(num_heads, head_block_size))](
         input_,
         frequencies,
         input_.stride(0),
@@ -86,6 +88,7 @@ def triton_rotary_(
         num_heads,
         rotary_block_size,
         head_block_size,
+        seq_len,
         backward,  # noqa
     )
     return input_
