@@ -75,14 +75,10 @@ class TestComposeConfigsLaws:
             },
         }
 
-    def test_identity_empty_surgery(self, source_config):
-        """Law 1: compose_configs(config, {}) == config"""
-        result = compose_configs(source_config, {})
-        assert result == source_config
-
-    def test_identity_none_surgery(self, source_config):
-        """Law 1: compose_configs(config, None) == config"""
-        result = compose_configs(source_config, None)
+    @pytest.mark.parametrize("empty_surgery", [{}, None])
+    def test_identity(self, source_config, empty_surgery):
+        """Law 1: compose_configs(config, empty) == config for empty in [{}, None]"""
+        result = compose_configs(source_config, empty_surgery)
         assert result == source_config
 
     def test_override_explicit_values(self, source_config):
@@ -114,7 +110,7 @@ class TestComposeConfigsLaws:
         assert mixer["head_size"] == 32  # Inherited
         assert mixer["rope_theta"] == 10000.0  # Inherited
         assert mixer["window_size"] == 512  # Added
-        assert "init" not in mixer  # Stripped by apply_surgery
+        # init is preserved for plan_surgery to see (stripped only at final output)
 
     def test_cross_type_attention_to_gdn(self, source_config):
         """Law 5: attention→gdn derives GDN dims from attention geometry."""
@@ -239,8 +235,14 @@ class TestComposeConfigsLaws:
 
         assert "vision_encoder" not in result
 
-    def test_init_stripped_from_result(self, source_config):
-        """Verify `init` keys are stripped from final result."""
+    def test_init_preserved_for_plan_surgery(self, source_config):
+        """Verify `init` keys are preserved so plan_surgery can see them.
+
+        The `init` field controls weight initialization (transfer vs random).
+        It's preserved through composition and only stripped at final output.
+        """
+        from fast_llm_external_models.apriel2.conversion.config import strip_init_fields
+
         surgery = {
             "decoder": {
                 "block": {
@@ -252,20 +254,20 @@ class TestComposeConfigsLaws:
                             "gdn": {"type": "gdn", "init": "random", "convolution_layer": {"kernel_size": 4}},
                         },
                     },
-                    "mlp": {"init": "transfer"},
-                    "normalization": {"init": "transfer"},
                 },
             },
         }
         result = compose_configs(source_config, surgery)
 
-        def check_no_init(d, path=""):
-            assert "init" not in d, f"Found 'init' key at {path}"
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    check_no_init(v, f"{path}.{k}")
+        # init is preserved in composed config
+        mixers = result["decoder"]["block"]["mixer"]["mixers"]
+        assert mixers["attention"].get("init") == "transfer"
+        assert mixers["gdn"].get("init") == "random"
 
-        check_no_init(result)
+        # strip_init_fields removes them for final output
+        stripped = strip_init_fields(result)
+        assert "init" not in stripped["decoder"]["block"]["mixer"]["mixers"]["attention"]
+        assert "init" not in stripped["decoder"]["block"]["mixer"]["mixers"]["gdn"]
 
     def test_init_random_still_inherits_config(self, source_config):
         """init: random is for weights only - config params still inherited."""
@@ -286,6 +288,49 @@ class TestComposeConfigsLaws:
         assert mixer["heads"] == 8
         assert mixer["head_groups"] == 4
         assert mixer["window_size"] == 512
+
+    # =========================================================================
+    # Monoid Laws: compose_configs forms a monoid action on configs
+    # =========================================================================
+
+    def test_surgery_monoid_associativity(self):
+        """MONOID: merge(merge(A, B), C) == merge(A, merge(B, C)) for partial configs."""
+        surgery_a = {"decoder": {"block": {"mixer": {"type": "stochastic", "main_mixer_name": "attention"}}}}
+        surgery_b = {"decoder": {"block": {"mixer": {"mixers": {"sliding_window": {"window_size": 512}}}}}}
+        surgery_c = {"decoder": {"block": {"mixer": {"mixers": {"gdn": {"type": "gdn"}}}}}}
+
+        # Left-associated: (A ∘ B) ∘ C
+        ab_c = compose_configs(compose_configs(surgery_a, surgery_b), surgery_c)
+        # Right-associated: A ∘ (B ∘ C)
+        a_bc = compose_configs(surgery_a, compose_configs(surgery_b, surgery_c))
+
+        assert ab_c == a_bc, "Surgery monoid should be associative"
+
+    @pytest.mark.parametrize("num_surgeries", [2, 3])
+    def test_monoid_action_compatibility(self, source_config, num_surgeries):
+        """MONOID ACTION: apply(apply(c, A), B) == apply(c, merge(A, B))
+
+        This is the key law: applying surgeries sequentially equals merging first.
+        Parameterized to test with 2 and 3 surgeries.
+        """
+        surgeries = [
+            {"decoder": {"block": {"mixer": {"type": "stochastic", "main_mixer_name": "attention", "mixers": {"attention": {}}}}}},
+            {"decoder": {"block": {"mixer": {"mixers": {"sliding_window": {"window_size": 512}}}}}},
+            {"decoder": {"block": {"mixer": {"mixers": {"gdn": {"type": "gdn"}}}}}},
+        ][:num_surgeries]
+
+        # Sequential: ((c ⊳ A) ⊳ B) ⊳ ...
+        result_sequential = source_config
+        for s in surgeries:
+            result_sequential = compose_configs(result_sequential, s)
+
+        # Merged: c ⊳ (A ∘ B ∘ ...)
+        merged = surgeries[0]
+        for s in surgeries[1:]:
+            merged = compose_configs(merged, s)
+        result_merged = compose_configs(source_config, merged)
+
+        assert result_sequential == result_merged, f"Monoid action compatibility failed for {num_surgeries} surgeries"
 
 
 class TestBiasConfigInheritance:
@@ -555,158 +600,10 @@ class TestComposeConfigsEndToEnd:
         mixer = config.decoder["block"]["mixer"]
         assert mixer["type"] == "stochastic"
 
-        # Each sub-mixer should have complete config (no init keys)
+        # Each sub-mixer should have complete config
+        # (init is preserved for plan_surgery, stripped only at final output)
         for name, sub_mixer in mixer["mixers"].items():
-            assert "init" not in sub_mixer, f"Sub-mixer {name} still has 'init' key"
             assert "type" in sub_mixer
-
-
-class TestMonoidLaws:
-    """Test the algebraic laws of compose_configs.
-
-    Surgery specs form a MONOID under deep-merge:
-    - Identity: {}
-    - Operation: deep merge (overlay wins)
-    - Associativity: merge(merge(A, B), C) == merge(A, merge(B, C))
-
-    compose_configs is a MONOID ACTION on configs:
-    - Identity action: apply(config, {}) == config
-    - Compatibility: apply(apply(c, A), B) == apply(c, merge(A, B))
-    """
-
-    @pytest.fixture
-    def complete_config(self):
-        """A complete Apriel2 config."""
-        return {
-            "model_type": "apriel2",
-            "architectures": ["Apriel2ForConditionalGeneration"],
-            "hidden_size": 256,
-            "vocab_size": 1000,
-            "bos_token_id": 1,
-            "eos_token_id": 2,
-            "tie_word_embeddings": False,
-            "image_token_index": 100,
-            "decoder": {
-                "type": "fixed",
-                "num_blocks": 4,
-                "block": {
-                    "mixer": {
-                        "type": "attention",
-                        "heads": 8,
-                        "head_groups": 4,
-                        "head_size": 32,
-                        "rope_theta": 10000.0,
-                    },
-                    "mlp": {"type": "mlp", "intermediate_size": 512},
-                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-                },
-            },
-        }
-
-    @pytest.fixture
-    def surgery_a(self):
-        """First surgery: wrap in stochastic with attention."""
-        return {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"init": "transfer"},
-                        },
-                    },
-                },
-            },
-        }
-
-    @pytest.fixture
-    def surgery_b(self):
-        """Second surgery: add sliding window mixer."""
-        return {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "mixers": {
-                            "sliding_window": {"init": "transfer", "window_size": 512},
-                        },
-                    },
-                },
-            },
-        }
-
-    def test_identity_action(self, complete_config):
-        """apply(config, {}) == config"""
-        result = compose_configs(complete_config, {})
-        assert result == complete_config
-
-    def test_surgery_monoid_associativity(self, surgery_a, surgery_b):
-        """merge(merge(A, B), C) == merge(A, merge(B, C)) for partial configs."""
-        surgery_c = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "mixers": {
-                            "gdn": {"type": "gdn", "init": "transfer", "convolution_layer": {"kernel_size": 4}},
-                        },
-                    },
-                },
-            },
-        }
-
-        # Left-associated: (A ∘ B) ∘ C
-        ab = compose_configs(surgery_a, surgery_b)
-        ab_c = compose_configs(ab, surgery_c)
-
-        # Right-associated: A ∘ (B ∘ C)
-        bc = compose_configs(surgery_b, surgery_c)
-        a_bc = compose_configs(surgery_a, bc)
-
-        assert ab_c == a_bc, "Surgery monoid should be associative"
-
-    def test_monoid_action_compatibility(self, complete_config, surgery_a, surgery_b):
-        """apply(apply(c, A), B) == apply(c, merge(A, B))
-
-        This is the key law: applying surgeries sequentially should equal
-        merging the surgeries first, then applying once.
-        """
-        # Sequential application: (c ⊳ A) ⊳ B
-        result_sequential = compose_configs(compose_configs(complete_config, surgery_a), surgery_b)
-
-        # Merged application: c ⊳ (A ∘ B)
-        merged_surgery = compose_configs(surgery_a, surgery_b)
-        result_merged = compose_configs(complete_config, merged_surgery)
-
-        # These should be equivalent
-        assert result_sequential == result_merged, "Monoid action should satisfy compatibility law"
-
-    def test_three_way_compatibility(self, complete_config, surgery_a, surgery_b):
-        """Test with three surgeries for stronger confidence."""
-        surgery_c = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "mixers": {
-                            "gdn": {"type": "gdn", "init": "transfer", "convolution_layer": {"kernel_size": 4}},
-                        },
-                    },
-                },
-            },
-        }
-
-        # Sequential: ((c ⊳ A) ⊳ B) ⊳ C
-        seq = compose_configs(
-            compose_configs(compose_configs(complete_config, surgery_a), surgery_b),
-            surgery_c
-        )
-
-        # Merged: c ⊳ ((A ∘ B) ∘ C)
-        merged = compose_configs(
-            complete_config,
-            compose_configs(compose_configs(surgery_a, surgery_b), surgery_c)
-        )
-
-        assert seq == merged, "Three-way monoid action should satisfy compatibility"
 
 
 class TestCompositionTortureTest:
@@ -807,19 +704,29 @@ class TestCompositionTortureTest:
         assert mixer["mixers"]["sliding_window"]["window_size"] == 512
         assert mixer["mixers"]["gdn"]["value_heads"] == 16
 
-    def test_no_init_keys_in_result(self, complete_config, additive_surgery_chain):
-        """Verify no 'init' keys leak through."""
+    def test_init_keys_preserved_for_planning(self, complete_config, additive_surgery_chain):
+        """Verify 'init' keys are preserved for plan_surgery to see.
 
-        def check_no_init(d, path=""):
-            if isinstance(d, dict):
-                assert "init" not in d, f"Found 'init' key at {path}"
-                for k, v in d.items():
-                    check_no_init(v, f"{path}.{k}")
+        The `init` field is metadata for weight initialization. It's preserved
+        through composition and only stripped when saving final output.
+        """
+        from fast_llm_external_models.apriel2.conversion.config import strip_init_fields
 
         result = complete_config
         for i, surgery in enumerate(additive_surgery_chain):
             result = compose_configs(result, surgery)
-            check_no_init(result, f"step_{i+1}")
+
+        # init should be in the composed config
+        mixer = result["decoder"]["block"]["mixer"]
+        if "mixers" in mixer:
+            has_init = any("init" in m for m in mixer["mixers"].values())
+            assert has_init, "init should be preserved in composed config"
+
+        # strip_init_fields removes them
+        stripped = strip_init_fields(result)
+        mixer = stripped["decoder"]["block"]["mixer"]
+        if "mixers" in mixer:
+            assert all("init" not in m for m in mixer["mixers"].values())
 
     def test_full_torture_chain(self, complete_config, torture_surgery_chain):
         """Test the full 10-step torture chain produces valid configs."""

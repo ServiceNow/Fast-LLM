@@ -1681,6 +1681,148 @@ def torture_surgery_chain():
 
 
 # =============================================================================
+# Shared Config Dict Fixtures (for compose_configs / plan_surgery tests)
+# =============================================================================
+
+
+@pytest.fixture
+def base_config_dict():
+    """Complete Apriel2 config dict without biases (Llama-style).
+
+    Use this as the base config for testing compose_configs and plan_surgery.
+    Returns a dict (not Apriel2Config) for direct use with compose_configs.
+    """
+    return {
+        "model_type": "apriel2",
+        "hidden_size": 256,
+        "vocab_size": 1000,
+        "bos_token_id": 1,
+        "eos_token_id": 2,
+        "tie_word_embeddings": False,
+        "decoder": {
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 8,
+                    "head_groups": 4,
+                    "head_size": 32,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 512, "gated": True},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    }
+
+
+@pytest.fixture
+def base_config_with_bias_dict():
+    """Complete Apriel2 config dict with Qwen-style biases.
+
+    - QKV bias enabled, O bias disabled
+    - Gated MLP (no per-layer bias control in this style)
+
+    Use this for testing bias inheritance through surgery operations.
+    Returns a dict (not Apriel2Config) for direct use with compose_configs.
+    """
+    return {
+        "model_type": "apriel2",
+        "hidden_size": 256,
+        "vocab_size": 1000,
+        "bos_token_id": 1,
+        "eos_token_id": 2,
+        "tie_word_embeddings": False,
+        "decoder": {
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 8,
+                    "head_groups": 4,
+                    "head_size": 32,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                    "query_layer": {"bias": {"enabled": True}},
+                    "key_layer": {"bias": {"enabled": True}},
+                    "value_layer": {"bias": {"enabled": True}},
+                    "dense_layer": {"bias": {"enabled": False}},
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 512, "gated": True},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    }
+
+
+def make_weights_for_config(config: dict) -> dict:
+    """Create random weights matching a config's expected schema.
+
+    This is a helper function (not a fixture) for creating test weights.
+    Use it in tests that need weights for plan execution.
+
+    Args:
+        config: Complete Apriel2 config dict
+
+    Returns:
+        Dict mapping weight key strings to torch tensors
+    """
+    from fast_llm_external_models.apriel2.conversion import W
+
+    hidden = config["hidden_size"]
+    vocab = config["vocab_size"]
+    decoder = config["decoder"]
+    num_blocks = decoder["num_blocks"]
+    block = decoder["block"]
+    mixer = block["mixer"]
+    mlp = block["mlp"]
+
+    heads = mixer["heads"]
+    head_groups = mixer["head_groups"]
+    head_size = mixer["head_size"]
+    inter = mlp["intermediate_size"]
+
+    # Check bias settings
+    has_q_bias = mixer.get("query_layer", {}).get("bias", {}).get("enabled", False)
+    has_k_bias = mixer.get("key_layer", {}).get("bias", {}).get("enabled", False)
+    has_v_bias = mixer.get("value_layer", {}).get("bias", {}).get("enabled", False)
+
+    weights = {}
+    weights["model.embed_tokens.weight"] = torch.randn(vocab, hidden)
+
+    for i in range(num_blocks):
+        p = f"model.decoder.blocks.{i}"
+
+        # Attention
+        weights[f"{p}.mixer.q_proj.weight"] = torch.randn(heads * head_size, hidden)
+        weights[f"{p}.mixer.k_proj.weight"] = torch.randn(head_groups * head_size, hidden)
+        weights[f"{p}.mixer.v_proj.weight"] = torch.randn(head_groups * head_size, hidden)
+        weights[f"{p}.mixer.o_proj.weight"] = torch.randn(hidden, heads * head_size)
+
+        if has_q_bias:
+            weights[f"{p}.mixer.q_proj.bias"] = torch.randn(heads * head_size)
+        if has_k_bias:
+            weights[f"{p}.mixer.k_proj.bias"] = torch.randn(head_groups * head_size)
+        if has_v_bias:
+            weights[f"{p}.mixer.v_proj.bias"] = torch.randn(head_groups * head_size)
+
+        # MLP
+        weights[f"{p}.mlp.up_proj.weight"] = torch.randn(inter, hidden)
+        weights[f"{p}.mlp.gate_proj.weight"] = torch.randn(inter, hidden)
+        weights[f"{p}.mlp.down_proj.weight"] = torch.randn(hidden, inter)
+
+        # Norms
+        weights[f"{p}.input_layernorm.weight"] = torch.randn(hidden)
+        weights[f"{p}.post_attention_layernorm.weight"] = torch.randn(hidden)
+
+    weights["model.norm.weight"] = torch.randn(hidden)
+    weights["lm_head.weight"] = torch.randn(vocab, hidden)
+
+    return {W(k): v for k, v in weights.items()}
+
+
+# =============================================================================
 # Cache Test Fixtures - Tensor Dimensions
 # =============================================================================
 
