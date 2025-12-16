@@ -87,10 +87,13 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
             messages = r.xreadgroup(
                 groupname=self._config.group_name,
                 consumername=f"{self._config.consumer_name_prefix}_{self.batch_data_rank}",
-                # ">" means read only new messages that were never delivered to this consumer
+                # ">" reads only new messages that have not been delivered to any consumer
                 streams={self._config.redis.stream_key: ">"},
                 count=1,
-                block=1000,  # wait up to 1 second
+                block=1000,
+                # No explicit ACK: messages are processed immediately; on rank failure the job restarts,
+                # so message loss is acceptable and simplifies coordination
+                noack=True,
             )
 
             data = None
@@ -98,7 +101,6 @@ class StreamingDataset[SampleType: LanguageModelSample](SamplableIterableDataset
                 for stream_key, msgs in messages:
                     assert stream_key == self._config.redis.stream_key.encode()
                     for msg_id, msg_data in msgs:
-                        r.xack(self._config.redis.stream_key, self._config.group_name, msg_id)
                         data = orjson.loads(msg_data[self._config.redis.payload_key.encode()])
                         yield self._sample_from_dict(data)
 
