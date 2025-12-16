@@ -158,6 +158,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
+        total_valid_tokens: int | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
@@ -249,14 +250,21 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                             loss_mask[sample_index, begin:end] = False
                     if (
                         self._config.head.distillation_model is not None
-                        and self._config.decoder.block.distillation_model is not None
+                        or self._config.decoder.block.distillation_model is not None
                     ):
                         kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                        # Pass total_valid_tokens for correct gradient accumulation
+                        if total_valid_tokens is not None:
+                            kwargs[LanguageModelKwargs.total_valid_tokens] = total_valid_tokens
                     labels = torch.where(loss_mask, labels, -100)
 
                 kwargs[LanguageModelKwargs.labels] = (
                     labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels
                 ).contiguous()
+                if LanguageModelKwargs.loss_mask in kwargs and kwargs[AttentionKwargs.sequence_first]:
+                    kwargs[LanguageModelKwargs.loss_mask] = (
+                        kwargs[LanguageModelKwargs.loss_mask].transpose(0, 1).contiguous()
+                    )
 
                 if batch.chosen_spans is not None:
                     kwargs[LanguageModelKwargs.chosen_spans] = batch.chosen_spans.crop(labels_begin, labels_end).ranges

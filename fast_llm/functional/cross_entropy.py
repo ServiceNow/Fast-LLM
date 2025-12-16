@@ -35,12 +35,10 @@ def _torch_cross_entropy_forward_backward(
                 logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
             )
         else:
-            loss = (
-                torch.nn.functional.cross_entropy(
-                    logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
-                )
-                * loss_mask
-            ).mean()
+            per_sample_loss = torch.nn.functional.cross_entropy(
+                logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
+            )
+            loss = (per_sample_loss * loss_mask).sum() / loss_mask.sum()
         if grad_output is None:
             grad = None
         else:
@@ -129,7 +127,8 @@ def _fused_cross_entropy_forward_backward(
         else:
             grad_base = exp_logits - sum_exp_logits * target
 
-        grad = grad_base.mul((grad_output / logits.size(0)) / sum_exp_logits)
+        normalizer = loss_mask.sum() if loss_mask is not None else logits.size(0)
+        grad = grad_base.mul((grad_output / normalizer) / sum_exp_logits)
         if logits_scale_factor != 1.0:
             grad *= logits_scale_factor
         if loss_mask is not None:
@@ -155,7 +154,8 @@ def _fused_cross_entropy_forward_backward(
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
 
-    loss = per_sample_loss.mean()
+    valid_tokens = loss_mask.sum() if loss_mask is not None else logits.size(0)
+    loss = per_sample_loss.sum() / valid_tokens
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
 
@@ -261,47 +261,45 @@ def _reverse_kl_forward_backward(
 
     # Compute log probabilities
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
-    with torch.enable_grad():
-        # logits_ = logits.float()#.detach().requires_grad_(grad_output is not None)
-        student_log_probs = distributed_log_softmax(logits, group=group)
+    student_log_probs = distributed_log_softmax(logits, group=group)
 
-        # Reverse KL: input=teacher_log_probs, target=student_probs
-        loss_terms = torch.nn.functional.kl_div(
-            teacher_log_probs,  # input = log(p)
-            student_log_probs,  # target = log(q)
-            reduction="none",
-            log_target=True,
-        ).sum(dim=-1)
-        if loss_mask is not None:
-            # loss mask is the same on all ranks for TP over vocab.
-            valid = loss_mask.to(loss_terms.dtype)
-            loss_terms = loss_terms * valid
-            valid_tokens = valid.sum()
-        else:
-            valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
-        loss = loss_terms.sum()  # sums over batch and seq. len.
+    # Reverse KL: input=teacher_log_probs, target=student_probs
+    loss_terms = torch.nn.functional.kl_div(
+        teacher_log_probs,  # input = log(p)
+        student_log_probs,  # target = log(q)
+        reduction="none",
+        log_target=True,
+    ).sum(dim=-1)
+    if loss_mask is not None:
+        # loss mask is the same on all ranks for TP over vocab.
+        valid = loss_mask.to(loss_terms.dtype)
+        loss_terms = loss_terms * valid
+        valid_tokens = valid.sum()
+    else:
+        valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
+    loss = loss_terms.sum()  # sums over batch and seq. len.
 
+    if group is not None:
+        all_reduce(loss, op=ReduceOp.SUM, group=group)
+    loss /= valid_tokens
+
+    if grad_output is not None:
+        # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
+        log_ratio = student_log_probs - teacher_log_probs
+        expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
+        # expected E_q(log s - log t) -- this is actually dependent on the full vocab!
         if group is not None:
-            all_reduce(loss, op=ReduceOp.SUM, group=group)
-        loss /= valid_tokens
+            all_reduce(expected, op=ReduceOp.SUM, group=group)
+        grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
 
-        if grad_output is not None:
-            # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
-            log_ratio = student_log_probs - teacher_log_probs
-            expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
-            # expected E_q(log s - log t) -- this is actually dependent on the full vocab!
-            if group is not None:
-                all_reduce(expected, op=ReduceOp.SUM, group=group)
-            grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
+        if loss_mask is not None:
+            valid = loss_mask.to(logits.dtype).unsqueeze(-1)
+            grad_base = grad_base * valid
 
-            if loss_mask is not None:
-                valid = loss_mask.to(logits.dtype).unsqueeze(-1)
-                grad_base = grad_base * valid
-
-            grad = grad_base.mul(grad_output / valid_tokens)
-            grad = grad.to(logits.dtype)
-        else:
-            grad = None
+        grad = grad_base.mul(grad_output / valid_tokens)
+        grad = grad.to(logits.dtype)
+    else:
+        grad = None
 
     return loss.detach_(), grad
 

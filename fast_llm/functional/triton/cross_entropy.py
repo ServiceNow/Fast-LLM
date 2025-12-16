@@ -144,13 +144,22 @@ def triton_cross_entropy_forward_backward(
     losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
     # TODO: Safe to do inplace?
     grad_logits = None if grad_output is None else torch.empty_like(logits)
+
+    # Compute valid token count for loss masking
+    if target_format == TargetFormat.labels:
+        # For labels format, masking is done via negative labels
+        valid_count = (target >= 0).sum().item()  # Convert to Python scalar
+    else:
+        # For logits/probabilities format, masking is done via loss_mask
+        valid_count = loss_mask.sum().item() if loss_mask is not None else n_rows
+
     if target_format == TargetFormat.labels:
         triton_cross_entropy_forward_backward_kernel[(n_rows,)](
             logits,
             target,
             grad_logits,
             losses,
-            None if grad_output is None else grad_output / n_rows,
+            None if grad_output is None else grad_output / valid_count,
             n_cols,
             logits.stride(0),
             None if grad_output is None else grad_logits.stride(0),
@@ -167,7 +176,7 @@ def triton_cross_entropy_forward_backward(
             loss_mask,
             grad_logits,
             losses,
-            None if grad_output is None else grad_output / n_rows,
+            None if grad_output is None else grad_output / valid_count,
             n_cols,
             logits.stride(0),
             target.stride(0),
@@ -177,4 +186,4 @@ def triton_cross_entropy_forward_backward(
             num_warps=num_warps,
             from_logits=target_format == TargetFormat.logits,
         )
-    return losses.mean(), grad_logits
+    return losses.sum() / valid_count, grad_logits

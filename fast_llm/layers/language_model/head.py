@@ -376,7 +376,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None:
+        if distillation_target is not None and self._config.distillation_loss_factor > 0.0:
+            # We need to scale the loss by (valid_tokens * num_micro_batches) / total_valid_tokens to correctly average the loss over micro-batches.
+            # The runner averages losses by dividing by num_micro_batches, so we need to account for that.
+            # Note: for grads this scaling is already in the 'grad_output'
+            total_valid_tokens = kwargs.get(
+                LanguageModelKwargs.total_valid_tokens
+            )  # number of not masked tokens across all micro-batches.
+            num_micro_batches = kwargs.get("num_micro_batches", 1)
+
+            if loss_mask is None or total_valid_tokens is None:
+                loss_scalor_df = 1
+            else:
+                valid_tokens = loss_mask.sum()
+                # Scale by (valid_tokens * num_micro_batches) / total_valid_tokens
+                # This accounts for the runner dividing by num_micro_batches
+                loss_scalor_df = (valid_tokens * num_micro_batches) / total_valid_tokens
             if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
@@ -408,9 +423,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
                 )
             if self.training and losses is not None:  # we keep track of unscaled losses for model comparison purposes
-                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
-            distillation_loss = distillation_loss * self._config.distillation_loss_factor
+                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach() * loss_scalor_df)
 
+            distillation_loss = distillation_loss * self._config.distillation_loss_factor * loss_scalor_df
+        else:
+            distillation_loss, distillation_grad = None, None
+
+        # TODO: de-allocate earlier.
+        del logits
         # TODO: Accumulate grads in-place to reduce memory and compute overhead.
         grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
 

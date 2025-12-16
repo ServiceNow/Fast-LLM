@@ -318,11 +318,11 @@ def get_test_dataset_with_image_patches(
     )
 
 
-def get_model_test_dataset(config_only: bool = False, use_loss_masking: bool = False):
+def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
-        max_loss_masking_spans=5 if use_loss_masking else 0,
+        max_loss_masking_spans=5,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         splits={"training": 969, "validation": 30, "test": 1},
         config_only=config_only,
