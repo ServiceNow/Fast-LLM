@@ -370,11 +370,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits_scale_factor=self._config.logits_scale_factor,
                 target_format=TargetFormat.labels,
             )
+            if self.training and losses is not None:
+                losses[self._ce_loss_name_unscaled].append(lm_loss.detach())
             lm_loss = lm_loss * self._config.language_model_loss_factor
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None and self._config.distillation_loss_factor > 0.0:
+        if distillation_target is not None:
             if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
@@ -405,23 +407,15 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 raise ValueError(
                     f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
                 )
+            if self.training and losses is not None:  # we keep track of unscaled losses for model comparison purposes
+                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
             distillation_loss = distillation_loss * self._config.distillation_loss_factor
-        else:
-            distillation_loss, distillation_grad = None, None
 
         # TODO: Accumulate grads in-place to reduce memory and compute overhead.
         grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
 
         # TODO: Return individual losses?
         loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
-
-        # When using only activation distillation, loss and grad are None.
-        # Create zero tensors to allow activation distillation gradients to flow through.
-        if loss is None:
-            loss = torch.zeros(1, device=input_.device, dtype=input_.dtype, requires_grad=True)
-        if grad is None:
-            # Zero gradient means no loss at the head, but activation distillation gradients
-            grad = torch.zeros_like(logits)
 
         # TODO: de-allocate earlier.
         del logits
@@ -439,6 +433,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     @functools.cached_property
     def _loss_name(self) -> str:
         name = "language_model_loss"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _ce_loss_name_unscaled(self) -> str:
+        name = "language_model_loss_unscaled"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
@@ -471,8 +472,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             name = f"{name}_{self._prediction_distance}"
         return name
 
+    @functools.cached_property
+    def _distillation_loss_name_unscaled(self) -> str:
+        name = "distillation_loss_unscaled"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
+        if self._config.distillation_model is None or self._config.language_model_loss_factor > 0.0:
+            # unscaled CE loss (NTP)
+            loss_defs = [
+                LossDef(
+                    name=self._ce_loss_name_unscaled,
+                    formatted_name=_format_name(self._ce_loss_name_unscaled),
+                    count=count,
+                )
+            ]
         if self._config.logit_z_loss:
             loss_defs.append(
                 LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
@@ -490,6 +507,15 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                 )
             )
+            # unscaled distillation loss for comparison purposes
+            loss_defs.append(
+                LossDef(
+                    name=self._distillation_loss_name_unscaled,
+                    formatted_name=_format_name(self._distillation_loss_name_unscaled),
+                    count=count,
+                )
+            )
+            # if we mix distillation loss and CE loss for NTP, we want to log both
             if self._config.language_model_loss_factor > 0.0:
                 loss_defs.append(
                     LossDef(
@@ -511,12 +537,11 @@ def _format_name(name: str) -> str:
     return name.replace("_", " ")
 
 
-def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor | None:
+def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor:
     tensors = [tensor for tensor in tensors if tensor is not None]
     if len(tensors) > 1:
         return sum(tensors)
     elif len(tensors) == 1:
         return tensors[0]
     else:
-        # All tensors are None - this is valid when using only activation distillation
-        return None
+        raise RuntimeError()
