@@ -405,23 +405,6 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    "llama",
-    "llama_with_loss_masking",
-    updates={
-        ("batch", "use_loss_masking_spans"): True,
-    },
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
-    compare_factor=1.5,  # Loss masking seem to induce slight numerical variation between dtypes
-)
-
-_update_and_add_testing_config(
     # Tests yarn-style rotary embeddings.
     "llama",
     "llama_yarn",
@@ -569,6 +552,7 @@ _update_and_add_testing_config(
     "mistral_distill_logits",
     updates={
         ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
                 "model": {"base_model": copy.deepcopy(_mistral_base_model)},
