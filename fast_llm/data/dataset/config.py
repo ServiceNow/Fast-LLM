@@ -9,13 +9,13 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Sample
 from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
     from fast_llm.engine.distributed.distributed import Distributed
 
@@ -121,12 +121,12 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
     def build(
         self, preprocessing: PreprocessingConfig
-    ) -> SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]:
+    ) -> "SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]":
         raise NotImplementedError()
 
     def build_and_sample(
         self, sampling: SamplingData
-    ) -> SampledDataset[SampleType] | SampledIterableDataset[SampleType]:
+    ) -> "SampledDataset[SampleType] | SampledIterableDataset[SampleType]":
         return self.build(sampling.preprocessing).sample(sampling)
 
 
