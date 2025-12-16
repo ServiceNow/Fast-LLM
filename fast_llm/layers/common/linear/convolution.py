@@ -34,7 +34,11 @@ class CausalConv1d(torch.nn.Module):
             else self._forward_torch
         )
 
-    def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
+    def _forward_torch(self, input_: torch.Tensor, **kwargs) -> torch.Tensor:
+        if kwargs:
+            raise NotImplementedError(
+                f"Arguments {tuple(kwargs)} not implemented for torch implementation of 1d convolution."
+            )
         return self._activation.activation_fn(
             torch.nn.functional.conv1d(
                 input_,
@@ -45,37 +49,14 @@ class CausalConv1d(torch.nn.Module):
             )[..., : input_.size(1)]
         )
 
-    def _forward_causal_conv1d(self, input_: torch.Tensor) -> torch.Tensor:
+    def _forward_causal_conv1d(self, input_: torch.Tensor, **kwargs) -> torch.Tensor:
         return _causal_conv1d_fn(
             input_,
             self.weight.squeeze(1),
             self.bias,
             activation=(None if self._activation == ActivationType.identity else self._activation.value),
+            **kwargs,
         )
-
-    def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
-        raise NotImplementedError()
-
-
-class Convolution2D(torch.nn.Module):
-    """
-    TODO: Generalize to other convolutions?
-    """
-
-    def __init__(
-        self,
-        weight: ParameterMeta,
-        bias: ParameterMeta | None,
-        *,
-        stride: tuple[int, int],
-    ):
-        super().__init__()
-        self.weight = weight
-        self.bias = bias
-        self._stride = stride
-
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self._stride)
 
     def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
         raise NotImplementedError()

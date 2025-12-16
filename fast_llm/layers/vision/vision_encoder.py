@@ -27,8 +27,10 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
         peft: PeftConfig | None,
     ):
         super().__init__(config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft)
-        vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
-        self.patch_convolution = self._config.patch_convolution.get_layer(
+        # Internal hidden dimension for embeddings and encoder (may differ from output hidden_dim for adapter)
+        self._vision_hidden_dim = TensorDim("hidden", self._config.hidden_size)
+        vision_hidden_dim = self._vision_hidden_dim
+        self.embeddings = self._config.embeddings.get_layer(
             distributed_config,
             vision_hidden_dim,
             lr_scale=self._lr_scale,
@@ -49,18 +51,18 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
         )
 
     def get_layers(self) -> list["Layer"]:
-        return self.patch_convolution.get_layers() + self.encoder.get_layers() + self.adapter.get_layers()
+        return self.embeddings.get_layers() + self.encoder.get_layers() + self.adapter.get_layers()
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
-        self.patch_convolution.preprocess(kwargs)
+        self.embeddings.preprocess(kwargs)
         self.encoder.preprocess(kwargs)
         self.adapter.preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
         return (
-            self.patch_convolution.get_loss_definitions(count)
+            self.embeddings.get_loss_definitions(count)
             + self.encoder.get_loss_definitions(count)
             + self.adapter.get_loss_definitions(count)
         )

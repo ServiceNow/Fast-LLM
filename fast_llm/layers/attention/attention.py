@@ -11,11 +11,12 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert, div
+from fast_llm.utils import div
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -365,9 +366,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         key = key.view(*key.shape[:2], self._local_head_groups, self._config.head_size)
         value = value.view(*value.shape[:2], self._local_head_groups, self._config.head_size)
 
-        if self._debug.enabled:
-            self._debug(query, "query_rotary_input", self._query_dims, kwargs)
-            self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
+        self._debug(query, "query_rotary_input", self._query_dims, kwargs)
+        self._debug(key, "key_rotary_input", self._kv_dims, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
         with set_generator(self._distributed.tp_generator):
@@ -379,16 +379,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             else:
                 raise NotImplementedError(self._implementation)
 
-        if self._debug.enabled:
-            self._debug(query, "query", self._query_dims, kwargs)
-            self._debug(key, "key", self._kv_dims, kwargs)
-            self._debug(value, "value", self._kv_dims, kwargs)
-            self._debug(input_, "context", self._context_dims, kwargs)
+        self._debug(query, "query", self._query_dims, kwargs)
+        self._debug(key, "key", self._kv_dims, kwargs)
+        self._debug(value, "value", self._kv_dims, kwargs)
+        self._debug(input_, "context", self._context_dims, kwargs)
 
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
             input_ = input_.transpose(0, 1).contiguous()
-        return self.dense(input_)
+        out, bias = self.dense(input_)
+        self._debug(out, None, kwargs.get(AttentionKwargs.hidden_dims), kwargs)
+        return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         batch_dim: TensorDim = kwargs[AttentionKwargs.hidden_dims][1 if kwargs[AttentionKwargs.sequence_first] else 0]
@@ -505,40 +506,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             kwargs[AttentionKwargs.attention_mask_value] = self._backup_attention_mask_value
 
     def _preprocess_for_flash_attention(self, kwargs: dict[str, typing.Any]) -> None:
-        """
-        Prepares cu_seqlens_q and cu_seqlens_k for flash_attn_varlen_func:
-        https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/flash_attn_interface.py#L1375
-        cu_seqlens_q and cu_seqlens_k are cumulative sequence lengths for the query and key/value tensors, respectively.
-        Assumes a flattened batch of documents. In absence of sequence_data_parallelism, cu_seqlens_q = cu_seqlens_k.
-        If sequence_data_parallelism > 1, query tensors contain tokens only from current micro-sequence, whereas key/value tensors additionally
-        also contain previous tokens from the first document in micro-sequence.
-        We use individual sequence lengths of each document to (optionally) find the micro-sequences in the batch and compute the cumulative lengths.
-        """
-        if self._config.cross_document_attention:
-            return
-        device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
-
-        # TODO: ====== Fix (need to know how much first sequence was cropped) ======
-        Assert.eq(
-            kwargs[AttentionKwargs.sequence_k_dim].global_size, kwargs[AttentionKwargs.sequence_q_dim].global_size
-        )
-
-        # TODO: Calculate these in batch preprocessing?
-        sequence_lengths_q = torch.tensor(
-            [
-                0,
-                *(
-                    sequence_length
-                    for sequence_lengths in kwargs[AttentionKwargs.sequence_lengths]
-                    for sequence_length in sequence_lengths
-                ),
-            ],
-            dtype=torch.int32,
-        )
-        max_sequence_length = sequence_lengths_q.max().item()
-        cu_seqlens_q = sequence_lengths_q.cumsum_(0).to(device)
-        max_seqlen_q = cu_seqlens_q.new_full((1,), max_sequence_length)
-        kwargs[AttentionKwargs.cu_seqlens_q] = cu_seqlens_q
-        kwargs[AttentionKwargs.cu_seqlens_k] = cu_seqlens_q
-        kwargs[AttentionKwargs.max_seqlen_q] = max_seqlen_q
-        kwargs[AttentionKwargs.max_seqlen_k] = max_seqlen_q
+        if not self._config.cross_document_attention:
+            preprocess_for_varlen(
+                kwargs,
+                kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device,
+                return_cu_seqlens=True,
+                return_max_seqlen=True,
+            )

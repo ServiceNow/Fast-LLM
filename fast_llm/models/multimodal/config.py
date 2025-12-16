@@ -14,9 +14,15 @@ from fast_llm.models.gpt.config import (
     GPTTrainerConfig,
     PretrainedGPTModelConfig,
 )
+from fast_llm.models.multimodal.conversion.config import (
+    Apriel2CheckpointFormat,
+    LlavaCheckpointFormat,
+    LlavaHybridSSMCheckpointFormat,
+)
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalModel
+    from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
+    from fast_llm.models.multimodal.model import MultiModalBaseModel, MultiModalInferenceRunner, MultiModalModel
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
 logger = logging.getLogger(__name__)
@@ -41,8 +47,11 @@ class MultiModalModelConfig(GPTModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "multimodal"
     base_model: MultiModalBaseModelConfig = FieldUpdate()
-    # TODO: ====== Conversion ======
-    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
+        LlavaCheckpointFormat,
+        LlavaHybridSSMCheckpointFormat,
+        Apriel2CheckpointFormat,
+    )
 
     @classmethod
     def get_model_class(cls) -> type["MultiModalModel"]:
@@ -51,10 +60,10 @@ class MultiModalModelConfig(GPTModelConfig):
         return MultiModalModel
 
     @classmethod
-    def get_inference_runner_class(cls) -> type["MultiModalModelInferenceRunner"]:
-        from fast_llm.models.multimodal.model import MultiModalModelInferenceRunner
+    def get_inference_runner_class(cls) -> type["MultiModalInferenceRunner"]:
+        from fast_llm.models.multimodal.model import MultiModalInferenceRunner
 
-        return MultiModalModelInferenceRunner
+        return MultiModalInferenceRunner
 
     @classmethod
     def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceMultiModalModelForCausalLM"]:
@@ -71,6 +80,7 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 

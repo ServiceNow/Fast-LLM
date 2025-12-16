@@ -17,15 +17,20 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AttentionKwargs(BlockKwargs):
-    rotary_freq_q = "rotary_freq_q"
-    rotary_freq_k = "rotary_freq_k"
-    attention_mask = "attention_mask"
-    attention_mask_value = "attention_mask_value"
+class MixerKwargs(BlockKwargs):
     cu_seqlens_q = "cu_seqlens_q"
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
+    seq_idx = "seq_idx"
+    position_ids = "position_ids"
+
+
+class AttentionKwargs(MixerKwargs):
+    rotary_freq_q = "rotary_freq_q"
+    rotary_freq_k = "rotary_freq_k"
+    attention_mask = "attention_mask"
+    attention_mask_value = "attention_mask_value"
     # TODO: Review these
     presents = "presents"
     past_key_values = "past_key_values"
@@ -86,7 +91,7 @@ class AttentionConfig(MixerConfig):
     causal: bool = Field(
         default=True,
         desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     dropout: float = Field(
         default=0.0,

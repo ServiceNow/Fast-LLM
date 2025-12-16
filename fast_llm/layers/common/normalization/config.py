@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.parameter import ParameterConfig, combine_lr_scales
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
@@ -127,3 +128,20 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
         from fast_llm.layers.common.normalization.normalization import RMSNormalization
 
         return RMSNormalization
+
+
+@config_class(dynamic_type={NormalizationConfig: "gated_rms_norm"})
+class GatedRMSNormalizationConfig(RMSNormalizationConfig):
+    _abstract = False
+
+    activation: ActivationType = Field(
+        default=ActivationType.silu,
+        desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
+        hint=FieldHint.core,
+    )
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization.normalization import GatedRMSNormalization
+
+        return GatedRMSNormalization

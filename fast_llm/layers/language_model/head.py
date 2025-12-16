@@ -166,24 +166,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         input_ = input_.detach().requires_grad_(do_grad := targets is not None and self.training)
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
-
-            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
-                # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
-                # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
-                dims = list(kwargs[LanguageModelKwargs.hidden_dims])
-                sequence_index = 1 - int(kwargs[LanguageModelKwargs.sequence_first])
-                dims[sequence_index] = (
-                    TensorDim(
-                        BlockDimNames.sequence_q_tp,
-                        dims[sequence_index].global_size,
-                        self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
-                    )
-                    if self._sequence_parallel_logits
-                    else TensorDim(BlockDimNames.sequence_q, dims[sequence_index].global_size)
-                )
-                meta = TensorMeta.from_dims(tuple(dims), tensor_name="hidden_state", dtype=ln_output.dtype)
-                hidden_state, _ = meta.local_to_global(ln_output.detach())
-                kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
+            # Transormers expect normalized outputs for the last transformer layer,
+            # so we add the norm output to the hidden states.
+            self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
 
         grad_output = kwargs[LanguageModelKwargs.grad_output] / (
             self._parallel_dim.size if self._sequence_parallel_logits else 1
@@ -344,15 +329,18 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 self._z_loss_name,
                 logits_scale_factor=self._config.logits_scale_factor,
             )
-        if self._debug.enabled and self._config.cross_entropy_splits is None:
-            sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
+
+        sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
+        if LanguageModelKwargs.hidden_dims in kwargs:
             batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
             dims = (
                 (sequence_dim, batch_dim, self._vocab_dim)
                 if kwargs[LanguageModelKwargs.sequence_first]
                 else (batch_dim, sequence_dim, self._vocab_dim)
             )
-            self._debug(logits, "Language model logits", dims, kwargs, scale=self._config.logits_scale_factor)
+        else:
+            dims = None
+        self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
 
         if targets is None:
             return logits * self._config.logits_scale_factor, None
@@ -399,7 +387,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    sequence_parallel_logits=self._sequence_parallel_logits,
                 )
+
             elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
@@ -501,6 +491,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 )
 
         return loss_defs
+
+    @property
+    def heads(self):
+        # For compatibility with MTP.
+        return [self]
 
 
 def _format_name(name: str) -> str:

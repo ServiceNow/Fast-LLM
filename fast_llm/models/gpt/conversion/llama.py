@@ -10,13 +10,13 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.attention.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
-from fast_llm.layers.block.config import FixedBlockSequenceConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
@@ -198,19 +198,19 @@ class LlamaAttentionConverter:
         elif rope_type == "llama3":
             rotary_config.update(
                 {
-                    "scale_factor": config["factor"],
-                    "low_frequency_factor": config["low_freq_factor"],
-                    "high_frequency_factor": config["high_freq_factor"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "scale_factor": config["rope_scaling"]["factor"],
+                    "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
+                    "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         elif rope_type == "yarn":
             rotary_config.update(
                 {
-                    "attention_factor": config["attention_factor"],
-                    "beta_fast": config["beta_fast"],
-                    "beta_slow": config["beta_slow"],
-                    "original_context_length": config["original_max_position_embeddings"],
+                    "attention_factor": config["rope_scaling"]["attention_factor"],
+                    "beta_fast": config["rope_scaling"]["beta_fast"],
+                    "beta_slow": config["rope_scaling"]["beta_slow"],
+                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
                 }
             )
         else:
@@ -419,8 +419,19 @@ class LlamaDecoderConverter:
         }
 
     @classmethod
-    def export_config(cls, config: FixedBlockSequenceConfig) -> dict:
-        # TODO: Support PatternBlockSequenceConfig with compatible configs.
+    def export_config(cls, config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
+        if isinstance(config, PatternBlockSequenceConfig):
+            # All exported block configs must be equal
+            exported_block_configs = [
+                safe_merge_dicts(
+                    cls.block_converter_class.export_config(block_config),
+                    {"num_hidden_layers": config.num_blocks},
+                )
+                for block_config in config.blocks.values()
+            ]
+            for other in exported_block_configs[1:]:
+                Assert.eq(exported_block_configs[0], other)
+            return exported_block_configs[0]
         Assert.custom(isinstance, config, FixedBlockSequenceConfig)
         return safe_merge_dicts(
             cls.block_converter_class.export_config(config.block),
@@ -430,15 +441,19 @@ class LlamaDecoderConverter:
     @classmethod
     def get_converters(
         cls,
-        config: FixedBlockSequenceConfig,
+        config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
+        # In the case of PatternBlockSequenceConfig, compatibility was already checked in export_config
+        block_config = (
+            config.block if isinstance(config, FixedBlockSequenceConfig) else next(iter(config.blocks.values()))
+        )
         converters = []
         for block_index in range(config.num_blocks):
             converters += cls.block_converter_class.get_converters(
-                config.block,
+                block_config,
                 f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
                 drop_on_export,
@@ -494,11 +509,12 @@ class LlamaHeadConverter:
                 f"{fast_llm_prefix}.output_weights",
                 "lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
+                drop_on_export=exported_config["tie_word_embeddings"],
             ),
         ]
 
 
-class LlamaBaseModelConverter:
+class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
     # TODO: Peft?
     decoder_converter_class: typing.ClassVar[type[LlamaDecoderConverter]] = LlamaDecoderConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
