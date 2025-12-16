@@ -1,7 +1,6 @@
 import argparse
 import pathlib
-
-import cloudpickle
+import pickle
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.config import GPTDataConfig
@@ -75,7 +74,7 @@ def distributed_gptdata_streaming_test(
     )
     result_path.parent.mkdir(exist_ok=True, parents=True)
     with result_path.open("wb") as f:
-        cloudpickle.dump(batch, f)
+        pickle.dump(batch, f)
 
 
 def parse_args():
