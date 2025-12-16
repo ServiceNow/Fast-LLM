@@ -43,6 +43,7 @@ from fast_llm_external_models.apriel2.conversion import (
     compose,
     compose_configs,
     plan_surgery,
+    strip_init_fields,
 )
 
 # Import source-specific converters
@@ -149,15 +150,19 @@ def build_plan(
     # Apply surgery chain if requested
     if surgery_configs:
         for i, surgery_config in enumerate(surgery_configs, 1):
-            surgery_plan = plan_surgery(current_config, surgery_config)
+            # S × P → T: compose state with surgery to get transition spec
+            target_config = compose_configs(current_config, surgery_config)
+
+            # S × T → Plan: build plan from source state and transition spec
+            surgery_plan = plan_surgery(current_config, target_config)
             logger.info(f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets")
 
-            # Compose: current -> surgery
+            # Compose plans
             current_plan = compose(current_plan, surgery_plan)
             logger.info(f"Composed plan [{i}/{len(surgery_configs)}]: {current_plan.summary()['num_targets']} targets")
 
-            # Compose configs: merge surgery spec into current config
-            current_config = compose_configs(current_config, surgery_config)
+            # T → S: strip init for next iteration (init is consumed by plan_surgery)
+            current_config = strip_init_fields(target_config)
 
     return current_plan, current_config
 
@@ -407,11 +412,11 @@ def main():
         show_plan=args.show_plan or args.verbose,
     )
 
-    # Save config
+    # Save config (build_plan returns S which has no init, but strip defensively)
     output_config_file = args.output_dir / "config.json"
     logger.info(f"Saving config to {output_config_file}")
     with open(output_config_file, "w") as f:
-        json.dump(apriel2_config, f, indent=2)
+        json.dump(strip_init_fields(apriel2_config), f, indent=2)
 
     # Copy tokenizer files
     copy_tokenizer_files(input_dir, args.output_dir)

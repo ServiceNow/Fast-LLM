@@ -1,86 +1,122 @@
 """Weight conversion system for Apriel2 models.
 
-Architecture Overview
-=====================
+Overview
+========
 
-This package implements a declarative weight transformation system with two
-orthogonal concerns:
+This package implements a declarative weight transformation system. The core
+abstraction separates config composition (structural) from plan execution (weights).
 
-1. **Config Composition** - Structural transformations of model configs
-2. **Plan Building & Execution** - Weight transformations between configs
+Conceptual Types
+================
 
-These concerns are intentionally separated:
-- Config composition determines WHAT the target architecture looks like
-- Plan building determines HOW weights are transformed to match
-- The `init` field bridges them: it's config metadata consumed by the plan builder
+All configs are ``dict``, but we distinguish three conceptual types:
+
+**State (S)** - A complete model config without ``init`` fields.
+    What you load from disk or save after conversion.
+
+**Partial Surgery (P)** - An incomplete config specifying changes.
+    May contain ``init`` fields (``transfer`` or ``random``).
+
+**Transition Spec (T)** - A complete config WITH ``init`` fields.
+    The result of applying surgery to a state. Describes both target
+    structure and weight initialization mode.
+
+Algebraic Structure
+===================
+
+**Monoid**: Partial surgeries compose via deep merge::
+
+    compose_configs : P × P → P
+
+**Action**: Surgeries act on states to produce transition specs::
+
+    compose_configs : S × P → T
+    compose_configs : T × P → T
+
+**Extraction**: Strip init to get a state::
+
+    strip_init_fields : T → S
+
+**Planning**: Build weight transformation from source state + transition spec::
+
+    plan_surgery : S × T → Plan
+
+The ``init`` Field
+==================
+
+The ``init`` field in surgeries specifies weight initialization:
+
+- ``init: transfer`` → transfer/convert weights from source
+- ``init: random`` → randomly initialize weights
+
+This field is preserved through ``compose_configs`` so ``plan_surgery`` can read it.
+Use ``strip_init_fields`` before saving configs to disk.
+
+Typical Usage
+=============
+
+::
+
+    from fast_llm_external_models.apriel2.conversion import (
+        compose_configs,
+        plan_surgery,
+        strip_init_fields,
+        execute,
+    )
+
+    # Load source state
+    source_state = load_config(...)  # S
+
+    # Apply surgery
+    surgery = {"decoder": {"block": {"mixer": {"type": "gdn", "init": "random"}}}}  # P
+    transition = compose_configs(source_state, surgery)  # T
+
+    # Build and execute plan
+    plan = plan_surgery(source_state, transition)
+    weights = execute(plan, source_weights, seed=42)
+
+    # Save (strip init first)
+    target_state = strip_init_fields(transition)  # S
+    save_config(target_state)
+
+For chained surgeries::
+
+    current_state = source_state  # S
+    current_plan = identity_plan
+
+    for surgery in surgery_chain:  # each P
+        transition = compose_configs(current_state, surgery)  # T
+        plan = plan_surgery(current_state, transition)
+        current_plan = compose(current_plan, plan)
+        current_state = strip_init_fields(transition)  # S  <- IMPORTANT!
+
+**Note**: The ``strip_init_fields`` call is critical. It ensures that ``init: random``
+applies only to the surgery that introduces a component. Without stripping, subsequent
+surgeries would re-randomize existing components. See ``config.py`` docstring for details.
 
 Key Design Decisions
 ====================
 
 **Declarative Plans**
-    Plans are DATA (JSON-serializable expressions), not functions. This enables:
-    - Inspection and debugging of transformations
-    - Serialization for distributed execution
-    - Composition via substitution rather than function composition
+    Plans are data (expressions), not functions. Enables inspection,
+    serialization, and composition via substitution.
 
-**Separation of Config and Weights**
-    The `init` field in surgery specs controls weight handling (transfer vs random)
-    but does NOT affect config composition. Config composition is purely structural.
-    After composition, `init` fields are stripped from complete configs.
+**Inheritance Semantics**
+    When S × P → T, unspecified fields inherit from source.
+    Cross-type derivation maps geometry (attention.heads → gdn.value_heads).
 
-**Composition Semantics**
-    Surgery specs use declarative (merge) composition, not operational (function)
-    composition. For "additive" surgeries (modifying existing structure), the
-    monoid action law holds. For "replacement" surgeries (defining complete new
-    structure), sequential application differs from composed application by design.
-
-**Cross-Type Derivation**
-    When converting between mixer types (e.g., attention → mamba), geometric
-    parameters are derived where possible:
-    - attention.heads → mamba dimensions (MIL conversion)
-    - attention.heads → gdn heads (DIL conversion)
+**Additive vs Replacement Surgeries**
+    Additive surgeries (no ``type:`` declaration) satisfy the action law.
+    Replacement surgeries (explicit ``type:``) use last-write-wins.
 
 Module Structure
 ================
 
-- `config.py` - Config composition (compose_configs, apply_surgery)
-- `converters.py` - Plan builders (plan_surgery, plan_mil_attention_to_mamba, etc.)
-- `expr.py` - Expression types and plan class (Ref, Slice, Concat, Init, ExprPlan)
-- `executor.py` - Plan execution (StreamingExecutor, execute)
-- `io.py` - Streaming I/O (SafetensorLoader, ShardedSafetensorWriter)
-- `llava/` - Source-specific converter for Llava → Apriel2
-
-Example Usage
-=============
-
-    from fast_llm_external_models.apriel2.conversion import (
-        compose_configs,
-        plan_surgery,
-        execute,
-    )
-
-    # 1. Compose configs to get target architecture
-    target_config = compose_configs(source_config, surgery_spec)
-
-    # 2. Build plan for weight transformation
-    plan = plan_surgery(source_config, target_config)
-
-    # 3. Execute plan to transform weights
-    target_weights = execute(plan, source_weights, seed=42)
-
-For streaming I/O with large models:
-
-    from fast_llm_external_models.apriel2.conversion import (
-        StreamingExecutor,
-        SafetensorLoader,
-        ShardedSafetensorWriter,
-    )
-
-    with SafetensorLoader(source_files) as loader:
-        executor = StreamingExecutor(plan, loader)
-        with ShardedSafetensorWriter(output_dir) as writer:
-            for key, tensor in executor.execute(seed=42):
-                writer.add(key, tensor)
+- ``config.py`` - Config composition (compose_configs, strip_init_fields)
+- ``converters.py`` - Plan builders (plan_surgery, plan_mil_attention_to_mamba)
+- ``expr.py`` - Expression types (Ref, Slice, Concat, Init, ExprPlan)
+- ``executor.py`` - Plan execution (StreamingExecutor, execute)
+- ``io.py`` - Streaming I/O (SafetensorLoader, ShardedSafetensorWriter)
 """
 
 # Core types and plan operations
@@ -127,7 +163,7 @@ from fast_llm_external_models.apriel2.conversion.converters import (
 )
 
 # Config composition
-from fast_llm_external_models.apriel2.conversion.config import compose_configs
+from fast_llm_external_models.apriel2.conversion.config import compose_configs, strip_init_fields
 
 # Source-specific converters
 from fast_llm_external_models.apriel2.conversion.llava import (
@@ -175,6 +211,7 @@ __all__ = [
     "plan_kil_attention_to_kda",
     # Config composition
     "compose_configs",
+    "strip_init_fields",
     # Source-specific converters
     "convert_llava_config",
     "plan_llava_to_apriel2",

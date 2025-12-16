@@ -831,44 +831,69 @@ def plan_surgery(
     source_config: dict,
     target_config: dict,
 ) -> ExprPlan:
-    """Build a weight conversion plan between two Apriel2 configurations.
+    """Build a weight conversion plan: S × T → Plan.
 
-    This function creates an ExprPlan that maps source weight keys to expressions
-    defining how to compute target weights. The plan handles same-type passthrough,
-    cross-type conversions (MIL, DIL, KIL), and stochastic mixer routing.
+    Creates an ExprPlan mapping target weight keys to expressions over source weights.
+    Handles same-type passthrough, cross-type conversions (MIL, DIL, KIL), and
+    stochastic mixer routing.
+
+    Type Signature::
+
+        plan_surgery : S × T → Plan
+
+    Where S is a state (source) and T is a transition spec (target with ``init`` fields).
+
+    The ``init`` Field
+    ------------------
+
+    The ``init`` field in ``target_config`` controls weight initialization:
+
+    - ``init: transfer`` (or absent) → create Ref expressions (transfer from source)
+    - ``init: random`` → create Init expressions (random initialization)
+
+    This is why ``target_config`` should be a transition spec (T) from ``compose_configs``,
+    not a stripped state (S). If ``init`` fields are missing, all components default to
+    transfer mode.
 
     Args:
-        source_config: Complete Apriel2 config dict describing the source architecture.
-            Must have all structural fields (hidden_size, decoder, etc.) fully specified.
-        target_config: Complete Apriel2 config dict describing the target architecture.
-            Must be fully specified with all inherited fields resolved. Use
-            compose_configs(source_config, surgery_spec) to produce this from a
-            partial surgery specification.
+        source_config: State (S) - complete config describing source architecture.
+            Must have hidden_size, decoder, etc. No ``init`` fields expected.
+        target_config: Transition spec (T) - complete config with ``init`` fields.
+            Use ``compose_configs(source, surgery)`` to produce this.
 
     Returns:
         ExprPlan mapping target weight keys to expressions over source weights.
 
-    Example:
+    Example::
+
         # Apply a surgery that wraps attention in a stochastic mixer
         surgery_spec = {
             "decoder": {"block": {"mixer": {
                 "type": "stochastic",
-                "mixers": {"attention": {"type": "attention", "init": "transfer"}}
+                "mixers": {
+                    "attention": {"init": "transfer"},
+                    "gdn": {"type": "gdn", "init": "random"},
+                }
             }}}
         }
 
-        # First compose to get complete target config with inherited fields
-        target_config = compose_configs(source_config, surgery_spec)
+        # S × P → T
+        transition = compose_configs(source_config, surgery_spec)
 
-        # Then build the plan from two complete configs
-        plan = plan_surgery(source_config, target_config)
-        new_weights = execute(plan, source_weights, seed=0)
+        # S × T → Plan
+        plan = plan_surgery(source_config, transition)
+
+        # Execute
+        new_weights = execute(plan, source_weights, seed=42)
+
+        # T → S for saving
+        target_state = strip_init_fields(transition)
 
     Note:
-        Both arguments must be complete configs. The target_config determines the
-        full target architecture including all inherited fields (bias settings,
-        rotary config, etc.). Passing a partial surgery spec directly will result
-        in missing inherited fields and incorrect plans.
+        Both arguments must be complete (have hidden_size and decoder).
+        The target_config should retain ``init`` fields from the surgery spec.
+        Passing a stripped state as target will cause all components to use
+        transfer mode, which may not be intended.
     """
     hidden_size = target_config.get("hidden_size", source_config.get("hidden_size"))
     assert hidden_size is not None, "hidden_size must be specified in source or target config"
@@ -922,8 +947,10 @@ def _plan_non_decoder_weights(config: dict) -> ExprPlan:
     embed = W("model", "embed_tokens", "weight")
     mappings[embed] = Ref(key=embed)
 
-    head = W("lm_head", "weight")
-    mappings[head] = Ref(key=head)
+    # lm_head only if not tied to embeddings
+    if not config.get("tie_word_embeddings", False):
+        head = W("lm_head", "weight")
+        mappings[head] = Ref(key=head)
 
     norm = W("model", "norm", "weight")
     mappings[norm] = Ref(key=norm)
