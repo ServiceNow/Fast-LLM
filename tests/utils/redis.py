@@ -8,6 +8,7 @@ import orjson
 import pytest
 
 from fast_llm.data.dataset.config import (
+    IngestionType,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
@@ -37,13 +38,16 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def push_msg(redis_client, config, tokens=None):
+def push_msg(redis_client, config, tokens=None, stream_key_suffix=None):
     """Push a message into FakeRedis stream."""
     msg = {
         "tokens": tokens,
         "tokens_dtype": "int64",
     }
-    redis_client.xadd(config.redis.stream_key, {config.redis.payload_key: orjson.dumps(msg)})
+    stream_key = config.redis.stream_key
+    if stream_key_suffix is not None:
+        stream_key += stream_key_suffix
+    redis_client.xadd(stream_key, {config.redis.payload_key: orjson.dumps(msg)})
 
 
 class FakeRedisServerKiller:
@@ -62,22 +66,49 @@ class FakeRedisServerKiller:
                     self._is_killed = True
 
 
-def wait_until_stream_empty(r, stream_key, group, stop_event):
+def wait_until_stream_empty(
+    redis_client,
+    stream_key,
+    consumer_group,
+    stop_event,
+    consumer_count,
+    ingestion_type: IngestionType,
+):
+    if ingestion_type == IngestionType.CONSUMER_GROUP:
+        return wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event)
+    elif ingestion_type == IngestionType.ONE_STREAM:
+        raise NotImplementedError()
+    elif ingestion_type == IngestionType.N_STREAMS:
+        raise NotImplementedError()
+    else:
+        raise ValueError(f"Unknown ingestion type {ingestion_type.value}")
+
+
+def wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event):
     """
     Wait until lag == 0, meaning all messages have been delivered AND acknowledged.
     Absence of group mean test has not started yet, so we wait
     """
-    group = group.encode()
+    consumer_group = consumer_group.encode()
     while not stop_event.is_set():
-        groups = r.xinfo_groups(stream_key)
+        groups = redis_client.xinfo_groups(stream_key)
 
-        g = next((g for g in groups if g["name"] == group), None)
+        g = next((g for g in groups if g["name"] == consumer_group), None)
         if g is not None:
             lag = g.get("lag", 0)
             if lag == 0:
                 return
 
         time.sleep(0.05)
+
+
+def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig):
+    while not stop_event.is_set():
+        res = redis_client.hget(f"{config.redis.stream_key}:consumer_count", "0")
+        if res is None:
+            time.sleep(0.05)
+            continue
+        return int(res)
 
 
 @contextlib.contextmanager
@@ -88,7 +119,9 @@ def redis_batch_producer(
     thread_exc = []
 
     def producer_loop():
+        is_n_streams = stream_config.ingestion_type == IngestionType.N_STREAMS
         try:
+            consumer_count = get_consumer_count(redis_client, stop_event, stream_config)
             stream = stream_config.redis.stream_key
             group = stream_config.group_name
             batch_idx = 0
@@ -98,8 +131,20 @@ def redis_batch_producer(
                 for i in range(batch_size):
                     if stop_event.is_set():
                         return
-                    push_msg(redis_client, stream_config, [batch_idx * batch_size + i] * sequence_length)
-                wait_until_stream_empty(redis_client, stream, group, stop_event)
+                    push_msg(
+                        redis_client,
+                        stream_config,
+                        [batch_idx * batch_size + i] * sequence_length,
+                        stream_key_suffix=f"_{i % consumer_count}" if is_n_streams else None,
+                    )
+                wait_until_stream_empty(
+                    redis_client,
+                    stream,
+                    group,
+                    stop_event,
+                    consumer_count=consumer_count,
+                    ingestion_type=stream_config.ingestion_type,
+                )
                 batch_idx += 1
         except Exception as e:
             # if failed to push messages kill redis server so waiting side in the test would unlock

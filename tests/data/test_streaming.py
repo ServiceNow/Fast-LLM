@@ -6,6 +6,7 @@ import fakeredis
 import pytest
 import torch
 
+from fast_llm.data.dataset.config import IngestionType
 from fast_llm.data.dataset.streaming import StreamingDataset
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -110,10 +111,12 @@ def run_distributed_gptdata_streaming_test(
     run_distributed_script,
     result_path,
     request,
+    ingestion_type: IngestionType,
 ):
     import tests.data.gptdata_streaming_test
 
     stream_config, fake_redis, fake_redis_server_killer = fake_redis_server
+    stream_config = stream_config.from_dict(stream_config.to_dict(), {("ingestion_type"): ingestion_type})
 
     sequence_length = 10
     micro_batch_size = 2
@@ -155,6 +158,8 @@ def run_distributed_gptdata_streaming_test(
                 str(result_path),
                 "--redis-port",
                 str(redis_port),
+                "--ingestion-type",
+                str(ingestion_type.value),
             ]
             # TODO: distributed_capture is ignored now inside the script
             if request.config.getoption("distributed_capture"):
@@ -178,6 +183,7 @@ def run_distributed_gptdata_streaming_test(
                 total_gpus=total_gpus,
                 redis_port=redis_port,
                 result_path=result_path,
+                ingestion_type=ingestion_type,
             )
 
     check_distributed_gptdata_streaming_test_results(
@@ -337,7 +343,18 @@ def test_sampling_overflow_creates_two(monkeypatched_redis, stream_config):
     assert out[1].tokens.tokens.tolist() == list(range(10))
 
 
-def test_gptdata_streaming_single_consumer(fake_redis_server, run_distributed_script_lean, result_path, request):
+@pytest.mark.parametrize(
+    "ingestion_type",
+    [
+        IngestionType.CONSUMER_GROUP,
+        # TODO: need to implement wait_until_stream_empty for those variants on test side to enable tests for them
+        # IngestionType.ONE_STREAM,
+        # IngestionType.N_STREAMS,
+    ],
+)
+def test_gptdata_streaming_single_consumer(
+    fake_redis_server, run_distributed_script_lean, ingestion_type, result_path, request
+):
 
     run_distributed_gptdata_streaming_test(
         fake_redis_server=fake_redis_server,
@@ -352,6 +369,7 @@ def test_gptdata_streaming_single_consumer(fake_redis_server, run_distributed_sc
         run_distributed_script=run_distributed_script_lean,
         result_path=result_path,
         request=request,
+        ingestion_type=ingestion_type,
     )
 
 
@@ -377,4 +395,5 @@ def test_gptdata_streamin_gpus(fake_redis_server, variant, run_distributed_scrip
         run_distributed_script=run_distributed_script_lean,
         result_path=result_path,
         request=request,
+        ingestion_type=IngestionType.CONSUMER_GROUP,
     )

@@ -314,6 +314,30 @@ class StreamingDatasetRedisConfig(RedisConfig):
     )
 
 
+class IngestionType(str, enum.Enum):
+    CONSUMER_GROUP = "consumer_group"
+    ONE_STREAM = "one_stream"
+    N_STREAMS = "n_streams"
+
+
+class HashType(str, enum.Enum):
+    MESSAGE_INDEX = "message_index"
+    """Use the index of the received message for hashing. Provides precise distribution but may not be well shuffled."""
+
+    MESSAGE_ID = "message_id"
+    """Hash messages based on their unique message ID. Good for probabilistic distribution.
+       Redis message IDs are regenerated each time, so this is not reproducible.
+    """
+
+    MESSAGE_BODY = "message_body"
+    """Hash messages based on their payload content (bytes). Distributes messages roughly evenly.
+       Deterministic based on message content, but not perfectly balanced across ranks.
+    """
+
+    PRODUCER_PROVIDED = "producer_provided"
+    """Use the hash or index provided by the producer. Allows deterministic splitting and perfect balance."""
+
+
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
 class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     """
@@ -335,7 +359,31 @@ class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
 
     consumer_name_prefix: str = Field(
         default="fast_llm_dp_group_consumer",
-        desc="Prefix used to generate unique consumer names for each rank.",
+        desc="Prefix used to generate unique consumer names for each rank in Redis consumer group.",
+        hint=FieldHint.core,
+    )
+
+    ingestion_type: IngestionType = Field(
+        default=IngestionType.CONSUMER_GROUP,
+        desc="Strategy used to ingest data from Redis streams (consumer group, single stream, or multiple streams).",
+        hint=FieldHint.core,
+    )
+
+    hash_type: HashType = Field(
+        default=HashType.MESSAGE_ID,
+        desc="How to compute hash for assigning messages to ranks.",
+        hint=FieldHint.core,
+    )
+
+    hash_key: str = Field(
+        default="hash",
+        desc="Key in the message dict containing the hash or index provided by the producer.",
+        hint=FieldHint.core,
+    )
+
+    ack_period_per_consumer: int = Field(
+        default=10,
+        desc="Number of messages after which the consumer acknowledges received IDs back to the Redis hash.",
         hint=FieldHint.core,
     )
 
