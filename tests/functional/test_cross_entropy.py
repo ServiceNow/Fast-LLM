@@ -115,9 +115,7 @@ def _reverse_kl_forward_backward_torch(target: torch.Tensor, logits: torch.Tenso
 @pytest.mark.parametrize("loss_masking", [False, True])
 @pytest.mark.parametrize("target_format", (TargetFormat.logits,))
 def test_reverse_kl(loss_masking, target_format):
-    logits, target, loss_mask = _get_cross_entropy_inputs(
-        1000, loss_masking, target_format, device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
     out_ref, grad_ref = _reverse_kl_forward_backward_torch(target, logits, loss_mask)
     out, grad = reverse_kl_forward_backward(
         logits=logits,
@@ -168,9 +166,7 @@ def _compare_parallel_cross_entropy(
     # Ensure all workers have the same inputs.
     torch.manual_seed(0)
     world_size = torch.distributed.get_world_size(group)
-    logits, target, loss_mask = _get_cross_entropy_inputs(
-        1000, loss_masking, target_format, device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
 
     out, grad = function(
         logits=logits.chunk(world_size, 1)[rank],

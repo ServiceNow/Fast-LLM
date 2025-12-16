@@ -6,7 +6,6 @@ import os
 import pathlib
 import re
 import typing
-from functools import partial
 
 import pytest
 import transformers
@@ -420,7 +419,6 @@ _update_and_add_testing_config(
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=1.5,  # Loss masking seem to induce slight numerical variation between dtypes
-    get_dataset=partial(get_model_test_dataset, use_loss_masking=True),
 )
 
 _update_and_add_testing_config(
