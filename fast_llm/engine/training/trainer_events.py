@@ -81,10 +81,11 @@ class TrainerEvents:
             self._broadcast_weights(model, export_config)
 
     def send_training_finished(self):
-        self.sender.send(msg_type=self.config.training_finished.training_finished_message_type)
+        if self.config.training_finished.enabled:
+            self.sender.send(msg_type=self.config.training_finished.training_finished_message_type)
 
-        if is_main_rank() and self.config.weights_broadcast.enabled:
-            torch.distributed.destroy_process_group()
+            if is_main_rank() and self.config.weights_broadcast.enabled:
+                torch.distributed.destroy_process_group()
 
     def _broadcast_weights(self, model: FastLLMModel, export_config: TrainingExportConfig):
         for shard_name, layer_name, tensor in model.iter_checkpoint(export_config.get_save_config("", 10), {}):
