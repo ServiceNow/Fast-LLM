@@ -31,6 +31,7 @@ class LanguageModelKwargs(BlockKwargs):
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
     loss_mask = "loss_mask"
+    total_valid_tokens = "total_valid_tokens"
     mask_inputs = "mask_inputs"
 
 

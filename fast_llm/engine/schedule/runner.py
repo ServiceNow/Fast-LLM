@@ -10,6 +10,7 @@ import yaml
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import all_reduce, recv, safe_barrier, send
+from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.run import get_run, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -19,6 +20,7 @@ from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.config import EventType, ScheduleConfig, StepType, StreamType
 from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -319,10 +321,31 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _preprocess_data(
         self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
     ) -> typing.Generator[None, None, None]:
-        batch_config = context.schedule.batch_config
-        grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) / batch_config.num_inputs
+        from fast_llm.layers.language_model.config import LanguageModelKwargs
+
+        batch_config: GPTBatchConfig = context.schedule.batch_config
+        default_grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) / batch_config.num_inputs
+
+        # We need additional pass to compute total valid tokens, which is needed to correctly set grad weights when using loss masks + grad accumulation
+        # TODO: add conditions? This must not be used always
+        all_micro_batches = []
+        total_valid_tokens = None
         for micro_batch in range(batch_config.sequential_micro_batches):
-            micro_batch_data = next(data_iterator)
+            micro_batch_data: LanguageModelBatch = next(data_iterator)
+            all_micro_batches.append(micro_batch_data)
+
+            # Sum valid tokens across all microbatches (if loss masking is used)
+            if (
+                not preprocessed
+                and hasattr(micro_batch_data, "valid_tokens")
+                and micro_batch_data.valid_tokens is not None
+            ):
+                if total_valid_tokens is None:
+                    total_valid_tokens = 0
+                total_valid_tokens += micro_batch_data.valid_tokens
+
+        # Second pass: Preprocess and yield each microbatch with correct gradient weighting
+        for micro_batch, micro_batch_data in enumerate(all_micro_batches):
             if not preprocessed:
                 micro_batch_data = self._multi_stage.base_model.preprocess_batch(
                     micro_batch_data,
@@ -330,8 +353,20 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,
+                    total_valid_tokens=total_valid_tokens,
                 )
             for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
+                # Compute grad_output based on valid tokens when loss masking is used
+                if LanguageModelKwargs.loss_mask in kwargs and total_valid_tokens is not None:
+                    loss_mask = kwargs[LanguageModelKwargs.loss_mask]
+                    valid_tokens = loss_mask.sum().item()
+                    # Weight this micro-batch by its proportion of valid tokens. This is required to correctly scale the gradients when different microbatches have different number of valid tokens
+                    grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) * (
+                        valid_tokens / total_valid_tokens
+                    )
+                else:
+                    grad_output = default_grad_output
+
                 kwargs.update(
                     grad_output=grad_output,
                     micro_batch=micro_batch,
