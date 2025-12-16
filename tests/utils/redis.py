@@ -176,6 +176,7 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
         distributed=distributed,
         dataset_name="test",
         cache_directory="/tmp",
+        preprocessing={},
     )
 
 

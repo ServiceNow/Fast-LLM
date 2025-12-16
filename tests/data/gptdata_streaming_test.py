@@ -45,7 +45,12 @@ def distributed_gptdata_streaming_test(
 
     data = GPTData(data_config, distributed.config)
 
-    data.setup(distributed, {"streaming1": sampling_data.parameters}, "/tmp")
+    data.setup(
+        distributed=distributed,
+        sampling_parameters={"streaming1": sampling_data.parameters},
+        preprocessing={},
+        cache_directory="/tmp",
+    )
 
     with NoAutoValidate():
         batch_config = GPTBatchConfig(
