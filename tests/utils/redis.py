@@ -1,4 +1,5 @@
 import contextlib
+import pathlib
 import socket
 import threading
 import time
@@ -16,6 +17,7 @@ from fast_llm.data.dataset.config import (
     StreamingDatasetConfig,
     StreamingDatasetRedisConfig,
 )
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 
 
 def get_stream_config():
@@ -175,7 +177,8 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
         config=SamplingConfig(shuffle=ShufflingType.disabled),
         distributed=distributed,
         dataset_name="test",
-        cache_directory="/tmp",
+        cache_directory=pathlib.Path("/tmp"),
+        preprocessing=LanguageModelPreprocessingConfig(),
     )
 
 
