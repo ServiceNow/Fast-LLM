@@ -241,8 +241,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
 
                 if isinstance(self.mixer, StochasticMixer):
-                    # Get the selected mixer name (deterministic based on same generator)
-                    selected_mixer = self.mixer._sample_mixer_name(kwargs)
+                    selected_mixer = self.mixer._last_selected_mixer
                     metrics[f"{self.module_name}/activation_distillation_loss/{selected_mixer}"] = (
                         activation_loss.detach()
                     )
