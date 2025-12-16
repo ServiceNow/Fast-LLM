@@ -436,10 +436,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         # TODO: Return individual losses?
         loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
-
-        # TODO: de-allocate earlier.
-        del logits
-
         if self.training and losses is not None:
             if dpo_loss is not None:
                 losses[self._dpo_loss_name].append(dpo_loss.detach())
