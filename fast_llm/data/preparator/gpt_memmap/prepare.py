@@ -220,21 +220,25 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
+        if self._source_schema.has_conversation:
+            tokens, train_mask = self._tokenizer.tokenize_chat(
+                sample[self._source_schema.messages],
+                self._source_schema.add_generation_prompt,
+                data_type=self._data_type,
+            )
+            return LanguageModelSample(
+                TokenSample(tokens, [len(tokens)]),
+                RangeSample(_mask_to_spans(train_mask), len(tokens)),
+                None,
+                None,
+                None,
+            )
+
+        # Text format: use the text-spans pipeline
+        text = sample[self._source_schema.text]
         all_spans = []
 
-        if self._source_schema.has_conversation:
-            # Conversation format: apply chat template and compute loss masking spans
-            messages = sample[self._source_schema.messages]
-            text, loss_masking_spans = self._tokenizer.apply_chat_template_with_spans(
-                messages,
-                add_generation_prompt=self._source_schema.add_generation_prompt,
-            )
-            all_spans.extend([(SpanType.loss_masking, span) for span in loss_masking_spans])
-        else:
-            # Plain text format
-            text = sample[self._source_schema.text]
-
-        if self._source_schema.has_loss_masking_span and not self._source_schema.has_conversation:
+        if self._source_schema.has_loss_masking_span:
             # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
             loss_masking_spans = _sort_spans(
                 (SpanType.loss_masking, (begin, last + 1))
@@ -495,3 +499,19 @@ def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:
     if left == len(cumsum):
         return left.item()
     return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
+
+
+def _mask_to_spans(mask: list[bool]) -> list[tuple[int, int]]:
+    """Convert a boolean train mask to loss masking spans (where mask[i] == False)."""
+    spans = []
+    start = None
+    for i, value in enumerate(mask):
+        if not value:
+            if start is None:
+                start = i
+        elif start is not None:
+            spans.append((start, i))
+            start = None
+    if start is not None:
+        spans.append((start, len(mask)))
+    return spans

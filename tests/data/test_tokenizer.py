@@ -61,10 +61,13 @@ def test_validate_chat_template_with_markers(common_tokenizer):
     common_tokenizer.validate_chat_template()
 
 
+# Realistic chat template following HF conventions (e.g., SmolLM3):
+# The generation block includes the full assistant turn: opening tag, content, and closing tag.
+# This ensures the model learns to emit the closing tag.
 CHAT_TEMPLATE = (
     "{% for message in messages %}"
     "{% if message.role == 'assistant' %}"
-    "<assistant>{% generation %}{{ message.content }}{% endgeneration %}</assistant>"
+    "{% generation %}<assistant>{{ message.content }}</assistant>{% endgeneration %}"
     "{% else %}"
     "<{{ message.role }}>{{ message.content }}</{{ message.role }}>"
     "{% endif %}"
@@ -73,24 +76,84 @@ CHAT_TEMPLATE = (
 
 
 @pytest.mark.parametrize(
-    ("messages", "expected_text", "expected_spans"),
+    ("messages", "expected_tokens", "expected_trainable_indices"),
     (
-        ([], "", []),
+        # Single turn: full assistant turn (<assistant>Hello</assistant>) is trainable
         (
             [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
-            "<user>Hi</user><assistant>Hello</assistant>",
-            [(0, 26), (31, 43)],
+            [49152, 27, 789, 29, 16946, 750, 789, 2293, 17822, 29, 7371, 750, 17822, 29, 49152],
+            [7, 8, 9, 10, 11, 12, 13],
         ),
+        # Multi-turn: both assistant turns are fully trainable
         (
-            [{"role": "user", "content": "A"}, {"role": "assistant", "content": "B"}, {"role": "user", "content": "C"}, {"role": "assistant", "content": "D"}],
-            "<user>A</user><assistant>B</assistant><user>C</user><assistant>D</assistant>",
-            [(0, 25), (26, 63), (64, 76)],
+            [
+                {"role": "user", "content": "A"},
+                {"role": "assistant", "content": "B"},
+                {"role": "user", "content": "C"},
+                {"role": "assistant", "content": "D"},
+            ],
+            [49152, 27, 789, 29, 32, 750, 789, 2293, 17822, 29, 33, 750, 17822, 2293, 789, 29, 34, 750, 789, 2293, 17822, 29, 35, 750, 17822, 29, 49152],
+            [7, 8, 9, 10, 11, 12, 13, 19, 20, 21, 22, 23, 24, 25],
+        ),
+        # System + user + assistant: full assistant turn trainable
+        (
+            [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+            ],
+            [49152, 27, 3144, 29, 5815, 1139, 44569, 6928, 3144, 2293, 789, 29, 16946, 750, 789, 2293, 17822, 29, 7371, 750, 17822, 29, 49152],
+            [15, 16, 17, 18, 19, 20, 21],
+        ),
+        # User only: no trainable tokens
+        (
+            [{"role": "user", "content": "Hi"}],
+            [49152, 27, 789, 29, 16946, 750, 789, 29, 49152],
+            [],
+        ),
+        # Long multi-turn (85 tokens, 3 assistant responses with tags, tests span machinery)
+        (
+            [
+                {"role": "system", "content": "You are a helpful assistant that answers questions."},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": "The capital of France is Paris."},
+                {"role": "user", "content": "What about Germany?"},
+                {"role": "assistant", "content": "The capital of Germany is Berlin."},
+                {"role": "user", "content": "And Italy?"},
+                {"role": "assistant", "content": "The capital of Italy is Rome."},
+            ],
+            [49152, 27, 3144, 29, 5815, 1139, 373, 44569, 2424, 11886, 954, 15737, 14516, 6928, 3144, 2293, 789, 29, 13938, 438, 331, 25016, 457, 12409, 562, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 12409, 562, 438, 4235, 280, 6928, 17822, 2293, 789, 29, 13938, 5028, 759, 42226, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 759, 42226, 438, 29784, 3556, 6928, 17822, 2293, 789, 29, 1996, 4413, 3326, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 4413, 3326, 438, 613, 1361, 6928, 17822, 29, 49152],
+            list(range(27, 41)) + list(range(49, 63)) + list(range(70, 84)),
         ),
     ),
 )
-def test_apply_chat_template_with_spans(common_tokenizer, messages, expected_text, expected_spans):
-    """Chat template produces correct text and masking spans."""
+def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_trainable_indices):
     common_tokenizer.tokenizer.chat_template = CHAT_TEMPLATE
-    text, spans = common_tokenizer.apply_chat_template_with_spans(messages)
-    Assert.eq(text, expected_text)
-    Assert.eq(spans, expected_spans)
+    tokens, train_mask = common_tokenizer.tokenize_chat(messages)
+    Assert.eq(tokens.tolist(), expected_tokens)
+    Assert.eq([i for i, m in enumerate(train_mask) if m], expected_trainable_indices)
+
+
+@pytest.mark.parametrize(
+    ("train_mask", "expected_loss_spans"),
+    (
+        # All masked (no trainable tokens)
+        ([False, False, False], [(0, 3)]),
+        # All trainable (no spans)
+        ([True, True, True], []),
+        # Single trainable at start
+        ([True, False, False], [(1, 3)]),
+        # Single trainable at end
+        ([False, False, True], [(0, 2)]),
+        # Single trainable in middle
+        ([False, True, False], [(0, 1), (2, 3)]),
+        # Multiple trainable regions (simulates multi-turn conversation)
+        ([False, False, True, True, False, False, True, True, True, False], [(0, 2), (4, 6), (9, 10)]),
+        # Alternating
+        ([False, True, False, True, False], [(0, 1), (2, 3), (4, 5)]),
+    ),
+)
+def test_mask_to_spans(train_mask, expected_loss_spans):
+    from fast_llm.data.preparator.gpt_memmap.prepare import _mask_to_spans
+
+    Assert.eq(_mask_to_spans(train_mask), expected_loss_spans)

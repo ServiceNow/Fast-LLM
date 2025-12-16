@@ -1,0 +1,103 @@
+# Dataset preparation config for Tulu 3 SFT mixture with Qwen2 tokenizer
+#
+# This config converts the Tulu 3 SFT dataset (conversation format) to
+# Fast-LLM's memmap format, with automatic loss masking span computation
+# to train only on assistant responses.
+#
+# =============================================================================
+# TOKENIZER SETUP (one-time)
+# =============================================================================
+#
+# The tokenizer must have a chat template with {% generation %} markers.
+# Qwen2's default template doesn't have these, so we need to patch it.
+#
+# IMPORTANT: The entire assistant turn (opening tag + content + closing tag)
+# must be inside the {% generation %} block. This ensures the model learns to
+# produce the full assistant response including special tokens like <|im_end|>.
+# Reference: https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja
+#
+# Run this Python script to create a patched tokenizer:
+#
+#   from transformers import AutoTokenizer
+#
+#   tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+#
+#   # Patch chat template: wrap ENTIRE assistant turn in generation markers
+#   tokenizer.chat_template = '''{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system
+#   You are a helpful assistant.<|im_end|>
+#   ' }}{% endif %}{% if message['role'] == 'assistant' %}{% generation %}{{ '<|im_start|>assistant
+#   ' + message['content'] + '<|im_end|>
+#   ' }}{% endgeneration %}{% else %}{{ '<|im_start|>' + message['role'] + '
+#   ' + message['content'] + '<|im_end|>
+#   ' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant
+#   ' }}{% endif %}'''
+#
+#   tokenizer.save_pretrained("/path/to/qwen2-instruct-with-markers")
+#
+# =============================================================================
+# DATA PREPARATION
+# =============================================================================
+#
+# Small dataset (for testing):
+#
+#   fast-llm prepare gpt_memmap \
+#       -c fast_llm_external_models/apriel2/examples/prepare_tulu3.yaml \
+#       dataset.split=train[:1000] \
+#       output_path=/path/to/tulu3-prepared-small
+#
+# Full dataset (~939K samples, ~6 minutes):
+#
+#   fast-llm prepare gpt_memmap \
+#       -c fast_llm_external_models/apriel2/examples/prepare_tulu3.yaml
+#
+# =============================================================================
+# VERIFICATION
+# =============================================================================
+#
+# To verify the prepared dataset has loss masking spans:
+#
+#   import pathlib
+#   from fast_llm.data.dataset.memmap import MemmapDataset
+#   from fast_llm.data.sample.language_model import LanguageModelSample
+#   from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
+#
+#   dataset = MemmapDataset[LanguageModelSample](
+#       'tulu3',
+#       pathlib.Path('/path/to/tulu3-prepared/shard_0_0.fast_llm_dataset'),
+#       LanguageModelPreprocessingConfig(use_loss_masking_spans=True)
+#   )
+#
+#   doc = dataset.get_document(0)
+#   print(f'Tokens: {len(doc.tokens.tokens)}')
+#   print(f'Loss masking spans: {doc.loss_masking_spans.ranges}')
+#
+# =============================================================================
+
+# Dataset configuration
+dataset:
+  # Tulu 3 SFT mixture from AllenAI
+  path: allenai/tulu-3-sft-mixture
+  split: train
+
+  # Source schema for conversation format
+  source_schema:
+    # Use conversation type (vs default "text" type)
+    type: conversation
+
+    # Column containing the messages list
+    messages: messages
+
+# Tokenizer configuration
+# IMPORTANT: Must use a tokenizer with {% generation %} markers in its chat template.
+# See instructions above to create a patched Qwen2 tokenizer.
+tokenizer:
+  path: /path/to/qwen2-instruct-with-markers
+  # Qwen2 doesn't have a BOS token by default, use <|endoftext|> as BOS
+  bos_token: "<|endoftext|>"
+
+# Output configuration
+output_path: /path/to/tulu3-prepared
+
+# Processing configuration
+num_workers: 8
+documents_per_shard: 100000
