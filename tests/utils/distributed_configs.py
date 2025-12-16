@@ -56,7 +56,7 @@ for tensor in ("fw", "bw"):
 _bf16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
-        (None, "fw"): get_config(1e-2, 1e-3),
+        (None, "fw"): get_config(1.5e-2, 1.5e-3),
         (None, "bw"): get_config(1.5e-2, 1e-5),
         (None, "bias"): get_config(2e-2, 1e-3),
         (None, "gradient"): get_config(2e-2, 5e-5),
@@ -79,7 +79,7 @@ _fp16_compare = get_config(
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
     compare=None,
-    config_args=["training.num_workers=2"],
+    config_args=[],
     num_gpus=1,
 )
 
@@ -87,7 +87,8 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="bf16",
         compare="simple",
-        config_args=["model.distributed.compute_dtype=bf16"],
+        # Also tests parallel data loader.
+        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=2"],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),

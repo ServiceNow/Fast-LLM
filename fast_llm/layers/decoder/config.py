@@ -1,5 +1,6 @@
 import enum
 import typing
+import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import combine_lr_scales
@@ -100,11 +101,15 @@ class MixerConfig(BlockWithBiasConfig):
 
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
-        if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
+        if (type := default.get("type")) == "mamba_2":
+            warnings.warn("Mixer name `mamba_2` is deprecated. Please use `mamba` instead.", DeprecationWarning)
+            default["type"] = "mamba"
+        if cls is MixerConfig and cls.get_subclass(type) is None:
             from fast_llm.layers.attention.config import AttentionConfig
 
             # Default subclass.
             return AttentionConfig._from_dict(default, strict)
+
         return super()._from_dict(default, strict=strict)
 
 
@@ -200,6 +205,22 @@ class DecoderBlockConfig(BlockConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    distillation_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for activation-level distillation.",
+        hint=FieldHint.feature,
+    )
+    activation_distillation_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the activation-level distillation loss by.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        if self.activation_distillation_factor > 0.0 and self.distillation_model is None:
+            raise ValueError("Activation distillation requires a distillation_model.")
 
     @property
     def layer_class(self) -> "type[DecoderBlock]":
@@ -223,3 +244,8 @@ class DecoderBlockConfig(BlockConfig):
             peft=peft,
             return_input=return_input,
         )
+
+    def get_distillation_models(self) -> set[str]:
+        if self.distillation_model is not None and self.activation_distillation_factor > 0.0:
+            return {self.distillation_model}
+        return set()

@@ -194,11 +194,17 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
         patch_positions = kwargs[VisionKwargs.patch_positions]
         if not hasattr(self, "_frequencies"):
             self._frequencies = self._config.theta ** -torch.arange(
-                0, 1, 4 / self._head_size, device=kwargs[AttentionKwargs.device], dtype=torch.float64
-            )
+                0, 1, 2 / self._head_size, device=kwargs[AttentionKwargs.device], dtype=torch.float64
+            ).view(-1, 2)
+
         # TODO: Pre-compute 2d frequencies?
-        angles = torch.outer(patch_positions.flatten(), self._frequencies).view(
-            len(patch_positions), self._head_size // 2
+        # Equivalent to the separate outer product of height and width frequencies.
+        # Pre-allocate output to avoid a reshape with copy.
+        angles = self._frequencies.new_empty(len(patch_positions), self._head_size // 2)
+        torch.bmm(
+            patch_positions.T.unsqueeze(2).to(torch.float64),
+            self._frequencies.T.unsqueeze(1),
+            out=angles.view(-1, 2, self._head_size // 4).permute(1, 0, 2),
         )
         frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
         if not self._config.complex_format:

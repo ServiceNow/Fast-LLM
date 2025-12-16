@@ -14,7 +14,11 @@ from fast_llm.models.gpt.config import (
     GPTTrainerConfig,
     PretrainedGPTModelConfig,
 )
-from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat, LlavaHybridSSMCheckpointFormat
+from fast_llm.models.multimodal.conversion.config import (
+    Apriel2CheckpointFormat,
+    LlavaCheckpointFormat,
+    LlavaHybridSSMCheckpointFormat,
+)
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.multimodal.huggingface import HuggingfaceMultiModalModelForCausalLM
@@ -46,6 +50,7 @@ class MultiModalModelConfig(GPTModelConfig):
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         LlavaCheckpointFormat,
         LlavaHybridSSMCheckpointFormat,
+        Apriel2CheckpointFormat,
     )
 
     @classmethod
@@ -75,6 +80,7 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 

@@ -39,7 +39,7 @@ def _reverse_kl_loss(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask.flatten()).mean()
+            loss = (loss_per_sample * loss_mask.flatten()).sum() / loss_mask.sum()
     return loss
 
 
@@ -163,8 +163,6 @@ def test_lm_head(
     loss_masking: bool,
     prediction_heads: int,
 ):
-    torch.cuda.manual_seed(0)
-    torch.manual_seed(0)
     head_config = {
         "cross_entropy_implementation": cross_entropy_impl,
         "normalization": {"type": "rms_norm"},
@@ -266,6 +264,8 @@ def test_lm_head(
             distributed,
             tied_parameter_duplicates=[head.output_weights.tensor_name] if is_duplicate else [],
             tied_parameter_duplicate_buffers={head.output_weights.tensor_name: logit_weight} if is_duplicate else {},
+            # Names must be kept as-is for tied weights.
+            set_names=False,
         )
 
         # Get reference outputs and grads

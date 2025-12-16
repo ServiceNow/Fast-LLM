@@ -57,29 +57,58 @@ class TestApriel2Modeling:
             use_cache=True
         )
 
-        # Forward with WRONG cache (zeros) - should give different results if cache is used
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache
-        wrong_cache = Apriel2Cache(config)
-        # Initialize with zeros (wrong state)
-        for layer_idx in range(config.num_hidden_layers):
-            # For attention layers, initialize empty cache
-            if hasattr(wrong_cache.layers[layer_idx], 'key_cache'):
-                wrong_cache.layers[layer_idx].key_cache = torch.zeros(2, 4, 1, 16)
-                wrong_cache.layers[layer_idx].value_cache = torch.zeros(2, 4, 1, 16)
+        # Test 1: Empty cache should give different results than filled cache
+        # This verifies cache is being used at all
+        from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache
+        empty_cache = Apriel2Cache(config)
 
-        outputs_wrong_cache = model(
+        outputs_empty_cache = model(
             input_ids[:, split_pos:split_pos+1],
-            past_key_values=wrong_cache,
+            past_key_values=empty_cache,
             use_cache=True
         )
 
-        # If cache is being used, wrong cache should give different results
-        cache_is_used = not torch.allclose(
+        cache_affects_output = not torch.allclose(
             outputs_correct_cache.logits,
-            outputs_wrong_cache.logits,
+            outputs_empty_cache.logits,
             atol=1e-3
         )
-        assert cache_is_used, f"Cache appears to be dormant for {config_name} - wrong cache gives same results as correct cache"
+        assert cache_affects_output, f"Cache appears dormant for {config_name} - empty cache gives same results as filled cache"
+
+        # Test 2: Corrupted cache (zeros) should give different results than correct cache
+        # This verifies the actual cache VALUES are being used
+        corrupted_cache = Apriel2Cache(config)
+        correct_cache = outputs_part1.past_key_values
+
+        # Derive dimensions from actual cache (handles different attention implementations)
+        for layer_idx in range(config.decoder["num_blocks"]):
+            correct_layer = correct_cache.layers[layer_idx]
+            corrupted_layer = corrupted_cache.layers[layer_idx]
+
+            # Handle both direct attention cache and stochastic mixer dict
+            if isinstance(correct_layer, _AttentionCache) and correct_layer.key is not None:
+                # Use same shape as correct cache but fill with zeros
+                corrupted_layer.key = torch.zeros_like(correct_layer.key)
+                corrupted_layer.value = torch.zeros_like(correct_layer.value)
+            elif isinstance(correct_layer, dict):
+                # For stochastic mixers, corrupt attention sub-caches
+                for name, correct_sub in correct_layer.items():
+                    if isinstance(correct_sub, _AttentionCache) and correct_sub.key is not None:
+                        corrupted_layer[name].key = torch.zeros_like(correct_sub.key)
+                        corrupted_layer[name].value = torch.zeros_like(correct_sub.value)
+
+        outputs_corrupted_cache = model(
+            input_ids[:, split_pos:split_pos+1],
+            past_key_values=corrupted_cache,
+            use_cache=True
+        )
+
+        cache_values_matter = not torch.allclose(
+            outputs_correct_cache.logits,
+            outputs_corrupted_cache.logits,
+            atol=1e-3
+        )
+        assert cache_values_matter, f"Cache values not used for {config_name} - zeroed cache gives same results as correct cache"
 
         # 4. Cache correctness - validate cache produces same results as no-cache
         # Compute full sequence without cache
@@ -94,10 +123,12 @@ class TestApriel2Modeling:
         )
 
         # Logits should match between cached and non-cached
+        # Note: GPU execution with bfloat16/float16 has lower precision than CPU float32,
+        # so we use a looser tolerance here.
         assert torch.allclose(
             outputs_full.logits[:, split_pos, :],
             outputs_part2.logits[:, 0, :],
-            atol=1e-5
+            atol=1e-3
         ), f"Cache correctness failed for {config_name}: cached and non-cached logits differ"
 
         # 5. Generation - end-to-end validation

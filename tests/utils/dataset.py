@@ -7,7 +7,9 @@ import numpy as np
 import PIL.Image
 
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.utils import padded_cumsum
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_FILE, TOKENIZER_PATH
 
@@ -158,7 +160,7 @@ def _get_test_dataset(
     path: pathlib.Path,
     seed: int,
     tokenizer_path: str = TOKENIZER_PATH,
-    vocab_size: int | None = None,
+    max_vocab_size: int | None = None,
     documents_per_shard: int = 10**6,
     num_documents: int = 1000,
     min_document_size: int = 5,
@@ -173,7 +175,7 @@ def _get_test_dataset(
     min_image_size: int = 4,
     max_image_size: int = 32,
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
     config_paths = (
         [path / "fast_llm_config.yaml"]
         if splits is None
@@ -214,7 +216,7 @@ def _get_test_dataset(
                     "load_from_disk": True,
                     "source_schema": source_schema,
                 },
-                "tokenizer": {"path": tokenizer_path, "max_vocab_size": vocab_size},
+                "tokenizer": {"path": tokenizer_path, "max_vocab_size": max_vocab_size},
                 "output_path": path,
                 "documents_per_shard": documents_per_shard,
                 "splits": splits,
@@ -231,28 +233,45 @@ def _get_test_dataset(
             for split, config_path in zip(splits, config_paths, strict=True)
         }
     )
-    return path, config, hf_path
+    preprocessing = LanguageModelPreprocessingConfig(
+        tokenizer={"type": "tokenizer", "path": tokenizer_path, "max_vocab_size": max_vocab_size},
+        image_patches=NullPreprocessingConfig() if image_patch_config is None else image_patch_config,
+        vocab_size=max_vocab_size,
+        use_loss_masking_spans=max_loss_masking_spans > 0,
+        use_preference_spans=has_preference_spans,
+    )
+    return path, config, hf_path, preprocessing
 
 
-def get_common_test_dataset():
+def get_common_test_dataset() -> (
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+):
     return _get_test_dataset(DATASET_CACHE / "common_dataset", seed=1234)
 
 
-def get_alt_test_dataset():
+def get_alt_test_dataset() -> (
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+):
     return _get_test_dataset(DATASET_CACHE / "other_dataset", seed=2345)
 
 
-def get_sharded_test_dataset():
+def get_sharded_test_dataset() -> (
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+):
     return _get_test_dataset(DATASET_CACHE / "common_dataset_sharded", seed=1234, documents_per_shard=350)
 
 
-def get_split_test_dataset():
+def get_split_test_dataset() -> (
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split", seed=1234, splits={"training": 1, "validation": 1}
     )
 
 
-def get_split_sharded_test_dataset():
+def get_split_sharded_test_dataset() -> (
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split_sharded",
         seed=1234,
@@ -261,15 +280,25 @@ def get_split_sharded_test_dataset():
     )
 
 
-def get_test_dataset_with_loss_masking_spans():
-    return _get_test_dataset(DATASET_CACHE / "dataset_with_loss_masking_spans", seed=1234, max_loss_masking_spans=5)
+def get_test_dataset_with_loss_masking_spans(
+    config_only: bool = False,
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+    return _get_test_dataset(
+        DATASET_CACHE / "dataset_with_loss_masking_spans", seed=1234, max_loss_masking_spans=5, config_only=config_only
+    )
 
 
-def get_test_dataset_with_preference_spans():
-    return _get_test_dataset(DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True)
+def get_test_dataset_with_preference_spans(
+    config_only: bool = False,
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+    return _get_test_dataset(
+        DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True, config_only=config_only
+    )
 
 
-def get_test_dataset_with_image_patches(image_break_token: int | None = None, image_end_token: int | None = None):
+def get_test_dataset_with_image_patches(
+    image_break_token: int | None = None, image_end_token: int | None = None, config_only: bool = False
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / f"dataset_with_image_patches_{image_break_token}_{image_end_token}",
         seed=1234,
@@ -282,6 +311,7 @@ def get_test_dataset_with_image_patches(image_break_token: int | None = None, im
             image_break_token=image_break_token,
             image_end_token=image_end_token,
         ),
+        config_only=config_only,
     )
 
 
@@ -289,7 +319,7 @@ def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
-        vocab_size=MODEL_TEST_VOCAB_SIZE,
+        max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         splits={"training": 969, "validation": 30, "test": 1},
         config_only=config_only,
     )
@@ -299,7 +329,7 @@ def get_multimodal_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset_multimodal",
         seed=1234,
-        vocab_size=MODEL_TEST_VOCAB_SIZE,
+        max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         max_images=2,
         image_patch_config=ImagePatchConfig(
             height=4,

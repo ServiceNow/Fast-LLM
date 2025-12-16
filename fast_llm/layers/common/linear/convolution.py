@@ -34,7 +34,11 @@ class CausalConv1d(torch.nn.Module):
             else self._forward_torch
         )
 
-    def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
+    def _forward_torch(self, input_: torch.Tensor, **kwargs) -> torch.Tensor:
+        if kwargs:
+            raise NotImplementedError(
+                f"Arguments {tuple(kwargs)} not implemented for torch implementation of 1d convolution."
+            )
         return self._activation.activation_fn(
             torch.nn.functional.conv1d(
                 input_,
