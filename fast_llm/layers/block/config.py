@@ -45,7 +45,7 @@ class BlockKwargs:
     device = "device"
     hidden_states = "hidden_states"
     output_hidden_states = "output_hidden_states"
-    padding_mask = "padding_mask"
+    activation_mask = "activation_mask"
 
 
 @config_class(registry=True)

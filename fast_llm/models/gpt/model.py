@@ -217,9 +217,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
 
-            # Padding tokens are -100, valid tokens are >= 0
-            # (batch_size, sequence_length)
-            padding_mask = cropped_tokens.tokens != -100
+            # Create activation mask from loss_masking_spans if available
+            # This mask indicates which positions should be included in activation distillation loss
+            # (excludes padding but includes image tokens with -100 token IDs)
+            activation_mask = None
+            if batch.loss_masking_spans is not None:
+                loss_masking_spans = batch.loss_masking_spans.crop(tokens_begin, tokens_end)
+                # Start with all positions valid
+                activation_mask = torch.ones_like(cropped_tokens.tokens, dtype=torch.bool)
+                # Mask out the spans that should be excluded
+                for sample_index, sample_loss_masking_spans in enumerate(loss_masking_spans.ranges):
+                    for begin, end in sample_loss_masking_spans:
+                        activation_mask[sample_index, begin:end] = False
 
             kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
@@ -227,7 +236,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 AttentionKwargs.presents: presents,
                 BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
-                BlockKwargs.padding_mask: padding_mask,
+                BlockKwargs.activation_mask: activation_mask,
                 AttentionKwargs.device: self._distributed.device,
                 BlockKwargs.hidden_states: {},
                 **reference_logits[i],

@@ -179,13 +179,13 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             activation_loss_factor = self._config.activation_distillation_factor
             # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
 
-            # Handle possible padding by using pre-computed padding mask
+            # Handle possible padding by using pre-computed activation mask
             sequence_first = kwargs.get(BlockKwargs.sequence_first, False)
-            padding_mask = kwargs.get(BlockKwargs.padding_mask)
+            activation_mask = kwargs.get(BlockKwargs.activation_mask)
 
-            if padding_mask is not None:
-                # Use pre-computed padding mask (bool tensor where True = valid token)
-                mask = padding_mask.to(dtype=mixer_output.dtype)
+            if activation_mask is not None:
+                # Use pre-computed activation mask (bool tensor where True = valid token)
+                mask = activation_mask.to(dtype=mixer_output.dtype)
                 if sequence_first:
                     # (batch, sequence) -> (sequence, batch)
                     mask = mask.T
@@ -198,7 +198,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 local_loss_sum = torch.sum(masked_loss)
                 total_count = int(mask.sum().item())
             else:
-                # No padding_mask available, compute loss on all tokens
+                # No activation_mask available, compute loss on all tokens
                 per_token_loss = torch.norm(
                     mixer_output - teacher_tensor, p=2, dim=-1
                 )  # (batch, sequence) or (sequence, batch)
@@ -210,7 +210,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # All-reduce across tensor-parallel group if sequence-parallel is enabled
             if self._sequence_parallel and self._distributed.tensor_group is not None:
                 all_reduce(local_loss_sum, group=self._distributed.tensor_group, op=ReduceOp.SUM)
-                if padding_mask is not None:
+                if activation_mask is not None:
                     # Different ranks may have different amounts of padding
                     total_count_tensor = torch.tensor(total_count, device=mixer_output.device, dtype=torch.int64)
                     all_reduce(total_count_tensor, group=self._distributed.tensor_group, op=ReduceOp.SUM)
