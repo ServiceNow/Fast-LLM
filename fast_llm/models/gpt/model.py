@@ -217,12 +217,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
 
+            # Padding tokens are -100, valid tokens are >= 0
+            # (batch_size, sequence_length)
+            padding_mask = cropped_tokens.tokens != -100
+
             kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                BlockKwargs.padding_mask: padding_mask,
                 AttentionKwargs.device: self._distributed.device,
                 BlockKwargs.hidden_states: {},
                 **reference_logits[i],
