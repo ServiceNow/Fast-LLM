@@ -219,11 +219,12 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                     # All ranks contribute the same count
                     total_count *= self._distributed.tensor_group.size()
 
-            activation_loss = activation_loss_factor * (local_loss_sum / total_count)
+            activation_loss = local_loss_sum / total_count
+            scaled_activation_loss = activation_loss_factor * activation_loss
 
             # Backward hooks
-            hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
-            bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
+            hidden_states = AuxiliaryLoss.apply(hidden_states, scaled_activation_loss, 1.0)
+            bias = AuxiliaryLoss.apply(bias, scaled_activation_loss, 1.0) if bias is not None else None
             # Logging
             if losses is not None and self._activation_distillation_loss_name in losses:
                 losses[self._activation_distillation_loss_name].append(activation_loss.detach())
