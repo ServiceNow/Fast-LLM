@@ -552,6 +552,7 @@ _update_and_add_testing_config(
     "mistral_distill_logits",
     updates={
         ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
                 "model": {"base_model": copy.deepcopy(_mistral_base_model)},
