@@ -217,18 +217,29 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
 
-            # Create activation mask from loss_masking_spans if available
-            # This mask indicates which positions should be included in activation distillation loss
-            # (excludes padding but includes image tokens with -100 token IDs)
-            activation_mask = None
-            if batch.loss_masking_spans is not None:
-                loss_masking_spans = batch.loss_masking_spans.crop(tokens_begin, tokens_end)
-                # Start with all positions valid
-                activation_mask = torch.ones_like(cropped_tokens.tokens, dtype=torch.bool)
-                # Mask out the spans that should be excluded
-                for sample_index, sample_loss_masking_spans in enumerate(loss_masking_spans.ranges):
-                    for begin, end in sample_loss_masking_spans:
-                        activation_mask[sample_index, begin:end] = False
+            # Create activation mask for activation distillation
+            # This mask should:
+            # - Be 0 on padding tokens (added at the end when documents aren't truncated)
+            # - Be 1 on image placeholder tokens (token value -100 but not padding)
+            # - Be 1 on all other valid tokens (ignores loss-masking-spans)
+            #
+            # Note: Padding is added as a separate document with all tokens = -100
+            # We detect padding by checking if all tokens in a document segment are -100
+            activation_mask = torch.ones_like(cropped_tokens.tokens, dtype=torch.bool)
+
+            for sample_index, sample_lengths in enumerate(cropped_tokens.lengths):
+                # Iterate through documents in this sample
+                pos = 0
+                for doc_length in sample_lengths:
+                    # Check if this document is padding (all tokens are -100)
+                    doc_tokens = cropped_tokens.tokens[sample_index, pos : pos + doc_length]
+                    is_padding_doc = torch.all(doc_tokens == -100).item()
+
+                    if is_padding_doc:
+                        # This is a padding document, mask it out
+                        activation_mask[sample_index, pos : pos + doc_length] = False
+
+                    pos += doc_length
 
             kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
