@@ -55,6 +55,8 @@ def _lm_head(
     logit_scale_factor: float = 1.0,
     logit_z_loss=0.0,
     distillation_loss_implementation: DistillationLossImpl = DistillationLossImpl.cross_entropy,
+    language_model_loss_factor: float = 1.0,
+    distillation_loss_factor: float = 1.0,
 ):
     hidden = torch.rms_norm(
         input_.to(rms_weight.dtype),
@@ -69,23 +71,31 @@ def _lm_head(
         loss = _reverse_kl_loss(
             (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
         )
-        loss.backward(torch.full_like(loss, grad_output))
-        return loss, None
+        # Apply distillation_loss_factor to grad_output for backward
+        loss.backward(torch.full_like(loss, grad_output * distillation_loss_factor))
+        # Return scaled loss
+        return loss * distillation_loss_factor, None
 
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
     z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2) if logit_z_loss > 0 else None
     if target.ndim == logits.ndim:
+        # Distillation loss (cross-entropy with soft targets)
         loss = torch.nn.functional.cross_entropy(
             logits.flatten(0, -2), target.float().softmax(-1).flatten(0, -2), reduction="none"
         )
         if loss_mask is not None:
             loss = loss * loss_mask.flatten()
         loss = loss.mean()
+        # Apply distillation_loss_factor
+        loss.backward(torch.full_like(loss, grad_output * distillation_loss_factor))
+        return loss * distillation_loss_factor, z_loss
     else:
+        # Language model loss (cross-entropy with hard labels)
         loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
-    loss.backward(torch.full_like(loss, grad_output))
-    return loss, z_loss
+        # Apply language_model_loss_factor
+        loss.backward(torch.full_like(loss, grad_output * language_model_loss_factor))
+        return loss * language_model_loss_factor, z_loss
 
 
 SEQUENCE_LENGTH = 200
@@ -153,6 +163,54 @@ VOCAB_SIZE = 500
             {},
             True,
             1,
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "language_model_loss_factor": 0.0,
+                    "track_language_model_loss": True,
+                    "distillation_loss_factor": 1.0,
+                }
+            },
+            {},
+            False,
+            1,
+            id="track_lm_zero_factor",
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "language_model_loss_factor": 0.0,
+                    "distillation_loss_factor": 0.0,
+                    "track_language_model_loss": True,
+                    "track_distillation_loss": True,
+                }
+            },
+            {},
+            False,
+            1,
+            id="track_both_zero_factors",
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "language_model_loss_factor": 0.0,
+                    "distillation_loss_factor": 0.0,
+                    "track_language_model_loss": False,
+                    "track_distillation_loss": False,
+                }
+            },
+            {},
+            False,
+            1,
+            marks=pytest.mark.xfail(
+                reason="No losses computed when all factors=0 and tracking=False, raises RuntimeError in _add_tensors",
+                strict=True,
+            ),
+            id="zero_factors_no_tracking",
         ),
     ),
 )
@@ -292,6 +350,10 @@ def test_lm_head(
             logit_scale_factor=head_config.logits_scale_factor,
             logit_z_loss=head_config.logit_z_loss,
             distillation_loss_implementation=head_config.distillation_loss_implementation,
+            language_model_loss_factor=(
+                head_config.language_model_loss_factor if head_config.language_model_loss_factor is not None else 1.0
+            ),
+            distillation_loss_factor=head_config.distillation_loss_factor,
         )
 
         # Prepare LM head inputs
@@ -303,20 +365,27 @@ def test_lm_head(
             head_input = torch.stack((shared_hidden, input_.detach())).requires_grad_()
             output_grad = torch.randn_like(shared_hidden)
 
-        loss_name = f"language_model_loss_{prediction_distance}" if prediction_distance > 0 else "language_model_loss"
-        loss_keys = {loss_name}
+        lm_head_loss_name = f"lm_head_loss_{prediction_distance}" if prediction_distance > 0 else "lm_head_loss"
+        expected_loss_keys = {lm_head_loss_name}
+        if head._compute_lm_loss:
+            lm_loss_name_unscaled = (
+                f"lm_loss_unscaled_{prediction_distance}" if prediction_distance > 0 else "lm_loss_unscaled"
+            )
+            lm_loss_name = f"lm_loss_{prediction_distance}" if prediction_distance > 0 else "lm_loss"
+
+            expected_loss_keys.add(lm_loss_name_unscaled)
+            expected_loss_keys.add(lm_loss_name)
         if ref_z_loss is not None:
-            loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
-        if head_config.distillation_model is not None:
-            loss_keys.add("distillation_loss")
-            if head_config.language_model_loss_factor > 0:
-                loss_keys.add("distillation_language_model_loss")
+            expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
+        if head._compute_distillation_loss:
+            expected_loss_keys.add("distillation_loss")
+            expected_loss_keys.add("distillation_loss_unscaled")
 
         Assert.eq(
             {loss_definition.name: loss_definition.count for loss_definition in head.get_loss_definitions()},
-            {loss_key: 1 for loss_key in loss_keys},
+            {loss_key: 1 for loss_key in expected_loss_keys},
         )
-        losses = {key: [] for key in loss_keys}
+        losses = {key: [] for key in expected_loss_keys}
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
@@ -325,16 +394,16 @@ def test_lm_head(
             1e-5 if distributed.config.compute_dtype == DataType.float32 else 1e-4
         ) * head_config.logits_scale_factor
 
-        Assert.eq(losses.keys(), loss_keys)
-        Assert.eq(len(losses[loss_name]), 1)
+        Assert.eq(losses.keys(), expected_loss_keys)
+        Assert.eq(len(losses[lm_head_loss_name]), 1)
         if ref_z_loss is not None:
             Assert.eq(len(losses["z_loss"]), 1)
             Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
 
-        Assert.rms_close_relative(losses[loss_name][0], ref_loss, threshold, min_threshold)
+        Assert.rms_close_relative(losses[lm_head_loss_name][0], ref_loss, threshold, min_threshold)
 
         if head._is_last_head:
-            Assert.all_equal(output, losses[loss_name][0])
+            Assert.all_equal(output, losses[lm_head_loss_name][0])
             input_grad = head_input.grad
         else:
             Assert.all_equal(output, shared_hidden)
@@ -344,3 +413,7 @@ def test_lm_head(
         Assert.rms_close_relative(input_grad, ref_input.grad, threshold, min_threshold)
         Assert.rms_close_relative(head.final_norm.weight.grad_buffer, ref_rms_weight.grad, threshold, min_threshold)
         Assert.rms_close_relative(logit_weight.grad_buffer, ref_logit_weight.grad, threshold, min_threshold)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

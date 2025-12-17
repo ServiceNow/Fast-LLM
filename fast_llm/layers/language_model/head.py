@@ -461,22 +461,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             Assert.is_(lm_grad, None)
 
         if distillation_loss is not None:
-            # We need to scale the loss by (valid_tokens * num_micro_batches) / total_valid_tokens to correctly average the loss over micro-batches.
-            # The runner averages losses by dividing by num_micro_batches, so we need to account for that.
-            # Note: for grads this scaling is already in the 'grad_output'
-            total_valid_tokens = kwargs.get(
-                LanguageModelKwargs.total_valid_tokens
-            )  # number of not masked tokens across all micro-batches.
-            num_micro_batches = kwargs.get("num_micro_batches", 1)
-
-            if loss_mask is None or total_valid_tokens is None:
-                loss_scalor_df = 1
-            else:
-                valid_tokens = loss_mask.sum()
-                # Scale by (valid_tokens * num_micro_batches) / total_valid_tokens
-                # This accounts for the runner dividing by num_micro_batches
-                loss_scalor_df = (valid_tokens * num_micro_batches) / total_valid_tokens
-            distillation_loss = distillation_loss * loss_scalor_df
+            distillation_loss = distillation_loss
             if self.training and losses is not None:
                 losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
             distillation_loss = distillation_loss * self._config.distillation_loss_factor
@@ -561,6 +546,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 LossDef(
                     name=self._lm_loss_name_unscaled,
                     formatted_name=_format_name(self._lm_loss_name_unscaled),
+                    count=count,
+                )
+            )
+            loss_defs.append(
+                LossDef(
+                    name=self._lm_loss_name,
+                    formatted_name=_format_name(self._lm_loss_name),
                     count=count,
                 )
             )
