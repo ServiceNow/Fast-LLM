@@ -465,7 +465,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             # The runner averages losses by dividing by num_micro_batches, so we need to account for that.
             # Note: for grads this scaling is already in the 'grad_output'
             total_valid_tokens = kwargs.get(
-                LanguageModelKwargs.total_valid_tokens
+                LanguageModelKwargs.total_valid_tokens, None
             )  # number of not masked tokens across all micro-batches.
             num_micro_batches = kwargs.get("num_micro_batches", 1)
 

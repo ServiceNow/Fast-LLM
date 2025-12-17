@@ -86,7 +86,7 @@ def _lm_head(
         )
         if loss_mask is not None:
             loss = loss * loss_mask.flatten()
-        loss = loss.mean()
+        loss = loss.sum() / (loss_mask.sum() if loss_mask is not None else loss.numel())
         # Apply distillation_loss_factor
         loss.backward(torch.full_like(loss, grad_output * distillation_loss_factor))
         return loss * distillation_loss_factor, z_loss
