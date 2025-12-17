@@ -23,7 +23,7 @@ def distributed_gptdata_streaming_test(
     redis_port,
     result_path,
 ):
-    stream_config = StreamingDatasetConfig.from_dict({"redis": {"port": redis_port}})
+    stream_config = StreamingDatasetConfig(port=redis_port)
 
     distributed = Distributed(
         DistributedConfig(

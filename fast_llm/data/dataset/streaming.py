@@ -4,9 +4,9 @@ import typing
 import redis
 import torch.utils.data
 
-from fast_llm.data.dataset.abstract import SamplableDataset
-from fast_llm.data.dataset.config import SamplingData, StreamingDatasetConfig
-from fast_llm.data.dataset.sampled import SampledIterableDataset
+from fast_llm.config import Configurable
+from fast_llm.data.dataset.abstract import SamplableIterableDataset
+from fast_llm.data.dataset.config import StreamingDatasetConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
@@ -24,9 +24,11 @@ REDIS_DATA_KEY = "fast_llm_streaming"
 REDIS_GROUP_NAME = "fast_llm_group"
 
 
-class RedisStreamingDataset[SampleType: LanguageModelSample](SamplableDataset[SampleType]):
-    def __init__(self, config: StreamingDatasetConfig, distributed_config: DistributedConfig):
-        super().__init__()
+class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: LanguageModelSample](
+    Configurable[ConfigType], SamplableIterableDataset[SampleType]
+):
+    def __init__(self, config: ConfigType, distributed_config: DistributedConfig):
+        super().__init__(config)
         if distributed_config.pipeline_parallel > 1:
             # NOTE: It is not yet clear whether the issue comes from the streaming dataset
             # itself or from the distributed data-loader wrappers, but currently it
@@ -34,48 +36,25 @@ class RedisStreamingDataset[SampleType: LanguageModelSample](SamplableDataset[Sa
             # the training step.
             raise NotImplementedError("Streaming dataset support is not implemented for pipeline-parallel training.")
 
-        self._name = f"redis[{config.redis.host}:{config.redis.port}]({REDIS_DATA_KEY}|{REDIS_GROUP_NAME})[data]"
+        self._name = f"redis[{config.host}:{config.port}]({REDIS_DATA_KEY}|{REDIS_GROUP_NAME})[data]"
         self._config = config
-        self.batch_data_rank = distributed_config.batch_data_rank
-        self.batch_data_parallel = distributed_config.batch_data_parallel
+        self._rank = distributed_config.batch_data_rank
         self.is_batch_data_group_leader = (
             distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).rank == 0
         )
 
-        if distributed_config.rank == 0:
-            redis_client = redis.Redis(host=self._config.redis.host, port=self._config.redis.port)
-            # TODO: Not needed?
-            redis_client.hset(f"{REDIS_DATA_KEY}:consumer_count", "0", str(self.batch_data_parallel))
+        # TODO: Not needed?
+        # if distributed_config.rank == 0:
+        #    redis_client = redis.Redis(host=self._config.host, port=self._config.port)
+        #    redis_client.hset(f"{REDIS_DATA_KEY}:consumer_count", "0", str(distributed_config.batch_data_parallel))
+
+    @property
+    def requires_broadcast(self) -> bool:
+        return True
 
     @property
     def name(self) -> str:
         return self._name
-
-    def sample(self, config: SamplingData) -> SampledIterableDataset[LanguageModelSample]:
-        return SampledIterableDataset(iter(self), config)
-
-    # def __getstate__(self) -> tuple[str, StreamingDatasetConfig, int, int, bool, bytes, bytes]:
-    #    return (
-    #        self._name,
-    #        self._config,
-    #        self.batch_data_parallel,
-    #        self.batch_data_rank,
-    #        self.is_batch_data_group_leader,
-    #        self.payload_key_b,
-    #        self.hash_key_b,
-    #    )
-
-    # def __setstate__(self, state: tuple[str, StreamingDatasetConfig, int, bool, bytes, bytes]):
-    #    name, config, batch_data_parallel, batch_data_rank, is_batch_data_group_leader, payload_key_b, hash_key_b = (
-    #        state
-    #    )
-    #    self._name = name
-    #    self._config = config
-    #    self.batch_data_parallel = batch_data_parallel
-    #    self.batch_data_rank = batch_data_rank
-    #    self.is_batch_data_group_leader = is_batch_data_group_leader
-    #    self.payload_key_b = payload_key_b
-    #    self.hash_key_b = hash_key_b
 
     def __iter__(self) -> typing.Iterator[LanguageModelSample]:
         worker_info = torch.utils.data.get_worker_info()
@@ -85,7 +64,7 @@ class RedisStreamingDataset[SampleType: LanguageModelSample](SamplableDataset[Sa
         if not self.is_batch_data_group_leader:
             raise RuntimeError("Must be only called on the batch data group leader")
 
-        client = redis.Redis(host=self._config.redis.host, port=self._config.redis.port)
+        client = redis.Redis(host=self._config.host, port=self._config.port)
 
         # Create the consumer group at the start of the stream ("0")
         # If the stream already exists, XGROUP CREATE will fail unless we add mkstream=True
@@ -105,7 +84,7 @@ class RedisStreamingDataset[SampleType: LanguageModelSample](SamplableDataset[Sa
             # BLOCK: wait for new messages (milliseconds)
             messages = client.xreadgroup(
                 groupname=REDIS_GROUP_NAME,
-                consumername=f"fast_llm_consumer_{self.batch_data_rank}",
+                consumername=f"fast_llm_consumer_{self._rank}",
                 # ">" reads only new messages that have not been delivered to any consumer
                 streams={REDIS_DATA_KEY: ">"},
                 count=1,
@@ -121,7 +100,7 @@ class RedisStreamingDataset[SampleType: LanguageModelSample](SamplableDataset[Sa
                         processed += 1
                         # TODO: or do it after processing all received messaged then count > 1?
                         if processed % self._config.acknowledge_interval == 0:
-                            client.hset(f"{REDIS_DATA_KEY}:ack", str(self.batch_data_rank), msg_id)
+                            client.hset(f"{REDIS_DATA_KEY}:ack", str(self._rank), msg_id)
 
                         yield self._read_document(json.loads(msg_data[b"data"]))
 

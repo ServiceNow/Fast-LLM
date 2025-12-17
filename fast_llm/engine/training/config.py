@@ -16,6 +16,7 @@ from fast_llm.config import (
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
@@ -398,15 +399,10 @@ class TrainingFinishedEventConfig(TrainerEvent):
 
 
 @config_class()
-class TrainerEventsConfig(Config):
+class TrainerEventsConfig(RedisConfig):
     """
     Aggregates all trainer-side Redis-based event configurations.
     """
-
-    redis: TrainerEventsRedisConfig = Field(
-        desc="Redis connection and stream settings used to fetch incoming training data.",
-        hint=FieldHint.core,
-    )
 
     weights_broadcast: WeightsBroadcastEventConfig = Field(
         default=None,

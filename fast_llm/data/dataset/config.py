@@ -11,7 +11,6 @@ from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, c
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Sample
-from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -108,7 +107,7 @@ class DatasetConfig[SampleType: Sample](Config):
 @config_class(registry=True)
 class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     """
-    A sampled dataset containing a prepared list or iterable of samples to be indexed sequentially (as-is) during training.
+    A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     """
 
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
@@ -302,18 +301,29 @@ class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
             raise FileNotFoundError(self.path)
 
 
+@config_class()
+class RedisConfig(Config):
+    # TODO: Move elsewhere? (Also used in trainer) Get it from the trainer in sampling config?
+    host: str = Field(
+        default="localhost",
+        desc="Hostname or IP address of the Redis server.",
+        hint=FieldHint.core,
+    )
+
+    port: int = Field(
+        default=6379,
+        desc="Port number on which the Redis server is running.",
+        hint=FieldHint.core,
+    )
+
+
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
-class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
+class StreamingDatasetConfig[SampleType: LanguageModelSample](RedisConfig, SamplableDatasetConfig[SampleType]):
     """
     Configuration for a streaming dataset that reads training data from a Redis stream.
     """
 
     _abstract = False
-
-    redis: RedisConfig = Field(
-        desc="Redis connection and stream settings used to fetch incoming training data.",
-        hint=FieldHint.core,
-    )
 
     acknowledge_interval: int = Field(
         default=10,
@@ -324,4 +334,6 @@ class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         from fast_llm.data.dataset.streaming import RedisStreamingDataset
 
-        return RedisStreamingDataset[SampleType](self, sampling.distributed.config).sample(sampling)
+        return RedisStreamingDataset[StreamingDatasetConfig, SampleType](self, sampling.distributed.config).sample(
+            sampling
+        )

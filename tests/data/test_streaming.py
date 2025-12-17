@@ -122,7 +122,7 @@ def run_distributed_gptdata_streaming_test(
     pipeline_parallel = variant["pipeline_parallel"]
     sequence_data_parallel = variant["sequence_data_parallel"]
     total_gpus = variant["total_gpus"]
-    redis_port = stream_config.redis.port
+    redis_port = stream_config.port
 
     result_path = result_path / "distributed_gptdata_streaming_test" / request.node.name
 
@@ -223,8 +223,7 @@ def test_streaming_dataset_reads_single_message(monkeypatched_redis, stream_conf
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     fake_redis = monkeypatched_redis
 
-    distributed = Distributed(DistributedConfig(), use_cpu=True)
-    dataset = RedisStreamingDataset(stream_config, distributed)
+    dataset = RedisStreamingDataset(stream_config, DistributedConfig())
 
     # Insert a message
     push_msg(fake_redis, [1, 2, 3])
@@ -244,8 +243,7 @@ def test_streaming_dataset_reads_multiple_messages(monkeypatched_redis, stream_c
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     fake_redis = monkeypatched_redis
 
-    distributed = Distributed(DistributedConfig(), use_cpu=True)
-    dataset = RedisStreamingDataset(stream_config, distributed)
+    dataset = RedisStreamingDataset(stream_config, DistributedConfig())
 
     # Insert a message
     push_msg(fake_redis, [1, 2, 3])
@@ -271,7 +269,7 @@ def test_sampling_1_doc_exact_fit(monkeypatched_redis, stream_config):
     push_msg(fake_redis, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -289,7 +287,7 @@ def test_sampling_2_docs_exact_fit(monkeypatched_redis, stream_config):
     push_msg(fake_redis, [5, 6, 7, 8, 9, 10])
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -306,7 +304,7 @@ def test_sampling_skips_too_long_doc_and_padding_final(monkeypatched_redis, stre
     push_msg(fake_redis, list(range(10)))  # usable
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -323,7 +321,7 @@ def test_sampling_overflow_creates_two(monkeypatched_redis, stream_config):
     push_msg(fake_redis, list(range(10)))
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 2, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(10, 0, 2, distributed))
 
     sampler_iter = iter(sampler)
     out = [next(sampler_iter)]

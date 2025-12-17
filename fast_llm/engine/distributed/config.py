@@ -101,7 +101,7 @@ class DistributedDim:
             if len(global_ranks) == 1 or (
                 isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start
             ):
-                global_ranks = range(start, start + size * stride, sizes_and_strides[0][0])
+                global_ranks = range(start, start + size * stride, sizes_and_strides[0][1])
             else:
                 global_ranks = (rank0 + rank1 for rank1 in range(0, size, stride) for rank0 in global_ranks)
         global_ranks = global_ranks if isinstance(global_ranks, range) else list(global_ranks)
@@ -349,7 +349,7 @@ class DistributedConfig(Config):
                 DistributedDimNames.model_and_sequence_data,
                 (self.tensor_parallel, tensor_stride),
                 (self.sequence_data_parallel, sequence_data_stride),
-                (self.pipeline_rank, pipeline_stride),
+                (self.pipeline_parallel, pipeline_stride),
             )
 
         super()._validate()
@@ -362,6 +362,7 @@ class DistributedConfig(Config):
         self._add_distributed_dim(DistributedDim.from_sizes_and_strides(name, self.rank, *sizes_and_strides))
 
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
+        log("AAAAAA", distributed_dim, distributed_dim.global_ranks, distributed_dim.rank, self.rank, self.world_size)
         Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
 
         try:

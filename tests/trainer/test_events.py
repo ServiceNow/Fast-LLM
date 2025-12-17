@@ -356,8 +356,8 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
     #  so fake consumers can read them as well from this dict config
     model_config["events"] = {
         "redis": {
-            "host": stream_config.redis.host,
-            "port": stream_config.redis.port,
+            "host": stream_config.host,
+            "port": stream_config.port,
             "stream_key": "fast_llm_events",
             "payload_key": "event",
         },

@@ -147,13 +147,13 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
 @pytest.fixture
 def stream_config():
     # TODO: ======= Not safe for parallel tests? =======
-    return StreamingDatasetConfig.from_dict({"redis": {"port": find_free_port()}})
+    return StreamingDatasetConfig(port=find_free_port())
 
 
 @pytest.fixture
 def fake_redis_server(stream_config):
     # We search for free port as port from previous test can still be not free even after server shutdown
-    server_address = (stream_config.redis.host, stream_config.redis.port)
+    server_address = (stream_config.host, stream_config.port)
 
     # ----- Monkey-patch handler to suppress broken pipes -----
     orig_handle = fakeredis._tcp_server.TCPFakeRequestHandler.handle

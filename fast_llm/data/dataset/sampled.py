@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import yaml
 
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
@@ -110,6 +110,10 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `Data`.
+
+    @property
+    def requires_broadcast(self) -> bool:
+        return self._indexed_dataset.requires_broadcast
 
     def _sample(self) -> None:
         """
@@ -434,17 +438,27 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __init__(
         self,
-        iterable_dataset: typing.Iterator[SampleType],
+        dataset: SamplableIterableDataset[SampleType],
         sampling: SamplingData,
     ):
-        self._iterator = iterable_dataset
+        self._dataset = dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
         self._documents: list[SampleType] = []
         self._current_length = 0
         self._sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
+        # Delay iterator creation to avoid pickling issues.
+        self._iterator: typing.Iterator[SampleType] | None = None
+
+    @property
+    def requires_broadcast(self) -> bool:
+        # TODO: ====== fix ======
+        # return self._iterator.requires_broadcast
+        return True
 
     def __getitem__(self, index: int) -> SampleType:
+        if self._iterator is None:
+            self._iterator = iter(self._dataset)
         while self._current_length < self._sample_length:
             document = next(self._iterator)
             if len(document) > self._sample_length:
@@ -476,4 +490,4 @@ class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
 
     @property
     def name(self) -> str:
-        return self._iterator.name
+        return self._dataset.name

@@ -4,10 +4,10 @@ import orjson
 import redis
 import torch.distributed
 
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.config_utils.run import is_main_rank
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.training.config import TrainerEventsConfig, TrainingExportConfig
-from fast_llm.redis.config import RedisConfig
 
 logger = logging.getLogger(__name__)
 
