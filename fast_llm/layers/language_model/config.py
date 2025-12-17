@@ -168,9 +168,19 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Factor to scale the language modeling loss by when using distillation.",
         hint=FieldHint.feature,
     )
+    track_language_model_loss: bool = Field(
+        default=False,
+        desc="Track the unscaled language modeling loss for logging purposes. Will always do if language_model_loss_factor > 0.",
+        hint=FieldHint.feature,
+    )
     distillation_loss_factor: float = Field(
         default=1.0,
         desc="Factor to scale the distillation loss by when using distillation.",
+        hint=FieldHint.feature,
+    )
+    track_distillation_loss: bool = Field(
+        default=False,
+        desc="Track the unscaled distillation loss for logging purposes. Will always do if distillation_loss_factor > 0.",
         hint=FieldHint.feature,
     )
     logits_scale_factor: float = Field(
@@ -243,6 +253,8 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                 else:
                     self.language_model_loss_factor = 0.0
         super()._validate()
+        if self.distillation_model is None:
+            Assert.is_(self.track_distillation_loss, False)
         assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
 
     @property

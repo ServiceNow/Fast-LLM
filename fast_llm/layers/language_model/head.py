@@ -113,6 +113,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             peft=self._peft,
         )
 
+        self._compute_lm_loss = self.config.language_model_loss_factor > 0.0 or self.config.track_language_model_loss
+        self._compute_dpo_loss = self._config.enable_dpo
+        self._compute_distillation_loss = self._config.distillation_model is not None and (
+            self._config.distillation_loss_factor > 0.0 or self._config.track_distillation_loss
+        )
+
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
@@ -137,8 +143,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         # TODO: Drop autograd entirely.
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
-        if losses is not None and language_model_loss is not None:
-            losses[self._loss_name].append(language_model_loss.detach())
         # TODO: Return the model output when needed.
         if self._is_last_head:
             # Last head should return the loss for backward.
@@ -205,25 +209,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 if loss_mask is not None:
                     loss_mask = loss_mask.flatten()
 
-            if self._config.distillation_model is None or self._config.language_model_loss_factor > 0.0:
-                lm_target = kwargs.get(LanguageModelKwargs.labels)
-                if lm_target is not None:
-                    # MTP: Shift the labels
-                    lm_target_sequence_length = (
-                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
-                    )
-                    if LanguageModelKwargs.sequence_q_dim in kwargs:
-                        Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
-                    lm_target_slice = slice(
-                        self._prediction_distance, self._prediction_distance + lm_target_sequence_length
-                    )
-                    lm_target = (
-                        lm_target[lm_target_slice]
-                        if kwargs[LanguageModelKwargs.sequence_first]
-                        else lm_target[:, lm_target_slice]
-                    ).flatten()
-            else:
-                lm_target = None
+            lm_target = kwargs.get(LanguageModelKwargs.labels)
+            if lm_target is not None:
+                # MTP: Shift the labels
+                lm_target_sequence_length = (
+                    lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
+                )
+                if LanguageModelKwargs.sequence_q_dim in kwargs:
+                    Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
+                lm_target_slice = slice(
+                    self._prediction_distance, self._prediction_distance + lm_target_sequence_length
+                )
+                lm_target = (
+                    lm_target[lm_target_slice]
+                    if kwargs[LanguageModelKwargs.sequence_first]
+                    else lm_target[:, lm_target_slice]
+                ).flatten()
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
         if self._sequence_parallel_logits:
@@ -246,7 +247,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         losses: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if self._config.cross_entropy_splits is None or targets is None:
-            loss, logit_input_grad = self._logits_cross_entropy_forward_backward(
+            loss, logit_input_grad = self._logits_loss_forward_backward(
                 input_, targets, weight, grad_output, kwargs, losses
             )
             if targets is None:
@@ -279,7 +280,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 for tensor in [logit_input, *targets, logit_input_grad]
             ]
             for logit_input_, *targets_, logit_input_grad_ in zip(*tensors_split, strict=True):
-                loss_, grad_ = self._logits_cross_entropy_forward_backward(
+                loss_, grad_ = self._logits_loss_forward_backward(
                     logit_input_,
                     targets_,
                     weight,
@@ -301,7 +302,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             all_reduce(loss, group=self._parallel_dim.group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
-    def _logits_cross_entropy_forward_backward(
+    def _logits_loss_forward_backward(
         self,
         input_: torch.Tensor,
         targets: tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None],
@@ -359,7 +360,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             dpo_loss, dpo_grad = None, None
 
-        if lm_target is not None:
+        if lm_target is not None and self._compute_lm_loss:
             lm_loss, lm_grad = cross_entropy_forward_backward(
                 logits.flatten(0, -2),
                 lm_target,
@@ -370,13 +371,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits_scale_factor=self._config.logits_scale_factor,
                 target_format=TargetFormat.labels,
             )
-            if self.training and losses is not None:
-                losses[self._ce_loss_name_unscaled].append(lm_loss.detach())
-            lm_loss = lm_loss * self._config.language_model_loss_factor
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None:
+        if distillation_target is not None and self._compute_distillation_loss:
             if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
@@ -407,39 +405,121 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 raise ValueError(
                     f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
                 )
-            if self.training and losses is not None:  # we keep track of unscaled losses for model comparison purposes
-                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
-            distillation_loss = distillation_loss * self._config.distillation_loss_factor
-
-        # TODO: Accumulate grads in-place to reduce memory and compute overhead.
-        grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
-
-        # TODO: Return individual losses?
-        loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
+        else:
+            distillation_loss, distillation_grad = None, None
 
         # TODO: de-allocate earlier.
         del logits
-
-        if self.training and losses is not None:
-            if dpo_loss is not None:
-                losses[self._dpo_loss_name].append(dpo_loss.detach())
-            if self._config.distillation_model is not None and distillation_loss is not None:
-                losses[self._distillation_loss_name].append(distillation_loss.detach())
-            if self._config.distillation_model is not None and lm_loss is not None:
-                losses[self._distillation_language_model_loss_name].append(lm_loss.detach())
+        loss, grad = self._post_process_loss_and_grad(
+            dpo_loss,
+            dpo_grad,
+            lm_loss,
+            lm_grad,
+            distillation_loss,
+            distillation_grad,
+            losses,
+            loss_mask,
+            kwargs,
+        )
 
         return loss, output_parallel_linear_backward(grad, context) if self.training else None
 
+    def _post_process_loss_and_grad(
+        self,
+        dpo_loss: torch.Tensor | None,
+        dpo_grad: torch.Tensor | None,
+        lm_loss: torch.Tensor | None,
+        lm_grad: torch.Tensor | None,
+        distillation_loss: torch.Tensor | None,
+        distillation_grad: torch.Tensor | None,
+        losses: dict | None,
+        loss_mask: torch.Tensor | None,
+        kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        If loss is provided (i.e. not None) it will be logged in scaled and unscaled version. The total loss is also logged.
+
+        Arguments:
+        - Losses: unscaled losses from different components (DPO, LM CE, Distillation)
+        - Grads: gradients of the losses w.r.t. logits from different components, already scaled by loss factors.
+        """
+        # Extremely explicit but easier to follow.
+        ############
+        if dpo_loss is not None:
+            if self.training and losses is not None:
+                losses[self._dpo_loss_name].append(dpo_loss.detach())
+        else:
+            Assert.is_(dpo_grad, None)
+
+        if lm_loss is not None:
+            if self.training and losses is not None:
+                losses[self._lm_loss_name_unscaled].append(lm_loss.detach())
+            lm_loss = lm_loss * self._config.language_model_loss_factor  # does not need scaling by loss_scalor_df
+            if self.training and losses is not None:
+                losses[self._lm_loss_name].append(lm_loss.detach())
+        else:
+            Assert.is_(lm_grad, None)
+
+        if distillation_loss is not None:
+            # We need to scale the loss by (valid_tokens * num_micro_batches) / total_valid_tokens to correctly average the loss over micro-batches.
+            # The runner averages losses by dividing by num_micro_batches, so we need to account for that.
+            # Note: for grads this scaling is already in the 'grad_output'
+            total_valid_tokens = kwargs.get(
+                LanguageModelKwargs.total_valid_tokens
+            )  # number of not masked tokens across all micro-batches.
+            num_micro_batches = kwargs.get("num_micro_batches", 1)
+
+            if loss_mask is None or total_valid_tokens is None:
+                loss_scalor_df = 1
+            else:
+                valid_tokens = loss_mask.sum()
+                # Scale by (valid_tokens * num_micro_batches) / total_valid_tokens
+                # This accounts for the runner dividing by num_micro_batches
+                loss_scalor_df = (valid_tokens * num_micro_batches) / total_valid_tokens
+            distillation_loss = distillation_loss * loss_scalor_df
+            if self.training and losses is not None:
+                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
+            distillation_loss = distillation_loss * self._config.distillation_loss_factor
+            if self.training and losses is not None:
+                losses[self._distillation_loss_name].append(distillation_loss.detach())
+        else:
+            Assert.is_(distillation_grad, None)
+
+        ############
+        # TODO: Accumulate grads in-place to reduce memory and compute overhead.
+        grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
+        total_loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
+        if losses is not None and total_loss is not None:
+            losses[self._total_loss_name].append(total_loss.detach())
+
+        return total_loss, grad
+
     @functools.cached_property
-    def _loss_name(self) -> str:
-        name = "language_model_loss"
+    def _total_loss_name(self) -> str:
+        """
+        Combined total scaled loss used for training.
+        """
+        name = "lm_head_loss"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
 
     @functools.cached_property
-    def _ce_loss_name_unscaled(self) -> str:
-        name = "language_model_loss_unscaled"
+    def _lm_loss_name_unscaled(self) -> str:
+        """
+        Unscaled language model cross-entropy loss.
+        """
+        name = "lm_loss_unscaled"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _lm_loss_name(self) -> str:
+        """
+        Scaled language model cross-entropy loss.
+        """
+        name = "lm_loss"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
@@ -459,8 +539,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         return name
 
     @functools.cached_property
-    def _distillation_language_model_loss_name(self) -> str:
-        name = "distillation_language_model_loss"
+    def _distillation_loss_name_unscaled(self) -> str:
+        name = "distillation_loss_unscaled"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
@@ -472,34 +552,28 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             name = f"{name}_{self._prediction_distance}"
         return name
 
-    @functools.cached_property
-    def _distillation_loss_name_unscaled(self) -> str:
-        name = "distillation_loss_unscaled"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
-        if self._config.distillation_model is None or self._config.language_model_loss_factor > 0.0:
-            # unscaled CE loss (NTP)
-            loss_defs = [
+        loss_defs = [
+            LossDef(name=self._total_loss_name, formatted_name=_format_name(self._total_loss_name), count=count)
+        ]
+        if self._compute_lm_loss:
+            loss_defs.append(
                 LossDef(
-                    name=self._ce_loss_name_unscaled,
-                    formatted_name=_format_name(self._ce_loss_name_unscaled),
+                    name=self._lm_loss_name_unscaled,
+                    formatted_name=_format_name(self._lm_loss_name_unscaled),
                     count=count,
                 )
-            ]
+            )
         if self._config.logit_z_loss:
             loss_defs.append(
                 LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
             )
-        if self._config.enable_dpo:
+        if self._compute_dpo_loss:
             loss_defs.append(
                 LossDef(name=self._dpo_loss_name, formatted_name=_format_name(self._dpo_loss_name), count=count)
             )
 
-        if self._config.distillation_model is not None:
+        if self._compute_distillation_loss:
             loss_defs.append(
                 LossDef(
                     name=self._distillation_loss_name,
@@ -515,15 +589,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                 )
             )
-            # if we mix distillation loss and CE loss for NTP, we want to log both
-            if self._config.language_model_loss_factor > 0.0:
-                loss_defs.append(
-                    LossDef(
-                        name=self._distillation_language_model_loss_name,
-                        formatted_name=_format_name(self._distillation_language_model_loss_name),
-                        count=count,
-                    )
-                )
 
         return loss_defs
 
@@ -544,4 +609,4 @@ def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor:
     elif len(tensors) == 1:
         return tensors[0]
     else:
-        raise RuntimeError()
+        raise RuntimeError("No tensors to add.")
