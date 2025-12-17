@@ -564,6 +564,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                 )
             )
+            loss_defs.append(
+                LossDef(
+                    name=self._lm_loss_name,
+                    formatted_name=_format_name(self._lm_loss_name),
+                    count=count,
+                )
+            )
         if self._config.logit_z_loss:
             loss_defs.append(
                 LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
