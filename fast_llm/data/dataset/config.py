@@ -7,7 +7,7 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, UpdateType, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Sample
@@ -15,8 +15,8 @@ from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
@@ -111,22 +111,16 @@ class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
     A sampled dataset containing a prepared list or iterable of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(
-        self, sampling: SamplingData
-    ) -> "SampledDataset[SampleType] | SampledIterableDataset[SampleType]":
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         raise NotImplementedError()
 
 
 @config_class()
 class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(
-        self, preprocessing: PreprocessingConfig
-    ) -> "SamplableDataset[SampleType] | SamplableIterableDataset[SampleType]":
+    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
         raise NotImplementedError()
 
-    def build_and_sample(
-        self, sampling: SamplingData
-    ) -> "SampledDataset[SampleType] | SampledIterableDataset[SampleType]":
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         return self.build(sampling.preprocessing).sample(sampling)
 
 
@@ -308,39 +302,6 @@ class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
             raise FileNotFoundError(self.path)
 
 
-@config_class()
-class StreamingDatasetRedisConfig(RedisConfig):
-    stream_key: str = FieldUpdate(default="fast_llm_streaming")
-
-    payload_key: str = FieldUpdate(
-        default="data",
-    )
-
-
-class IngestionType(str, enum.Enum):
-    CONSUMER_GROUP = "consumer_group"
-    ONE_STREAM = "one_stream"
-    N_STREAMS = "n_streams"
-
-
-class HashType(str, enum.Enum):
-    MESSAGE_INDEX = "message_index"
-    """Use the index of the received message for hashing. Provides precise distribution but may not be well shuffled."""
-
-    MESSAGE_ID = "message_id"
-    """Hash messages based on their unique message ID. Good for probabilistic distribution.
-       Redis message IDs are regenerated each time, so this is not reproducible.
-    """
-
-    MESSAGE_BODY = "message_body"
-    """Hash messages based on their payload content (bytes). Distributes messages roughly evenly.
-       Deterministic based on message content, but not perfectly balanced across ranks.
-    """
-
-    PRODUCER_PROVIDED = "producer_provided"
-    """Use the hash or index provided by the producer. Allows deterministic splitting and perfect balance."""
-
-
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
 class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
     """
@@ -349,48 +310,18 @@ class StreamingDatasetConfig[SampleType: LanguageModelSample](SamplableDatasetCo
 
     _abstract = False
 
-    redis: StreamingDatasetRedisConfig = Field(
+    redis: RedisConfig = Field(
         desc="Redis connection and stream settings used to fetch incoming training data.",
         hint=FieldHint.core,
     )
 
-    group_name: str = Field(
-        default="fast_llm_dp_group",
-        desc="Name of the Redis consumer group used for data-parallel reading.",
-        hint=FieldHint.core,
-    )
-
-    consumer_name_prefix: str = Field(
-        default="fast_llm_dp_group_consumer",
-        desc="Prefix used to generate unique consumer names for each rank in Redis consumer group.",
-        hint=FieldHint.core,
-    )
-
-    ingestion_type: IngestionType = Field(
-        default=IngestionType.CONSUMER_GROUP,
-        desc="Strategy used to ingest data from Redis streams (consumer group, single stream, or multiple streams).",
-        hint=FieldHint.core,
-    )
-
-    hash_type: HashType = Field(
-        default=HashType.MESSAGE_ID,
-        desc="How to compute hash for assigning messages to ranks.",
-        hint=FieldHint.core,
-    )
-
-    hash_key: str = Field(
-        default="hash",
-        desc="Key in the message dict containing the hash or index provided by the producer.",
-        hint=FieldHint.core,
-    )
-
-    ack_period_per_consumer: int = Field(
+    acknowledge_interval: int = Field(
         default=10,
         desc="Number of messages after which the consumer acknowledges received IDs back to the Redis hash.",
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> "SampledIterableDataset[SampleType]":
-        from fast_llm.data.dataset.streaming import StreamingDataset
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+        from fast_llm.data.dataset.streaming import RedisStreamingDataset
 
-        return StreamingDataset[SampleType](self, sampling.distributed).sample(sampling)
+        return RedisStreamingDataset[SampleType](self, sampling.distributed.config).sample(sampling)

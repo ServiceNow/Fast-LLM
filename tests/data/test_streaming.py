@@ -6,8 +6,7 @@ import fakeredis
 import pytest
 import torch
 
-from fast_llm.data.dataset.config import IngestionType
-from fast_llm.data.dataset.streaming import StreamingDataset
+from fast_llm.data.dataset.streaming import RedisStreamingDataset
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -111,12 +110,10 @@ def run_distributed_gptdata_streaming_test(
     run_distributed_script,
     result_path,
     request,
-    ingestion_type: IngestionType,
 ):
     import tests.data.gptdata_streaming_test
 
     stream_config, fake_redis, fake_redis_server_killer = fake_redis_server
-    stream_config = stream_config.from_dict(stream_config.to_dict(), {("ingestion_type"): ingestion_type})
 
     sequence_length = 10
     micro_batch_size = 2
@@ -132,7 +129,6 @@ def run_distributed_gptdata_streaming_test(
     with redis_batch_producer(
         redis_client=fake_redis,
         fake_redis_server_killer=fake_redis_server_killer,
-        stream_config=stream_config,
         batch_size=batch_size,
         sequence_length=10,
     ):
@@ -158,8 +154,6 @@ def run_distributed_gptdata_streaming_test(
                 str(result_path),
                 "--redis-port",
                 str(redis_port),
-                "--ingestion-type",
-                str(ingestion_type.value),
             ]
             # TODO: distributed_capture is ignored now inside the script
             if request.config.getoption("distributed_capture"):
@@ -183,7 +177,6 @@ def run_distributed_gptdata_streaming_test(
                 total_gpus=total_gpus,
                 redis_port=redis_port,
                 result_path=result_path,
-                ingestion_type=ingestion_type,
             )
 
     check_distributed_gptdata_streaming_test_results(
@@ -231,10 +224,10 @@ def test_streaming_dataset_reads_single_message(monkeypatched_redis, stream_conf
     fake_redis = monkeypatched_redis
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    dataset = StreamingDataset(stream_config, distributed)
+    dataset = RedisStreamingDataset(stream_config, distributed)
 
     # Insert a message
-    push_msg(fake_redis, stream_config, [1, 2, 3])
+    push_msg(fake_redis, [1, 2, 3])
 
     it = iter(dataset)
     sample = next(it)
@@ -252,12 +245,12 @@ def test_streaming_dataset_reads_multiple_messages(monkeypatched_redis, stream_c
     fake_redis = monkeypatched_redis
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    dataset = StreamingDataset(stream_config, distributed)
+    dataset = RedisStreamingDataset(stream_config, distributed)
 
     # Insert a message
-    push_msg(fake_redis, stream_config, [1, 2, 3])
-    push_msg(fake_redis, stream_config, [1, 2, 3])
-    push_msg(fake_redis, stream_config, [1, 2, 3])
+    push_msg(fake_redis, [1, 2, 3])
+    push_msg(fake_redis, [1, 2, 3])
+    push_msg(fake_redis, [1, 2, 3])
 
     it = iter(dataset)
     for i in range(3):
@@ -275,10 +268,10 @@ def test_sampling_1_doc_exact_fit(monkeypatched_redis, stream_config):
     """Docs exactly fill one sample."""
     fake_redis = monkeypatched_redis
 
-    push_msg(fake_redis, stream_config, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    push_msg(fake_redis, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -292,11 +285,11 @@ def test_sampling_2_docs_exact_fit(monkeypatched_redis, stream_config):
     fake_redis = monkeypatched_redis
 
     # Two rollouts: lengths 4 and 6 -> exactly 10
-    push_msg(fake_redis, stream_config, [1, 2, 3, 4])
-    push_msg(fake_redis, stream_config, [5, 6, 7, 8, 9, 10])
+    push_msg(fake_redis, [1, 2, 3, 4])
+    push_msg(fake_redis, [5, 6, 7, 8, 9, 10])
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -309,11 +302,11 @@ def test_sampling_skips_too_long_doc_and_padding_final(monkeypatched_redis, stre
     """Rollout longer than sample_length must be dropped."""
     fake_redis = monkeypatched_redis
 
-    push_msg(fake_redis, stream_config, list(range(20)))  # skip: too long
-    push_msg(fake_redis, stream_config, list(range(10)))  # usable
+    push_msg(fake_redis, list(range(20)))  # skip: too long
+    push_msg(fake_redis, list(range(10)))  # usable
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 1, distributed))
 
     out = next(iter(sampler))
 
@@ -326,11 +319,11 @@ def test_sampling_overflow_creates_two(monkeypatched_redis, stream_config):
     """A document overflowing the boundary triggers padding + next sample."""
     fake_redis = monkeypatched_redis
 
-    push_msg(fake_redis, stream_config, list(range(6)))
-    push_msg(fake_redis, stream_config, list(range(10)))
+    push_msg(fake_redis, list(range(6)))
+    push_msg(fake_redis, list(range(10)))
 
     distributed = Distributed(DistributedConfig(), use_cpu=True)
-    sampler = StreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 2, distributed))
+    sampler = RedisStreamingDataset(stream_config, distributed).sample(make_sampling(10, 0, 2, distributed))
 
     sampler_iter = iter(sampler)
     out = [next(sampler_iter)]
@@ -343,18 +336,7 @@ def test_sampling_overflow_creates_two(monkeypatched_redis, stream_config):
     assert out[1].tokens.tokens.tolist() == list(range(10))
 
 
-@pytest.mark.parametrize(
-    "ingestion_type",
-    [
-        IngestionType.CONSUMER_GROUP,
-        # TODO: need to implement wait_until_stream_empty for those variants on test side to enable tests for them
-        # IngestionType.ONE_STREAM,
-        # IngestionType.N_STREAMS,
-    ],
-)
-def test_gptdata_streaming_single_consumer(
-    fake_redis_server, run_distributed_script_lean, ingestion_type, result_path, request
-):
+def test_gptdata_streaming_single_consumer(fake_redis_server, run_distributed_script_lean, result_path, request):
 
     run_distributed_gptdata_streaming_test(
         fake_redis_server=fake_redis_server,
@@ -369,7 +351,6 @@ def test_gptdata_streaming_single_consumer(
         run_distributed_script=run_distributed_script_lean,
         result_path=result_path,
         request=request,
-        ingestion_type=ingestion_type,
     )
 
 
@@ -395,5 +376,4 @@ def test_gptdata_streamin_gpus(fake_redis_server, variant, run_distributed_scrip
         run_distributed_script=run_distributed_script_lean,
         result_path=result_path,
         request=request,
-        ingestion_type=IngestionType.CONSUMER_GROUP,
     )

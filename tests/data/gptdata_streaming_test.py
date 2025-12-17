@@ -5,11 +5,11 @@ import pickle
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.config import IngestionType
+from fast_llm.data.dataset.config import StreamingDatasetConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
-from tests.utils.redis import get_stream_config, make_sampling
+from tests.utils.redis import make_sampling
 
 
 def distributed_gptdata_streaming_test(
@@ -22,12 +22,8 @@ def distributed_gptdata_streaming_test(
     total_gpus,
     redis_port,
     result_path,
-    ingestion_type,
 ):
-    stream_config = get_stream_config()
-    stream_config = stream_config.from_dict(
-        stream_config.to_dict(), {("redis", "port"): redis_port, ("ingestion_type"): ingestion_type}
-    )
+    stream_config = StreamingDatasetConfig.from_dict({"redis": {"port": redis_port}})
 
     distributed = Distributed(
         DistributedConfig(
@@ -89,7 +85,6 @@ def parse_args():
     parser.add_argument("--total-gpus", type=int, required=True, help="Total number of GPUs available.")
     parser.add_argument("--redis-port", type=int, required=True, help="Redis port to connect to.")
     parser.add_argument("--result-path", type=str, required=True, help="Path to save test results.")
-    parser.add_argument("--ingestion-type", type=str, required=True, help="Ingestion type used in streaming dataset.")
 
     return parser.parse_args()
 
@@ -107,7 +102,6 @@ def main():
         total_gpus=args.total_gpus,
         redis_port=args.redis_port,
         result_path=args.result_path,
-        ingestion_type=IngestionType(args.ingestion_type),
     )
 
 

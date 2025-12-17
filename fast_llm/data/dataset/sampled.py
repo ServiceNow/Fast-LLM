@@ -9,7 +9,6 @@ import torch
 import yaml
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.abstract_iterable import SamplableIterableDataset, SampledIterableDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
@@ -432,53 +431,49 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
 
 
-class NaiveSampledIterableDataset[SampleType: Sample](SampledIterableDataset[SampleType]):
+class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __init__(
         self,
-        iterable_dataset: SamplableIterableDataset[SampleType],
+        iterable_dataset: typing.Iterator[SampleType],
         sampling: SamplingData,
     ):
-        self._dataset = iterable_dataset
+        self._iterator = iterable_dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
+        self._documents: list[SampleType] = []
+        self._current_length = 0
+        self._sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
 
-        assert self._parameters.truncate_documents == False
-        assert self._config.shuffle == ShufflingType.disabled
-
-    def __iter__(self) -> typing.Iterator[SampleType]:
-        sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
-        current_sample_length = 0
-        documents: list[SampleType] = []
-        for doc in self._dataset:
-            if len(doc) > sample_length:
-                logging.warning(f"Dropping doc with length {len(doc)} higher then sample_length {sample_length}")
+    def __getitem__(self, index: int) -> SampleType:
+        while self._current_length < self._sample_length:
+            document = next(self._iterator)
+            if len(document) > self._sample_length:
+                logging.warning(f"Dropping document with length {len(document)} > {self._sample_length}.")
                 continue
-            if current_sample_length + len(doc) > sample_length:
-                padding_length = sample_length - current_sample_length
-                assert padding_length > 0
-                documents.append(documents[-1].get_padding(padding_length))
+            self._documents.append(document)
+            self._current_length += len(document)
 
-                yield documents[0].from_documents(documents)
-
-                documents = [doc]
-                current_sample_length = len(doc)
+        if self._current_length == self._sample_length:
+            documents = self._documents
+            self._documents = []
+            self._current_length = 0
+        else:
+            last_length = len(self._documents[-1])
+            remaining_length = last_length - (self._current_length - self._sample_length)
+            if self._parameters.truncate_documents:
+                documents = self._documents[:-1] + [self._documents[-1].crop(0, remaining_length)]
+                self._documents = [self._documents[-1].crop(remaining_length, last_length)]
             else:
-                documents.append(doc)
-                current_sample_length += len(doc)
+                documents = self._documents[:-1] + [self._documents[0].get_padding(remaining_length)]
+                self._documents = [self._documents[-1]]
+            self._current_length = len(self._documents[0])
+        sample = documents[0].from_documents(documents)
+        Assert.eq(len(sample), self._sample_length)
+        return sample
 
-            if current_sample_length == sample_length:
-                yield documents[0].from_documents(documents)
-
-                documents = []
-                current_sample_length = 0
-
-        if current_sample_length > 0:
-            padding_length = sample_length - current_sample_length
-            assert padding_length > 0
-            documents.append(documents[-1].get_padding(padding_length))
-
-            yield documents[0].from_documents(documents)
+    def __len__(self) -> int:
+        return self._parameters.num_samples
 
     @property
     def name(self) -> str:
-        return self._dataset.name
+        return self._iterator.name

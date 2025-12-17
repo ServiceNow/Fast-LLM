@@ -29,7 +29,6 @@ from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
-from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -320,13 +319,6 @@ class TrainingConfig(Config):
         super()._validate()
         self.shutdown.assert_sub_interval(self.checkpoint)
         self.wandb.alert.assert_sub_interval(self.logs)
-
-
-@config_class()
-class TrainerEventsRedisConfig(RedisConfig):
-    stream_key: str = FieldUpdate(default="fast_llm_events")
-
-    payload_key: str = FieldUpdate(default="event")
 
 
 @config_class()

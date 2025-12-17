@@ -9,28 +9,14 @@ import orjson
 import pytest
 
 from fast_llm.data.dataset.config import (
-    IngestionType,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
     ShufflingType,
     StreamingDatasetConfig,
-    StreamingDatasetRedisConfig,
 )
+from fast_llm.data.dataset.streaming import REDIS_DATA_KEY, REDIS_GROUP_NAME
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-
-
-def get_stream_config():
-    return StreamingDatasetConfig(
-        redis=StreamingDatasetRedisConfig(
-            host="localhost",
-            port=6379,
-            stream_key="test_stream",
-            payload_key="data",
-        ),
-        group_name="test_group",
-        consumer_name_prefix="consumer",
-    )
 
 
 def find_free_port():
@@ -40,16 +26,15 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def push_msg(redis_client, config, tokens=None, stream_key_suffix=None):
+def push_msg(redis_client, tokens=None, stream_key_suffix=None, payload_key="data", stream_key=REDIS_DATA_KEY):
     """Push a message into FakeRedis stream."""
     msg = {
         "tokens": tokens,
         "tokens_dtype": "int64",
     }
-    stream_key = config.redis.stream_key
     if stream_key_suffix is not None:
         stream_key += stream_key_suffix
-    redis_client.xadd(stream_key, {config.redis.payload_key: orjson.dumps(msg)})
+    redis_client.xadd(stream_key, {payload_key: orjson.dumps(msg)})
 
 
 class FakeRedisServerKiller:
@@ -73,20 +58,7 @@ def wait_until_stream_empty(
     stream_key,
     consumer_group,
     stop_event,
-    consumer_count,
-    ingestion_type: IngestionType,
 ):
-    if ingestion_type == IngestionType.CONSUMER_GROUP:
-        return wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event)
-    elif ingestion_type == IngestionType.ONE_STREAM:
-        raise NotImplementedError()
-    elif ingestion_type == IngestionType.N_STREAMS:
-        raise NotImplementedError()
-    else:
-        raise ValueError(f"Unknown ingestion type {ingestion_type.value}")
-
-
-def wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event):
     """
     Wait until lag == 0, meaning all messages have been delivered AND acknowledged.
     Absence of group mean test has not started yet, so we wait
@@ -106,7 +78,7 @@ def wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_gr
 
 def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig):
     while not stop_event.is_set():
-        res = redis_client.hget(f"{config.redis.stream_key}:consumer_count", "0")
+        res = redis_client.hget(f"{REDIS_DATA_KEY}:consumer_count", "0")
         if res is None:
             time.sleep(0.05)
             continue
@@ -114,18 +86,12 @@ def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig)
 
 
 @contextlib.contextmanager
-def redis_batch_producer(
-    redis_client, fake_redis_server_killer, stream_config, batch_size, sequence_length, num_batches=None
-):
+def redis_batch_producer(redis_client, fake_redis_server_killer, batch_size, sequence_length, num_batches=None):
     stop_event = threading.Event()
     thread_exc = []
 
     def producer_loop():
-        is_n_streams = stream_config.ingestion_type == IngestionType.N_STREAMS
         try:
-            consumer_count = get_consumer_count(redis_client, stop_event, stream_config)
-            stream = stream_config.redis.stream_key
-            group = stream_config.group_name
             batch_idx = 0
             while not stop_event.is_set():
                 if num_batches is not None and batch_idx >= num_batches:
@@ -135,17 +101,13 @@ def redis_batch_producer(
                         return
                     push_msg(
                         redis_client,
-                        stream_config,
                         [batch_idx * batch_size + i] * sequence_length,
-                        stream_key_suffix=f"_{i % consumer_count}" if is_n_streams else None,
                     )
                 wait_until_stream_empty(
                     redis_client,
-                    stream,
-                    group,
+                    REDIS_DATA_KEY,
+                    REDIS_GROUP_NAME,
                     stop_event,
-                    consumer_count=consumer_count,
-                    ingestion_type=stream_config.ingestion_type,
                 )
                 batch_idx += 1
         except Exception as e:
@@ -184,14 +146,13 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
 
 @pytest.fixture
 def stream_config():
-    return get_stream_config()
+    # TODO: ======= Not safe for parallel tests? =======
+    return StreamingDatasetConfig.from_dict({"redis": {"port": find_free_port()}})
 
 
 @pytest.fixture
 def fake_redis_server(stream_config):
     # We search for free port as port from previous test can still be not free even after server shutdown
-    stream_config = stream_config.from_dict(stream_config.to_dict(), {("redis", "port"): find_free_port()})
-
     server_address = (stream_config.redis.host, stream_config.redis.port)
 
     # ----- Monkey-patch handler to suppress broken pipes -----

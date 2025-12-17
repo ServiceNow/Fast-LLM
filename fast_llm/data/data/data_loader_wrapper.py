@@ -1,4 +1,3 @@
-import torch.distributed
 import torch.utils.data.dataloader
 
 from fast_llm.core.distributed import broadcast_object
@@ -12,19 +11,16 @@ class DistributedDataLoaderWrapper:
 
     def __init__(
         self,
-        dataloader: torch.utils.data.dataloader.DataLoader | None,
-        rank: int,
+        data_loader: torch.utils.data.dataloader.DataLoader,
         process_group: torch.distributed.ProcessGroup | None,
     ):
-        self.dataloader = dataloader
-        self.rank = rank
+        self._data_loader = data_loader
+        self._rank = 0 if process_group is None else process_group.rank()
         self.process_group = process_group
 
-        assert (self.rank == 0 and self.dataloader is not None) or (self.rank > 0 and self.dataloader is None)
-
     def __iter__(self):
-        if self.rank == 0:
-            self.iterator = iter(self.dataloader)
+        if self._rank == 0:
+            self.iterator = iter(self._data_loader)
         if self.process_group is None:
             return self.iterator
         return self
@@ -37,7 +33,7 @@ class DistributedDataLoaderWrapper:
         # entire Batch object, which is inefficient for tensors because it serializes
         # (pickles) them before sending.
 
-        if self.rank == 0:
+        if self._rank == 0:
             try:
                 data = next(self.iterator)  # may raise StopIteration
             except Exception as e:

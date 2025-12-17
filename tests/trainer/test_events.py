@@ -382,7 +382,6 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
     with redis_batch_producer(
         redis_client=fake_redis_client,
         fake_redis_server_killer=fake_redis_server_killer,
-        stream_config=stream_config,
         batch_size=batch_size,
         sequence_length=sequence_length,
     ):

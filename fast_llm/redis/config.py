@@ -14,15 +14,3 @@ class RedisConfig(Config):
         desc="Port number on which the Redis server is running.",
         hint=FieldHint.core,
     )
-
-    stream_key: str = Field(
-        default=None,
-        desc="Name of the Redis stream to read data from.",
-        hint=FieldHint.core,
-    )
-
-    payload_key: str = Field(
-        default=None,
-        desc="Key under which the message data is stored inside the Redis payload dict.",
-        hint=FieldHint.core,
-    )
