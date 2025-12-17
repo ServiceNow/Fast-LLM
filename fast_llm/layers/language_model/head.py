@@ -376,7 +376,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None and self._config.distillation_loss_factor > 0.0:
+        if distillation_target is not None:
             # We need to scale the loss by (valid_tokens * num_micro_batches) / total_valid_tokens to correctly average the loss over micro-batches.
             # The runner averages losses by dividing by num_micro_batches, so we need to account for that.
             # Note: for grads this scaling is already in the 'grad_output'
@@ -426,8 +426,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach() * loss_scalor_df)
 
             distillation_loss = distillation_loss * self._config.distillation_loss_factor * loss_scalor_df
-        else:
-            distillation_loss, distillation_grad = None, None
 
         # TODO: de-allocate earlier.
         del logits
