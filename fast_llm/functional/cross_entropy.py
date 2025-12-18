@@ -285,20 +285,25 @@ def _reverse_kl_forward_backward(
 
     if grad_output is not None:
         log_ratio = student_log_probs - teacher_log_probs
-        student_probs = torch.exp(student_log_probs)  # Compute once, reuse
+        del teacher_log_probs  # Free immediately after use
+
+        student_probs = torch.exp(student_log_probs)
+        del student_log_probs  # Free immediately after use
 
         expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
             all_reduce(expected, op=ReduceOp.SUM, group=group)
 
-        # Reuse student_probs instead of recomputing exp
-        grad_base = student_probs * (log_ratio - expected)
+        # Reuse log_ratio buffer for gradient computation (in-place operations)
+        log_ratio.sub_(expected)  # In-place: log_ratio -= expected
+        log_ratio.mul_(student_probs)  # In-place: now log_ratio is grad_base
+        del student_probs  # Free after use
 
         if loss_mask is not None:
-            grad_base *= loss_mask.to(logits.dtype).unsqueeze(-1)  # More in-place
+            log_ratio.mul_(loss_mask.to(logits.dtype).unsqueeze(-1))  # In-place
 
-        grad = grad_base * (grad_output / valid_tokens)  # Could use mul_ for in-place
-        grad = grad.to(logits.dtype)
+        log_ratio.mul_(grad_output / valid_tokens)  # In-place
+        grad = log_ratio.to(logits.dtype)
     else:
         grad = None
 
