@@ -209,22 +209,25 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 if loss_mask is not None:
                     loss_mask = loss_mask.flatten()
 
-            lm_target = kwargs.get(LanguageModelKwargs.labels)
-            if lm_target is not None:
-                # MTP: Shift the labels
-                lm_target_sequence_length = (
-                    lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
-                )
-                if LanguageModelKwargs.sequence_q_dim in kwargs:
-                    Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
-                lm_target_slice = slice(
-                    self._prediction_distance, self._prediction_distance + lm_target_sequence_length
-                )
-                lm_target = (
-                    lm_target[lm_target_slice]
-                    if kwargs[LanguageModelKwargs.sequence_first]
-                    else lm_target[:, lm_target_slice]
-                ).flatten()
+            if self._compute_lm_loss:
+                lm_target = kwargs.get(LanguageModelKwargs.labels)
+                if lm_target is not None:
+                    # MTP: Shift the labels
+                    lm_target_sequence_length = (
+                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
+                    )
+                    if LanguageModelKwargs.sequence_q_dim in kwargs:
+                        Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
+                    lm_target_slice = slice(
+                        self._prediction_distance, self._prediction_distance + lm_target_sequence_length
+                    )
+                    lm_target = (
+                        lm_target[lm_target_slice]
+                        if kwargs[LanguageModelKwargs.sequence_first]
+                        else lm_target[:, lm_target_slice]
+                    ).flatten()
+            else:
+                lm_target = None
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
         if self._sequence_parallel_logits:
