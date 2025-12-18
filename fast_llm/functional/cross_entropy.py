@@ -259,17 +259,23 @@ def _reverse_kl_forward_backward(
     if loss_mask is not None:
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
-    # Compute log probabilities
+    # Compute log probabilities and intermediates in memory-efficient order
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
-    student_log_probs = distributed_log_softmax(logits, group=group)
+    # Use log_ratio variable to initially hold student_log_probs to save memory
+    log_ratio = distributed_log_softmax(logits, group=group)
 
-    # Reverse KL: input=teacher_log_probs, target=student_probs
-    loss_terms = torch.nn.functional.kl_div(
-        teacher_log_probs,  # input = log(p)
-        student_log_probs,  # target = log(q)
-        reduction="none",
-        log_target=True,
-    ).sum(dim=-1)
+    # Compute student_probs first (exp creates new tensor, log_ratio unchanged)
+    student_probs = log_ratio.exp()
+
+    # Now convert log_ratio to actual log ratio in-place
+    # Reverse KL(q||p) = sum_i q_i * (log q_i - log p_i) where q=student, p=teacher
+    log_ratio.sub_(teacher_log_probs)  # In-place: log_ratio = student_log_probs - teacher_log_probs
+    del teacher_log_probs  # Free immediately after use
+
+    # Compute loss terms: student_probs * log_ratio, then sum over vocab
+    # This is equivalent to kl_div(..., log_target=True) but more memory efficient
+    loss_terms = (student_probs * log_ratio).sum(dim=-1)
+
     if loss_mask is not None:
         # loss mask is the same on all ranks for TP over vocab.
         valid = loss_mask.to(loss_terms.dtype)
@@ -284,12 +290,8 @@ def _reverse_kl_forward_backward(
     loss /= valid_tokens
 
     if grad_output is not None:
-        log_ratio = student_log_probs - teacher_log_probs
-        del teacher_log_probs  # Free immediately after use
-
-        student_probs = torch.exp(student_log_probs)
-        del student_log_probs  # Free immediately after use
-
+        # Gradient: d/d(logits) KL(q||p) = q * (log(q/p) - E_q[log(q/p)])
+        # where E_q[log(q/p)] is the expected log ratio under the student distribution
         expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
             all_reduce(expected, op=ReduceOp.SUM, group=group)
