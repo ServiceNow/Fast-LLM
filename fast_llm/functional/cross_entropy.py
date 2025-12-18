@@ -284,19 +284,20 @@ def _reverse_kl_forward_backward(
     loss /= valid_tokens
 
     if grad_output is not None:
-        # need to calculate gradient manually, backprop through all reduce can be problematic, see https://github.com/pytorch/pytorch/issues/58005
         log_ratio = student_log_probs - teacher_log_probs
-        expected = torch.sum(torch.exp(student_log_probs) * log_ratio, dim=-1, keepdim=True)
-        # expected E_q(log s - log t) -- this is actually dependent on the full vocab!
+        student_probs = torch.exp(student_log_probs)  # Compute once, reuse
+
+        expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
             all_reduce(expected, op=ReduceOp.SUM, group=group)
-        grad_base = torch.exp(student_log_probs) * (log_ratio - expected)
+
+        # Reuse student_probs instead of recomputing exp
+        grad_base = student_probs * (log_ratio - expected)
 
         if loss_mask is not None:
-            valid = loss_mask.to(logits.dtype).unsqueeze(-1)
-            grad_base = grad_base * valid
+            grad_base *= loss_mask.to(logits.dtype).unsqueeze(-1)  # More in-place
 
-        grad = grad_base.mul(grad_output / valid_tokens)
+        grad = grad_base * (grad_output / valid_tokens)  # Could use mul_ for in-place
         grad = grad.to(logits.dtype)
     else:
         grad = None
