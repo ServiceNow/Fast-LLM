@@ -136,6 +136,9 @@ def supernet_converted(qwen2_source, apriel2_converted):
 @pytest.fixture(scope="module")
 def roundtrip_converted(supernet_converted, qwen2_source):
     """Stage 3: Supernet -> Fast-LLM -> Supernet."""
+    if not torch.cuda.is_available():
+        pytest.skip("Roundtrip conversion requires CUDA (integration tests need realistic hardware)")
+
     from fast_llm.engine.checkpoint.config import (
         CheckpointLoadConfig,
         CheckpointSaveConfig,
@@ -181,18 +184,22 @@ def roundtrip_converted(supernet_converted, qwen2_source):
 
 
 @pytest.fixture(params=["apriel2", "supernet", "roundtrip"])
-def converted_model(request, apriel2_converted, supernet_converted, roundtrip_converted):
+def converted_model(request, apriel2_converted, supernet_converted):
     """Parameterized fixture providing each conversion stage for testing.
 
     This allows a single test to run against all stages automatically.
     """
     if request.param == "roundtrip":
         pytest.importorskip("fast_llm")
+        if not torch.cuda.is_available():
+            pytest.skip("Roundtrip tests require CUDA (integration tests need realistic hardware)")
+        # Lazy-load to avoid fixture evaluation when CUDA unavailable
+        roundtrip_converted = request.getfixturevalue("roundtrip_converted")
+        return roundtrip_converted
 
     return {
         "apriel2": apriel2_converted,
         "supernet": supernet_converted,
-        "roundtrip": roundtrip_converted,
     }[request.param]
 
 
