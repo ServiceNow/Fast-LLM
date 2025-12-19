@@ -109,6 +109,7 @@ class CrossEntropyImpl(str, enum.Enum):
 
 class DistillationLossImpl(str, enum.Enum):
     reverse_kl = "reverse_kl"
+    forward_kl = "forward_kl"
     cross_entropy = "cross_entropy"
 
 

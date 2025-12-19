@@ -14,7 +14,11 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
-from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
+from fast_llm.functional.cross_entropy import (
+    cross_entropy_forward_backward,
+    forward_kl_forward_backward,
+    reverse_kl_forward_backward,
+)
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
@@ -380,6 +384,21 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         if distillation_target is not None and self._compute_distillation_loss:
             if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
+                    logits.flatten(0, -2),
+                    distillation_target,
+                    loss_mask,
+                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
+                    group=group,
+                    logits_scale_factor=self._config.logits_scale_factor,
+                    teacher_softmax_temperature=self._config.teacher_softmax_temperature,
+                    target_format=(
+                        TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
+                    ),
+                    sequence_parallel_logits=self._sequence_parallel_logits,
+                )
+
+            elif self._config.distillation_loss_implementation == DistillationLossImpl.forward_kl:
+                distillation_loss, distillation_grad = forward_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
