@@ -173,16 +173,37 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Track the unscaled language modeling loss for logging purposes. Will always do if language_model_loss_factor > 0.",
         hint=FieldHint.feature,
     )
-    distillation_loss_factor: float = Field(
-        default=1.0,
-        desc="Factor to scale the distillation loss by when using distillation.",
-        hint=FieldHint.feature,
-    )
-    track_distillation_loss: bool = Field(
+    track_forward_kl_loss: bool = Field(
         default=False,
-        desc="Track the unscaled distillation loss for logging purposes. Will always do if distillation_loss_factor > 0.",
+        desc="Track the unscaled forward KL loss for logging purposes. Will always do if distillation_loss_implementation is forward_kl.",
         hint=FieldHint.feature,
     )
+    track_reverse_kl_loss: bool = Field(
+        default=False,
+        desc="Track the unscaled reverse KL loss for logging purposes. Will always do if distillation_loss_implementation is reverse_kl.",
+        hint=FieldHint.feature,
+    )
+    track_distillation_ce_loss: bool = Field(
+        default=False,
+        desc="Track the unscaled distillation cross-entropy loss for logging purposes. Will always do if distillation_loss_implementation is cross_entropy.",
+        hint=FieldHint.feature,
+    )
+    forward_kl_loss_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the forward KL loss by when using distillation with forward KL.",
+        hint=FieldHint.feature,
+    )
+    reverse_kl_loss_factor: float = Field(
+        default=1.0,
+        desc="Factor to scale the reverse KL loss by when using distillation with reverse KL.",
+        hint=FieldHint.feature,
+    )
+    distillation_ce_loss_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the distillation cross-entropy loss by when using distillation with cross-entropy.",
+        hint=FieldHint.feature,
+    )
+
     logits_scale_factor: float = Field(
         default=1.0,
         desc="Multiply output logits by scale factor.",
@@ -254,7 +275,9 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                     self.language_model_loss_factor = 0.0
         super()._validate()
         if self.distillation_model is None:
-            Assert.is_(self.track_distillation_loss, False)
+            Assert.is_(self.track_forward_kl_loss, False)
+            Assert.is_(self.track_reverse_kl_loss, False)
+            Assert.is_(self.track_distillation_ce_loss, False)
         assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
 
     @property

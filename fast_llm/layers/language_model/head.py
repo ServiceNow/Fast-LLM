@@ -13,7 +13,7 @@ from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import (
     cross_entropy_forward_backward,
     forward_kl_forward_backward,
@@ -119,8 +119,18 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         self._compute_lm_loss = self.config.language_model_loss_factor > 0.0 or self.config.track_language_model_loss
         self._compute_dpo_loss = self._config.enable_dpo
-        self._compute_distillation_loss = self._config.distillation_model is not None and (
-            self._config.distillation_loss_factor > 0.0 or self._config.track_distillation_loss
+        self._compute_rkl_loss = self._config.distillation_model is not None and (
+            self._config.reverse_kl_loss_factor > 0.0 or self._config.track_reverse_kl_loss
+        )
+        self._compute_kl_loss = self._config.distillation_model is not None and (
+            self._config.forward_kl_loss_factor > 0.0 or self._config.track_forward_kl_loss
+        )
+        self._compute_dist_ce_loss = self._config.distillation_model is not None and (
+            self._config.distillation_ce_loss_factor > 0.0 or self._config.track_distillation_ce_loss
+        )
+
+        self._compute_distillation_loss = any(
+            [self._compute_rkl_loss, self._compute_kl_loss, self._compute_dist_ce_loss]
         )
 
     def forward(
@@ -378,13 +388,16 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             lm_loss, lm_grad = None, None
 
+        distillation_rkl_grad, distillation_kl_grad, distillation_ce_grad = None, None, None
+        distillation_rkl_loss, distillation_kl_loss, distillation_ce_loss = None, None, None
+
         if distillation_target is not None and self._compute_distillation_loss:
-            if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
-                distillation_loss, distillation_grad = reverse_kl_forward_backward(
+            if self._compute_rkl_loss:
+                distillation_rkl_loss, distillation_rkl_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
-                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._config.reverse_kl_loss_factor,
                     group=group,
                     logits_scale_factor=self._config.logits_scale_factor,
                     teacher_softmax_temperature=self._config.teacher_softmax_temperature,
@@ -394,12 +407,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     sequence_parallel_logits=self._sequence_parallel_logits,
                 )
 
-            elif self._config.distillation_loss_implementation == DistillationLossImpl.forward_kl:
-                distillation_loss, distillation_grad = forward_kl_forward_backward(
+            if self._compute_kl_loss:
+                distillation_kl_loss, distillation_kl_grad = forward_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
-                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._config.forward_kl_loss_factor,
                     group=group,
                     logits_scale_factor=self._config.logits_scale_factor,
                     teacher_softmax_temperature=self._config.teacher_softmax_temperature,
@@ -409,13 +422,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     sequence_parallel_logits=self._sequence_parallel_logits,
                 )
 
-            elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
-                distillation_loss, distillation_grad = cross_entropy_forward_backward(
+            if self._compute_dist_ce_loss:
+                distillation_ce_loss, distillation_ce_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
                     group=group,
-                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_ce_loss_factor,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._config.logits_scale_factor,
                     target_format=TargetFormat.logits,
@@ -424,8 +437,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 raise ValueError(
                     f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
                 )
-        else:
-            distillation_loss, distillation_grad = None, None
 
         # TODO: de-allocate earlier.
         del logits
@@ -434,10 +445,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             dpo_grad,
             lm_loss,
             lm_grad,
-            distillation_loss,
-            distillation_grad,
+            distillation_rkl_loss,
+            distillation_rkl_grad,
+            distillation_kl_loss,
+            distillation_kl_grad,
+            distillation_ce_loss,
+            distillation_ce_grad,
             losses,
-            loss_mask,
             kwargs,
         )
 
@@ -449,10 +463,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         dpo_grad: torch.Tensor | None,
         lm_loss: torch.Tensor | None,
         lm_grad: torch.Tensor | None,
-        distillation_loss: torch.Tensor | None,
-        distillation_grad: torch.Tensor | None,
+        distillation_rkl_loss: torch.Tensor | None,
+        distillation_rkl_grad: torch.Tensor | None,
+        distillation_kl_loss: torch.Tensor | None,
+        distillation_kl_grad: torch.Tensor | None,
+        distillation_ce_loss: torch.Tensor | None,
+        distillation_ce_grad: torch.Tensor | None,
         losses: dict | None,
-        loss_mask: torch.Tensor | None,
         kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -463,6 +480,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         - Grads: gradients of the losses w.r.t. logits from different components, already scaled by loss factors.
         """
         # Extremely explicit but easier to follow.
+        # TODO: simplify / shrten / make seperate dataclass?
         ############
         if dpo_loss is not None:
             if self.training and losses is not None:
@@ -472,27 +490,37 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         if lm_loss is not None:
             if self.training and losses is not None:
-                losses[self._lm_loss_name_unscaled].append(lm_loss.detach())
-            lm_loss = lm_loss * self._config.language_model_loss_factor  # does not need scaling by loss_scalor_df
-            if self.training and losses is not None:
                 losses[self._lm_loss_name].append(lm_loss.detach())
+            lm_loss = lm_loss * self._config.language_model_loss_factor
         else:
             Assert.is_(lm_grad, None)
 
-        if distillation_loss is not None:
-            distillation_loss = distillation_loss
+        if distillation_rkl_loss is not None:
+            distillation_rkl_loss = distillation_rkl_loss
             if self.training and losses is not None:
-                losses[self._distillation_loss_name_unscaled].append(distillation_loss.detach())
-            distillation_loss = distillation_loss * self._config.distillation_loss_factor
-            if self.training and losses is not None:
-                losses[self._distillation_loss_name].append(distillation_loss.detach())
+                losses[self._distillation_rkl_loss_name].append(distillation_rkl_loss.detach())
+            distillation_rkl_loss = distillation_rkl_loss * self._config.distillation_loss_factor
         else:
-            Assert.is_(distillation_grad, None)
+            Assert.is_(distillation_rkl_grad, None)
+        if distillation_kl_loss is not None:
+            distillation_kl_loss = distillation_kl_loss
+            if self.training and losses is not None:
+                losses[self._distillation_kl_loss_name].append(distillation_kl_loss.detach())
+            distillation_kl_loss = distillation_kl_loss * self._config.distillation_loss_factor
+        else:
+            Assert.is_(distillation_kl_grad, None)
+        if distillation_ce_loss is not None:
+            distillation_ce_loss = distillation_ce_loss
+            if self.training and losses is not None:
+                losses[self._distillation_ce_loss_name].append(distillation_ce_loss.detach())
+            distillation_ce_loss = distillation_ce_loss * self._config.distillation_loss_factor
+        else:
+            Assert.is_(distillation_ce_grad, None)
 
         ############
         # TODO: Accumulate grads in-place to reduce memory and compute overhead.
-        grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
-        total_loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
+        grad = _add_tensors(dpo_grad, lm_grad, distillation_rkl_grad, distillation_kl_grad, distillation_ce_grad)
+        total_loss = _add_tensors(dpo_loss, lm_loss, distillation_rkl_loss, distillation_kl_loss, distillation_ce_loss)
         if losses is not None and total_loss is not None:
             losses[self._total_loss_name].append(total_loss.detach())
 
@@ -509,21 +537,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         return name
 
     @functools.cached_property
-    def _lm_loss_name_unscaled(self) -> str:
+    def _lm_loss_name(self) -> str:
         """
         Unscaled language model cross-entropy loss.
         """
         name = "lm_loss_unscaled"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
-    @functools.cached_property
-    def _lm_loss_name(self) -> str:
-        """
-        Scaled language model cross-entropy loss.
-        """
-        name = "lm_loss"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
@@ -543,15 +561,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         return name
 
     @functools.cached_property
-    def _distillation_loss_name_unscaled(self) -> str:
-        name = "distillation_loss_unscaled"
+    def _distillation_kl_loss_name(self) -> str:
+        name = "distillation_kl_loss_unscaled"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
 
     @functools.cached_property
-    def _distillation_loss_name(self) -> str:
-        name = "distillation_loss"
+    def _distillation_rkl_loss_name(self) -> str:
+        name = "distillation_rkl_loss_unscaled"
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
+
+    @functools.cached_property
+    def _distillation_ce_loss_name(self) -> str:
+        name = "distillation_ce_loss_unscaled"
         if self._prediction_distance > 0:
             name = f"{name}_{self._prediction_distance}"
         return name
@@ -568,13 +593,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                 )
             )
-            loss_defs.append(
-                LossDef(
-                    name=self._lm_loss_name,
-                    formatted_name=_format_name(self._lm_loss_name),
-                    count=count,
-                )
-            )
         if self._config.logit_z_loss:
             loss_defs.append(
                 LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
@@ -585,21 +603,31 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             )
 
         if self._compute_distillation_loss:
-            loss_defs.append(
-                LossDef(
-                    name=self._distillation_loss_name,
-                    formatted_name=_format_name(self._distillation_loss_name),
-                    count=count,
-                )
-            )
             # unscaled distillation loss for comparison purposes
-            loss_defs.append(
-                LossDef(
-                    name=self._distillation_loss_name_unscaled,
-                    formatted_name=_format_name(self._distillation_loss_name_unscaled),
-                    count=count,
+            if self._compute_kl_loss:
+                loss_defs.append(
+                    LossDef(
+                        name=self._distillation_kl_loss_name,
+                        formatted_name=_format_name(self._distillation_kl_loss_name),
+                        count=count,
+                    )
                 )
-            )
+            if self._compute_rkl_loss:
+                loss_defs.append(
+                    LossDef(
+                        name=self._distillation_rkl_loss_name,
+                        formatted_name=_format_name(self._distillation_rkl_loss_name),
+                        count=count,
+                    )
+                )
+            if self._compute_dist_ce_loss:
+                loss_defs.append(
+                    LossDef(
+                        name=self._distillation_ce_loss_name,
+                        formatted_name=_format_name(self._distillation_ce_loss_name),
+                        count=count,
+                    )
+                )
 
         return loss_defs
 
