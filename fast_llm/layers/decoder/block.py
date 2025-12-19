@@ -179,22 +179,13 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             activation_loss_factor = self._config.activation_distillation_factor
             # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
 
-            # Handle possible padding by creating a mask based on sequence_lengths
+            # Handle possible padding by using pre-computed activation mask
             sequence_first = kwargs.get(BlockKwargs.sequence_first, False)
-            sequence_lengths = kwargs.get(BlockKwargs.sequence_lengths)
+            activation_mask = kwargs.get(BlockKwargs.activation_mask)
 
-            if sequence_lengths is not None:
-                # Create mask: 1 for valid positions, 0 for padding
-                # sequence_lengths is a list of lists: [[len1, len2, ...], [len1, len2, ...], ...]
-                # where outer list is batch, inner lists are document lengths within each sample
-                device = mixer_output.device
-                batch_size = len(sequence_lengths)
-                max_seq_len = mixer_output.shape[0] if sequence_first else mixer_output.shape[1]
-                mask = torch.zeros(batch_size, max_seq_len, device=device, dtype=mixer_output.dtype)
-                for batch_idx, sample_lens in enumerate(sequence_lengths):
-                    # Mark valid positions (non-padding) as 1
-                    total_len = sum(sample_lens)
-                    mask[batch_idx, :total_len] = 1.0
+            if activation_mask is not None:
+                # Use pre-computed activation mask (bool tensor where True = valid token)
+                mask = activation_mask.to(dtype=mixer_output.dtype)
                 if sequence_first:
                     # (batch, sequence) -> (sequence, batch)
                     mask = mask.T
@@ -207,8 +198,11 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 local_loss_sum = torch.sum(masked_loss)
                 total_count = int(mask.sum().item())
             else:
-                # No sequence_lengths available, compute loss without masking
-                local_loss_sum = torch.sum(torch.norm(mixer_output - teacher_tensor, p=2, dim=(2)))
+                # No activation_mask available, compute loss on all tokens
+                per_token_loss = torch.norm(
+                    mixer_output - teacher_tensor, p=2, dim=-1
+                )  # (batch, sequence) or (sequence, batch)
+                local_loss_sum = torch.sum(per_token_loss)
                 # mixer_output.shape is (batch, sequence, hidden) or (sequence, batch, hidden)
                 # In either case, dims 0 and 1 are batch and sequence
                 total_count = mixer_output.shape[0] * mixer_output.shape[1]
@@ -216,7 +210,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             # All-reduce across tensor-parallel group if sequence-parallel is enabled
             if self._sequence_parallel and self._distributed.tensor_group is not None:
                 all_reduce(local_loss_sum, group=self._distributed.tensor_group, op=ReduceOp.SUM)
-                if sequence_lengths is not None:
+                if activation_mask is not None:
                     # Different ranks may have different amounts of padding
                     total_count_tensor = torch.tensor(total_count, device=mixer_output.device, dtype=torch.int64)
                     all_reduce(total_count_tensor, group=self._distributed.tensor_group, op=ReduceOp.SUM)
@@ -225,11 +219,12 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                     # All ranks contribute the same count
                     total_count *= self._distributed.tensor_group.size()
 
-            activation_loss = activation_loss_factor * (local_loss_sum / total_count)
+            activation_loss = local_loss_sum / total_count
+            scaled_activation_loss = activation_loss_factor * activation_loss
 
             # Backward hooks
-            hidden_states = AuxiliaryLoss.apply(hidden_states, activation_loss, 1.0)
-            bias = AuxiliaryLoss.apply(bias, activation_loss, 1.0) if bias is not None else None
+            hidden_states = AuxiliaryLoss.apply(hidden_states, scaled_activation_loss, 1.0)
+            bias = AuxiliaryLoss.apply(bias, scaled_activation_loss, 1.0) if bias is not None else None
             # Logging
             if losses is not None and self._activation_distillation_loss_name in losses:
                 losses[self._activation_distillation_loss_name].append(activation_loss.detach())
