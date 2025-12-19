@@ -37,3 +37,6 @@ devenv.*
 
 # direnv
 .direnv
+
+# wandb
+wandb/
