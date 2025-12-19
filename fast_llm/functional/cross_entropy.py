@@ -227,6 +227,7 @@ def distributed_log_softmax(
     return logits_norm - sum_exp_logits.log()  # log_softmax
 
 
+@torch.compile
 def _reverse_kl_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -259,19 +260,12 @@ def _reverse_kl_forward_backward(
     if loss_mask is not None:
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
-    # Compute log probabilities and intermediates in memory-efficient order
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
-    # Use log_ratio variable to initially hold student_log_probs to save memory
     log_ratio = distributed_log_softmax(logits, group=group)
 
-    # Compute student_probs first (exp creates new tensor, log_ratio unchanged)
     student_probs = log_ratio.exp()
-
-    # Now convert log_ratio to actual log ratio in-place
-    # Reverse KL(q||p) = sum_i q_i * (log q_i - log p_i) where q=student, p=teacher
     log_ratio.sub_(teacher_log_probs)  # In-place: log_ratio = student_log_probs - teacher_log_probs
-    del teacher_log_probs  # Free immediately after use
-
+    del teacher_log_probs
     # Compute loss terms: student_probs * log_ratio, then sum over vocab
     # This is equivalent to kl_div(..., log_target=True) but more memory efficient
     loss_terms = (student_probs * log_ratio).sum(dim=-1)
@@ -280,9 +274,7 @@ def _reverse_kl_forward_backward(
         # loss mask is the same on all ranks for TP over vocab.
         valid = loss_mask.to(loss_terms.dtype)
         loss_terms = loss_terms * valid
-        valid_tokens = valid.sum()
-    else:
-        valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
+    valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
     loss = loss_terms.sum()  # sums over batch and seq. len.
 
     if group is not None:
@@ -295,8 +287,6 @@ def _reverse_kl_forward_backward(
         expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
             all_reduce(expected, op=ReduceOp.SUM, group=group)
-
-        # Reuse log_ratio buffer for gradient computation (in-place operations)
         log_ratio.sub_(expected)  # In-place: log_ratio -= expected
         log_ratio.mul_(student_probs)  # In-place: now log_ratio is grad_base
         del student_probs  # Free after use
