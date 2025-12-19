@@ -8,6 +8,7 @@ from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
+    MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
@@ -116,7 +117,7 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
         return RangeSample([(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_], sample_size)
 
 
-class EmptyRangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
+class EmptyRangeReader[ConfigType: RangeReaderBaseConfig](MemmapReaderBase[ConfigType]):
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         return RangeSample([], end - begin)
 
