@@ -194,6 +194,29 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 per_token_loss = torch.norm(
                     mixer_output - teacher_tensor, p=2, dim=-1
                 )  # (batch, sequence) or (sequence, batch)
+
+                # Slice mask to match per_token_loss shape (for sequence parallelism)
+                # When sequence_tensor_parallel is enabled, per_token_loss only has local sequence length
+                if mask.shape != per_token_loss.shape:
+                    # Calculate the sequence offset for this rank using the hidden_dims parallel rank
+                    hidden_dims = kwargs.get(BlockKwargs.hidden_dims)
+                    seq_dim_idx = 0 if sequence_first else 1
+                    hidden_seq_dim = hidden_dims[seq_dim_idx] if hidden_dims else None
+
+                    if hidden_seq_dim and hidden_seq_dim.parallel_dim:
+                        # Use the rank from the actual parallel dimension used by hidden states
+                        local_seq_length = per_token_loss.shape[0] if sequence_first else per_token_loss.shape[1]
+                        seq_offset = hidden_seq_dim.parallel_dim.rank * local_seq_length
+                    else:
+                        seq_offset = 0
+
+                    if sequence_first:
+                        # mask: (sequence, batch), per_token_loss: (local_sequence, batch)
+                        mask = mask[seq_offset : seq_offset + per_token_loss.shape[0], :]
+                    else:
+                        # mask: (batch, sequence), per_token_loss: (batch, local_sequence)
+                        mask = mask[:, seq_offset : seq_offset + per_token_loss.shape[1]]
+
                 masked_loss = per_token_loss * mask
                 local_loss_sum = torch.sum(masked_loss)
                 total_count = int(mask.sum().item())
