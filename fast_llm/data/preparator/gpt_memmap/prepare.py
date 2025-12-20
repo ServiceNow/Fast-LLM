@@ -28,7 +28,12 @@ from fast_llm.data.dataset.config import (
 )
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.preparator.gpt_memmap.config import (
+    ConversationSourceConfig,
+    GPTMemmapDatasetPreparatorConfig,
+    LanguageModelSourceConfig,
+    DocumentSourceConfig,
+)
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import Tokenizer
@@ -133,7 +138,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         self._tokenizer = self._config.tokenizer.get_tokenizer()
 
         # Validate chat template for conversation format
-        if self._source_schema.has_conversation:
+        if isinstance(self._source_schema, ConversationSourceConfig):
             self._tokenizer.validate_chat_template()
 
         # Decide the datatype based on the tokenizer vocabulary size
@@ -220,108 +225,110 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
-        if self._source_schema.has_conversation:
-            tokens, train_mask = self._tokenizer.tokenize_chat(
+        token_spans_by_type = collections.defaultdict(list)
+        image_patches = image_token_maps = image_position_ids = patch_counts = None
+
+        if isinstance(self._source_schema, ConversationSourceConfig):
+            # Conversation format: tokenize messages and get loss masking spans from chat template
+            tokens, loss_masking_spans = self._tokenizer.tokenize_chat(
                 sample[self._source_schema.messages],
-                self._source_schema.add_generation_prompt,
+                True,
+                True,
                 data_type=self._data_type,
             )
-            return LanguageModelSample(
-                TokenSample(tokens, [len(tokens)]),
-                RangeSample(_mask_to_spans(train_mask), len(tokens)),
-                None,
-                None,
-                None,
-            )
+            token_spans_by_type[SpanType.loss_masking] = loss_masking_spans
+        elif isinstance(self._source_schema, DocumentSourceConfig):
+            # Document format: use the text-spans pipeline
+            text = sample[self._source_schema.text]
+            all_spans = []
 
-        # Text format: use the text-spans pipeline
-        text = sample[self._source_schema.text]
-        all_spans = []
+            if self._source_schema.has_loss_masking_span:
+                # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
+                loss_masking_spans = _sort_spans(
+                    (SpanType.loss_masking, (begin, last + 1))
+                    for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
+                    .reshape(-1, 2)
+                    .tolist()
+                )
+                all_spans.extend(loss_masking_spans)
 
-        if self._source_schema.has_loss_masking_span:
-            # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
-            loss_masking_spans = _sort_spans(
-                (SpanType.loss_masking, (begin, last + 1))
-                for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
-                .reshape(-1, 2)
-                .tolist()
-            )
-            all_spans.extend(loss_masking_spans)
+            if self._source_schema.has_preference_spans:
+                full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
+                full_rejected_text = (
+                    self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
+                )
+                # compute chosen span
+                chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
 
-        if self._source_schema.has_preference_spans:
-            full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
-            full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
-            # compute chosen span
-            chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
-
-            # compute rejected span
-            rejected_span = [
-                (
-                    SpanType.rejected,
+                # compute rejected span
+                rejected_span = [
                     (
-                        len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
-                        len(full_chosen_text) + len(full_rejected_text),
-                    ),
-                )
-            ]
-            # pack texts
-            text = full_chosen_text + full_rejected_text
-            all_spans.extend(chosen_spans + rejected_span)
-
-        if self._source_schema.has_images:
-            # Get the images and positions, sorted by position.
-            images, image_positions = (
-                zip(
-                    *sorted(
-                        zip(
-                            sample[self._source_schema.images],
-                            sample[self._source_schema.image_positions],
-                            strict=True,
+                        SpanType.rejected,
+                        (
+                            len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
+                            len(full_chosen_text) + len(full_rejected_text),
                         ),
-                        key=lambda x: x[1],
                     )
+                ]
+                # pack texts
+                text = full_chosen_text + full_rejected_text
+                all_spans.extend(chosen_spans + rejected_span)
+
+            if self._source_schema.has_images:
+                # Get the images and positions, sorted by position.
+                images, image_positions = (
+                    zip(
+                        *sorted(
+                            zip(
+                                sample[self._source_schema.images],
+                                sample[self._source_schema.image_positions],
+                                strict=True,
+                            ),
+                            key=lambda x: x[1],
+                        )
+                    )
+                    if len(sample[self._source_schema.images]) > 0
+                    else ([], [])
                 )
-                if len(sample[self._source_schema.images]) > 0
-                else ([], [])
-            )
-            # Get the image patches and associated data.
-            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
-                self._config.image_patches.get_patches_from_images(images, self._data_type)
-            )
-            patch_count_cumsum = padded_cumsum(patch_counts).tolist()
-            # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
-            all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
+                # Get the image patches and associated data.
+                image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
+                    self._config.image_patches.get_patches_from_images(images, self._data_type)
+                )
+                patch_count_cumsum = padded_cumsum(patch_counts).tolist()
+                # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
+                all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
 
-        # Sort the spans by location (begin), keeping track of their type.
-        # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
-        span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
-        # Tokenize the text, and determine the span locations in the tokenized text.
-        tokens, token_spans = self._tokenizer.tokenize_with_spans(
-            text, True, True, text_spans=spans, data_type=self._data_type
-        )
+            # Sort the spans by location (begin), keeping track of their type.
+            # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
+            span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
+            # Tokenize the text, and determine the span locations in the tokenized text.
+            tokens, token_spans = self._tokenizer.tokenize_with_spans(
+                text, True, True, text_spans=spans, data_type=self._data_type
+            )
 
-        # Gather token spans by type.
-        token_spans_by_type = collections.defaultdict(list)
-        if self._source_schema.has_images:
-            # Insert the image token ids in the token sequence and shift the spans accordingly.
-            tokens_shift = 0
-            image_index = 0
-            for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
-                # Account for the tokens already inserted.
-                begin = begin + tokens_shift
-                end = end + tokens_shift
-                if span_type == SpanType.image:
-                    # Shift the token map to the image location.
-                    image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
-                    # Insert the placeholder and image break tokens.
-                    tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
-                    tokens_shift += len(image_token_ids[image_index])
-                    image_index += 1
-                else:
-                    token_spans_by_type[span_type].append((begin, end))
+            # Gather token spans by type.
+            if self._source_schema.has_images:
+                # Insert the image token ids in the token sequence and shift the spans accordingly.
+                tokens_shift = 0
+                image_index = 0
+                for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
+                    # Account for the tokens already inserted.
+                    begin = begin + tokens_shift
+                    end = end + tokens_shift
+                    if span_type == SpanType.image:
+                        # Shift the token map to the image location.
+                        image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
+                        # Insert the placeholder and image break tokens.
+                        tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
+                        tokens_shift += len(image_token_ids[image_index])
+                        image_index += 1
+                    else:
+                        token_spans_by_type[span_type].append((begin, end))
+            else:
+                for span_type, token_span in zip(span_types, token_spans, strict=True):
+                    token_spans_by_type[span_type].append(token_span)
         else:
-            for span_type, token_span in zip(span_types, token_spans, strict=True):
-                token_spans_by_type[span_type].append(token_span)
+            raise NotImplementedError(f"Unsupported source schema type: {type(self._source_schema)}")
 
         sample_size = len(tokens)
 
@@ -501,17 +508,3 @@ def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:
     return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
 
 
-def _mask_to_spans(mask: list[bool]) -> list[tuple[int, int]]:
-    """Convert a boolean train mask to loss masking spans (where mask[i] == False)."""
-    spans = []
-    start = None
-    for i, value in enumerate(mask):
-        if not value:
-            if start is None:
-                start = i
-        elif start is not None:
-            spans.append((start, i))
-            start = None
-    if start is not None:
-        spans.append((start, len(mask)))
-    return spans

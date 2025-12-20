@@ -76,15 +76,17 @@ CHAT_TEMPLATE = (
 
 
 @pytest.mark.parametrize(
-    ("messages", "expected_tokens", "expected_trainable_indices"),
+    ("messages", "expected_tokens", "expected_loss_masking_spans"),
     (
         # Single turn: full assistant turn (<assistant>Hello</assistant>) is trainable
+        # 15 tokens, trainable indices 7-13, loss mask spans cover 0-6 and 14
         (
             [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
             [49152, 27, 789, 29, 16946, 750, 789, 2293, 17822, 29, 7371, 750, 17822, 29, 49152],
-            [7, 8, 9, 10, 11, 12, 13],
+            [(0, 7), (14, 15)],
         ),
         # Multi-turn: both assistant turns are fully trainable
+        # 27 tokens, trainable indices 7-13 and 19-25
         (
             [
                 {"role": "user", "content": "A"},
@@ -93,9 +95,10 @@ CHAT_TEMPLATE = (
                 {"role": "assistant", "content": "D"},
             ],
             [49152, 27, 789, 29, 32, 750, 789, 2293, 17822, 29, 33, 750, 17822, 2293, 789, 29, 34, 750, 789, 2293, 17822, 29, 35, 750, 17822, 29, 49152],
-            [7, 8, 9, 10, 11, 12, 13, 19, 20, 21, 22, 23, 24, 25],
+            [(0, 7), (14, 19), (26, 27)],
         ),
         # System + user + assistant: full assistant turn trainable
+        # 23 tokens, trainable indices 15-21
         (
             [
                 {"role": "system", "content": "You are helpful."},
@@ -103,15 +106,17 @@ CHAT_TEMPLATE = (
                 {"role": "assistant", "content": "Hello"},
             ],
             [49152, 27, 3144, 29, 5815, 1139, 44569, 6928, 3144, 2293, 789, 29, 16946, 750, 789, 2293, 17822, 29, 7371, 750, 17822, 29, 49152],
-            [15, 16, 17, 18, 19, 20, 21],
+            [(0, 15), (22, 23)],
         ),
         # User only: no trainable tokens
+        # 9 tokens, no trainable indices
         (
             [{"role": "user", "content": "Hi"}],
             [49152, 27, 789, 29, 16946, 750, 789, 29, 49152],
-            [],
+            [(0, 9)],
         ),
         # Long multi-turn (85 tokens, 3 assistant responses with tags, tests span machinery)
+        # Trainable: indices 27-40, 49-62, 70-83
         (
             [
                 {"role": "system", "content": "You are a helpful assistant that answers questions."},
@@ -123,15 +128,15 @@ CHAT_TEMPLATE = (
                 {"role": "assistant", "content": "The capital of Italy is Rome."},
             ],
             [49152, 27, 3144, 29, 5815, 1139, 373, 44569, 2424, 11886, 954, 15737, 14516, 6928, 3144, 2293, 789, 29, 13938, 438, 331, 25016, 457, 12409, 562, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 12409, 562, 438, 4235, 280, 6928, 17822, 2293, 789, 29, 13938, 5028, 759, 42226, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 759, 42226, 438, 29784, 3556, 6928, 17822, 2293, 789, 29, 1996, 4413, 3326, 35838, 789, 2293, 17822, 29, 2111, 25016, 457, 4413, 3326, 438, 613, 1361, 6928, 17822, 29, 49152],
-            list(range(27, 41)) + list(range(49, 63)) + list(range(70, 84)),
+            [(0, 27), (41, 49), (63, 70), (84, 85)],
         ),
     ),
 )
-def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_trainable_indices):
+def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_loss_masking_spans):
     common_tokenizer.tokenizer.chat_template = CHAT_TEMPLATE
-    tokens, train_mask = common_tokenizer.tokenize_chat(messages)
+    tokens, loss_masking_spans = common_tokenizer.tokenize_chat(messages)
     Assert.eq(tokens.tolist(), expected_tokens)
-    Assert.eq([i for i, m in enumerate(train_mask) if m], expected_trainable_indices)
+    Assert.eq(loss_masking_spans, expected_loss_masking_spans)
 
 
 @pytest.mark.parametrize(
@@ -153,7 +158,7 @@ def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_tra
         ([False, True, False, True, False], [(0, 1), (2, 3), (4, 5)]),
     ),
 )
-def test_mask_to_spans(train_mask, expected_loss_spans):
-    from fast_llm.data.preparator.gpt_memmap.prepare import _mask_to_spans
+def test_train_mask_to_loss_spans(train_mask, expected_loss_spans):
+    from fast_llm.data.preprocessing.tokenizer import _train_mask_to_loss_spans
 
-    Assert.eq(_mask_to_spans(train_mask), expected_loss_spans)
+    Assert.eq(_train_mask_to_loss_spans(train_mask), expected_loss_spans)

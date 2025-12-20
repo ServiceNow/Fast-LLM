@@ -81,7 +81,7 @@ dataset:
 
   # Source schema for conversation format
   source_schema:
-    # Use conversation type (vs default "text" type)
+    # Use conversation type (vs default "document" type)
     type: conversation
 
     # Column containing the messages list

@@ -18,30 +18,78 @@ if typing.TYPE_CHECKING:
 @config_class(registry=True)
 class LanguageModelSourceConfig(Config):
     """
-    A schema holding the name of each relevant column in the dataset.
-    Setting optional entries will enable the associated feature.
+    Abstract base class for data source schemas.
 
-    This is the base class for source schemas. Use `type: text` (default) for
-    plain text datasets, or `type: conversation` for chat/conversation datasets.
+    Use `type: document` (default) for documents with text, optional span annotations, and optional images.
+    Use `type: conversation` for structured chat/conversation datasets.
+    """
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if cls is LanguageModelSourceConfig and cls.get_subclass(default.get("type")) is None:
+            # Default to DocumentSourceConfig when type is not specified
+            return DocumentSourceConfig._from_dict(default, strict)
+        return super()._from_dict(default, strict=strict)
+
+    @functools.cached_property
+    def columns(self) -> list[str]:
+        """Columns to read from the dataset."""
+        raise NotImplementedError
+
+    @functools.cached_property
+    def has_loss_masking_span(self) -> bool:
+        return False
+
+    @functools.cached_property
+    def has_preference_spans(self) -> bool:
+        return False
+
+    @functools.cached_property
+    def has_images(self) -> bool:
+        return False
+
+
+@config_class(dynamic_type={LanguageModelSourceConfig: "document"})
+class DocumentSourceConfig(LanguageModelSourceConfig):
+    """
+    Source schema for document datasets with text, optional span annotations, and optional images.
+
+    The dataset should have a text column containing the document text.
+    Optionally, it can have additional columns for:
+    - Loss masking spans: character ranges to mask from loss computation
+    - Preference spans: chosen/rejected text for DPO training
+    - Images: image data with character positions for multimodal training
     """
 
     text: str = Field(
         default="text",
-        desc="Field of the dataset to use.",
+        desc="Field containing the document text.",
         hint=FieldHint.optional,
     )
-    loss_masking_spans: None | str = Field(
-        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
+    loss_masking_spans: str | None = Field(
+        default=None,
+        desc="Field containing character spans to mask for loss computation.",
+        hint=FieldHint.optional,
     )
-    chosen_span: None | str = Field(
-        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
+    chosen_span: str | None = Field(
+        default=None,
+        desc="Field containing chosen text for preference optimization.",
+        hint=FieldHint.optional,
     )
-    rejected_span: None | str = Field(
-        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
+    rejected_span: str | None = Field(
+        default=None,
+        desc="Field containing rejected text for preference optimization.",
+        hint=FieldHint.optional,
     )
-    images: None | str = Field(default=None, desc="Field containing images", hint=FieldHint.optional)
-    image_positions: None | str = Field(
-        default=None, desc="Field containing image positions in the text.", hint=FieldHint.optional
+    images: str | None = Field(
+        default=None,
+        desc="Field containing images.",
+        hint=FieldHint.optional,
+    )
+    image_positions: str | None = Field(
+        default=None,
+        desc="Field containing image positions in the text.",
+        hint=FieldHint.optional,
     )
 
     @functools.cached_property
@@ -69,28 +117,10 @@ class LanguageModelSourceConfig(Config):
         Assert.eq(self.images is None, self.image_positions is None)
         return self.images is not None
 
-    @functools.cached_property
-    def has_conversation(self) -> bool:
-        """Whether this is a conversation source schema."""
-        return False
-
     def _validate(self):
         super()._validate()
         if self.has_preference_spans and self.has_loss_masking_span:
-            raise ValueError(f"Can not enable both loss masking and preference spans.")
-
-
-@config_class(dynamic_type={LanguageModelSourceConfig: "text"})
-class TextSourceConfig(LanguageModelSourceConfig):
-    """
-    Source schema for plain text datasets (default).
-
-    The dataset should have a text column containing the document text.
-    Optionally, it can have additional columns for loss masking spans,
-    preference spans (for DPO), or images.
-    """
-
-    pass
+            raise ValueError("Cannot enable both loss masking and preference spans.")
 
 
 @config_class(dynamic_type={LanguageModelSourceConfig: "conversation"})
@@ -120,58 +150,20 @@ class ConversationSourceConfig(LanguageModelSourceConfig):
         }
     """
 
-    # Override text field - not used directly for conversation format
-    text: None | str = Field(
-        default=None,
-        desc="Not used for conversation format. Text is generated from messages.",
-        hint=FieldHint.optional,
-    )
-
-    # Conversation-specific fields
     messages: str = Field(
         default="messages",
         desc="Field containing the conversation messages list. Each message should have 'role' and 'content' keys.",
         hint=FieldHint.core,
     )
 
-    add_generation_prompt: bool = Field(
-        default=False,
-        desc="Whether to add a generation prompt at the end of the conversation. "
-        "Typically False for training data.",
-        hint=FieldHint.optional,
-    )
-
     @functools.cached_property
     def columns(self) -> list[str]:
-        # For conversation format, we read the messages column, not text
-        columns = [self.messages]
-        # Images can still be used with conversation format
-        if self.has_images:
-            columns.extend([self.images, self.image_positions])
-        return columns
-
-    @functools.cached_property
-    def has_conversation(self) -> bool:
-        return True
+        return [self.messages]
 
     @functools.cached_property
     def has_loss_masking_span(self) -> bool:
-        # Conversation format always generates loss masking spans
+        # Conversation format always generates loss masking spans from chat template markers
         return True
-
-    def _validate(self):
-        # Skip parent validation that checks text field
-        Config._validate(self)
-        if self.has_preference_spans:
-            raise ValueError("Preference spans are not supported with conversation format.")
-        if self.has_images:
-            # Images with conversation format would require computing image positions in the
-            # chat-template-formatted text, which is complex and format-dependent.
-            # For VLM training with conversations, preprocess the data to plain text format first.
-            raise ValueError(
-                "Images are not yet supported with conversation format. "
-                "For multimodal conversation data, preprocess to plain text format with image positions."
-            )
 
 
 @config_class()
