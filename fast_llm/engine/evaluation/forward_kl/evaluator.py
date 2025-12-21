@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigType]):
     _inference_runner: InferenceRunner
+    _max_sequence_length: int
 
     def setup(
         self,
@@ -40,6 +41,12 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         super().setup(distributed, run, multi_stage, runner, data, phase)
         self._inference_runner = InferenceRunner(self._multi_stage, runner=self._runner)
         self._inference_runner.setup()
+
+        if self._config.max_sequence_length is not None:
+            self._max_sequence_length = self._config.max_sequence_length
+        else:
+            self._max_sequence_length = self._multi_stage.base_model._config.embeddings.num_position_embeddings
+
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
@@ -57,7 +64,7 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
 
         safe_barrier(self._distributed.world_group, f"forward_kl_{self._name} begin")
 
-        forward_kl, num_traces = self._compute_forward_kl()
+        forward_kl, num_traces, num_skipped = self._compute_forward_kl()
 
         safe_barrier(self._distributed.world_group, f"forward_kl_{self._name} end")
 
@@ -75,12 +82,14 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             metrics[f"validation.{self._name}"]["iteration"] = training_progress.completed_steps
 
         formatted = f"Forward KL ({self._name}): {forward_kl:.4f} ({num_traces} traces)"
+        if num_skipped > 0:
+            formatted += f" [{num_skipped} skipped]"
         log_main_rank(formatted)
 
         return EvaluationMetrics(metrics, formatted)
 
     @torch.inference_mode()
-    def _compute_forward_kl(self) -> tuple[float, int]:
+    def _compute_forward_kl(self) -> tuple[float, int, int]:
         import datasets
 
         traces = datasets.load_dataset(
@@ -92,10 +101,26 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
 
         total_kl = 0.0
         num_traces = 0
+        num_skipped = 0
         num_samples = min(len(traces), self._config.num_samples) if self._config.num_samples else len(traces)
 
         for i in range(0, num_samples, self._config.batch_size):
-            batch = [traces[j] for j in range(i, min(i + self._config.batch_size, num_samples))]
+            batch_indices = range(i, min(i + self._config.batch_size, num_samples))
+            batch = []
+            for j in batch_indices:
+                trace = traces[j]
+                trace_len = len(trace["prompt_tokens"]) + len(trace["completion_tokens"])
+                if trace_len > self._max_sequence_length:
+                    logger.warning(
+                        f"Skipping trace {j}: length {trace_len} exceeds max {self._max_sequence_length}"
+                    )
+                    num_skipped += 1
+                    continue
+                batch.append(trace)
+
+            if not batch:
+                continue
+
             student_log_probs = self._compute_batch_log_probs(batch)
 
             for j, trace in enumerate(batch):
@@ -104,7 +129,7 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
 
             torch.cuda.empty_cache()
 
-        return total_kl / num_traces if num_traces > 0 else 0.0, num_traces
+        return total_kl / num_traces if num_traces > 0 else 0.0, num_traces, num_skipped
 
     def _compute_batch_log_probs(self, batch: list[dict[str, typing.Any]]) -> list[float]:
         max_len = max(len(t["prompt_tokens"]) + len(t["completion_tokens"]) for t in batch)
@@ -134,6 +159,7 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         )
 
         for input_, kwargs in preprocessed:
+            kwargs["global_logits"] = True
             self._inference_runner.forward(input_, kwargs)
             logits = kwargs["logits"]
 
