@@ -8,6 +8,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLmEval, LossEvaluator
+    from fast_llm.engine.evaluation.forward_kl.evaluator import ForwardKLEvaluator
 
 
 @config_class()
@@ -119,3 +120,47 @@ class LmEvalEvaluatorConfig(EvaluatorConfig):
         from fast_llm.engine.evaluation.lm_eval.evaluator import LmEvalEvaluator
 
         return LmEvalEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+
+
+@config_class(dynamic_type={EvaluatorConfig: "forward_kl"})
+class ForwardKLEvaluatorConfig(EvaluatorConfig):
+    _abstract: typing.ClassVar[bool] = False
+
+    dataset_path: str | None = Field(
+        default=None,
+        desc="HuggingFace dataset path containing teacher traces.",
+        hint=FieldHint.core,
+    )
+    task: str | None = Field(
+        default=None,
+        desc="Dataset configuration/task name.",
+        hint=FieldHint.optional,
+    )
+    num_samples: int | None = Field(
+        default=None,
+        desc="Maximum number of traces to evaluate. None for all.",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+    batch_size: int = Field(
+        default=8,
+        desc="Batch size for forward passes.",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0),
+    )
+    trust_remote_code: bool = Field(
+        default=False,
+        desc="Trust remote code when loading dataset.",
+        hint=FieldHint.optional,
+    )
+
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "ForwardKLEvaluator":
+        from fast_llm.engine.evaluation.forward_kl.evaluator import ForwardKLEvaluator
+
+        return ForwardKLEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
