@@ -41,12 +41,7 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         super().setup(distributed, run, multi_stage, runner, data, phase)
         self._inference_runner = InferenceRunner(self._multi_stage, runner=self._runner)
         self._inference_runner.setup()
-
-        if self._config.max_sequence_length is not None:
-            self._max_sequence_length = self._config.max_sequence_length
-        else:
-            self._max_sequence_length = self._multi_stage.base_model._config.embeddings.num_position_embeddings
-
+        self._max_sequence_length = self._config.max_sequence_length
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:

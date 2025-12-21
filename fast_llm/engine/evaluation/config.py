@@ -148,11 +148,11 @@ class ForwardKLEvaluatorConfig(EvaluatorConfig):
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
-    max_sequence_length: int | None = Field(
-        default=None,
-        desc="Maximum sequence length for traces. If None, uses model's position embedding limit.",
-        hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    max_sequence_length: int = Field(
+        default=2048,
+        desc="Maximum sequence length for traces.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
     trust_remote_code: bool = Field(
         default=False,
