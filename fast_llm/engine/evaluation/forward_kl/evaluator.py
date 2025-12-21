@@ -4,7 +4,8 @@ import typing
 import torch
 import torch.nn.functional as F
 
-from fast_llm.core.distributed import safe_barrier
+from fast_llm.config import NoAutoValidate
+from fast_llm.core.distributed import all_reduce, safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.sample.language_model import LanguageModelBatch, LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
@@ -21,13 +22,16 @@ from fast_llm.engine.evaluation.evaluator import (
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
+from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.models.gpt.config import GPTBatchConfig
 
 logger = logging.getLogger(__name__)
 
 
 class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigType]):
     _inference_runner: InferenceRunner
-    _max_sequence_length: int
+    _sequence_length: int
+    _micro_sequence_length: int
 
     def setup(
         self,
@@ -41,7 +45,11 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         super().setup(distributed, run, multi_stage, runner, data, phase)
         self._inference_runner = InferenceRunner(self._multi_stage, runner=self._runner)
         self._inference_runner.setup()
-        self._max_sequence_length = self._config.max_sequence_length
+
+        # Get sequence configuration from training batch config (required for SP support)
+        self._sequence_length = self._batch_config.sequence_length
+        self._micro_sequence_length = self._batch_config.micro_sequence_length
+
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
@@ -87,6 +95,10 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
     def _compute_forward_kl(self) -> tuple[float, int, int]:
         import datasets
 
+        # Shard traces across data-parallel ranks
+        data_rank = self._distributed.config.data_rank
+        data_parallel = self._distributed.config.data_parallel
+
         traces = datasets.load_dataset(
             self._config.dataset_path,
             name=self._config.task,
@@ -94,41 +106,70 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             trust_remote_code=self._config.trust_remote_code,
         )
 
+        # Apply num_samples limit before sharding to preserve semantics
+        # (num_samples = total traces across all ranks, not per-rank)
+        if self._config.num_samples and len(traces) > self._config.num_samples:
+            traces = traces.select(range(self._config.num_samples))
+
+        # Shard across DP ranks (lazy operation - just changes which indices are accessible)
+        traces = traces.shard(num_shards=data_parallel, index=data_rank)
+
         total_kl = 0.0
         num_traces = 0
         num_skipped = 0
-        num_samples = min(len(traces), self._config.num_samples) if self._config.num_samples else len(traces)
 
-        for i in range(0, num_samples, self._config.batch_size):
-            batch_indices = range(i, min(i + self._config.batch_size, num_samples))
-            batch = []
-            for j in batch_indices:
-                trace = traces[j]
-                trace_len = len(trace["prompt_tokens"]) + len(trace["completion_tokens"])
-                if trace_len > self._max_sequence_length:
-                    logger.warning(
-                        f"Skipping trace {j}: length {trace_len} exceeds max {self._max_sequence_length}"
-                    )
-                    num_skipped += 1
-                    continue
-                batch.append(trace)
-
-            if not batch:
+        # Collect traces for this rank, filtering by length
+        rank_traces = []
+        for trace in traces:
+            trace_len = len(trace["prompt_tokens"]) + len(trace["completion_tokens"])
+            if trace_len > self._sequence_length:
+                num_skipped += 1
                 continue
+            rank_traces.append(trace)
+
+        if num_skipped > 0:
+            logger.warning(
+                f"Skipped {num_skipped} traces exceeding sequence length {self._sequence_length}"
+            )
+
+        # Process traces in batches
+        for i in range(0, len(rank_traces), self._config.batch_size):
+            batch = rank_traces[i : i + self._config.batch_size]
 
             student_log_probs = self._compute_batch_log_probs(batch)
 
-            for j, trace in enumerate(batch):
-                total_kl += trace["teacher_log_prob"] - student_log_probs[j]
-                num_traces += 1
+            # student_log_probs is None on non-last pipeline ranks (they don't have logits)
+            if student_log_probs is not None:
+                for j, trace in enumerate(batch):
+                    total_kl += trace["teacher_log_prob"] - student_log_probs[j]
+                    num_traces += 1
 
             torch.cuda.empty_cache()
 
+        # Reduce across data group (sum KL and counts from all DP ranks)
+        if self._distributed.data_group:
+            total_kl_tensor = torch.tensor([total_kl], dtype=torch.float64, device=self._distributed.device)
+            num_traces_tensor = torch.tensor([num_traces], dtype=torch.int64, device=self._distributed.device)
+            num_skipped_tensor = torch.tensor([num_skipped], dtype=torch.int64, device=self._distributed.device)
+            all_reduce(total_kl_tensor, group=self._distributed.data_group)
+            all_reduce(num_traces_tensor, group=self._distributed.data_group)
+            all_reduce(num_skipped_tensor, group=self._distributed.data_group)
+            total_kl = total_kl_tensor.item()
+            num_traces = int(num_traces_tensor.item())
+            num_skipped = int(num_skipped_tensor.item())
+
+        # Reduce across pipeline group (last PP rank has the values, others have zeros)
+        if self._distributed.pipeline_group:
+            total_kl_tensor = torch.tensor([total_kl], dtype=torch.float64, device=self._distributed.device)
+            num_traces_tensor = torch.tensor([num_traces], dtype=torch.int64, device=self._distributed.device)
+            all_reduce(total_kl_tensor, group=self._distributed.pipeline_group)
+            all_reduce(num_traces_tensor, group=self._distributed.pipeline_group)
+            total_kl = total_kl_tensor.item()
+            num_traces = int(num_traces_tensor.item())
+
         return total_kl / num_traces if num_traces > 0 else 0.0, num_traces, num_skipped
 
-    def _compute_batch_log_probs(self, batch: list[dict[str, typing.Any]]) -> list[float]:
-        max_len = max(len(t["prompt_tokens"]) + len(t["completion_tokens"]) for t in batch)
-
+    def _compute_batch_log_probs(self, batch: list[dict[str, typing.Any]]) -> list[float] | None:
         samples = []
         prompt_lengths = []
         completion_lengths = []
@@ -138,7 +179,8 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             completion = trace["completion_tokens"]
             full = prompt + completion
             actual_len = len(full)
-            pad_len = max_len - actual_len
+            # Pad to training sequence length (required for SP support)
+            pad_len = self._sequence_length - actual_len
 
             tokens = torch.tensor(full + [0] * pad_len, dtype=torch.int64)
             samples.append(LanguageModelSample(TokenSample(tokens, lengths=[actual_len])))
@@ -147,8 +189,22 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
 
         lm_batch = LanguageModelBatch.from_samples(samples)
 
+        # Create batch config with training's sequence settings (required for SP support)
+        with NoAutoValidate():
+            batch_config = GPTBatchConfig(
+                micro_batch_size=len(batch),
+                sequence_length=self._sequence_length,
+                micro_sequence_length=self._micro_sequence_length,
+            )
+        batch_config.setup(self._distributed.config)
+        batch_config.validate()
+
+        # Get preprocessing metadata using GPTBatchConfig (enables proper SP splitting)
+        preprocessed_meta = self._multi_stage.base_model.preprocess_meta(batch_config, PhaseType.inference)
+
         preprocessed = self._multi_stage.base_model.preprocess_batch(
             lm_batch,
+            preprocessed_meta,
             phase=PhaseType.inference,
             iteration=0,
         )
@@ -156,19 +212,25 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         for input_, kwargs in preprocessed:
             kwargs["global_logits"] = True
             self._inference_runner.forward(input_, kwargs)
-            logits = kwargs["logits"]
 
-        sequence_first = kwargs.get("sequence_first", False)
-        if sequence_first:
+        # With pipeline parallelism, only the last stage has logits.
+        # Other stages participate in the forward pass but don't compute logits.
+        if "logits" not in kwargs:
+            return None
+
+        logits = kwargs["logits"]
+
+        if kwargs.get(AttentionKwargs.sequence_first, False):
             logits = logits.transpose(0, 1)
 
         results = []
+        device = logits.device
         for idx in range(len(batch)):
             prompt_len = prompt_lengths[idx]
             completion_len = completion_lengths[idx]
 
             pred_logits = logits[idx, prompt_len - 1 : prompt_len + completion_len - 1]
-            targets = lm_batch.tokens.tokens[idx, prompt_len : prompt_len + completion_len]
+            targets = lm_batch.tokens.tokens[idx, prompt_len : prompt_len + completion_len].to(device)
 
             log_probs = F.log_softmax(pred_logits.float(), dim=-1)
             token_log_probs = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
