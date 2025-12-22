@@ -8,6 +8,7 @@ and generates a config file that blends all discovered datasets with weights pro
 import argparse
 import logging
 import pathlib
+from collections import defaultdict
 
 import yaml
 
@@ -15,6 +16,15 @@ from fast_llm.config import Field, config_class
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _is_subpath(path: pathlib.Path, parent: pathlib.Path) -> bool:
+    """Check if path is under parent directory."""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def find_dataset_configs(root_dir: pathlib.Path, ignore_paths: list[pathlib.Path] | None = None) -> list[pathlib.Path]:
@@ -28,8 +38,6 @@ def find_dataset_configs(root_dir: pathlib.Path, ignore_paths: list[pathlib.Path
     Returns:
         List of paths to fast_llm_config*.yaml files
     """
-    config_files = []
-
     # Normalize ignore paths to absolute paths
     ignore_paths_absolute = set()
     if ignore_paths:
@@ -39,29 +47,19 @@ def find_dataset_configs(root_dir: pathlib.Path, ignore_paths: list[pathlib.Path
             else:
                 ignore_paths_absolute.add((root_dir / ignore_path).resolve())
 
-    # Find all fast_llm_config*.yaml files
+    # Find all fast_llm_config*.yaml files and filter out ignored ones
+    config_files = []
     for config_file in root_dir.rglob("fast_llm_config*.yaml"):
-        # Check if this file should be ignored
         config_file_resolved = config_file.resolve()
-        should_ignore = False
 
-        for ignore_path in ignore_paths_absolute:
-            # Check if the config file is under an ignored path
-            try:
-                config_file_resolved.relative_to(ignore_path)
-                should_ignore = True
-                break
-            except ValueError:
-                # Not under this ignored path, continue checking
-                continue
+        # Check if this file is under any ignored path
+        is_ignored = any(_is_subpath(config_file_resolved, ignore_path) for ignore_path in ignore_paths_absolute)
 
-        if not should_ignore:
+        if not is_ignored:
             config_files.append(config_file)
 
     # Sort by path for consistent ordering
-    config_files.sort()
-
-    return config_files
+    return sorted(config_files)
 
 
 def load_dataset_config(config_path: pathlib.Path) -> dict:
@@ -159,6 +157,49 @@ def get_dataset_num_tokens(config_path: pathlib.Path) -> int:
     return _get_config_num_tokens(config_dict, config_path.parent)
 
 
+def _get_token_count(config_file: pathlib.Path) -> float:
+    """
+    Get token count in billions for a dataset config file.
+    """
+    num_tokens = get_dataset_num_tokens(config_file)
+    logger.info(f"  - {config_file.name}: {num_tokens:,} tokens")
+    return num_tokens / 1e9
+
+
+def _create_dataset_reference(config_file: pathlib.Path, use_file_refs: bool) -> dict:
+    """
+    Create a dataset reference or inline config.
+
+    Args:
+        config_file: Path to the dataset config file
+        use_file_refs: If True, create a file reference; if False, inline the config
+
+    Returns:
+        Dictionary representing the dataset
+    """
+    if use_file_refs:
+        return {"type": "file", "path": str(config_file)}
+    else:
+        return load_dataset_config(config_file)
+
+
+def _get_directory_name(directory: pathlib.Path, root_dir: pathlib.Path, suffix: str = "") -> str:
+    """
+    Generate a name for a directory relative to root.
+
+    Args:
+        directory: The directory to name
+        root_dir: The root directory
+        suffix: Optional suffix to append to the name
+
+    Returns:
+        A string name for the directory
+    """
+    rel_path = directory.relative_to(root_dir) if directory != root_dir else pathlib.Path(".")
+    base_name = str(rel_path).replace("/", "_").replace(".", root_dir.name)
+    return f"{base_name}{suffix}" if suffix else base_name
+
+
 def create_blended_config(
     config_files: list[pathlib.Path],
     name: str = "blended",
@@ -189,32 +230,20 @@ def create_blended_config(
         else:
             return load_dataset_config(config_files[0])
 
-    # Multiple datasets
+    # Build datasets and weights in a single pass
+    logger.info("Calculating token counts for blended dataset weights...")
     datasets = []
+    weights = []
+
     for config_file in config_files:
+        # Add dataset reference or inline config
         if use_file_refs:
-            datasets.append(
-                {
-                    "type": "file",
-                    "path": str(config_file),
-                }
-            )
+            datasets.append({"type": "file", "path": str(config_file)})
         else:
             datasets.append(load_dataset_config(config_file))
 
-    # Get token counts for each dataset to calculate weights
-    logger.info("Calculating token counts for blended dataset weights...")
-    weights = []
-    for config_file in config_files:
-        try:
-            num_tokens = get_dataset_num_tokens(config_file)
-            weights.append(num_tokens / 1e9)
-            logger.info(f"  - {config_file.name}: {num_tokens:,} tokens")
-        except Exception as e:
-            logger.error(f"Failed to get token count for {config_file}: {e}")
-            # Use weight of 1 as fallback
-            weights.append(1)
-            logger.warning(f"  - {config_file.name}: using fallback weight of 1")
+        # Get token count for weight
+        weights.append(_get_token_count(config_file))
 
     return {
         "type": "blended",
@@ -237,15 +266,11 @@ def group_configs_by_directory(
     Returns:
         Dictionary mapping directory paths to lists of config files in that directory
     """
-    groups: dict[pathlib.Path, list[pathlib.Path]] = {}
-
+    groups: dict[pathlib.Path, list[pathlib.Path]] = defaultdict(list)
     for config_file in config_files:
-        parent_dir = config_file.parent
-        if parent_dir not in groups:
-            groups[parent_dir] = []
-        groups[parent_dir].append(config_file)
+        groups[config_file.parent].append(config_file)
 
-    return groups
+    return dict(groups)
 
 
 def build_directory_tree(
@@ -284,7 +309,7 @@ def create_directory_config(
     tree: dict[pathlib.Path, set[pathlib.Path]],
     root_dir: pathlib.Path,
     use_file_refs: bool,
-) -> tuple[dict, int] | None:
+) -> tuple[dict, float] | None:
     """
     Recursively create a blended config for a directory and its subdirectories.
 
@@ -296,37 +321,20 @@ def create_directory_config(
         use_file_refs: Whether to use file references
 
     Returns:
-        Tuple of (config dictionary, total token count), or None if directory has no datasets
+        Tuple of (config dictionary, total token count in billions), or None if directory has no datasets
     """
     local_datasets = []
-    local_config_files = []
     local_tokens = []
-    subdir_datasets = []
-    subdir_tokens = []
 
-    # First, collect configs directly in this directory (not in subdirectories)
+    # Collect configs directly in this directory (not in subdirectories)
     if directory in groups:
         for config_file in sorted(groups[directory]):
-            if use_file_refs:
-                local_datasets.append(
-                    {
-                        "type": "file",
-                        "path": str(config_file),
-                    }
-                )
-            else:
-                local_datasets.append(load_dataset_config(config_file))
-            local_config_files.append(config_file)
+            local_datasets.append(_create_dataset_reference(config_file, use_file_refs))
+            local_tokens.append(_get_token_count(config_file))
 
-            # Get token count for this dataset
-            try:
-                num_tokens = get_dataset_num_tokens(config_file)
-                local_tokens.append(num_tokens / 1e9)
-            except Exception as e:
-                logger.warning(f"Failed to get token count for {config_file}: {e}")
-                local_tokens.append(1)
-
-    # Then, recursively process subdirectories
+    # Recursively process subdirectories
+    subdir_datasets = []
+    subdir_tokens = []
     if directory in tree:
         for subdir in sorted(tree[directory]):
             subdir_result = create_directory_config(subdir, groups, tree, root_dir, use_file_refs)
@@ -335,17 +343,14 @@ def create_directory_config(
                 subdir_datasets.append(subdir_config)
                 subdir_tokens.append(subdir_token_count)
 
-    # If we have both local datasets and subdirectory datasets, group local ones first
+    # Combine local and subdirectory datasets
     if local_datasets and subdir_datasets:
-        # Create a group for local datasets if there are multiple
+        # If multiple local datasets, group them together
         if len(local_datasets) > 1:
-            rel_path = directory.relative_to(root_dir) if directory != root_dir else pathlib.Path(".")
-            local_name = f"{str(rel_path).replace('/', '_').replace('.', root_dir.name)}_local"
             local_total_tokens = sum(local_tokens)
-
             local_group = {
                 "type": "blended",
-                "name": local_name,
+                "name": _get_directory_name(directory, root_dir, "_local"),
                 "datasets": local_datasets,
                 "weights": local_tokens,
             }
@@ -363,21 +368,16 @@ def create_directory_config(
     else:
         return None
 
-    # Calculate total tokens for this directory
     total_tokens = sum(all_tokens)
 
+    # Don't wrap a single dataset
     if len(all_datasets) == 1:
-        # Don't wrap a single dataset
         return all_datasets[0], total_tokens
 
     # Multiple datasets - create blended config
-    rel_path = directory.relative_to(root_dir) if directory != root_dir else pathlib.Path(".")
-    name = str(rel_path).replace("/", "_").replace(".", root_dir.name)
-
-    # Use the collected token counts as weights
     return {
         "type": "blended",
-        "name": name,
+        "name": _get_directory_name(directory, root_dir),
         "datasets": all_datasets,
         "weights": all_tokens,
     }, total_tokens
