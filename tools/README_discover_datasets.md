@@ -24,7 +24,7 @@ python tools/discover_datasets.py <directory> -o <output.yaml> [options]
 
 - `directory`: Directory to search for datasets recursively (required)
 - `-o, --output`: Output path for the generated config YAML file (required)
-- `--no-file-refs`: Inline configs instead of using file references (optional)
+- `--no-file-refs`: Inline configs instead of using file references (optional, not recommended)
 - `--ignore`: Path to ignore during dataset discovery (can be specified multiple times, optional)
 
 **Examples:**
@@ -86,9 +86,9 @@ datasets:
   - type: file
     path: /path/to/dataset2/fast_llm_config.yaml
 weights:
-  - 1500000  # Dataset 1 has 1.5M tokens
-  - 500000   # Dataset 2 has 500K tokens
-  - 2000000  # Dataset 3 has 2M tokens
+  - 1.5  # Dataset 1 has 1.5B tokens
+  - 0.5  # Dataset 2 has 0.5B tokens
+  - 2.0  # Dataset 3 has 2.0B tokens
 ```
 
 With blended datasets, samples are drawn from each dataset proportionally to their weights during training. This means:
