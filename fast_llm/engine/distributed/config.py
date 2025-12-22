@@ -87,7 +87,9 @@ class DistributedDim:
         start = global_rank
         rank = 0
         world_size = 1
-        for size, stride in sizes_and_strides:
+        for i, (size, stride) in enumerate(sizes_and_strides):
+            if i > 0:
+                Assert.multiple(stride, sizes_and_strides[i - 1][1])
             rank_ = global_rank // stride % size
             start -= rank_ * stride
             rank += world_size * rank_
@@ -96,13 +98,13 @@ class DistributedDim:
         for size, stride in sizes_and_strides:
             if size == 1:
                 continue
-            if len(global_ranks) == 1 or (
-                isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start
-            ):
-                global_ranks = range(start, start + size * stride, sizes_and_strides[0][0])
+            if len(global_ranks) == 1:
+                global_ranks = range(start, start + size * stride, stride)
+            elif isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start:
+                global_ranks = range(start, start + size * stride, global_ranks.step)
             else:
-                global_ranks = (rank0 + rank1 for rank1 in range(0, size, stride) for rank0 in global_ranks)
-        global_ranks = global_ranks if isinstance(global_ranks, range) else list(global_ranks)
+                global_ranks = [rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks]
+        Assert.eq(len(global_ranks), world_size)
         return DistributedDim(name=name, size=world_size, rank=rank, global_ranks=global_ranks)
 
 
@@ -267,8 +269,6 @@ class DistributedConfig(Config):
     )
 
     def _validate(self) -> None:
-        super()._validate()
-
         if self.world_size is None:
             self.world_size = self.default_world_size
         if self.rank is None:
@@ -348,10 +348,19 @@ class DistributedConfig(Config):
             self._add_distributed_dim_from_sizes_and_strides(
                 DistributedDimNames.model_and_sequence_data,
                 (self.tensor_parallel, tensor_stride),
-                (self.sequence_data_parallel, sequence_data_stride),
-                (self.pipeline_rank, pipeline_stride),
+                (
+                    (self.pipeline_parallel, pipeline_stride)
+                    if self.pipeline_first
+                    else (self.sequence_data_parallel, sequence_data_stride)
+                ),
+                (
+                    (self.sequence_data_parallel, sequence_data_stride)
+                    if self.pipeline_first
+                    else (self.pipeline_parallel, pipeline_stride)
+                ),
             )
 
+        super()._validate()
         if self.reference_config is not None:
             self.compare(self.reference_config, ValueError)
         Assert.in_range(self.rank, 0, self.world_size)

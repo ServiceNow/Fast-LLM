@@ -1,7 +1,7 @@
+import json
 import sys
 from pathlib import Path
 
-import orjson
 import redis
 import safetensors.torch
 import torch.distributed
@@ -67,7 +67,7 @@ def main():
         for event_id, msg in events:
             last_id = event_id
             assert msg_key in msg
-            msg = orjson.loads(msg[msg_key].decode())
+            msg = json.loads(msg[msg_key].decode())
             print(f"{consumer_id} msg received: {msg}")
             if msg["type"] == config["events"]["weights_broadcast"]["weights_ready_message_type"] or (
                 msg["type"] == config["events"]["weights_broadcast"]["initial_weights_step_message_type"]

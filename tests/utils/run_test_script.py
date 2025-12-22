@@ -47,22 +47,7 @@ def do_run_distributed_script(
 
 
 @pytest.fixture(scope="session")
-def run_distributed_script(
-    worker_resources: "WorkerResources",
-    run_test_script_base_path: pathlib.Path,
-    model_testing_config: ModelTestingConfig,
-):
-    return functools.partial(
-        do_run_distributed_script,
-        rendezvous_port=worker_resources.rendezvous_port,
-        torchrun_port=worker_resources.torchrun_port,
-    )
-
-
-@pytest.fixture(scope="session")
-def run_distributed_script_lean(
-    worker_resources: "WorkerResources",
-):
+def run_distributed_script(worker_resources: "WorkerResources"):
     return functools.partial(
         do_run_distributed_script,
         rendezvous_port=worker_resources.rendezvous_port,

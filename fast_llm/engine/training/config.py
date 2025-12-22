@@ -16,6 +16,7 @@ from fast_llm.config import (
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
@@ -29,7 +30,6 @@ from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
-from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -323,13 +323,6 @@ class TrainingConfig(Config):
 
 
 @config_class()
-class TrainerEventsRedisConfig(RedisConfig):
-    stream_key: str = FieldUpdate(default="fast_llm_events")
-
-    payload_key: str = FieldUpdate(default="event")
-
-
-@config_class()
 class TrainerEvent(Config):
     enabled: bool = Field(
         default=False,
@@ -406,15 +399,10 @@ class TrainingFinishedEventConfig(TrainerEvent):
 
 
 @config_class()
-class TrainerEventsConfig(Config):
+class TrainerEventsConfig(RedisConfig):
     """
     Aggregates all trainer-side Redis-based event configurations.
     """
-
-    redis: TrainerEventsRedisConfig = Field(
-        desc="Redis connection and stream settings used to fetch incoming training data.",
-        hint=FieldHint.core,
-    )
 
     weights_broadcast: WeightsBroadcastEventConfig = Field(
         default=None,

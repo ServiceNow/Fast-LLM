@@ -1,18 +1,22 @@
+import json
 import logging
 
-import orjson
 import redis
 import torch.distributed
 
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.config_utils.run import is_main_rank
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.engine.training.config import TrainerEventsConfig, TrainerEventsRedisConfig, TrainingExportConfig
+from fast_llm.engine.training.config import TrainerEventsConfig, TrainingExportConfig
 
 logger = logging.getLogger(__name__)
 
 
+REDIS_TRAINING_KEY = "fast_llm_events"
+
+
 class RedisEventSender:
-    def __init__(self, config: TrainerEventsRedisConfig):
+    def __init__(self, config: RedisConfig):
         self.config = config
         self.client = None
 
@@ -30,7 +34,7 @@ class RedisEventSender:
             payload = {}
         payload.update({"type": msg_type})
 
-        self.client.xadd(self.config.stream_key, {self.config.payload_key: orjson.dumps(payload)})
+        self.client.xadd(REDIS_TRAINING_KEY, {"event": json.dumps(payload)})
 
 
 class TrainerEvents:

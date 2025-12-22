@@ -1,36 +1,23 @@
 import contextlib
+import itertools
+import json
 import pathlib
 import socket
 import threading
 import time
 
 import fakeredis
-import orjson
-import pytest
 
 from fast_llm.data.dataset.config import (
-    IngestionType,
+    RedisConfig,
     SamplingConfig,
     SamplingData,
     SamplingParameters,
-    ShufflingType,
     StreamingDatasetConfig,
-    StreamingDatasetRedisConfig,
 )
+from fast_llm.data.dataset.streaming import REDIS_DATA_KEY, REDIS_GROUP_NAME
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-
-
-def get_stream_config():
-    return StreamingDatasetConfig(
-        redis=StreamingDatasetRedisConfig(
-            host="localhost",
-            port=6379,
-            stream_key="test_stream",
-            payload_key="data",
-        ),
-        group_name="test_group",
-        consumer_name_prefix="consumer",
-    )
+from fast_llm.models.gpt.config import GPTBatchConfig
 
 
 def find_free_port():
@@ -40,32 +27,9 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def push_msg(redis_client, config, tokens=None, stream_key_suffix=None):
+def push_msg(redis_client, tokens):
     """Push a message into FakeRedis stream."""
-    msg = {
-        "tokens": tokens,
-        "tokens_dtype": "int64",
-    }
-    stream_key = config.redis.stream_key
-    if stream_key_suffix is not None:
-        stream_key += stream_key_suffix
-    redis_client.xadd(stream_key, {config.redis.payload_key: orjson.dumps(msg)})
-
-
-class FakeRedisServerKiller:
-    def __init__(self, server):
-        self._server = server
-        self._is_killed = False
-        self._lock = threading.Lock()
-
-    def kill(self):
-        with self._lock:
-            if not self._is_killed:
-                try:
-                    self._server.shutdown()
-                    self._server.server_close()
-                finally:
-                    self._is_killed = True
+    redis_client.xadd(REDIS_DATA_KEY, {"data": json.dumps({"tokens": tokens, "tokens_dtype": "int64"})})
 
 
 def wait_until_stream_empty(
@@ -73,20 +37,7 @@ def wait_until_stream_empty(
     stream_key,
     consumer_group,
     stop_event,
-    consumer_count,
-    ingestion_type: IngestionType,
 ):
-    if ingestion_type == IngestionType.CONSUMER_GROUP:
-        return wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event)
-    elif ingestion_type == IngestionType.ONE_STREAM:
-        raise NotImplementedError()
-    elif ingestion_type == IngestionType.N_STREAMS:
-        raise NotImplementedError()
-    else:
-        raise ValueError(f"Unknown ingestion type {ingestion_type.value}")
-
-
-def wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_group, stop_event):
     """
     Wait until lag == 0, meaning all messages have been delivered AND acknowledged.
     Absence of group mean test has not started yet, so we wait
@@ -106,7 +57,7 @@ def wait_until_stream_empty_consumer_group(redis_client, stream_key, consumer_gr
 
 def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig):
     while not stop_event.is_set():
-        res = redis_client.hget(f"{config.redis.stream_key}:consumer_count", "0")
+        res = redis_client.hget(f"{REDIS_DATA_KEY}:consumer_count", "0")
         if res is None:
             time.sleep(0.05)
             continue
@@ -114,67 +65,39 @@ def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig)
 
 
 @contextlib.contextmanager
-def redis_batch_producer(
-    redis_client, fake_redis_server_killer, stream_config, batch_size, sequence_length, num_batches=None
-):
-    stop_event = threading.Event()
-    thread_exc = []
+def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
+    with fake_redis_server(config):
+        stop_event = threading.Event()
+        client = config.get_client()
 
-    def producer_loop():
-        is_n_streams = stream_config.ingestion_type == IngestionType.N_STREAMS
-        try:
-            consumer_count = get_consumer_count(redis_client, stop_event, stream_config)
-            stream = stream_config.redis.stream_key
-            group = stream_config.group_name
-            batch_idx = 0
-            while not stop_event.is_set():
-                if num_batches is not None and batch_idx >= num_batches:
+        def producer_loop():
+            for sample_index in itertools.count():
+                if stop_event.is_set():
                     break
-                for i in range(batch_size):
-                    if stop_event.is_set():
-                        return
-                    push_msg(
-                        redis_client,
-                        stream_config,
-                        [batch_idx * batch_size + i] * sequence_length,
-                        stream_key_suffix=f"_{i % consumer_count}" if is_n_streams else None,
-                    )
-                wait_until_stream_empty(
-                    redis_client,
-                    stream,
-                    group,
-                    stop_event,
-                    consumer_count=consumer_count,
-                    ingestion_type=stream_config.ingestion_type,
-                )
-                batch_idx += 1
-        except Exception as e:
-            # if failed to push messages kill redis server so waiting side in the test would unlock
-            fake_redis_server_killer.kill()
-            thread_exc.append(e)
-            raise
+                push_msg(client, [sample_index] * batch_config.sequence_length)
+                if sample_index % 5 == 0:
+                    wait_until_stream_empty(client, REDIS_DATA_KEY, REDIS_GROUP_NAME, stop_event)
 
-    thread = threading.Thread(target=producer_loop, daemon=True)
-    thread.start()
+        thread = threading.Thread(target=producer_loop, daemon=True)
+        thread.start()
 
-    try:
-        yield
-    finally:
-        stop_event.set()
-        thread.join(timeout=10)
-        if thread_exc:
-            raise thread_exc[0]
+        try:
+            yield
+        finally:
+            stop_event.set()
+            thread.join(timeout=1)
+            client.close()
 
 
-def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
+def make_sampling(sequence_length, num_samples, distributed):
     return SamplingData(
         parameters=SamplingParameters(
             sequence_length=sequence_length,
-            extra_tokens=extra_tokens,
+            extra_tokens=0,
             num_samples=num_samples,
             truncate_documents=False,
         ),
-        config=SamplingConfig(shuffle=ShufflingType.disabled),
+        config=SamplingConfig(),
         distributed=distributed,
         dataset_name="test",
         cache_directory=pathlib.Path("/tmp"),
@@ -182,17 +105,9 @@ def make_sampling(sequence_length, extra_tokens, num_samples, distributed):
     )
 
 
-@pytest.fixture
-def stream_config():
-    return get_stream_config()
-
-
-@pytest.fixture
-def fake_redis_server(stream_config):
+@contextlib.contextmanager
+def fake_redis_server(config: RedisConfig):
     # We search for free port as port from previous test can still be not free even after server shutdown
-    stream_config = stream_config.from_dict(stream_config.to_dict(), {("redis", "port"): find_free_port()})
-
-    server_address = (stream_config.redis.host, stream_config.redis.port)
 
     # ----- Monkey-patch handler to suppress broken pipes -----
     orig_handle = fakeredis._tcp_server.TCPFakeRequestHandler.handle
@@ -209,27 +124,14 @@ def fake_redis_server(stream_config):
 
     fakeredis._tcp_server.TCPFakeRequestHandler.handle = safe_handle
 
-    server = fakeredis.TcpFakeServer(server_address, server_type="redis")
-    server_killer = FakeRedisServerKiller(server)
-
-    # ----- Start server thread -----
-    def serve():
-        try:
-            server.serve_forever()
-        except Exception:
-            # Extra safety: catch anything from serve_forever
-            pass
-
-    thread = threading.Thread(target=serve, daemon=True)
+    server = fakeredis.TcpFakeServer((config.host, config.port), server_type="redis")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    # ----- reate a redis-py client pointing at the fake serve -----
-    import redis
-
-    client = redis.Redis(host=server_address[0], port=server_address[1])
-
-    yield stream_config, client, server_killer
-
-    # ----- Teardown -----
-    server_killer.kill()
-    thread.join()
+    try:
+        yield
+    finally:
+        # ----- Teardown -----
+        server.shutdown()
+        server.server_close()
+        thread.join()
