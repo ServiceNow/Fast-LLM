@@ -63,15 +63,6 @@ def find_dataset_configs(root_dir: pathlib.Path, ignore_paths: list[pathlib.Path
 
 
 def load_dataset_config(config_path: pathlib.Path) -> dict:
-    """
-    Load a dataset config from a YAML file.
-
-    Args:
-        config_path: Path to the config file
-
-    Returns:
-        The loaded config as a dictionary
-    """
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config
@@ -253,15 +244,12 @@ def create_blended_config(
     }
 
 
-def group_configs_by_directory(
-    config_files: list[pathlib.Path], root_dir: pathlib.Path
-) -> dict[pathlib.Path, list[pathlib.Path]]:
+def group_configs_by_directory(config_files: list[pathlib.Path]) -> dict[pathlib.Path, list[pathlib.Path]]:
     """
     Group config files by their parent directory.
 
     Args:
         config_files: List of config file paths
-        root_dir: Root directory to use for relative paths
 
     Returns:
         Dictionary mapping directory paths to lists of config files in that directory
@@ -420,7 +408,7 @@ def create_hierarchical_config(
         logger.info(f"  - {config_file.relative_to(root_dir)}")
 
     # Group configs by directory
-    groups = group_configs_by_directory(config_files, root_dir)
+    groups = group_configs_by_directory(config_files)
 
     # Build directory tree
     tree = build_directory_tree(groups, root_dir)
@@ -470,9 +458,22 @@ class DiscoverDatasetsConfig(RunnableConfig):
             ignore_paths=self.ignore_paths,
         )
 
-        # Write the config to the output file
+        # Write the config to the output file with header comment
         self.output.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output, "w") as f:
+            # Write header comment
+            f.write(
+                "# This file was generated with tools/discover_datasets.py; weights are token-counts in billions.\n"
+            )
+            f.write(f"# Configuration:\n")
+            f.write(f"#   directory: {self.directory}\n")
+            f.write(f"#   use_file_refs: {self.use_file_refs}\n")
+            if self.ignore_paths:
+                f.write(f"#   ignore_paths:\n")
+                for ignore_path in self.ignore_paths:
+                    f.write(f"#     - {ignore_path}\n")
+            f.write("\n")
+            # Write the YAML config
             yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
 
         logger.info(f"Generated dataset config saved to {self.output}")
