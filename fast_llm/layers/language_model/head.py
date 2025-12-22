@@ -250,16 +250,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 input_, targets, weight, grad_output, kwargs, losses
             )
             if targets is None:
-                # TODO: Make a proper way of returning the model output.
-                loss = loss.detach()
-                if kwargs.get("global_logits"):
-                    if self._vocab_parallel:
-                        loss = gather_op(loss, self._parallel_dim.group, 2)
-                    elif self._sequence_parallel_logits:
-                        loss = gather_op(
-                            loss, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-                        )
-                kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
+                # global_logits: raw logits already stored and gathered in inner function
+                # non-global_logits: store scaled logits for distillation backwards compat
+                if not kwargs.get("global_logits"):
+                    kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss.detach()
                 return None, None
         else:
             loss = None
@@ -341,6 +335,17 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             dims = None
         self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
+
+        if kwargs.get("global_logits"):
+            logits_for_storage = logits.detach()
+            if self._vocab_parallel:
+                logits_for_storage = gather_op(logits_for_storage, self._parallel_dim.group, 2)
+            elif self._sequence_parallel_logits:
+                logits_for_storage = gather_op(
+                    logits_for_storage, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+                )
+            logits_key = "logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"
+            kwargs[logits_key] = logits_for_storage
 
         if targets is None:
             return logits * self._config.logits_scale_factor, None

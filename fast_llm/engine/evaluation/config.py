@@ -131,14 +131,19 @@ class ForwardKLEvaluatorConfig(EvaluatorConfig):
         desc="HuggingFace dataset path containing teacher traces.",
         hint=FieldHint.core,
     )
-    task: str | None = Field(
-        default=None,
-        desc="Dataset configuration/task name.",
+    split: str = Field(
+        default="validation",
+        desc="Dataset split to evaluate on. Use 'train+validation' syntax to combine multiple splits.",
+        hint=FieldHint.optional,
+    )
+    seed: int = Field(
+        default=42,
+        desc="Random seed for shuffling traces. Ensures reproducible evaluation across runs.",
         hint=FieldHint.optional,
     )
     num_samples: int | None = Field(
         default=None,
-        desc="Maximum number of traces to evaluate. None for all.",
+        desc="Maximum number of traces to evaluate (after shuffling). None for all.",
         hint=FieldHint.optional,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
