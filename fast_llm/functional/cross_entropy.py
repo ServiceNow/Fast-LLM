@@ -314,6 +314,7 @@ def reverse_kl_forward_backward(
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     sequence_parallel_logits: bool = False,
+    **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Compute reverse KL divergence: KL(q||p) where q is the predicted distribution (student) and p is the target (teacher).
@@ -443,6 +444,7 @@ def forward_kl_forward_backward(
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     sequence_parallel_logits: bool = False,
+    **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Compute forward KL divergence: KL(p||q) where p is the target distribution (teacher) and q is the predicted (student).
