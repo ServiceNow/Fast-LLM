@@ -44,7 +44,6 @@ class SampledDataset[SampleType: Sample](Dataset[SampleType]):
 
 
 class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
-
     @abc.abstractmethod
     def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
         pass
