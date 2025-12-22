@@ -9,6 +9,7 @@ from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.language_model.lm_head_losses import LossConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
@@ -43,6 +44,20 @@ def _reverse_kl_loss(
     return loss
 
 
+def _kl_loss(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    teacher_softmax_temperature: float = 1.0,
+):
+    return _reverse_kl_loss(
+        target,
+        logits,
+        loss_mask,
+        teacher_softmax_temperature,
+    )
+
+
 def _lm_head(
     input_: torch.Tensor,
     target: torch.Tensor,
@@ -54,9 +69,7 @@ def _lm_head(
     grad_output: float = 1.0,
     logit_scale_factor: float = 1.0,
     logit_z_loss=0.0,
-    distillation_loss_implementation: DistillationLossImpl = DistillationLossImpl.cross_entropy,
-    language_model_loss_factor: float = 1.0,
-    distillation_loss_factor: float = 1.0,
+    losses: dict[str, LossConfig],
 ):
     hidden = torch.rms_norm(
         input_.to(rms_weight.dtype),
@@ -66,36 +79,34 @@ def _lm_head(
     )
     logits = torch.nn.functional.linear(hidden, logit_weight).float()
 
-    if distillation_loss_implementation == DistillationLossImpl.reverse_kl:
-        Assert.eq(logits.shape, target.shape)
-        loss = _reverse_kl_loss(
-            (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
-        )
-        # Apply distillation_loss_factor to grad_output for backward
-        loss.backward(torch.full_like(loss, grad_output * distillation_loss_factor))
-        # Return scaled loss
-        return loss * distillation_loss_factor, None
+    if "dist_loss" in losses:
+        if losses["dist_loss"].type == "revkl_dist":
+            Assert.eq(logits.shape, target.shape)
+            loss = _reverse_kl_loss(
+                (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
+            )
+            # Apply distillation_loss_factor to grad_output for backward
+            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].factor))
+            # Return scaled loss
+            return loss * losses["dist_loss"].factor, None
+        elif losses["dist_loss"].type == "fkl_dist":
+            Assert.eq(logits.shape, target.shape)
+            loss = _kl_loss(
+                (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
+            )
+            # Apply distillation_loss_factor to grad_output for backward
+            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].factor))
+            # Return scaled loss
+            return loss * losses["dist_loss"].factor, None
 
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
     z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2) if logit_z_loss > 0 else None
-    if target.ndim == logits.ndim:
-        # Distillation loss (cross-entropy with soft targets)
-        loss = torch.nn.functional.cross_entropy(
-            logits.flatten(0, -2), target.float().softmax(-1).flatten(0, -2), reduction="none"
-        )
-        if loss_mask is not None:
-            loss = loss * loss_mask.flatten()
-        loss = loss.mean()
-        # Apply distillation_loss_factor
-        loss.backward(torch.full_like(loss, grad_output * distillation_loss_factor))
-        return loss * distillation_loss_factor, z_loss
-    else:
-        # Language model loss (cross-entropy with hard labels)
-        loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
-        # Apply language_model_loss_factor
-        loss.backward(torch.full_like(loss, grad_output * language_model_loss_factor))
-        return loss * language_model_loss_factor, z_loss
+    # Language model loss (cross-entropy with hard labels)
+    loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
+    # Apply language_model_loss_factor
+    loss.backward(torch.full_like(loss, grad_output * losses["lm_loss"].factor))
+    return loss * losses["lm_loss"].factor, z_loss
 
 
 SEQUENCE_LENGTH = 200
@@ -119,99 +130,169 @@ VOCAB_SIZE = 500
         ({"tied_embedding_weight": True}, {}, False, 1),
         ({}, {}, False, 2),
         ({}, {}, True, 1),
+        # Skip CE distillation for now - not yet implemented in new losses system
         # (
         #     {
         #         "head": {
         #             "distillation_model": "distillation",
-        #             "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+        #             "losses": {
+        #                 "lm_loss": {
+        #                     "type": "cross_entropy_lm_loss",
+        #                     "weight_scalor": 0.0,
+        #                     "log_it": False,
+        #                 },
+        #                 "dist_loss": {
+        #                     "type": "cross_entropy_dist",  # TODO: Not implemented yet
+        #                     "weight_scalor": 1.0,
+        #                     "log_it": True,
+        #                 }
+        #             }
         #         }
         #     },
         #     {},
         #     False,
         #     1,
         # ),
+        (
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 0.0,
+                            "log_it": False,
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 1.0,
+                            "log_it": True,
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+        ),
+        # Skip - CE distillation not implemented
         # (
         #     {
         #         "head": {
         #             "distillation_model": "distillation",
-        #             "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
-        #         }
-        #     },
-        #     {},
-        #     False,
-        #     1,
-        # ),
-        # (
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
-        #             "language_model_loss_factor": 1.0,
+        #             "losses": {
+        #                 "lm_loss": {
+        #                     "type": "cross_entropy_lm_loss",
+        #                     "weight_scalor": 1.0,
+        #                     "log_it": True,
+        #                 },
+        #                 "dist_loss": {
+        #                     "type": "cross_entropy_dist",  # TODO
+        #                     "weight_scalor": 1.0,
+        #                     "log_it": True,
+        #                 }
+        #             }
         #         }
         #     },
         #     {},
         #     True,
         #     1,
         # ),
-        # (
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
-        #         }
-        #     },
-        #     {},
-        #     True,
-        #     1,
-        # ),
-        # pytest.param(
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "language_model_loss_factor": 0.0,
-        #             "track_language_model_loss": True,
-        #             "distillation_loss_factor": 1.0,
-        #         }
-        #     },
-        #     {},
-        #     False,
-        #     1,
-        #     id="track_lm_zero_factor",
-        # ),
-        # pytest.param(
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "language_model_loss_factor": 0.0,
-        #             "distillation_loss_factor": 0.0,
-        #             "track_language_model_loss": True,
-        #             "track_distillation_loss": True,
-        #         }
-        #     },
-        #     {},
-        #     False,
-        #     1,
-        #     id="track_both_zero_factors",
-        # ),
-        # pytest.param(
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "language_model_loss_factor": 0.0,
-        #             "distillation_loss_factor": 0.0,
-        #             "track_language_model_loss": False,
-        #             "track_distillation_loss": False,
-        #         }
-        #     },
-        #     {},
-        #     False,
-        #     1,
-        #     marks=pytest.mark.xfail(
-        #         reason="No losses computed when all factors=0 and tracking=False, raises RuntimeError in _add_tensors",
-        #         strict=True,
-        #     ),
-        #     id="zero_factors_no_tracking",
-        # ),
+        (
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 0.0,
+                            "log_it": False,
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 1.0,
+                            "log_it": True,
+                        },
+                    },
+                }
+            },
+            {},
+            True,
+            1,
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 0.0,
+                            "log_it": True,  # tracking even with zero weight
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 1.0,
+                            "log_it": True,
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+            id="track_lm_zero_factor",
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 0.0,
+                            "log_it": True,  # tracking with zero weight
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 0.0,
+                            "log_it": True,  # tracking with zero weight
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+            id="track_both_zero_factors",
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "distillation_model": "distillation",
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 0.0,
+                            "log_it": False,  # not tracking with zero weight
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 0.0,
+                            "log_it": False,  # not tracking with zero weight
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+            marks=pytest.mark.xfail(
+                reason="No losses computed when all factors=0 and log_it=False",
+                strict=True,
+            ),
+            id="zero_factors_no_tracking",
+        ),
     ),
 )
 def test_lm_head(
@@ -222,8 +303,15 @@ def test_lm_head(
     prediction_heads: int,
 ):
     head_config = {
-        "cross_entropy_implementation": cross_entropy_impl,
         "normalization": {"type": "rms_norm"},
+        "losses": {
+            "lm_loss": {
+                "type": "cross_entropy_lm_loss",
+                "implementation": cross_entropy_impl,
+                "factor": 1.0,
+                "log_it": True,
+            }
+        },
     }
     config = GPTBaseModelConfig.from_dict(
         {
@@ -280,19 +368,19 @@ def test_lm_head(
         AttentionKwargs.sequence_first: sequence_first,
         AttentionKwargs.grad_output: 1.0,
     }
-    if head_config.distillation_model is None:
-        target = torch.randint(
-            0,
-            VOCAB_SIZE,
-            label_shape,
-            dtype=torch.int64,
-            device=distributed.device,
-        )
-        if loss_mask is not None:
-            target *= loss_mask
+    # always set lm targets
+    target = torch.randint(
+        0,
+        VOCAB_SIZE,
+        label_shape,
+        dtype=torch.int64,
+        device=distributed.device,
+    )
+    if loss_mask is not None:
+        target *= loss_mask
 
-        kwargs[LanguageModelKwargs.labels] = target
-    else:
+    kwargs[LanguageModelKwargs.labels] = target
+    if head_config.distillation_model is not None:
         assert config.head.max_prediction_distance == 1
         target = torch.randn(
             input_.shape[:-1] + (VOCAB_SIZE,),
@@ -349,11 +437,7 @@ def test_lm_head(
             logit_weight=ref_logit_weight,
             logit_scale_factor=head_config.logits_scale_factor,
             logit_z_loss=head_config.logit_z_loss,
-            distillation_loss_implementation=head_config.distillation_loss_implementation,
-            language_model_loss_factor=(
-                head_config.language_model_loss_factor if head_config.language_model_loss_factor is not None else 1.0
-            ),
-            distillation_loss_factor=head_config.distillation_loss_factor,
+            losses=head_config.losses,
         )
 
         # Prepare LM head inputs
@@ -367,19 +451,15 @@ def test_lm_head(
 
         lm_head_loss_name = f"lm_head_loss_{prediction_distance}" if prediction_distance > 0 else "lm_head_loss"
         expected_loss_keys = {lm_head_loss_name}
-        if head._compute_lm_loss:
-            lm_loss_name_unscaled = (
-                f"lm_loss_unscaled_{prediction_distance}" if prediction_distance > 0 else "lm_loss_unscaled"
-            )
-            lm_loss_name = f"lm_loss_{prediction_distance}" if prediction_distance > 0 else "lm_loss"
 
-            expected_loss_keys.add(lm_loss_name_unscaled)
-            expected_loss_keys.add(lm_loss_name)
+        # Get expected loss names from the loss configs
+        for loss_name, loss_config in head._config.losses.items():
+            if loss_config.log_it:
+                formatted_name = loss_config.get_formatted_name(loss_name, prediction_distance)
+                expected_loss_keys.add(formatted_name)
+
         if ref_z_loss is not None:
             expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
-        if head._compute_distillation_loss:
-            expected_loss_keys.add("distillation_loss")
-            expected_loss_keys.add("distillation_loss_unscaled")
 
         Assert.eq(
             {loss_definition.name: loss_definition.count for loss_definition in head.get_loss_definitions()},

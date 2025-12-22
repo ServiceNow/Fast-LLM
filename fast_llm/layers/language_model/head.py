@@ -432,6 +432,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 name=self._total_head_loss_name, formatted_name=_format_name(self._total_head_loss_name), count=count
             )
         ]
+        if self._config.logit_z_loss > 0.0:
+            loss_defs.append(
+                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
+            )
         for loss_name, loss_config in self._config.losses.items():
             if loss_config.log_it:
                 loss_def: LossDef = loss_config.get_loss_def(
