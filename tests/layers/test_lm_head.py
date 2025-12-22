@@ -293,6 +293,32 @@ VOCAB_SIZE = 500
             ),
             id="zero_factors_no_tracking",
         ),
+        pytest.param(
+            {
+                "head": {
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy_lm_loss",
+                            "factor": 1.0,
+                            "log_it": False,  # not tracking with zero weight
+                        },
+                        "dist_loss": {
+                            "type": "revkl_dist",
+                            "factor": 1.0,
+                            "log_it": True,  # not tracking with zero weight
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+            marks=pytest.mark.xfail(
+                reason="Cannot track distillation loss without distillation model being set",
+                strict=True,
+            ),
+            id="track_distillation_without_model",
+        ),
     ),
 )
 def test_lm_head(
