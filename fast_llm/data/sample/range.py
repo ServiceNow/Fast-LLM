@@ -92,6 +92,19 @@ class RangeReaderConfig(RangeReaderBaseConfig, MemmapReaderConfig):
     def _expected_buffer_size(self) -> int:
         return self.num_ranges * torch.int32.itemsize * 2 + (self.num_documents + 1) * torch.int32.itemsize
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_documents": self.num_documents,
+            "num_ranges": self.num_ranges,
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "num_ranges": sum(metadata_["num_ranges"] for metadata_ in metadata),
+        }
+
 
 class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
@@ -115,6 +128,13 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
             for begin_, end_ in self._ranges[self._count_cumsums[index] : self._count_cumsums[index + 1]].tolist()
         )
         return RangeSample([(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_], sample_size)
+
+    def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])
+        return {
+            "num_documents": end_index - begin_index,
+            "num_ranges": self._count_cumsums[end_index].item() - self._count_cumsums[begin_index].item(),
+        }
 
 
 class EmptyRangeReader[ConfigType: RangeReaderBaseConfig](MemmapReaderBase[ConfigType]):
