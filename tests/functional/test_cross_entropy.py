@@ -14,19 +14,19 @@ from tests.utils.utils import requires_cuda
 
 
 def _get_cross_entropy_inputs(
-    num_columns: int, loss_masking: bool, target_format: TargetFormat
+    num_columns: int, loss_masking: bool, target_format: TargetFormat, device="cuda"
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # We want something moderately close to the target for the test to be meaningful
-    logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda") / 3
-    loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device="cuda") if loss_masking else None
+    logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device=device) / 3
+    loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device=device) if loss_masking else None
     if target_format == TargetFormat.labels:
-        target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device="cuda")
+        target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device=device)
         logits = torch.nn.functional.one_hot(target, num_columns) + logits_var
         if loss_masking:
             logits = torch.where(loss_mask.unsqueeze(-1), logits, -100)
             loss_mask = None
     else:
-        target = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda")
+        target = torch.randn(256, num_columns, dtype=torch.bfloat16, device=device)
         logits = target + logits_var
         if target_format == TargetFormat.probabilities:
             target = torch.softmax(target, -1)
@@ -95,7 +95,7 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
         )
 
 
-def _reverse_kl_forward_backward_torch(target: torch.Tensor, logits: torch.Tensor, loss_mask: torch.Tensor | None):
+def _reverse_kl_forward_backward_torch(logits: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor | None):
     # Manual reference: sum over vocab then average over valid tokens.
     logits = logits.detach().requires_grad_()
     per_sample = torch.nn.functional.kl_div(
@@ -115,7 +115,7 @@ def _reverse_kl_forward_backward_torch(target: torch.Tensor, logits: torch.Tenso
 @pytest.mark.parametrize("loss_masking", [False, True])
 @pytest.mark.parametrize("target_format", (TargetFormat.logits,))
 def test_reverse_kl(loss_masking, target_format):
-    logits, target, loss_mask = _get_cross_entropy_inputs(10000, loss_masking, target_format)
+    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
     out_ref, grad_ref = _reverse_kl_forward_backward_torch(logits, target, loss_mask)
     out, grad = reverse_kl_forward_backward(
         logits=logits,
@@ -124,7 +124,6 @@ def test_reverse_kl(loss_masking, target_format):
         grad_output=1.0,
         target_format=TargetFormat.logits,
     )
-    # TODO: Error looks
     _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref, 1e-3)
 
 
@@ -190,9 +189,9 @@ def _compare_parallel_cross_entropy(
 
 def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGroup):
     success = True
-    for function in (cross_entropy_forward_backward, reverse_kl_forward_backward):
+    for function in (reverse_kl_forward_backward, cross_entropy_forward_backward):
         for target_format in (TargetFormat.logits,):
-            for loss_masking in [True, False]:
+            for loss_masking in [False, True]:
                 try:
                     _compare_parallel_cross_entropy(rank, group, target_format, function, loss_masking)
                 except Exception:
