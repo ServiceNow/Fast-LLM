@@ -27,6 +27,7 @@ class ProcessGroupPool:
         local_world_size: int | None = None,
         timeout: float = 60,
         use_cpu: bool = False,
+        init_method: str = "env://",
     ):
 
         self._rank = DistributedConfig.default_rank if rank is None else rank
@@ -54,7 +55,7 @@ class ProcessGroupPool:
             # TODO: Allow other init methods?
             self.store, _, _ = next(
                 torch.distributed.rendezvous(
-                    "env://",
+                    init_method,
                     self._rank,
                     self._world_size,
                     timeout=datetime.timedelta(seconds=timeout),

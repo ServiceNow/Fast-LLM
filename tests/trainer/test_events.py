@@ -11,6 +11,7 @@ import safetensors
 import torch
 import yaml
 
+from fast_llm.data.dataset.config import StreamingDatasetConfig
 from tests.utils.model_configs import MODEL_CONFIGS
 from tests.utils.redis import redis_batch_producer
 from tests.utils.utils import requires_cuda
@@ -327,8 +328,8 @@ variants = generate_variants(torch.cuda.device_count())
         for v in variants
     ],
 )
-def test_trainer_events_with_streaming(fake_redis_server, variant, run_distributed_script_lean, result_path, request):
-    stream_config, fake_redis_client, fake_redis_server_killer = fake_redis_server
+def test_trainer_events_with_streaming(variant, run_distributed_script, result_path, request):
+    stream_config = StreamingDatasetConfig(port=port)
     test_result_path = result_path / request.node.name
     test_result_path_fast_llm = test_result_path / "fast_llm"
     test_result_path_consumers = test_result_path / "consumers"
@@ -394,7 +395,7 @@ def test_trainer_events_with_streaming(fake_redis_server, variant, run_distribut
         ):
             run_fast_llm_training(
                 model_config=model_config,
-                run_distributed_script=run_distributed_script_lean,
+                run_distributed_script=run_distributed_script,
                 assigned_gpus=fast_llm_assigned_gpus,
             )
     check_events_results(

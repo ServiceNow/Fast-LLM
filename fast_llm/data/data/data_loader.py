@@ -61,7 +61,7 @@ class DistributedDataLoaderWrapper:
         # (pickles) them before sending.
 
         try:
-            data = next(self.iterator)  # may raise StopIteration
+            data = next(self._iterator)  # may raise StopIteration
         except Exception as e:
             data = e
         data = broadcast_object(data, self._process_group, 0)

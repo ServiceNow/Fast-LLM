@@ -1,6 +1,6 @@
+import json
 import logging
 
-import orjson
 import redis
 import torch.distributed
 
@@ -34,7 +34,7 @@ class RedisEventSender:
             payload = {}
         payload.update({"type": msg_type})
 
-        self.client.xadd(REDIS_TRAINING_KEY, {"event": orjson.dumps(payload)})
+        self.client.xadd(REDIS_TRAINING_KEY, {"event": json.dumps(payload)})
 
 
 class TrainerEvents:

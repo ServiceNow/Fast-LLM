@@ -1,4 +1,5 @@
 import logging
+import pathlib
 
 import pytest
 import torch
@@ -8,8 +9,10 @@ from tests.utils.distributed_configs import (
     SIMPLE_TESTING_CONFIG,
     SINGLE_GPU_TESTING_CONFIGS,
 )
-from tests.utils.model_configs import ModelTestingGroup
-from tests.utils.utils import check_subtest_success, requires_cuda, set_subtest_success
+from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
+from tests.utils.run_test_script import do_run_test_script_for_all_models
+from tests.utils.subtest import DistributedTestContext, check_subtest_success, set_subtest_success
+from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -49,27 +52,33 @@ def test_and_compare_model(
         compare_results_for_all_models(config)
 
 
+def _run_model_distributed(
+    test_context: DistributedTestContext, base_path: pathlib.Path, model_testing_config: ModelTestingConfig
+) -> None:
+    # Import all dynamic classes.
+    import fast_llm.cli  # noqa
+
+    for name, config in DISTRIBUTED_TESTING_CONFIGS.items():
+        if model_testing_config.should_skip(config):
+            continue
+        with test_context.subtest(base_path, name, config.num_gpus) as subtest:
+            if subtest.do_run:
+                do_run_test_script_for_all_models(config, model_testing_config, base_path)
+
+
 @requires_cuda
 @pytest.mark.depends_on(on=["test_model_simple[{model_testing_config}]"])
 @pytest.mark.model_testing_group(
     ModelTestingGroup.distributed,
 )
-def test_run_model_distributed(run_distributed_script, model_testing_config, run_test_script_base_path, request):
-    import tests.models.distributed_test_model
-
-    script = [
-        "-m",
-        tests.models.distributed_test_model.__name__,
-        str(run_test_script_base_path),
-        model_testing_config.name,
-    ]
-    if request.config.getoption("distributed_capture"):
-        logger.warning(
-            "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
-        )
-    else:
-        script.append("--no-distributed-capture")
-    run_distributed_script(script, num_gpus=torch.cuda.device_count())
+def test_run_model_distributed(run_parallel_script, model_testing_config, run_test_script_base_path, request):
+    if torch.cuda.device_count() < 2:
+        pytest.skip(f"Not enough GPUs")
+    run_parallel_script(
+        _run_model_distributed,
+        (run_test_script_base_path, model_testing_config),
+        world_size=torch.cuda.device_count(),
+    )
 
 
 # We don't want to depend on `test_model_distributed` because we still want to run this in cas of failure.

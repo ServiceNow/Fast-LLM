@@ -27,14 +27,13 @@ from tests.utils.save_load_configs import (  # isort: skip
 from tests.utils.run_test_script import (  # isort: skip
     compare_results_for_all_models,
     run_distributed_script,
-    run_distributed_script_lean,
     run_test_script_base_path,
     run_test_script_for_all_models,
 )
-from tests.utils.redis import fake_redis_server, stream_config  # isort: skip
 
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
-from tests.utils.utils import result_path, format_resource_report, report_subtest  # isort: skip
+from tests.utils.utils import result_path  # isort: skip
+from tests.utils.subtest import format_resource_report, report_subtest, run_parallel_script  # isort: skip
 
 # Import all dynamic classes.
 import fast_llm.cli  # isort: skip

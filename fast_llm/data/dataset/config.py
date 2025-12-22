@@ -316,6 +316,11 @@ class RedisConfig(Config):
         hint=FieldHint.core,
     )
 
+    def get_client(self):
+        import redis
+
+        return redis.Redis(self.host, self.port)
+
 
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
 class StreamingDatasetConfig[SampleType: LanguageModelSample](RedisConfig, SamplableDatasetConfig[SampleType]):
