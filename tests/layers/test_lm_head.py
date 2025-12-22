@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
+from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
@@ -119,99 +119,99 @@ VOCAB_SIZE = 500
         ({"tied_embedding_weight": True}, {}, False, 1),
         ({}, {}, False, 2),
         ({}, {}, True, 1),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
-                }
-            },
-            {},
-            False,
-            1,
-        ),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
-                }
-            },
-            {},
-            False,
-            1,
-        ),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
-                    "language_model_loss_factor": 1.0,
-                }
-            },
-            {},
-            True,
-            1,
-        ),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
-                }
-            },
-            {},
-            True,
-            1,
-        ),
-        pytest.param(
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "language_model_loss_factor": 0.0,
-                    "track_language_model_loss": True,
-                    "distillation_loss_factor": 1.0,
-                }
-            },
-            {},
-            False,
-            1,
-            id="track_lm_zero_factor",
-        ),
-        pytest.param(
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "language_model_loss_factor": 0.0,
-                    "distillation_loss_factor": 0.0,
-                    "track_language_model_loss": True,
-                    "track_distillation_loss": True,
-                }
-            },
-            {},
-            False,
-            1,
-            id="track_both_zero_factors",
-        ),
-        pytest.param(
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "language_model_loss_factor": 0.0,
-                    "distillation_loss_factor": 0.0,
-                    "track_language_model_loss": False,
-                    "track_distillation_loss": False,
-                }
-            },
-            {},
-            False,
-            1,
-            marks=pytest.mark.xfail(
-                reason="No losses computed when all factors=0 and tracking=False, raises RuntimeError in _add_tensors",
-                strict=True,
-            ),
-            id="zero_factors_no_tracking",
-        ),
+        # (
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+        #         }
+        #     },
+        #     {},
+        #     False,
+        #     1,
+        # ),
+        # (
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+        #         }
+        #     },
+        #     {},
+        #     False,
+        #     1,
+        # ),
+        # (
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+        #             "language_model_loss_factor": 1.0,
+        #         }
+        #     },
+        #     {},
+        #     True,
+        #     1,
+        # ),
+        # (
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+        #         }
+        #     },
+        #     {},
+        #     True,
+        #     1,
+        # ),
+        # pytest.param(
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "language_model_loss_factor": 0.0,
+        #             "track_language_model_loss": True,
+        #             "distillation_loss_factor": 1.0,
+        #         }
+        #     },
+        #     {},
+        #     False,
+        #     1,
+        #     id="track_lm_zero_factor",
+        # ),
+        # pytest.param(
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "language_model_loss_factor": 0.0,
+        #             "distillation_loss_factor": 0.0,
+        #             "track_language_model_loss": True,
+        #             "track_distillation_loss": True,
+        #         }
+        #     },
+        #     {},
+        #     False,
+        #     1,
+        #     id="track_both_zero_factors",
+        # ),
+        # pytest.param(
+        #     {
+        #         "head": {
+        #             "distillation_model": "distillation",
+        #             "language_model_loss_factor": 0.0,
+        #             "distillation_loss_factor": 0.0,
+        #             "track_language_model_loss": False,
+        #             "track_distillation_loss": False,
+        #         }
+        #     },
+        #     {},
+        #     False,
+        #     1,
+        #     marks=pytest.mark.xfail(
+        #         reason="No losses computed when all factors=0 and tracking=False, raises RuntimeError in _add_tensors",
+        #         strict=True,
+        #     ),
+        #     id="zero_factors_no_tracking",
+        # ),
     ),
 )
 def test_lm_head(

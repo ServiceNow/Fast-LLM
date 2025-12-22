@@ -374,7 +374,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         total_loss, grad = None, None
         for loss_name, loss_config in self._config.losses.items():
-            if loss_config.weight_scalor == 0.0 and not loss_config.log_it:
+            if loss_config.factor == 0.0 and not loss_config.log_it:
                 continue
             # losses are returned unscaled but the grads are already scaled
             # we log unscaled losses seperately and the scaled total loss
@@ -382,15 +382,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits,
                 targets,
                 grad_output=(
-                    grad_output * self._loss_coefficient * loss_config.weight_scalor
-                    if grad_output is not None
-                    else None
+                    grad_output * self._loss_coefficient * loss_config.factor if grad_output is not None else None
                 ),
                 group=group,
                 logits_scale_factor=self._config.logits_scale_factor,
                 vocab_parallel=self._vocab_parallel,
             )
-            loss_ = loss_unscaled_ * loss_config.weight_scalor * self._loss_coefficient
+            loss_ = loss_unscaled_ * loss_config.factor * self._loss_coefficient
 
             if losses is not None and loss_config.log_it:
                 losses[self._formatted_loss_names[loss_name]].append(loss_unscaled_.detach())

@@ -552,6 +552,12 @@ _update_and_add_testing_config(
     "mistral_distill_logits",
     updates={
         ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("model", "base_model", "head", "losses"): {
+            "distillation_loss": {
+                "type": "revkl_dist",
+                "factor": 1.0,
+            },
+        },
         ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
@@ -599,7 +605,7 @@ _update_and_add_testing_config(
     "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
-        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
+        ("model", "base_model", "head", "losses", "distillation_loss", "factor"): 0.001,
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
         ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {

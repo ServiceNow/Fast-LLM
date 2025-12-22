@@ -212,9 +212,7 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         with self._set_implicit_default():
             if not self.losses:
                 self.losses = {
-                    "lm_loss": LossConfig._from_dict(
-                        {"type": "cross_entropy_lm_loss", "weight_scalor": 1.0, "log_it": True}
-                    )
+                    "lm_loss": LossConfig._from_dict({"type": "cross_entropy_lm_loss", "factor": 1.0, "log_it": True})
                 }
 
             for loss_config in self.losses.values():

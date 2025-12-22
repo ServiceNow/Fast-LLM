@@ -54,7 +54,7 @@ class LossConfig(Config):
     _name: typing.ClassVar[str]
     _abstract: typing.ClassVar[bool] = True
 
-    weight_scalor: float = Field(
+    factor: float = Field(
         default=1.0,
         hint=FieldHint.core,
         desc="Weight for this loss in the total loss computation.",
@@ -90,8 +90,8 @@ class LossConfig(Config):
         )
 
     def _validate(self):
-        Assert.geq(self.weight_scalor, 0.0)
-        if self.weight_scalor > 0.0:
+        Assert.geq(self.factor, 0.0)
+        if self.factor > 0.0:
             with self._set_implicit_default():
                 if "log_it" not in self._explicit_fields:
                     self.log_it = True
