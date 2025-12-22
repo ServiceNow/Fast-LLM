@@ -284,7 +284,10 @@ def get_test_dataset_with_loss_masking_spans(
     config_only: bool = False,
 ) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
     return _get_test_dataset(
-        DATASET_CACHE / "dataset_with_loss_masking_spans", seed=1234, max_loss_masking_spans=5, config_only=config_only
+        DATASET_CACHE / "dataset_with_loss_masking_spans",
+        seed=1234,
+        max_loss_masking_spans=5,
+        config_only=config_only,
     )
 
 
@@ -319,6 +322,7 @@ def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
+        max_loss_masking_spans=5,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         splits={"training": 969, "validation": 30, "test": 1},
         config_only=config_only,
