@@ -441,6 +441,7 @@ def test_save_and_load_in_parallel(run_parallel_script, run_test_script_base_pat
         _save_and_load_in_parallel,
         (run_test_script_base_path, model_testing_config),
         world_size=2,
+        backend=model_testing_config.distributed_backend,
     )
 
 

@@ -12,6 +12,7 @@ import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
@@ -147,6 +148,10 @@ class ModelTestingConfig:
     def base_model_config_class(self):
         return self.model_config_class.get_base_model_config_class()
 
+    @functools.cached_property
+    def distributed_backend(self):
+        return DistributedBackend(self.config_dict["model"]["distributed"]["backend"])
+
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
         return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
@@ -254,6 +259,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "distributed": {
                 "reproducible_init": True,
                 "timeout": 20,
+                "backend": "nccl",
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},

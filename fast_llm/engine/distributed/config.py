@@ -40,7 +40,7 @@ _BIG_PRIMES = (
 MAX_SEED = 2**64
 
 
-class PhaseType(str, enum.Enum):
+class PhaseType(enum.StrEnum):
     training = "Training"
     validation = "Validation"
     test = "Test"
@@ -49,6 +49,21 @@ class PhaseType(str, enum.Enum):
     @property
     def is_training(self) -> bool:
         return self == PhaseType.training
+
+
+class DistributedBackend(enum.StrEnum):
+    nccl = "nccl"
+    gloo = "gloo"
+
+    @property
+    def process_group_class(self) -> type["ProcessGroup"]:
+        import torch
+
+        return (
+            torch.distributed.ProcessGroupNCCL
+            if self == DistributedBackend.nccl
+            else torch.distributed.ProcessGroupGloo
+        )
 
 
 @dataclasses.dataclass
@@ -199,6 +214,11 @@ class DistributedConfig(Config):
     pipeline_first: bool = Field(
         default=False,
         desc="Prioritize the pipeline groups for placement of nearby ranks over data groups.",
+        hint=FieldHint.expert,
+    )
+    backend: DistributedBackend = Field(
+        default=DistributedBackend.nccl,
+        desc="The distributed backend to use.",
         hint=FieldHint.expert,
     )
     timeout: float = Field(

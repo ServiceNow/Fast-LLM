@@ -8,6 +8,7 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.engine.distributed.config import (
     MAX_SEED,
+    DistributedBackend,
     DistributedConfig,
     DistributedDim,
     DistributedDimNames,
@@ -28,6 +29,7 @@ class ProcessGroupPool:
         timeout: float = 60,
         use_cpu: bool = False,
         init_method: str = "env://",
+        backend: DistributedBackend = DistributedBackend.nccl,
     ):
 
         self._rank = DistributedConfig.default_rank if rank is None else rank
@@ -37,10 +39,12 @@ class ProcessGroupPool:
         )
         self._timeout = timeout
         self._use_cpu = use_cpu
+        self._backend = backend
         self._process_groups = {}
 
         if self._use_cpu:
-            Assert.eq(self._world_size, 1)
+            if backend == DistributedBackend.nccl:
+                Assert.eq(self._world_size, 1)
             self._device = torch.device("cpu")
         else:
             Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
@@ -78,6 +82,10 @@ class ProcessGroupPool:
     def device(self):
         return self._device
 
+    @property
+    def backend(self):
+        return self._backend
+
     def get_process_group(self, global_ranks: range | tuple, group_rank: int) -> ProcessGroup | None:
         """
         Get the requested process group from the pool, or create it if it doesn't exist.
@@ -101,8 +109,7 @@ class ProcessGroupPool:
             if isinstance(global_ranks, range)
             else f"ranks_{"_".join(str(rank) for rank in global_ranks)}"
         )
-
-        group = torch.distributed.ProcessGroupNCCL(
+        group = self._backend.process_group_class(
             torch.distributed.PrefixStore(prefix + "/", self.store),
             group_rank,
             group_size,
@@ -158,6 +165,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 self._config.local_world_size,
                 self._config.timeout,
                 use_cpu,
+                self._config.backend,
             )
         else:
             self._pool = _default_pool
@@ -165,6 +173,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             Assert.eq(self._pool.rank, self._config.rank)
             Assert.geq(self._pool.local_world_size, self._config.local_world_size)
             Assert.eq(self._pool.device.type, "cpu" if use_cpu else "cuda")
+            Assert.eq(self._pool.backend, self._config.backend)
 
         self.world_group = self.add_group(self._config.distributed_dims[DistributedDimNames.world])
         self.data_group = self.add_group(self._config.distributed_dims[DistributedDimNames.data])

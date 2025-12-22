@@ -71,13 +71,14 @@ def _run_model_distributed(
 @pytest.mark.model_testing_group(
     ModelTestingGroup.distributed,
 )
-def test_run_model_distributed(run_parallel_script, model_testing_config, run_test_script_base_path, request):
+def test_run_model_distributed(run_parallel_script, model_testing_config, run_test_script_base_path):
     if torch.cuda.device_count() < 2:
         pytest.skip(f"Not enough GPUs")
     run_parallel_script(
         _run_model_distributed,
         (run_test_script_base_path, model_testing_config),
         world_size=torch.cuda.device_count(),
+        backend=model_testing_config.distributed_backend,
     )
 
 

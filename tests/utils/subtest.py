@@ -13,7 +13,7 @@ import torch
 
 from fast_llm.core.distributed import allreduce_scalar, safe_barrier
 from fast_llm.engine.config_utils.logging import configure_logging
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.utils import Assert, get_and_reset_memory_usage_mib, header
 
@@ -21,10 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 class DistributedTestContext:
-    def __init__(self, do_capture: bool, timeout: float = 20.0, init_method: str = "env://"):
+    def __init__(
+        self,
+        do_capture: bool,
+        timeout: float = 20.0,
+        init_method: str = "env://",
+        backend: DistributedBackend = DistributedBackend.nccl,
+    ) -> None:
         self._do_capture = do_capture
         self._timeout = timeout
         self._init_method = init_method
+        self._backend = backend
 
     def __enter__(self):
         if self._do_capture:
@@ -32,7 +39,9 @@ class DistributedTestContext:
                 "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
             )
 
-        self._pool = ProcessGroupPool(timeout=self._timeout, init_method=self._init_method).__enter__()
+        self._pool = ProcessGroupPool(
+            timeout=self._timeout, init_method=self._init_method, backend=self._backend
+        ).__enter__()
         self._rank = self._pool.rank
         self._world_size = self._pool.world_size
         self._failures = []
@@ -214,6 +223,7 @@ def parallel_worker(
     rank: int,
     world_size: int,
     init_method: str,
+    backend: DistributedBackend,
     do_capture: bool,
     fn: typing.Callable,
     fn_args: typing.Sequence[typing.Any],
@@ -221,7 +231,7 @@ def parallel_worker(
     DistributedConfig.default_rank = rank
     DistributedConfig.default_world_size = world_size
     DistributedConfig.default_local_world_size = world_size
-    with DistributedTestContext(do_capture, 60, init_method) as test_context:
+    with DistributedTestContext(do_capture, 60, init_method, backend) as test_context:
         fn(test_context, *fn_args)
 
 
@@ -232,6 +242,7 @@ def do_run_parallel_script(
     do_capture: bool,
     world_size: int,
     timeout: float = 240,
+    backend: DistributedBackend = DistributedBackend.nccl,
 ):
     if do_capture:
         logger.warning(
@@ -239,10 +250,10 @@ def do_run_parallel_script(
         )
     torch.multiprocessing.spawn(
         parallel_worker,
-        args=(world_size, f"tcp://localhost:{port}", do_capture, fn, fn_args),
+        args=(world_size, f"tcp://localhost:{port}", backend, do_capture, fn, fn_args),
         nprocs=world_size,
         join=False,
-    ).join(timeout, grace_period=63)
+    ).join(timeout, grace_period=5)
 
 
 @pytest.fixture(scope="session")
