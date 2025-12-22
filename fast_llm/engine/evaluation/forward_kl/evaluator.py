@@ -1,3 +1,4 @@
+import gc
 import logging
 import typing
 
@@ -19,17 +20,17 @@ from fast_llm.engine.evaluation.evaluator import (
     EvaluatorSamplingParameters,
     TrainingProgress,
 )
-from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig
+from fast_llm.models.gpt.model import GPTInferenceRunner
 
 logger = logging.getLogger(__name__)
 
 
 class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigType]):
-    _inference_runner: InferenceRunner
+    _inference_runner: GPTInferenceRunner
     _sequence_length: int
     _micro_sequence_length: int
 
@@ -43,7 +44,11 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         phase: PhaseType,
     ) -> None:
         super().setup(distributed, run, multi_stage, runner, data, phase)
-        self._inference_runner = InferenceRunner(self._multi_stage, runner=self._runner)
+
+        # TODO: instead of using GPTInferenceRunner, we should get ourselves
+        # the FastLLMModelConfig instance and build the correct InferenceRunner
+        # with config.get_inference_runner_class()
+        self._inference_runner = GPTInferenceRunner(self._multi_stage, runner=self._runner)
         self._inference_runner.setup()
 
         # Get sequence configuration from training batch config (required for SP support)
@@ -101,10 +106,13 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
 
         traces = datasets.load_dataset(
             self._config.dataset_path,
-            name=self._config.task,
-            split="validation",
+            split=self._config.split,
             trust_remote_code=self._config.trust_remote_code,
         )
+
+        # Shuffle traces for better problem coverage when using num_samples.
+        # Uses a fixed seed for reproducibility across distributed ranks.
+        traces = traces.shuffle(seed=self._config.seed)
 
         # Apply num_samples limit before sharding to preserve semantics
         # (num_samples = total traces across all ranks, not per-rank)
@@ -127,6 +135,10 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
                 continue
             rank_traces.append(trace)
 
+        # Free the HuggingFace dataset - we've extracted what we need
+        del traces
+        gc.collect()
+
         if num_skipped > 0:
             logger.warning(
                 f"Skipped {num_skipped} traces exceeding sequence length {self._sequence_length}"
@@ -144,6 +156,8 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
                     total_kl += trace["teacher_log_prob"] - student_log_probs[j]
                     num_traces += 1
 
+            # Memory cleanup
+            gc.collect()
             torch.cuda.empty_cache()
 
         # Reduce across data group (sum KL and counts from all DP ranks)
@@ -179,22 +193,33 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             completion = trace["completion_tokens"]
             full = prompt + completion
             actual_len = len(full)
-            # Pad to training sequence length (required for SP support)
             pad_len = self._sequence_length - actual_len
 
-            tokens = torch.tensor(full + [0] * pad_len, dtype=torch.int64)
-            samples.append(LanguageModelSample(TokenSample(tokens, lengths=[actual_len])))
+            trace_tokens = torch.tensor(full, dtype=torch.int64)
+            trace_sample = LanguageModelSample(TokenSample(trace_tokens))
+
+            if pad_len > 0:
+                padding_sample = trace_sample.get_padding(pad_len)
+                sample = LanguageModelSample.from_documents([trace_sample, padding_sample])
+            elif pad_len == 0:
+                sample = trace_sample
+            else:
+                raise ValueError("Trace length exceeds sequence length")
+
+            samples.append(sample)
             prompt_lengths.append(len(prompt))
             completion_lengths.append(len(completion))
 
         lm_batch = LanguageModelBatch.from_samples(samples)
 
         # Create batch config with training's sequence settings (required for SP support)
+        # truncate_documents=False enables mask_inputs, which handles -100 padding tokens
         with NoAutoValidate():
             batch_config = GPTBatchConfig(
                 micro_batch_size=len(batch),
                 sequence_length=self._sequence_length,
                 micro_sequence_length=self._micro_sequence_length,
+                truncate_documents=False,
             )
         batch_config.setup(self._distributed.config)
         batch_config.validate()
@@ -229,11 +254,18 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             prompt_len = prompt_lengths[idx]
             completion_len = completion_lengths[idx]
 
+            # Extract only the slice we need, then compute on it
             pred_logits = logits[idx, prompt_len - 1 : prompt_len + completion_len - 1]
             targets = lm_batch.tokens.tokens[idx, prompt_len : prompt_len + completion_len].to(device)
 
             log_probs = F.log_softmax(pred_logits.float(), dim=-1)
             token_log_probs = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
             results.append(token_log_probs.sum().item())
+
+            # Explicitly delete intermediates
+            del pred_logits, targets, log_probs, token_log_probs
+
+        # Explicitly delete the large logits tensor
+        del logits, kwargs, preprocessed, lm_batch
 
         return results
