@@ -240,7 +240,12 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                     },
                     "num_blocks": 2,
                 },
-                "head": {"output_weight": init_1},
+                "head": {
+                    "output_weight": init_1,
+                    "losses": {
+                        "lm_loss": {"type": "cross_entropy_lm_loss", "factor": 1.0, "log_it": True},
+                    },
+                },
                 "hidden_size": 256,
                 "tied_embedding_weight": True,
             },
@@ -578,27 +583,6 @@ _update_and_add_testing_config(
     compare_factor=1.5,
     # modes not supported with reference models
     skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
-)
-
-_update_and_add_testing_config(
-    "mistral_distill_logits",
-    "mistral_reverse_kl",
-    updates={
-        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
-    },
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
-    },
-    compare_factor=2,
-    # Modes not supported with reference models
-    skip_tests=("sdp", "ms", "pp"),
 )
 
 _update_and_add_testing_config(

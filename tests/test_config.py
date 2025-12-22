@@ -147,6 +147,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     "normalization": {"implementation": "triton"},
                 },
                 "num_blocks": 12,
+                "head": {},
             },
             "hidden_size": 512,
             "tied_embedding_weight": False,

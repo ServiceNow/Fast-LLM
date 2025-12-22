@@ -3,17 +3,16 @@ import dataclasses
 import logging
 import typing
 
-import torch
-
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.core.distributed import ProcessGroup
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    pass
+    import torch
+
+    from fast_llm.core.distributed import ProcessGroup
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +31,13 @@ def _format_name(name: str) -> str:
 
 @dataclasses.dataclass
 class Targets:
-    lm_target: torch.Tensor | None = None
-    dpo_target: torch.Tensor | None = None
-    loss_mask: torch.Tensor | None = None
+    lm_target: "torch.Tensor | None" = None
+    dpo_target: "torch.Tensor | None" = None
+    loss_mask: "torch.Tensor | None" = None
     chosen_spans: list[list[tuple[int, int]]] | None = None
     rejected_spans: list[list[tuple[int, int]]] | None = None
-    reference_model_logits: torch.Tensor | None = None
-    dpo_reference_model_logits: torch.Tensor | None = None
+    reference_model_logits: "torch.Tensor | None" = None
+    dpo_reference_model_logits: "torch.Tensor | None" = None
 
     def has_any_target(self) -> bool:
         return any(getattr(self, field.name) is not None for field in dataclasses.fields(self))
@@ -70,14 +69,14 @@ class LossConfig(Config):
     @abc.abstractmethod
     def compute_loss(
         self,
-        logits: torch.Tensor,
+        logits: "torch.Tensor",
         target: Targets,
         grad_output: float | None = None,
-        group: ProcessGroup | None = None,
+        group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
     def get_loss_def(self, name: str, count: int = 1, prediction_distance: int | None = None) -> LossDef:
@@ -124,14 +123,14 @@ class CrossEntropyLMLossConfig(LossConfig):
 
     def compute_loss(
         self,
-        logits: torch.Tensor,
+        logits: "torch.Tensor",
         targets: Targets,
         grad_output: float | None = None,
-        group: ProcessGroup | None = None,
+        group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 
         target = targets.lm_target
@@ -176,13 +175,13 @@ class ForwardKLLossConfig(LossConfig):
 
     def compute_loss(
         self,
-        logits: torch.Tensor,
+        logits: "torch.Tensor",
         targets: Targets,
         grad_output: float | None = None,
-        group: ProcessGroup | None = None,
+        group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import forward_kl_forward_backward
 
         target = targets.reference_model_logits
@@ -218,13 +217,13 @@ class ReverseKLLossConfig(LossConfig):
 
     def compute_loss(
         self,
-        logits: torch.Tensor,
+        logits: "torch.Tensor",
         targets: Targets,
         grad_output: float | None = None,
-        group: ProcessGroup | None = None,
+        group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import reverse_kl_forward_backward
 
         # Use distillation_target for KL losses
@@ -261,12 +260,12 @@ class DPOLossConfig(LossConfig):
 
     def compute_loss(
         self,
-        logits: torch.Tensor,
+        logits: "torch.Tensor",
         targets: Targets,
         grad_output: float | None = None,
-        group: ProcessGroup | None = None,
+        group: "ProcessGroup" = None,
         **kwargs,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.dpo import compute_dpo_loss
 
         return compute_dpo_loss(

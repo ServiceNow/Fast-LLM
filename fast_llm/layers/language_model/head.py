@@ -100,6 +100,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
+        assert self._config.losses, "At least one loss must be configured."
         self._formatted_loss_names = {
             loss_name: loss_config.get_formatted_name(loss_name, self._prediction_distance)
             for loss_name, loss_config in self._config.losses.items()
