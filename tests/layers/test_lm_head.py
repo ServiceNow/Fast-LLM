@@ -9,7 +9,7 @@ from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.language_model.lm_head_losses import LossConfig
+from fast_llm.layers.language_model.lm_head_losses import LanguageModelLossConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
@@ -69,7 +69,7 @@ def _lm_head(
     grad_output: float = 1.0,
     logit_scale_factor: float = 1.0,
     logit_z_loss=0.0,
-    losses: dict[str, LossConfig],
+    losses: dict[str, LanguageModelLossConfig],
 ):
     hidden = torch.rms_norm(
         input_.to(rms_weight.dtype),
@@ -80,7 +80,7 @@ def _lm_head(
     logits = torch.nn.functional.linear(hidden, logit_weight).float()
 
     if "dist_loss" in losses:
-        if losses["dist_loss"].type == "revkl_dist":
+        if losses["dist_loss"].type == "reverse_kl_distillation":
             Assert.eq(logits.shape, target.shape)
             loss = _reverse_kl_loss(
                 (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
@@ -89,7 +89,7 @@ def _lm_head(
             loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].factor))
             # Return scaled loss
             return loss * losses["dist_loss"].factor, None
-        elif losses["dist_loss"].type == "fkl_dist":
+        elif losses["dist_loss"].type == "forward_kl_distillation":
             Assert.eq(logits.shape, target.shape)
             loss = _kl_loss(
                 (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
@@ -137,14 +137,12 @@ VOCAB_SIZE = 500
         #             "distillation_model": "distillation",
         #             "losses": {
         #                 "lm_loss": {
-        #                     "type": "cross_entropy_lm_loss",
+        #                     "type": "cross_entropy",
         #                     "weight_scalor": 0.0,
-        #                     "log_it": False,
         #                 },
         #                 "dist_loss": {
         #                     "type": "cross_entropy_dist",  # TODO: Not implemented yet
         #                     "weight_scalor": 1.0,
-        #                     "log_it": True,
         #                 }
         #             }
         #         }
@@ -153,87 +151,18 @@ VOCAB_SIZE = 500
         #     False,
         #     1,
         # ),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "losses": {
-                        "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
-                            "factor": 0.0,
-                            "log_it": False,
-                        },
-                        "dist_loss": {
-                            "type": "revkl_dist",
-                            "factor": 1.0,
-                            "log_it": True,
-                        },
-                    },
-                }
-            },
-            {},
-            False,
-            1,
-        ),
-        # Skip - CE distillation not implemented
-        # (
-        #     {
-        #         "head": {
-        #             "distillation_model": "distillation",
-        #             "losses": {
-        #                 "lm_loss": {
-        #                     "type": "cross_entropy_lm_loss",
-        #                     "weight_scalor": 1.0,
-        #                     "log_it": True,
-        #                 },
-        #                 "dist_loss": {
-        #                     "type": "cross_entropy_dist",  # TODO
-        #                     "weight_scalor": 1.0,
-        #                     "log_it": True,
-        #                 }
-        #             }
-        #         }
-        #     },
-        #     {},
-        #     True,
-        #     1,
-        # ),
-        (
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "losses": {
-                        "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
-                            "factor": 0.0,
-                            "log_it": False,
-                        },
-                        "dist_loss": {
-                            "type": "revkl_dist",
-                            "factor": 1.0,
-                            "log_it": True,
-                        },
-                    },
-                }
-            },
-            {},
-            True,
-            1,
-        ),
         pytest.param(
             {
                 "head": {
                     "distillation_model": "distillation",
                     "losses": {
                         "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
+                            "type": "cross_entropy",
                             "factor": 0.0,
-                            "log_it": True,  # tracking even with zero weight
                         },
                         "dist_loss": {
-                            "type": "revkl_dist",
+                            "type": "reverse_kl_distillation",
                             "factor": 1.0,
-                            "log_it": True,
                         },
                     },
                 }
@@ -249,37 +178,12 @@ VOCAB_SIZE = 500
                     "distillation_model": "distillation",
                     "losses": {
                         "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
+                            "type": "cross_entropy",
                             "factor": 0.0,
-                            "log_it": True,  # tracking with zero weight
                         },
                         "dist_loss": {
-                            "type": "revkl_dist",
+                            "type": "reverse_kl_distillation",
                             "factor": 0.0,
-                            "log_it": True,  # tracking with zero weight
-                        },
-                    },
-                }
-            },
-            {},
-            False,
-            1,
-            id="track_both_zero_factors",
-        ),
-        pytest.param(
-            {
-                "head": {
-                    "distillation_model": "distillation",
-                    "losses": {
-                        "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
-                            "factor": 0.0,
-                            "log_it": False,  # not tracking with zero weight
-                        },
-                        "dist_loss": {
-                            "type": "revkl_dist",
-                            "factor": 0.0,
-                            "log_it": False,  # not tracking with zero weight
                         },
                     },
                 }
@@ -288,24 +192,22 @@ VOCAB_SIZE = 500
             False,
             1,
             marks=pytest.mark.xfail(
-                reason="No losses computed when all factors=0 and log_it=False",
+                reason="Cannot track both losses with zero factor",
                 strict=True,
             ),
-            id="zero_factors_no_tracking",
+            id="track_both_zero_factors",
         ),
         pytest.param(
             {
                 "head": {
                     "losses": {
                         "lm_loss": {
-                            "type": "cross_entropy_lm_loss",
+                            "type": "cross_entropy",
                             "factor": 1.0,
-                            "log_it": False,  # not tracking with zero weight
                         },
                         "dist_loss": {
-                            "type": "revkl_dist",
+                            "type": "reverse_kl_distillation",
                             "factor": 1.0,
-                            "log_it": True,  # not tracking with zero weight
                         },
                     },
                 }
@@ -332,10 +234,9 @@ def test_lm_head(
         "normalization": {"type": "rms_norm"},
         "losses": {
             "lm_loss": {
-                "type": "cross_entropy_lm_loss",
+                "type": "cross_entropy",
                 "implementation": cross_entropy_impl,
                 "factor": 1.0,
-                "log_it": True,
             }
         },
     }
@@ -480,9 +381,8 @@ def test_lm_head(
 
         # Get expected loss names from the loss configs
         for loss_name, loss_config in head._config.losses.items():
-            if loss_config.log_it:
-                formatted_name = loss_config.get_formatted_name(loss_name, prediction_distance)
-                expected_loss_keys.add(formatted_name)
+            formatted_name = loss_config.get_formatted_name(loss_name, prediction_distance)
+            expected_loss_keys.add(formatted_name)
 
         if ref_z_loss is not None:
             expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")

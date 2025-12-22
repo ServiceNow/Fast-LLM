@@ -9,7 +9,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequence
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.language_model.lm_head_losses import LossConfig
+from fast_llm.layers.language_model.lm_head_losses import LanguageModelLossConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -135,7 +135,7 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Configuration for the final normalization layer.",
         hint=FieldHint.architecture,
     )
-    losses: dict[str, LossConfig] = Field(
+    losses: dict[str, LanguageModelLossConfig] = Field(
         default_factory=dict,
         desc="A dictionary of loss names and their configurations.",
         hint=FieldHint.core,

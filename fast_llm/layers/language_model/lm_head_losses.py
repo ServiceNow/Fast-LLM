@@ -44,10 +44,10 @@ class Targets:
 
 
 @config_class(registry=True)
-class LossConfig(Config):
+class LanguageModelLossConfig(Config):
     """
     Losses canm register themselves
-    using @config_class(dynamic_type={LossConfig: "loss_type_name"})
+    using @config_class(dynamic_type= {LanguageModelLossConfig: "loss_type_name"})
     """
 
     _name: typing.ClassVar[str]
@@ -58,12 +58,6 @@ class LossConfig(Config):
         hint=FieldHint.core,
         desc="Weight for this loss in the total loss computation.",
         valid=check_field(Assert.geq, 0.0),
-    )
-
-    log_it: bool = Field(
-        default=True,
-        hint=FieldHint.optional,
-        desc="Whether to log this loss.",
     )
 
     @abc.abstractmethod
@@ -90,10 +84,6 @@ class LossConfig(Config):
 
     def _validate(self):
         Assert.geq(self.factor, 0.0)
-        if self.factor > 0.0:
-            with self._set_implicit_default():
-                if "log_it" not in self._explicit_fields:
-                    self.log_it = True
         super()._validate()
 
     def get_formatted_name(self, name=None, prediction_distance: int | None = None) -> str:
@@ -103,8 +93,8 @@ class LossConfig(Config):
         return name
 
 
-@config_class(dynamic_type={LossConfig: "cross_entropy_lm_loss"})
-class CrossEntropyLMLossConfig(LossConfig):
+@config_class(dynamic_type={LanguageModelLossConfig: "cross_entropy"})
+class CrossEntropyLMLossConfig(LanguageModelLossConfig):
     _name: typing.ClassVar[str] = "CE"
     _abstract: typing.ClassVar[bool] = False
 
@@ -159,8 +149,8 @@ class CrossEntropyLMLossConfig(LossConfig):
         )
 
 
-@config_class(dynamic_type={LossConfig: "fkl_dist"})
-class ForwardKLLossConfig(LossConfig):
+@config_class(dynamic_type={LanguageModelLossConfig: "forward_kl_distillation"})
+class ForwardKLLossConfig(LanguageModelLossConfig):
     """Forward KL divergence KL(p||q) for distillation (mode-covering)."""
 
     _name: typing.ClassVar[str] = "FwdKL"
@@ -201,8 +191,8 @@ class ForwardKLLossConfig(LossConfig):
         )
 
 
-@config_class(dynamic_type={LossConfig: "revkl_dist"})
-class ReverseKLLossConfig(LossConfig):
+@config_class(dynamic_type={LanguageModelLossConfig: "reverse_kl_distillation"})
+class ReverseKLLossConfig(LanguageModelLossConfig):
     """Reverse KL divergence KL(q||p) for distillation (mode-seeking)."""
 
     _name: typing.ClassVar[str] = "RevKL"
@@ -244,8 +234,8 @@ class ReverseKLLossConfig(LossConfig):
         )
 
 
-@config_class(dynamic_type={LossConfig: "dpo"})
-class DPOLossConfig(LossConfig):
+@config_class(dynamic_type={LanguageModelLossConfig: "dpo"})
+class DPOLossConfig(LanguageModelLossConfig):
     """Direct Preference Optimization (DPO) loss for alignment."""
 
     _name: typing.ClassVar[str] = "DPO"

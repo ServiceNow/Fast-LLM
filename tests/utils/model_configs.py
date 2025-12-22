@@ -243,7 +243,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "head": {
                     "output_weight": init_1,
                     "losses": {
-                        "lm_loss": {"type": "cross_entropy_lm_loss", "factor": 1.0, "log_it": True},
+                        "lm_loss": {"type": "cross_entropy", "factor": 1.0},
                     },
                 },
                 "hidden_size": 256,
@@ -559,7 +559,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "head", "distillation_model"): "teacher",
         ("model", "base_model", "head", "losses"): {
             "distillation_loss": {
-                "type": "revkl_dist",
+                "type": "reverse_kl_distillation",
                 "factor": 1.0,
             },
         },
