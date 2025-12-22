@@ -29,10 +29,15 @@ from torch.distributed import (  # noqa
 logger = logging.getLogger(__name__)
 
 
-def add_ephemeral_timeout(group: ProcessGroup, timeout: float | None = None) -> None:
+@contextlib.contextmanager
+def set_timeout(group: ProcessGroup | None, timeout: float | None = None):
     if group is not None and timeout is not None:
-        # TODO: Only works for nccl?
-        group._add_ephemeral_timeout(datetime.timedelta(seconds=timeout))
+        timeout_ = group.options._timeout
+        group.set_timeout(datetime.timedelta(seconds=timeout))
+        yield
+        group.set_timeout(timeout_)
+    else:
+        yield
 
 
 def broadcast(
@@ -43,8 +48,8 @@ def broadcast(
     opts = torch.distributed.BroadcastOptions()
     opts.rootRank = src
     opts.rootTensor = 0
-    add_ephemeral_timeout(group, timeout)
-    work = group.broadcast([tensor], opts)
+    with set_timeout(group, timeout):
+        work = group.broadcast([tensor], opts)
     if async_op:
         return work
     else:
@@ -55,7 +60,7 @@ def broadcast(
 def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name: str) -> None:
     # A utility function to check for tensor-parallel (or other) mismatches.
     all_tensors = tensor.new_empty((group.size(),) + tensor.shape)
-    all_gather_into_tensor(all_tensors, tensor, group)
+    all_gather_into_tensor(all_tensors, tensor.unsqueeze(0), group)
 
     mismatches = (all_tensors != tensor).any(dim=0)
     num_mismatches = mismatches.sum().item()
@@ -84,8 +89,8 @@ def allreduce_scalar(
 ) -> float | int:
     if group:
         value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
-        add_ephemeral_timeout(group, timeout)
-        torch.distributed.all_reduce(value, op=op, group=group)
+        with set_timeout(group, timeout):
+            torch.distributed.all_reduce(value, op=op, group=group)
         return value.item()
     else:
         return value
@@ -99,9 +104,9 @@ def all_gather_scalar(
 ):
     if group:
         value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
-        add_ephemeral_timeout(group, timeout)
         output_tensor = value.new_empty((group.size(),))
-        torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
+        with set_timeout(group, timeout):
+            torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
         return output_tensor.tolist()
     else:
         return value
@@ -147,6 +152,12 @@ def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None
 
 def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
     assert group is not None
+    if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
+        # send not supported for gloo on GPU.
+        tensor_cpu = tensor.cpu()
+        group.send([tensor_cpu], dst, tag).wait()
+        tensor.copy_(tensor_cpu)
+        return None
     work = group.send([tensor], dst, tag)
     if async_op:
         return work
@@ -157,6 +168,12 @@ def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, ta
 
 def recv(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
     assert group is not None
+    if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
+        # recv not supported for gloo on GPU.
+        tensor_cpu = tensor.cpu()
+        group.recv([tensor_cpu], src, tag).wait()
+        tensor.copy_(tensor_cpu)
+        return None
     work = group.recv([tensor], src, tag)
     if async_op:
         return work
