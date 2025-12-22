@@ -1,8 +1,8 @@
 """
-Tool to recursively discover datasets in a directory and generate a concatenated dataset config.
+Tool to recursively discover datasets in a directory and generate a blended dataset config.
 
 This tool walks through a directory tree, identifies datasets by their fast_llm_config*.yaml files,
-and generates a config file that concatenates all discovered datasets.
+and generates a config file that blends all discovered datasets with weights proportional to token counts.
 """
 
 import argparse
@@ -159,25 +159,22 @@ def get_dataset_num_tokens(config_path: pathlib.Path) -> int:
     return _get_config_num_tokens(config_dict, config_path.parent)
 
 
-def create_concatenated_config(
+def create_blended_config(
     config_files: list[pathlib.Path],
-    name: str = "concatenated",
+    name: str = "blended",
     use_file_refs: bool = True,
-    use_blended: bool = False,
 ) -> dict:
     """
-    Create a concatenated or blended dataset config from a list of config files.
+    Create a blended dataset config from a list of config files.
 
     Args:
         config_files: List of paths to dataset config files
-        name: Name for the concatenated/blended dataset
+        name: Name for the blended dataset
         use_file_refs: If True, use file references (type: file, path: ...).
                       If False, inline the full configs.
-        use_blended: If True, create a blended dataset with weights proportional to token counts.
-                    If False, create a concatenated dataset.
 
     Returns:
-        Dictionary representing a concatenated or blended dataset config
+        Dictionary representing a blended dataset config
     """
     if len(config_files) == 0:
         raise ValueError("No config files provided")
@@ -205,33 +202,26 @@ def create_concatenated_config(
         else:
             datasets.append(load_dataset_config(config_file))
 
-    if use_blended:
-        # Get token counts for each dataset to calculate weights
-        logger.info("Calculating token counts for blended dataset weights...")
-        weights = []
-        for config_file in config_files:
-            try:
-                num_tokens = get_dataset_num_tokens(config_file)
-                weights.append(num_tokens / 1e9)
-                logger.info(f"  - {config_file.name}: {num_tokens:,} tokens")
-            except Exception as e:
-                logger.error(f"Failed to get token count for {config_file}: {e}")
-                # Use weight of 1 as fallback
-                weights.append(1)
-                logger.warning(f"  - {config_file.name}: using fallback weight of 1")
+    # Get token counts for each dataset to calculate weights
+    logger.info("Calculating token counts for blended dataset weights...")
+    weights = []
+    for config_file in config_files:
+        try:
+            num_tokens = get_dataset_num_tokens(config_file)
+            weights.append(num_tokens / 1e9)
+            logger.info(f"  - {config_file.name}: {num_tokens:,} tokens")
+        except Exception as e:
+            logger.error(f"Failed to get token count for {config_file}: {e}")
+            # Use weight of 1 as fallback
+            weights.append(1)
+            logger.warning(f"  - {config_file.name}: using fallback weight of 1")
 
-        return {
-            "type": "blended",
-            "name": name,
-            "datasets": datasets,
-            "weights": weights,
-        }
-    else:
-        return {
-            "type": "concatenated",
-            "name": name,
-            "datasets": datasets,
-        }
+    return {
+        "type": "blended",
+        "name": name,
+        "datasets": datasets,
+        "weights": weights,
+    }
 
 
 def group_configs_by_directory(
@@ -294,10 +284,9 @@ def create_directory_config(
     tree: dict[pathlib.Path, set[pathlib.Path]],
     root_dir: pathlib.Path,
     use_file_refs: bool,
-    use_blended: bool = False,
 ) -> tuple[dict, int] | None:
     """
-    Recursively create a config for a directory and its subdirectories.
+    Recursively create a blended config for a directory and its subdirectories.
 
     Args:
         directory: Current directory to process
@@ -305,7 +294,6 @@ def create_directory_config(
         tree: Directory tree structure
         root_dir: Root directory
         use_file_refs: Whether to use file references
-        use_blended: Whether to create blended datasets instead of concatenated
 
     Returns:
         Tuple of (config dictionary, total token count), or None if directory has no datasets
@@ -341,7 +329,7 @@ def create_directory_config(
     # Then, recursively process subdirectories
     if directory in tree:
         for subdir in sorted(tree[directory]):
-            subdir_result = create_directory_config(subdir, groups, tree, root_dir, use_file_refs, use_blended)
+            subdir_result = create_directory_config(subdir, groups, tree, root_dir, use_file_refs)
             if subdir_result is not None:
                 subdir_config, subdir_token_count = subdir_result
                 subdir_datasets.append(subdir_config)
@@ -355,19 +343,12 @@ def create_directory_config(
             local_name = f"{str(rel_path).replace('/', '_').replace('.', root_dir.name)}_local"
             local_total_tokens = sum(local_tokens)
 
-            if use_blended:
-                local_group = {
-                    "type": "blended",
-                    "name": local_name,
-                    "datasets": local_datasets,
-                    "weights": local_tokens,
-                }
-            else:
-                local_group = {
-                    "type": "concatenated",
-                    "name": local_name,
-                    "datasets": local_datasets,
-                }
+            local_group = {
+                "type": "blended",
+                "name": local_name,
+                "datasets": local_datasets,
+                "weights": local_tokens,
+            }
             all_datasets = [local_group] + subdir_datasets
             all_tokens = [local_total_tokens] + subdir_tokens
         else:
@@ -389,48 +370,38 @@ def create_directory_config(
         # Don't wrap a single dataset
         return all_datasets[0], total_tokens
 
-    # Multiple datasets - create concatenated or blended config
+    # Multiple datasets - create blended config
     rel_path = directory.relative_to(root_dir) if directory != root_dir else pathlib.Path(".")
     name = str(rel_path).replace("/", "_").replace(".", root_dir.name)
 
-    if use_blended:
-        # Use the collected token counts as weights
-        return {
-            "type": "blended",
-            "name": name,
-            "datasets": all_datasets,
-            "weights": all_tokens,
-        }, total_tokens
-    else:
-        return {
-            "type": "concatenated",
-            "name": name,
-            "datasets": all_datasets,
-        }, total_tokens
+    # Use the collected token counts as weights
+    return {
+        "type": "blended",
+        "name": name,
+        "datasets": all_datasets,
+        "weights": all_tokens,
+    }, total_tokens
 
 
 def create_hierarchical_config(
     root_dir: pathlib.Path,
     use_file_refs: bool = True,
-    use_blended: bool = False,
     ignore_paths: list[pathlib.Path] | None = None,
 ) -> dict:
     """
-    Create a hierarchical concatenated or blended dataset config from all datasets in a directory.
+    Create a hierarchical blended dataset config from all datasets in a directory.
 
-    Datasets in the same directory are grouped together, and these groups are nested
-    following the directory structure.
+    Datasets in the same directory are grouped together with weights proportional to token counts,
+    and these groups are nested following the directory structure.
 
     Args:
         root_dir: Root directory to search for datasets
         use_file_refs: If True, use file references (type: file).
                       If False, inline the full configs.
-        use_blended: If True, create blended datasets with weights proportional to token counts.
-                    If False, create concatenated datasets.
         ignore_paths: List of paths to ignore (can be absolute or relative to root_dir)
 
     Returns:
-        Dictionary representing the hierarchical dataset config
+        Dictionary representing the hierarchical blended dataset config
     """
     logger.info(f"Discovering datasets in {root_dir}...")
 
@@ -455,15 +426,14 @@ def create_hierarchical_config(
     tree = build_directory_tree(groups, root_dir)
 
     # Create hierarchical config
-    result = create_directory_config(root_dir, groups, tree, root_dir, use_file_refs, use_blended)
+    result = create_directory_config(root_dir, groups, tree, root_dir, use_file_refs)
 
     if result is None:
         raise ValueError("Failed to create config")
 
     config, total_tokens = result
 
-    if use_blended:
-        logger.info(f"Total tokens across all datasets: {total_tokens:,}")
+    logger.info(f"Total tokens across all datasets: {total_tokens:,}")
 
     return config
 
@@ -477,10 +447,6 @@ class DiscoverDatasetsConfig(RunnableConfig):
     directory: pathlib.Path = Field(desc="Directory to search for datasets recursively")
     output: pathlib.Path = Field(desc="Output path for the generated config YAML file")
     use_file_refs: bool = Field(default=True, desc="Use file references (type: file) instead of inlining configs")
-    use_blended: bool = Field(
-        default=False,
-        desc="Create blended datasets with weights proportional to token counts instead of concatenated datasets",
-    )
     ignore_paths: list[pathlib.Path] = Field(
         default_factory=list,
         desc="List of paths to ignore during dataset discovery (can be absolute or relative to directory)",
@@ -501,7 +467,6 @@ class DiscoverDatasetsConfig(RunnableConfig):
         config = create_hierarchical_config(
             self.directory.resolve(),
             use_file_refs=self.use_file_refs,
-            use_blended=self.use_blended,
             ignore_paths=self.ignore_paths,
         )
 
@@ -526,19 +491,12 @@ def main():
     """
     Command-line entry point.
     """
-    parser = argparse.ArgumentParser(
-        description="Discover datasets and generate hierarchical concatenated or blended config"
-    )
+    parser = argparse.ArgumentParser(description="Discover datasets and generate hierarchical blended config")
     parser.add_argument("directory", type=pathlib.Path, help="Directory to search for datasets recursively")
     parser.add_argument(
         "-o", "--output", type=pathlib.Path, required=True, help="Output path for the generated config YAML file"
     )
     parser.add_argument("--no-file-refs", action="store_true", help="Inline configs instead of using file references")
-    parser.add_argument(
-        "--blended",
-        action="store_true",
-        help="Create blended datasets with weights proportional to token counts instead of concatenated datasets",
-    )
     parser.add_argument(
         "--ignore",
         type=pathlib.Path,
@@ -552,16 +510,11 @@ def main():
     # Configure logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    # Require --blended flag since concatenated datasets don't work properly
-    if not args.blended:
-        parser.error("--blended flag is required (concatenated datasets are currently not supported)")
-
     # Create and run the config
     config = DiscoverDatasetsConfig(
         directory=args.directory,
         output=args.output,
         use_file_refs=not args.no_file_refs,
-        use_blended=args.blended,
         ignore_paths=args.ignore_paths or [],
     )
     config.run()
