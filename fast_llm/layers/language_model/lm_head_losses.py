@@ -53,7 +53,7 @@ class LanguageModelLossConfig(Config):
     _name: typing.ClassVar[str]
     _abstract: typing.ClassVar[bool] = True
 
-    factor: float = Field(
+    weight: float = Field(
         default=1.0,
         hint=FieldHint.core,
         desc="Weight for this loss in the total loss computation.",
@@ -83,7 +83,7 @@ class LanguageModelLossConfig(Config):
         )
 
     def _validate(self):
-        Assert.geq(self.factor, 0.0)
+        Assert.geq(self.weight, 0.0)
         super()._validate()
 
     def get_formatted_name(self, name=None, prediction_distance: int | None = None) -> str:

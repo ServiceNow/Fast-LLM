@@ -86,18 +86,18 @@ def _lm_head(
                 (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
             )
             # Apply distillation_loss_factor to grad_output for backward
-            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].factor))
+            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].weight))
             # Return scaled loss
-            return loss * losses["dist_loss"].factor, None
+            return loss * losses["dist_loss"].weight, None
         elif losses["dist_loss"].type == "forward_kl_distillation":
             Assert.eq(logits.shape, target.shape)
             loss = _kl_loss(
                 (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
             )
             # Apply distillation_loss_factor to grad_output for backward
-            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].factor))
+            loss.backward(torch.full_like(loss, grad_output * losses["dist_loss"].weight))
             # Return scaled loss
-            return loss * losses["dist_loss"].factor, None
+            return loss * losses["dist_loss"].weight, None
 
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
@@ -105,8 +105,8 @@ def _lm_head(
     # Language model loss (cross-entropy with hard labels)
     loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
     # Apply language_model_loss_factor
-    loss.backward(torch.full_like(loss, grad_output * losses["lm_loss"].factor))
-    return loss * losses["lm_loss"].factor, z_loss
+    loss.backward(torch.full_like(loss, grad_output * losses["lm_loss"].weight))
+    return loss * losses["lm_loss"].weight, z_loss
 
 
 SEQUENCE_LENGTH = 200
@@ -158,11 +158,11 @@ VOCAB_SIZE = 500
                     "losses": {
                         "lm_loss": {
                             "type": "cross_entropy",
-                            "factor": 0.0,
+                            "weight": 0.0,
                         },
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
-                            "factor": 1.0,
+                            "weight": 1.0,
                         },
                     },
                 }
@@ -179,11 +179,11 @@ VOCAB_SIZE = 500
                     "losses": {
                         "lm_loss": {
                             "type": "cross_entropy",
-                            "factor": 0.0,
+                            "weight": 0.0,
                         },
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
-                            "factor": 0.0,
+                            "weight": 0.0,
                         },
                     },
                 }
@@ -203,11 +203,11 @@ VOCAB_SIZE = 500
                     "losses": {
                         "lm_loss": {
                             "type": "cross_entropy",
-                            "factor": 1.0,
+                            "weight": 1.0,
                         },
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
-                            "factor": 1.0,
+                            "weight": 1.0,
                         },
                     },
                 }
@@ -236,7 +236,7 @@ def test_lm_head(
             "lm_loss": {
                 "type": "cross_entropy",
                 "implementation": cross_entropy_impl,
-                "factor": 1.0,
+                "weight": 1.0,
             }
         },
     }

@@ -216,7 +216,7 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                         "lm_loss": LanguageModelLossConfig._from_dict(
                             {
                                 "type": "cross_entropy",
-                                "factor": 1.0,
+                                "weight": 1.0,
                             }
                         )
                     }
