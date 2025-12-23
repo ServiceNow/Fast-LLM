@@ -383,7 +383,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits,
                 targets,
                 grad_output=(
-                    grad_output * self._loss_coefficient * loss_config.factor if grad_output is not None else None
+                    (grad_output * self._loss_coefficient * loss_config.factor if grad_output is not None else None)
+                    if loss_config.factor != 0.0
+                    else None
                 ),
                 group=group,
                 logits_scale_factor=self._config.logits_scale_factor,
