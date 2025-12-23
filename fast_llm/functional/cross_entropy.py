@@ -264,7 +264,7 @@ def _reverse_kl_forward_backward(
     log_ratio = distributed_log_softmax(logits, group=group)
 
     student_probs = log_ratio.exp()
-    log_ratio.sub_(teacher_log_probs)  # In-place: log_ratio = student_log_probs - teacher_log_probs
+    log_ratio = log_ratio - teacher_log_probs  # In-place: log_ratio = student_log_probs - teacher_log_probs
     del teacher_log_probs
     # Compute loss terms: student_probs * log_ratio, then sum over vocab
     # This is equivalent to kl_div(..., log_target=True) but more memory efficient
@@ -287,14 +287,14 @@ def _reverse_kl_forward_backward(
         expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
             all_reduce(expected, op=ReduceOp.SUM, group=group)
-        log_ratio.sub_(expected)  # In-place: log_ratio -= expected
-        log_ratio.mul_(student_probs)  # In-place: now log_ratio is grad_base
+        log_ratio = log_ratio - expected
+        log_ratio = log_ratio * student_probs
         del student_probs  # Free after use
 
         if loss_mask is not None:
-            log_ratio.mul_(loss_mask.to(logits.dtype).unsqueeze(-1))  # In-place
+            log_ratio = log_ratio * loss_mask.to(logits.dtype).unsqueeze(-1)
 
-        log_ratio.mul_(grad_output / valid_tokens)  # In-place
+        log_ratio = log_ratio * (grad_output / valid_tokens)
         grad = log_ratio.to(logits.dtype)
     else:
         grad = None
