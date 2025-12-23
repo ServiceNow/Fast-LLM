@@ -38,6 +38,7 @@ _compare_layer_match = get_config(
         # Biases have higher absolute error.
         (None, "bias"): get_config(3e-3, 5e-5),
         (None, "gradient"): get_config(3e-3, 3e-5),
+        (None, "loss"): get_config(1e-5, 1e-6),
     }
 )
 
@@ -60,6 +61,7 @@ _bf16_compare = get_config(
         (None, "bw"): get_config(1.5e-2, 1e-5),
         (None, "bias"): get_config(2e-2, 1e-3),
         (None, "gradient"): get_config(2e-2, 5e-5),
+        (None, "loss"): get_config(2e-4, 2e-4),
     }
 )
 
@@ -71,6 +73,7 @@ _fp16_compare = get_config(
         (None, "bw"): get_config(3e-3, 1e-5, scale=2**16),
         (None, "bias"): get_config(3e-3, 1e-4, scale=2**16),
         (None, "gradient"): get_config(3e-3, 5e-5, scale=2**16),
+        (None, "loss"): get_config(1e-4, 1e-4),
     }
 )
 

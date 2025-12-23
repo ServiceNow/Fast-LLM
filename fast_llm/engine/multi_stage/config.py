@@ -115,6 +115,12 @@ class StageConfig(Config):
         hint=FieldHint.logging,
         valid=check_field(Assert.geq, 0),
     )
+    debug_losses: int = Field(
+        default=0,
+        desc="Log loss values after reduction.",
+        hint=FieldHint.logging,
+        valid=check_field(Assert.geq, 0),
+    )
     debug_param_update: int = Field(
         default=0,
         desc="Log the parameters after update.",

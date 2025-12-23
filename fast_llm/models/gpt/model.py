@@ -158,6 +158,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
+        total_valid_tokens: int | None = None,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         assert self._is_setup
@@ -277,6 +278,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                         or self._config.decoder.block.distillation_model is not None
                     ):
                         kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                        # Pass total_valid_tokens for correct gradient accumulation
+                        if total_valid_tokens is not None:
+                            kwargs[LanguageModelKwargs.total_valid_tokens] = total_valid_tokens
                     labels = torch.where(loss_mask, labels, -100)
 
                 kwargs[LanguageModelKwargs.labels] = (

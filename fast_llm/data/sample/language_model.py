@@ -100,21 +100,41 @@ class LanguageModelBatch(Batch):
         chosen_spans: RangeBatch | None = None,
         rejected_spans: RangeBatch | None = None,
         image_patches: PatchBatch | None = None,
+        valid_tokens: int | None = None,
     ):
         self.tokens = tokens
         self.loss_masking_spans = loss_masking_spans
         self.chosen_spans = chosen_spans
         self.rejected_spans = rejected_spans
         self.image_patches = image_patches
+        self.valid_tokens = valid_tokens
 
     @classmethod
     def from_samples(cls, samples: typing.Iterable[LanguageModelSample]) -> typing.Self:
+        samples = list(samples)
+        token_batch = TokenBatch.from_samples([sample.tokens for sample in samples])
+        loss_masking_spans = _merge_optional(
+            RangeBatch.from_samples, [sample.loss_masking_spans for sample in samples]
+        )
+
+        # Calculate valid tokens for this batch (used for gradient accumulation weighting)
+        valid_tokens = None
+        if loss_masking_spans is not None:
+            batch_size, sequence_length = token_batch.tokens.shape
+            # Start with all tokens
+            valid_tokens = batch_size * sequence_length
+            # Subtract masked tokens
+            for sample_ranges in loss_masking_spans.ranges:
+                for begin, end in sample_ranges:
+                    valid_tokens -= end - begin
+
         return cls(
-            TokenBatch.from_samples([sample.tokens for sample in samples]),
-            _merge_optional(RangeBatch.from_samples, [sample.loss_masking_spans for sample in samples]),
+            token_batch,
+            loss_masking_spans,
             _merge_optional(RangeBatch.from_samples, [sample.chosen_spans for sample in samples]),
             _merge_optional(RangeBatch.from_samples, [sample.rejected_spans for sample in samples]),
             _merge_optional(PatchBatch.from_samples, [sample.image_patches for sample in samples]),
+            valid_tokens,
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -124,6 +144,7 @@ class LanguageModelBatch(Batch):
             _crop_optional(self.chosen_spans, begin, end),
             _crop_optional(self.rejected_spans, begin, end),
             _crop_optional(self.image_patches, begin, end),
+            valid_tokens=None,  # Cropped batches don't have valid token counts
         )
 
     def to_device_(self, device: "torch.device | str"):
