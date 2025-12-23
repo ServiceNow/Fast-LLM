@@ -34,8 +34,6 @@ class Targets:
     lm_target: "torch.Tensor | None" = None
     dpo_target: "torch.Tensor | None" = None
     loss_mask: "torch.Tensor | None" = None
-    chosen_spans: list[list[tuple[int, int]]] | None = None
-    rejected_spans: list[list[tuple[int, int]]] | None = None
     reference_model_logits: "torch.Tensor | None" = None
     dpo_reference_model_logits: "torch.Tensor | None" = None
 
@@ -64,12 +62,12 @@ class LanguageModelLossConfig(Config):
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        target: Targets,
+        targets: Targets,
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
-        **kwargs,
+        kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
@@ -119,7 +117,7 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
-        **kwargs,
+        kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 
@@ -145,7 +143,6 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
             logits_scale_factor=logits_scale_factor,
             teacher_softmax_temperature=self.teacher_softmax_temperature,
             target_format=TargetFormat.labels,
-            **kwargs,
         )
 
 
@@ -170,7 +167,8 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
-        **kwargs,
+        vocab_parallel: bool = False,
+        kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import forward_kl_forward_backward
 
@@ -187,7 +185,6 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
             logits_scale_factor=logits_scale_factor,
             teacher_softmax_temperature=self.teacher_softmax_temperature,
             target_format=TargetFormat.logits,
-            **kwargs,
         )
 
 
@@ -212,7 +209,8 @@ class ReverseKLLossConfig(LanguageModelLossConfig):
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
-        **kwargs,
+        vocab_parallel: bool = False,
+        kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import reverse_kl_forward_backward
 
@@ -230,7 +228,6 @@ class ReverseKLLossConfig(LanguageModelLossConfig):
             logits_scale_factor=logits_scale_factor,
             teacher_softmax_temperature=self.teacher_softmax_temperature,
             target_format=TargetFormat.logits,
-            **kwargs,
         )
 
 
@@ -254,16 +251,22 @@ class DPOLossConfig(LanguageModelLossConfig):
         targets: Targets,
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
-        **kwargs,
+        logits_scale_factor: float | None = None,
+        vocab_parallel: bool = False,
+        kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.dpo import compute_dpo_loss
+        from fast_llm.layers.language_model.config import LanguageModelKwargs
+
+        chosen_spans = kwargs.get(LanguageModelKwargs.chosen_spans)
+        rejected_spans = kwargs.get(LanguageModelKwargs.rejected_spans)
 
         return compute_dpo_loss(
             logits=logits,
             targets=targets.dpo_target,
             reference_model_logits=targets.dpo_reference_model_logits,
-            chosen_spans=targets.chosen_spans,
-            rejected_spans=targets.rejected_spans,
+            chosen_spans=chosen_spans,
+            rejected_spans=rejected_spans,
             beta=self.beta,
             grad_output=grad_output,
         )

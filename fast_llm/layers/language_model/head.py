@@ -182,14 +182,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             dpo_target,
             reference_model_logits,
             loss_mask,
-            chosen_spans,
-            rejected_spans,
             dpo_reference_model_logits,
-        ) = (None, None, None, None, None, None, None)
+        ) = (None, None, None, None, None)
         if self._config.enable_dpo:
             dpo_target = kwargs.get(LanguageModelKwargs.labels)
-            chosen_spans = kwargs.get(LanguageModelKwargs.chosen_spans)
-            rejected_spans = kwargs.get(LanguageModelKwargs.rejected_spans)
             dpo_reference_model_logits = (kwargs.get(f"{self._config.dpo_reference_model}_logits"),)
         else:
             if self._config.distillation_model is not None:
@@ -230,8 +226,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             dpo_target=dpo_target,
             lm_target=lm_target,
             loss_mask=loss_mask,
-            chosen_spans=chosen_spans,
-            rejected_spans=rejected_spans,
             reference_model_logits=reference_model_logits,
             dpo_reference_model_logits=dpo_reference_model_logits,
         )
@@ -302,8 +296,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     dpo_target=dpo_target_,
                     reference_model_logits=reference_model_logits_,
                     loss_mask=loss_mask_,
-                    chosen_spans=targets.chosen_spans,
-                    rejected_spans=targets.rejected_spans,
                     dpo_reference_model_logits=targets.dpo_reference_model_logits,
                 )
                 loss_, grad_ = self._logits_loss_forward_backward(
@@ -390,6 +382,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 group=group,
                 logits_scale_factor=self._config.logits_scale_factor,
                 vocab_parallel=self._vocab_parallel,
+                kwargs=kwargs,
             )
             loss_ = loss_unscaled_ * loss_config.weight * self._loss_coefficient
 
