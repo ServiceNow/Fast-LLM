@@ -25,8 +25,7 @@ class PeftConfig(Config):
         self,
         module: "LinearBase",
         enabled: bool,
-        out_channel_begin: int | None = None,
-        out_channel_end: int | None = None,
+        out_channel_ranges: tuple[tuple[int | None, int | None], ...] | None = None,
     ) -> "LinearLike":
         return self.apply_other(module)
 
@@ -75,8 +74,7 @@ class LoRAConfig(PeftConfig):
         self,
         module: "LinearBase",
         enabled: bool,
-        out_channel_begin: int | None = None,
-        out_channel_end: int | None = None,
+        out_channel_ranges: tuple[tuple[int | None, int | None], ...] | None = None,
     ) -> "LinearLike":
         if not enabled:
             return self.apply_other(module)

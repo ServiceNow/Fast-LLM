@@ -15,7 +15,9 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.layers.common.linear.config import LinearConfig
+from fast_llm.layers.common.peft.config import PeftConfig
+from fast_llm.tensor import ConcatenatedParameterMeta, ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -173,3 +175,70 @@ class InputParallelLinear(LinearBase):
     def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:  # noqa
         # TODO: Needs grad_bias as input too?
         return input_parallel_linear_backward(grad_output, context)
+
+
+def concatenate_linear_layers[
+    T: LinearBase
+](
+    layers: tuple[T, ...],
+    configs: tuple[LinearConfig, ...],
+    *,
+    concatenate_input_dim: bool = False,
+    dim_name: str | None = None,
+    default_apply_peft: bool | tuple[bool, ...] = False,
+    peft: PeftConfig | None,
+) -> T:
+    # TODO: Simplify.
+    # All biases must be either enabled or disabled. TODO: Allow non-constant.
+    enable_bias = layers[0].bias is not None
+    # Concatenate on `in_dim` (instead of `out_dim`)
+    if concatenate_input_dim:
+        # TODO: Support this case? (needs one bias instead of a concatenation)
+        assert not enable_bias
+
+    cls = type(layers[0])
+    # Should not already be wrapped with Peft.
+    Assert.incl(cls, (Linear, InputParallelLinear, OutputParallelLinear))
+    # The concatenated dimension must be at index zero.
+    transposed_weight = concatenate_input_dim
+    for layer in layers:
+        Assert.eq(layer._transposed_weight, transposed_weight)
+        Assert.is_(type(layer), cls)
+        Assert.eq(layer.bias is not None, enable_bias)
+
+    if cls in (InputParallelLinear, OutputParallelLinear):
+        for layer in layers[1:]:
+            Assert.is_(layer._parallel_dim, layers[0]._parallel_dim)
+            Assert.eq(layer._sequence_parallel, layers[0]._sequence_parallel)
+        args = {"parallel_dim": layers[0]._parallel_dim, "sequence_parallel": layers[0]._sequence_parallel}
+    else:
+        args = {}
+
+    # TODO: Original parameters won't get names.
+    weight = ConcatenatedParameterMeta.from_metas(tuple(layer.weight for layer in layers), dim_name=dim_name)
+    bias = (
+        ConcatenatedParameterMeta.from_metas(tuple(layer.bias for layer in layers), dim_name=dim_name)
+        if enable_bias
+        else None
+    )
+
+    out = cls(weight, bias, transposed_weight=transposed_weight, **args)
+    if peft is not None:
+        if isinstance(default_apply_peft, bool):
+            default_apply_peft = (default_apply_peft,) * len(layers)
+        apply_peft = [
+            default if config.apply_peft is None else config.apply_peft
+            for config, default in zip(configs, default_apply_peft, strict=True)
+        ]
+        if len(set(apply_peft)) == 1:
+            out_channel_ranges = None
+            enabled = apply_peft[0]
+        else:
+            enabled = True
+            out_channel_ranges = tuple(
+                split_range
+                for split_range, apply_peft_ in zip(weight.dims[0].get_split_ranges(True), apply_peft)
+                if apply_peft_
+            )
+        out = peft.apply_linear(out, enabled, out_channel_ranges=out_channel_ranges)
+    return out
