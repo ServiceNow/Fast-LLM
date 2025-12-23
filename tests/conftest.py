@@ -47,7 +47,18 @@ def pytest_addoption(parser):
     group = parser.getgroup("fast_llm")
     group.addoption("--skip-slow", action="store_true")
     group.addoption("--show-skipped", action="store_true")
-    group.addoption("--show-gpu-memory", type=int, default=10)
+    group.addoption(
+        "--show-gpu-memory",
+        type=int,
+        default=10,
+        help="Show resource usage stats for the tests and distributed subtests with the highest GPU memory usage.",
+    )
+    group.addoption(
+        "--show-durations",
+        type=int,
+        default=None,
+        help="Show resource usage stats for the slowest tests and distributed subtests.",
+    )
     group.addoption("--no-distributed-capture", dest="distributed_capture", action="store_false")
     group.addoption("--models", nargs="*")
     group.addoption(
@@ -228,6 +239,16 @@ def pytest_terminal_summary(terminalreporter):
     )
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
         terminalreporter.write_line(format_resource_report(nodeid, resource_reports[nodeid]))
+
+    if (show_durations := terminalreporter.config.getoption("--show-durations")) is not None:
+        terminalreporter.write_sep("=", "Highest durations", bold=True)
+        sorted_nodeids = sorted(
+            resource_reports.keys(),
+            key=lambda nodeid: (resource_reports[nodeid]["duration"] if "duration" in resource_reports[nodeid] else 0),
+            reverse=True,
+        )
+        for nodeid in sorted_nodeids[:show_durations]:
+            terminalreporter.write_line(format_resource_report(nodeid, resource_reports[nodeid]))
 
 
 def pytest_runtest_call(item: pytest.Function):
