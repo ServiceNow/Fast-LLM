@@ -65,7 +65,6 @@ class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDataset
     def _load_config(self) -> SampledDatasetConfig[SampleType]:
         assert self.path.is_file(), f"File {self.path} does not exist."
         config = yaml.safe_load(self.path.open("r"))
-        Assert.eq(config.keys(), {"config", "metadata"})
         if config.keys() == {"config", "metadata"}:
             # Newer format with metadata
             config = config["config"]
