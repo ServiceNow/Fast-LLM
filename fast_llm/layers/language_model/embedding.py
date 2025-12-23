@@ -106,6 +106,9 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
 
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
+                if isinstance(group, torch.distributed.ProcessGroupGloo):
+                    # Somehow needed is some rare cases to prevent autograd from complaining, ex. in `stp2_pp2s1_bf4`.
+                    embeddings = embeddings.clone()
         else:
             if self._sequence_parallel:
                 token_ids = split(token_ids, group=group, dim=0)
