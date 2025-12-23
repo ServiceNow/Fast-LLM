@@ -2,7 +2,9 @@ import logging
 import typing
 
 import torch
+import transformers.cache_utils
 import transformers.modeling_outputs
+import transformers.utils
 
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.sample.patch import PatchBatch
@@ -51,13 +53,13 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         image_sizes: torch.Tensor | None = None,
-        past_key_values=None,
+        past_key_values: transformers.cache_utils.Cache | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
+        labels: torch.Tensor | None = None,
         use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
+        cache_position: torch.Tensor | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs: typing.Unpack[transformers.utils.TransformersKwargs],
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
             self._get_batch(input_ids, pixel_values, attention_mask, position_ids, image_sizes),
@@ -65,9 +67,9 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
             inputs_embeds,
             labels,
             use_cache,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
+            cache_position,
+            logits_to_keep,
+            **kwargs,
         )
 
     def _get_batch(
