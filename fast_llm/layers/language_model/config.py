@@ -209,12 +209,22 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         return LanguageModelHead
 
     def _validate(self) -> None:
+        with self._set_implicit_default():
+            if not self.losses:
+                if "losses" not in self._explicit_fields:
+                    self.losses = {
+                        "lm_loss": LanguageModelLossConfig._from_dict(
+                            {
+                                "type": "cross_entropy",
+                                "factor": 1.0,
+                            }
+                        )
+                    }
         for loss_config in self.losses.values():
-            if "dist" in loss_config.type:
+            if "distillation" in loss_config.type:
                 assert self.distillation_model is not None, "Distillation loss requires a distillation model."
         super()._validate()
         assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
-        # Note: Default loss is handled at runtime in head.py if losses dict is empty
 
     @property
     def max_prediction_distance(self) -> int:
