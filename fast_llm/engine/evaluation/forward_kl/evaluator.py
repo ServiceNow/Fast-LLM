@@ -1,12 +1,13 @@
+import dataclasses
 import gc
+import hashlib
 import logging
-import typing
 
 import torch
 import torch.nn.functional as F
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.core.distributed import all_reduce, safe_barrier
+from fast_llm.core.distributed import allreduce_scalar, safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.sample.language_model import LanguageModelBatch, LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
@@ -29,7 +30,92 @@ from fast_llm.models.gpt.model import GPTInferenceRunner
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class TraceTensors:
+    tokens: torch.Tensor  # (num_traces, sequence_length)
+    prompt_lens: torch.Tensor  # (num_traces,)
+    completion_lens: torch.Tensor  # (num_traces,)
+    problem_indices: torch.Tensor  # (num_traces,)
+    teacher_log_probs: torch.Tensor  # (num_traces,)
+    corrects: torch.Tensor  # (num_traces,)
+    num_problems: int
+    num_skipped: int
+
+    def __len__(self) -> int:
+        return self.tokens.shape[0]
+
+    @classmethod
+    def empty(cls, sequence_length: int, device: torch.device, num_skipped: int = 0) -> "TraceTensors":
+        return cls(
+            tokens=torch.empty((0, sequence_length), dtype=torch.int64, device=device),
+            prompt_lens=torch.empty(0, dtype=torch.int64, device=device),
+            completion_lens=torch.empty(0, dtype=torch.int64, device=device),
+            problem_indices=torch.empty(0, dtype=torch.int64, device=device),
+            teacher_log_probs=torch.empty(0, dtype=torch.float64, device=device),
+            corrects=torch.empty(0, dtype=torch.bool, device=device),
+            num_problems=0,
+            num_skipped=num_skipped,
+        )
+
+    @classmethod
+    def from_traces(
+        cls,
+        traces: list[dict],
+        sequence_length: int,
+        device: torch.device,
+    ) -> "TraceTensors":
+        pid_to_idx: dict[str, int] = {}
+        valid_traces: list[tuple[list[int], list[int], str, float, bool]] = []
+        num_skipped = 0
+
+        for t in traces:
+            prompt, completion = t["prompt_tokens"], t["completion_tokens"]
+            if len(prompt) + len(completion) > sequence_length:
+                num_skipped += 1
+                continue
+            valid_traces.append((prompt, completion, t["problem_id"], t["teacher_log_prob"], t["correct"]))
+
+        if not valid_traces:
+            return cls.empty(sequence_length, device, num_skipped)
+
+        n = len(valid_traces)
+        tokens = torch.zeros((n, sequence_length), dtype=torch.int64, device=device)
+        prompt_lens = torch.empty(n, dtype=torch.int64, device=device)
+        completion_lens = torch.empty(n, dtype=torch.int64, device=device)
+        problem_indices = torch.empty(n, dtype=torch.int64, device=device)
+        teacher_log_probs = torch.empty(n, dtype=torch.float64, device=device)
+        corrects = torch.empty(n, dtype=torch.bool, device=device)
+
+        for i, (prompt, completion, pid, teacher_lp, correct) in enumerate(valid_traces):
+            seq = prompt + completion
+            tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.int64, device=device)
+            prompt_lens[i] = len(prompt)
+            completion_lens[i] = len(completion)
+
+            if pid not in pid_to_idx:
+                pid_to_idx[pid] = len(pid_to_idx)
+            problem_indices[i] = pid_to_idx[pid]
+            teacher_log_probs[i] = teacher_lp
+            corrects[i] = correct
+
+        return cls(
+            tokens=tokens,
+            prompt_lens=prompt_lens,
+            completion_lens=completion_lens,
+            problem_indices=problem_indices,
+            teacher_log_probs=teacher_log_probs,
+            corrects=corrects,
+            num_problems=len(pid_to_idx),
+            num_skipped=num_skipped,
+        )
+
+
 class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigType]):
+    """Shard by PROBLEM (not trace) so each rank gets complete problems.
+
+    This allows computing per-problem IS metrics locally, then reducing scalars.
+    """
+
     _inference_runner: GPTInferenceRunner
     _sequence_length: int
     _micro_sequence_length: int
@@ -44,17 +130,10 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         phase: PhaseType,
     ) -> None:
         super().setup(distributed, run, multi_stage, runner, data, phase)
-
-        # TODO: instead of using GPTInferenceRunner, we should get ourselves
-        # the FastLLMModelConfig instance and build the correct InferenceRunner
-        # with config.get_inference_runner_class()
         self._inference_runner = GPTInferenceRunner(self._multi_stage, runner=self._runner)
         self._inference_runner.setup()
-
-        # Get sequence configuration from training batch config (required for SP support)
         self._sequence_length = self._batch_config.sequence_length
         self._micro_sequence_length = self._batch_config.micro_sequence_length
-
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
@@ -66,157 +145,116 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         run_index: int | None = None,
     ) -> EvaluationMetrics:
         assert self._is_setup
-
         if self._config.dataset_path is None:
             return EvaluationMetrics()
 
         safe_barrier(self._distributed.world_group, f"forward_kl_{self._name} begin")
-
-        forward_kl, num_traces, num_skipped = self._compute_forward_kl()
-
+        metrics = self._evaluate()
         safe_barrier(self._distributed.world_group, f"forward_kl_{self._name} end")
 
-        if num_traces == 0:
+        if metrics["num_traces"] == 0:
             return EvaluationMetrics()
 
-        metrics = {
-            f"validation.{self._name}": {
-                "forward_kl": forward_kl,
-                "num_traces": num_traces,
-            }
-        }
-
-        if training_progress is not None:
-            metrics[f"validation.{self._name}"]["iteration"] = training_progress.completed_steps
-
-        formatted = f"Forward KL ({self._name}): {forward_kl:.4f} ({num_traces} traces)"
-        if num_skipped > 0:
-            formatted += f" [{num_skipped} skipped]"
+        formatted = (
+            f"IS Eval ({self._name}): "
+            f"acc={metrics['is_accuracy']:.4f}, "
+            f"ESS={metrics['mean_ess']:.2f}/{metrics['samples_per_problem']:.1f}, "
+            f"({metrics['num_problems']} problems, {metrics['num_traces']} traces)"
+        )
+        if metrics["num_skipped"] > 0:
+            formatted += f" [{metrics['num_skipped']} skipped]"
         log_main_rank(formatted)
 
-        return EvaluationMetrics(metrics, formatted)
+        return EvaluationMetrics(
+            {f"validation.{self._name}": {k: v for k, v in metrics.items() if k != "num_skipped"}},
+            formatted,
+        )
 
     @torch.inference_mode()
-    def _compute_forward_kl(self) -> tuple[float, int, int]:
+    def _evaluate(self) -> dict[str, float]:
+        device = self._distributed.device
+        data = self._load_traces(device)
+
+        if len(data) == 0:
+            return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
+
+        batch_size = self._config.batch_size
+        student_log_probs_batches: list[torch.Tensor] = []
+
+        for i in range(0, len(data), batch_size):
+            batch_log_probs = self._compute_batch_log_probs(
+                data.tokens[i : i + batch_size],
+                data.prompt_lens[i : i + batch_size],
+                data.completion_lens[i : i + batch_size],
+            )
+            if batch_log_probs is not None:
+                student_log_probs_batches.append(batch_log_probs)
+
+        if not student_log_probs_batches:  # non-last PP rank
+            return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
+
+        student_log_probs = torch.cat(student_log_probs_batches)
+        log_w = student_log_probs - data.teacher_log_probs
+
+        log_sum_all = self._scatter_logsumexp(log_w, data.problem_indices, data.num_problems)
+        log_w_correct = log_w.masked_fill(~data.corrects, float("-inf"))
+        log_sum_correct = self._scatter_logsumexp(log_w_correct, data.problem_indices, data.num_problems)
+
+        # IS accuracy; nan_to_num handles -inf - -inf
+        accuracy = (log_sum_correct - log_sum_all).exp().nan_to_num(0.0)
+
+        # ESS = exp(2*logsumexp(log_w) - logsumexp(2*log_w))
+        log_sum_sq = self._scatter_logsumexp(2 * log_w, data.problem_indices, data.num_problems)
+        ess = (2 * log_sum_all - log_sum_sq).exp().clamp(min=0.0)
+
+        return self._reduce_metrics(
+            accuracy.sum().item(),
+            ess.sum().item(),
+            data.num_problems,
+            len(data),
+            data.num_skipped,
+        )
+
+    def _load_traces(self, device: torch.device) -> TraceTensors:
         import datasets
 
-        # Shard traces across data-parallel ranks
-        data_rank = self._distributed.config.data_rank
-        data_parallel = self._distributed.config.data_parallel
-
-        traces = datasets.load_dataset(
+        ds = datasets.load_dataset(
             self._config.dataset_path,
             split=self._config.split,
             trust_remote_code=self._config.trust_remote_code,
         )
 
-        # Shuffle traces for better problem coverage when using num_samples.
-        # Uses a fixed seed for reproducibility across distributed ranks.
-        traces = traces.shuffle(seed=self._config.seed)
+        # Shuffle needed because traces are sorted by problem
+        if self._config.num_samples and len(ds) > self._config.num_samples:
+            ds = ds.shuffle(seed=self._config.seed).select(range(self._config.num_samples))
 
-        # Apply num_samples limit before sharding to preserve semantics
-        # (num_samples = total traces across all ranks, not per-rank)
-        if self._config.num_samples and len(traces) > self._config.num_samples:
-            traces = traces.select(range(self._config.num_samples))
+        dp_rank = self._distributed.config.data_rank
+        dp_size = self._distributed.config.data_parallel
 
-        # Shard across DP ranks (lazy operation - just changes which indices are accessible)
-        traces = traces.shard(num_shards=data_parallel, index=data_rank)
+        def belongs_to_shard(example: dict) -> bool:
+            h = hashlib.md5(example["problem_id"].encode(), usedforsecurity=False).digest()
+            return int.from_bytes(h[:4], "little") % dp_size == dp_rank
 
-        total_kl = 0.0
-        num_traces = 0
-        num_skipped = 0
+        ds = ds.filter(belongs_to_shard)
+        traces = list(ds)
 
-        # Collect traces for this rank, filtering by length
-        rank_traces = []
-        for trace in traces:
-            trace_len = len(trace["prompt_tokens"]) + len(trace["completion_tokens"])
-            if trace_len > self._sequence_length:
-                num_skipped += 1
-                continue
-            rank_traces.append(trace)
-
-        # Free the HuggingFace dataset - we've extracted what we need
-        del traces
+        del ds
         gc.collect()
 
-        if num_skipped > 0:
-            logger.warning(
-                f"Skipped {num_skipped} traces exceeding sequence length {self._sequence_length}"
-            )
+        return TraceTensors.from_traces(traces, self._sequence_length, device)
 
-        # Process traces in batches
-        for i in range(0, len(rank_traces), self._config.batch_size):
-            batch = rank_traces[i : i + self._config.batch_size]
+    def _compute_batch_log_probs(
+        self,
+        tokens: torch.Tensor,
+        prompt_lens: torch.Tensor,
+        completion_lens: torch.Tensor,
+    ) -> torch.Tensor | None:
+        batch_size = tokens.shape[0]
+        lm_batch = self._prepare_batch(tokens, prompt_lens, completion_lens)
 
-            student_log_probs = self._compute_batch_log_probs(batch)
-
-            # student_log_probs is None on non-last pipeline ranks (they don't have logits)
-            if student_log_probs is not None:
-                for j, trace in enumerate(batch):
-                    total_kl += trace["teacher_log_prob"] - student_log_probs[j]
-                    num_traces += 1
-
-            # Memory cleanup
-            gc.collect()
-            torch.cuda.empty_cache()
-
-        # Reduce across data group (sum KL and counts from all DP ranks)
-        if self._distributed.data_group:
-            total_kl_tensor = torch.tensor([total_kl], dtype=torch.float64, device=self._distributed.device)
-            num_traces_tensor = torch.tensor([num_traces], dtype=torch.int64, device=self._distributed.device)
-            num_skipped_tensor = torch.tensor([num_skipped], dtype=torch.int64, device=self._distributed.device)
-            all_reduce(total_kl_tensor, group=self._distributed.data_group)
-            all_reduce(num_traces_tensor, group=self._distributed.data_group)
-            all_reduce(num_skipped_tensor, group=self._distributed.data_group)
-            total_kl = total_kl_tensor.item()
-            num_traces = int(num_traces_tensor.item())
-            num_skipped = int(num_skipped_tensor.item())
-
-        # Reduce across pipeline group (last PP rank has the values, others have zeros)
-        if self._distributed.pipeline_group:
-            total_kl_tensor = torch.tensor([total_kl], dtype=torch.float64, device=self._distributed.device)
-            num_traces_tensor = torch.tensor([num_traces], dtype=torch.int64, device=self._distributed.device)
-            all_reduce(total_kl_tensor, group=self._distributed.pipeline_group)
-            all_reduce(num_traces_tensor, group=self._distributed.pipeline_group)
-            total_kl = total_kl_tensor.item()
-            num_traces = int(num_traces_tensor.item())
-
-        return total_kl / num_traces if num_traces > 0 else 0.0, num_traces, num_skipped
-
-    def _compute_batch_log_probs(self, batch: list[dict[str, typing.Any]]) -> list[float] | None:
-        samples = []
-        prompt_lengths = []
-        completion_lengths = []
-
-        for trace in batch:
-            prompt = trace["prompt_tokens"]
-            completion = trace["completion_tokens"]
-            full = prompt + completion
-            actual_len = len(full)
-            pad_len = self._sequence_length - actual_len
-
-            trace_tokens = torch.tensor(full, dtype=torch.int64)
-            trace_sample = LanguageModelSample(TokenSample(trace_tokens))
-
-            if pad_len > 0:
-                padding_sample = trace_sample.get_padding(pad_len)
-                sample = LanguageModelSample.from_documents([trace_sample, padding_sample])
-            elif pad_len == 0:
-                sample = trace_sample
-            else:
-                raise ValueError("Trace length exceeds sequence length")
-
-            samples.append(sample)
-            prompt_lengths.append(len(prompt))
-            completion_lengths.append(len(completion))
-
-        lm_batch = LanguageModelBatch.from_samples(samples)
-
-        # Create batch config with training's sequence settings (required for SP support)
-        # truncate_documents=False enables mask_inputs, which handles -100 padding tokens
         with NoAutoValidate():
             batch_config = GPTBatchConfig(
-                micro_batch_size=len(batch),
+                micro_batch_size=batch_size,
                 sequence_length=self._sequence_length,
                 micro_sequence_length=self._micro_sequence_length,
                 truncate_documents=False,
@@ -224,48 +262,111 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         batch_config.setup(self._distributed.config)
         batch_config.validate()
 
-        # Get preprocessing metadata using GPTBatchConfig (enables proper SP splitting)
         preprocessed_meta = self._multi_stage.base_model.preprocess_meta(batch_config, PhaseType.inference)
-
         preprocessed = self._multi_stage.base_model.preprocess_batch(
-            lm_batch,
-            preprocessed_meta,
-            phase=PhaseType.inference,
-            iteration=0,
+            lm_batch, preprocessed_meta, phase=PhaseType.inference, iteration=0
         )
 
+        # Loop runs through micro-sequences; final kwargs has the logits
         for input_, kwargs in preprocessed:
             kwargs["global_logits"] = True
             self._inference_runner.forward(input_, kwargs)
 
-        # With pipeline parallelism, only the last stage has logits.
-        # Other stages participate in the forward pass but don't compute logits.
-        if "logits" not in kwargs:
+        if "logits" not in kwargs:  # non-last PP stage
             return None
 
         logits = kwargs["logits"]
-
         if kwargs.get(AttentionKwargs.sequence_first, False):
             logits = logits.transpose(0, 1)
 
-        results = []
         device = logits.device
-        for idx in range(len(batch)):
-            prompt_len = prompt_lengths[idx]
-            completion_len = completion_lengths[idx]
+        seq_len = logits.shape[1]
 
-            # Extract only the slice we need, then compute on it
-            pred_logits = logits[idx, prompt_len - 1 : prompt_len + completion_len - 1]
-            targets = lm_batch.tokens.tokens[idx, prompt_len : prompt_len + completion_len].to(device)
+        pred_logits = logits[:, :-1, :].contiguous()
+        targets = tokens[:, 1:].contiguous().to(device)
 
-            log_probs = F.log_softmax(pred_logits.float(), dim=-1)
-            token_log_probs = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
-            results.append(token_log_probs.sum().item())
+        # Mask: completion predictions are at [prompt_len-1, prompt_len+completion_len-1)
+        mask = self._create_completion_mask(prompt_lens, completion_lens, seq_len - 1)
 
-            # Explicitly delete intermediates
-            del pred_logits, targets, log_probs, token_log_probs
+        ce_loss = F.cross_entropy(
+            pred_logits.view(-1, pred_logits.size(-1)),
+            targets.view(-1),
+            reduction="none",
+        ).view(batch_size, seq_len - 1)
 
-        # Explicitly delete the large logits tensor
+        results = -(ce_loss * mask).sum(dim=1)
+
         del logits, kwargs, preprocessed, lm_batch
 
-        return results
+        return results.to(torch.float64)
+
+    def _prepare_batch(
+        self,
+        tokens: torch.Tensor,
+        prompt_lens: torch.Tensor,
+        completion_lens: torch.Tensor,
+    ) -> LanguageModelBatch:
+        samples = []
+        for i in range(tokens.shape[0]):
+            seq_len = int(prompt_lens[i].item()) + int(completion_lens[i].item())
+            sample = LanguageModelSample(TokenSample(tokens[i, :seq_len].cpu()))
+
+            pad_len = self._sequence_length - seq_len
+            if pad_len > 0:
+                sample = LanguageModelSample.from_documents([sample, sample.get_padding(pad_len)])
+
+            samples.append(sample)
+
+        return LanguageModelBatch.from_samples(samples)
+
+    def _create_completion_mask(
+        self,
+        prompt_lens: torch.Tensor,
+        completion_lens: torch.Tensor,
+        seq_len: int,
+    ) -> torch.Tensor:
+        device = prompt_lens.device
+        positions = torch.arange(seq_len, device=device)
+        start = (prompt_lens - 1).unsqueeze(1)
+        end = (prompt_lens + completion_lens - 1).unsqueeze(1)
+        return (positions >= start) & (positions < end)
+
+    def _reduce_metrics(
+        self, sum_accuracy: float, sum_ess: float, num_problems: int, num_traces: int, num_skipped: int
+    ) -> dict[str, float]:
+        group = self._distributed.world_group
+        sum_accuracy = allreduce_scalar(sum_accuracy, group=group)
+        sum_ess = allreduce_scalar(sum_ess, group=group)
+        num_problems = int(allreduce_scalar(num_problems, torch.int64, group=group))
+        num_traces = int(allreduce_scalar(num_traces, torch.int64, group=group))
+        num_skipped = int(allreduce_scalar(num_skipped, torch.int64, group=group))
+
+        if num_problems == 0:
+            return {
+                "is_accuracy": 0.0,
+                "mean_ess": 0.0,
+                "samples_per_problem": 0.0,
+                "num_traces": 0,
+                "num_problems": 0,
+                "num_skipped": num_skipped,
+            }
+
+        return {
+            "is_accuracy": sum_accuracy / num_problems,
+            "mean_ess": sum_ess / num_problems,
+            "samples_per_problem": num_traces / num_problems,
+            "num_traces": num_traces,
+            "num_problems": num_problems,
+            "num_skipped": num_skipped,
+        }
+
+    def _scatter_logsumexp(self, src: torch.Tensor, index: torch.Tensor, num_groups: int) -> torch.Tensor:
+        # Max per group for numerical stability
+        max_vals = torch.full((num_groups,), float("-inf"), device=src.device, dtype=src.dtype)
+        max_vals.scatter_reduce_(0, index, src, reduce="amax")
+
+        src_shifted = (src - max_vals[index]).exp()
+        sum_exp = torch.zeros(num_groups, device=src.device, dtype=src.dtype)
+        sum_exp.scatter_add_(0, index, src_shifted)
+
+        return max_vals + sum_exp.log()
