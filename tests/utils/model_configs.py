@@ -12,6 +12,7 @@ import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
@@ -149,7 +150,7 @@ class ModelTestingConfig:
 
     @functools.cached_property
     def distributed_backend(self):
-        return self.config_dict["model"]["distributed"]["backend"]
+        return DistributedBackend(self.config_dict["model"]["distributed"]["backend"])
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
         return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)

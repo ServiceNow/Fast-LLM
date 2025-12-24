@@ -2,6 +2,7 @@ import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.layers.attention.config import AttentionConfig
+from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.models.gpt.conversion.config import Qwen2CheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
@@ -10,12 +11,29 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
+    LlamaMLPConverter,
 )
 from fast_llm.utils import Assert
 
 
 class Qwen2AttentionConverter(LlamaAttentionConverter):
     # TODO: Support sliding window with max_window_layers (need 2 kinds of block?)
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        config["attention_bias"] = True
+        out = super().import_config(config)
+        out["query_layer"] = {"bias": {"enabled": True}}
+        out["key_layer"] = {"bias": {"enabled": True}}
+        out["value_layer"] = {"bias": {"enabled": True}}
+        out["dense_layer"] = {"bias": {"enabled": False}}
+        return out
+
+    @classmethod
+    def export_config(cls, config: AttentionConfig) -> dict:
+        out = super().export_config(config)
+        del out["attention_bias"]
+        return out
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:
@@ -33,8 +51,22 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
             Assert.incl(config.dense_layer.bias.enabled, (None, False))
 
 
+class Qwen2MLPConverter(LlamaMLPConverter):
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        config["mlp_bias"] = False
+        return super().import_config(config)
+
+    @classmethod
+    def export_config(cls, config: MLPConfig) -> dict:
+        out = super().export_config(config)
+        del out["mlp_bias"]
+        return out
+
+
 class Qwen2BlockConverter(LlamaBlockConverter):
     mixer_converter_class: typing.ClassVar[type[Qwen2AttentionConverter]] = Qwen2AttentionConverter
+    mlp_converter_class: typing.ClassVar[type[Qwen2MLPConverter]] = Qwen2MLPConverter
 
 
 class Qwen2DecoderConverter(LlamaDecoderConverter):
