@@ -83,14 +83,10 @@
 # PERFORMANCE TUNING
 # =============================================================================
 #
-# Default config uses seq=4096, micro_batch=2, batch=16 which gives:
-#   - ~8k tokens/s/gpu throughput
-#   - ~61GB GPU memory usage
-#   - ~25 hours for 1B tokens on single GPU
-#
-# Adjust batch settings based on your GPU memory:
-#   - Reduce micro_batch_size if OOM
-#   - Increase micro_batch_size/batch_size if memory available
+# Default config uses seq=2048, micro_batch=2, batch=64 (~131k tokens/iter).
+# Adjust settings based on your GPU memory:
+#   - Reduce micro_batch_size or sequence_length if OOM
+#   - Increase micro_batch_size or sequence_length if memory available
 #
 # =============================================================================
 # OUTPUT
@@ -118,14 +114,16 @@ model:
           lr_scale: 0.0  # Freeze MLP
         normalization:
           lr_scale: 0.0  # Freeze layer norms
-        # Activation-level distillation from teacher
         distillation_model: teacher
-        activation_distillation_factor: 0.8
+        activation_distillation_factor: 0.5
     embeddings:
       lr_scale: 0.0  # Freeze word embeddings
     head:
       lr_scale: 0.0  # Freeze output head
-      cross_entropy_implementation: torch
+      # cross_entropy_implementation: torch
+      distillation_model: teacher
+      distillation_loss_factor: 1.0
+      distillation_loss_implementation: reverse_kl
   multi_stage:
     zero_stage: 2
   distributed:
@@ -143,11 +141,13 @@ reference_models:
       model_weights: true
       load_config: model
 
-# Batch configuration (tuned for ~61GB GPU memory, ~8k tokens/s)
+# Batch configuration
 batch:
-  sequence_length: 4096
+  sequence_length: 2048
   micro_batch_size: 2
-  batch_size: 16
+  batch_size: 64
+  truncate_documents: false
+  use_loss_masking_spans: true
 
 # Data configuration (prepared Tulu 3 dataset)
 data:
@@ -159,7 +159,7 @@ data:
 # Optimizer configuration
 optimizer:
   learning_rate:
-    base: 1.0e-05
+    base: 3.0e-05
     decay_style: cosine
     warmup_iterations: 100
     decay_iterations: 10000
@@ -169,17 +169,16 @@ optimizer:
   beta_2: 0.95
 
 # Training configuration
-# At seq=4096, batch=16: ~65k tokens/iter, ~280 iters/hour
-# 10000 iters ≈ 650M tokens ≈ 35 hours
+# At seq=2048, batch=64: ~131k tokens/iter
 training:
   train_iters: 10000
   num_workers: 4
   logs:
     interval: 10
   checkpoint:
-    interval: 280  # ~hourly
+    interval: 100
   export:
-    interval: 280  # ~hourly (useful for development/testing during training)
+    interval: 100
     format: apriel2_text
   test_iters: 0
   evaluators: {}
@@ -187,6 +186,7 @@ training:
   # wandb:
   #   entity_name: your-entity
   #   project_name: your-project
+  #   group_name: your-group
 
 # Experiment directory
 run:
