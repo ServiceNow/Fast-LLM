@@ -1,0 +1,193 @@
+# Training config for Qwen2-based Apriel2 stochastic supernet on Tulu 3 SFT data
+#
+# This config trains a stochastic supernet where each layer can sample from
+# multiple mixer types (attention, sliding window, gated delta net, KDA).
+# Only the mixer weights are trained; all other weights are frozen.
+# Activation-level distillation from a teacher model guides the training.
+#
+# =============================================================================
+# PREREQUISITES
+# =============================================================================
+#
+# 1. TOKENIZER SETUP
+#
+#    Qwen2's default chat template doesn't have generation markers needed for
+#    loss masking. Create a patched tokenizer following the SmolLM3 pattern:
+#    https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja
+#
+#    IMPORTANT: The ENTIRE assistant turn (opening tag + content + closing tag)
+#    must be inside {% generation %}...{% endgeneration %} markers.
+#
+#      from transformers import AutoTokenizer
+#      tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+#      # Wrap entire assistant turn in generation markers (NOT just content!)
+#      tokenizer.chat_template = '''{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system
+#      You are a helpful assistant.<|im_end|>
+#      ' }}{% endif %}{% if message['role'] == 'assistant' %}{% generation %}{{ '<|im_start|>assistant
+#      ' + message['content'] + '<|im_end|>
+#      ' }}{% endgeneration %}{% else %}{{ '<|im_start|>' + message['role'] + '
+#      ' + message['content'] + '<|im_end|>
+#      ' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant
+#      ' }}{% endif %}'''
+#      tokenizer.save_pretrained("/path/to/qwen2-instruct-with-markers")
+#
+# 2. PREPARE TULU 3 DATASET
+#
+#    Small dataset (for testing):
+#
+#      fast-llm prepare gpt_memmap \
+#          -c fast_llm_external_models/apriel2/examples/prepare_tulu3.yaml \
+#          tokenizer.path=/path/to/qwen2-instruct-with-markers \
+#          dataset.split=train[:1000] \
+#          output_path=/path/to/tulu3-prepared-small
+#
+#    Full dataset (~939K samples, ~6 minutes):
+#
+#      fast-llm prepare gpt_memmap \
+#          -c fast_llm_external_models/apriel2/examples/prepare_tulu3.yaml \
+#          tokenizer.path=/path/to/qwen2-instruct-with-markers \
+#          output_path=/path/to/tulu3-prepared
+#
+# 3. CONVERT QWEN2 TO APRIEL2 SUPERNET (student model)
+#
+#    This creates a stochastic supernet with multiple mixer types per layer:
+#
+#      python fast_llm_external_models/apriel2/convert.py \
+#          Qwen/Qwen2.5-0.5B-Instruct \
+#          /path/to/qwen2-supernet \
+#          --surgery fast_llm_external_models/apriel2/examples/stochastic_supernet.yaml
+#
+# 4. CONVERT QWEN2 TO APRIEL2 (teacher model)
+#
+#    The teacher is the original model without surgery, used for distillation:
+#
+#      python fast_llm_external_models/apriel2/convert.py \
+#          Qwen/Qwen2.5-0.5B-Instruct \
+#          /path/to/qwen2-teacher
+#
+# 5. RUN TRAINING
+#
+#    Update paths below and run:
+#
+#      fast-llm train gpt \
+#          -c fast_llm_external_models/apriel2/examples/train_supernet_qwen2.yaml
+#
+#    For long runs, use nohup:
+#
+#      nohup fast-llm train gpt \
+#          -c fast_llm_external_models/apriel2/examples/train_supernet_qwen2.yaml \
+#          > training.log 2>&1 &
+#      tail -f training.log
+#
+# =============================================================================
+# PERFORMANCE TUNING
+# =============================================================================
+#
+# Default config uses seq=4096, micro_batch=2, batch=16 which gives:
+#   - ~8k tokens/s/gpu throughput
+#   - ~61GB GPU memory usage
+#   - ~25 hours for 1B tokens on single GPU
+#
+# Adjust batch settings based on your GPU memory:
+#   - Reduce micro_batch_size if OOM
+#   - Increase micro_batch_size/batch_size if memory available
+#
+# =============================================================================
+# OUTPUT
+# =============================================================================
+#
+# Checkpoints: /path/to/qwen2-supernet-trained/checkpoints/{iteration}/
+# Exports:     /path/to/qwen2-supernet-trained/export/apriel2_text/{iteration}/
+#
+# =============================================================================
+
+# Load pretrained model (Qwen2 converted to Apriel2 supernet)
+pretrained:
+  path: /path/to/qwen2-supernet
+  format: apriel2_text
+  model_weights: true
+  load_config: model
+
+# Model config
+model:
+  base_model:
+    # Freeze all components except the mixer
+    decoder:
+      block:
+        mlp:
+          lr_scale: 0.0  # Freeze MLP
+        normalization:
+          lr_scale: 0.0  # Freeze layer norms
+        # Activation-level distillation from teacher
+        distillation_model: teacher
+        activation_distillation_factor: 0.8
+    embeddings:
+      lr_scale: 0.0  # Freeze word embeddings
+    head:
+      lr_scale: 0.0  # Freeze output head
+      cross_entropy_implementation: torch
+  multi_stage:
+    zero_stage: 2
+  distributed:
+    compute_dtype: bf16
+    seed: 42
+
+# Teacher model for activation-level distillation
+reference_models:
+  teacher:
+    model:
+      type: gpt
+    pretrained:
+      path: /path/to/qwen2-teacher
+      format: apriel2_text
+      model_weights: true
+      load_config: model
+
+# Batch configuration (tuned for ~61GB GPU memory, ~8k tokens/s)
+batch:
+  sequence_length: 4096
+  micro_batch_size: 2
+  batch_size: 16
+
+# Data configuration (prepared Tulu 3 dataset)
+data:
+  datasets:
+    training:
+      type: file
+      path: /path/to/tulu3-prepared/fast_llm_config.yaml
+
+# Optimizer configuration
+optimizer:
+  learning_rate:
+    base: 1.0e-05
+    decay_style: cosine
+    warmup_iterations: 100
+    decay_iterations: 10000
+    minimum: 1.0e-06
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+
+# Training configuration
+# At seq=4096, batch=16: ~65k tokens/iter, ~280 iters/hour
+# 10000 iters ≈ 650M tokens ≈ 35 hours
+training:
+  train_iters: 10000
+  num_workers: 4
+  logs:
+    interval: 10
+  checkpoint:
+    interval: 280  # ~hourly
+  export:
+    interval: 280  # ~hourly (useful for development/testing during training)
+    format: apriel2_text
+  test_iters: 0
+  evaluators: {}
+  # Weights & Biases configuration (optional, uncomment to enable)
+  # wandb:
+  #   entity_name: your-entity
+  #   project_name: your-project
+
+# Experiment directory
+run:
+  experiment_dir: /path/to/qwen2-supernet-trained
