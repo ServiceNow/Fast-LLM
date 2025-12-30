@@ -195,6 +195,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 prediction_heads=self._prediction_heads,
                 head_config=self._config,
                 sequence_parallel_logits=self._sequence_parallel_logits,
+                group=self._parallel_dim.group,
             )
             targets.update({k: v for k, v in loss_targets.items() if v is not None})
         if len(targets) == 0:
@@ -240,8 +241,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             else:
                 logit_input_grad = None
 
+            # Collect all tensors that need to be split to determine the split size
+            tensors_to_check = [logit_input]
+            if loss_mask is not None:
+                tensors_to_check.append(loss_mask)
+            tensors_to_check.extend(target for target in targets.values() if target is not None)
+
             split_size = div(
-                get_unique(target.size(0) for target in targets.values() if target is not None),
+                get_unique(tensor.size(0) for tensor in tensors_to_check),
                 self._config.cross_entropy_splits,
             )
             tensors_split = [
