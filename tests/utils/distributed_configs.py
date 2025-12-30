@@ -225,6 +225,17 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
+    # Depth-first micro-batches, tensor-parallel
+    DistributedTestingConfig(
+        name="tp2_df4",
+        compare="df4",
+        config_args=[
+            "model.distributed.tensor_parallel=2",
+            "batch.depth_first_micro_batches=4",
+        ],
+        num_gpus=2,
+        compare_config=_compare_layer_match,
+    ),
     # Cross-entropy splits
     DistributedTestingConfig(
         name="stp2_ce4",
@@ -246,17 +257,6 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
-        ],
-        num_gpus=4,
-        compare_config=_compare_layer_match,
-    ),
-    # Depth-first micro-batches, tensor-parallel
-    DistributedTestingConfig(
-        name="tp2_df4",
-        compare="df4",
-        config_args=[
-            "model.distributed.tensor_parallel=2",
-            "batch.depth_first_micro_batches=4",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,

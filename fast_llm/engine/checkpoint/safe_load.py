@@ -4,7 +4,7 @@ import math
 import torch
 from torch.distributed import all_reduce
 
-from fast_llm.core.distributed import add_ephemeral_timeout
+from fast_llm.core.distributed import set_timeout
 from fast_llm.engine.multi_stage.config import ShardName
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.functional.triton.pointwise import triton_fill
@@ -171,8 +171,8 @@ class SafeLoad:
         if self._distributed.world_group is not None:
             counter_tensor = torch.tensor(counters, dtype=torch.int64).to(self._distributed.device)
             # This may be the first distributed barrier after loading, so we need to wait for everyone to finish.
-            add_ephemeral_timeout(self._distributed.world_group, self._timeout)
-            all_reduce(counter_tensor, group=self._distributed.world_group)
+            with set_timeout(self._distributed.world_group, self._timeout):
+                all_reduce(counter_tensor, group=self._distributed.world_group)
             counters = counter_tensor.tolist()
 
         # Compare global counts against expected values.

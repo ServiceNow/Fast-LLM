@@ -23,6 +23,7 @@ from fast_llm.data.sample.abstract import (
 from fast_llm.data.sample.patch import (
     EmptyPatchReader,
     PatchBatch,
+    PatchReader,
     PatchReaderBaseConfig,
     PatchReaderConfig,
     PatchSample,
@@ -31,6 +32,7 @@ from fast_llm.data.sample.patch import (
 from fast_llm.data.sample.range import (
     EmptyRangeReader,
     RangeBatch,
+    RangeReader,
     RangeReaderBaseConfig,
     RangeReaderConfig,
     RangeSample,
@@ -243,6 +245,41 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.image_patches.expected_buffer_size
         )
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        out = super().get_metadata()
+        out["tokens"] = self.tokens.get_metadata()
+        if not isinstance(self.loss_masking_spans, NullReaderConfig):
+            out["loss_masking_spans"] = self.loss_masking_spans.get_metadata()
+        if not isinstance(self.chosen_spans, NullReaderConfig):
+            out["chosen_spans"] = self.chosen_spans.get_metadata()
+        if not isinstance(self.rejected_spans, NullReaderConfig):
+            out["rejected_spans"] = self.rejected_spans.get_metadata()
+        if not isinstance(self.image_patches, NullReaderConfig):
+            out["image_patches"] = self.image_patches.get_metadata()
+        return out
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        out = super().blend_metadata(metadata)
+        out["tokens"] = TokenReaderConfig.blend_metadata([metadata_["tokens"] for metadata_ in metadata])
+        if "loss_masking_spans" in metadata[0]:
+            out["loss_masking_spans"] = RangeReaderConfig.blend_metadata(
+                [metadata_["loss_masking_spans"] for metadata_ in metadata]
+            )
+        if "chosen_spans" in metadata[0]:
+            out["chosen_spans"] = RangeReaderConfig.blend_metadata(
+                [metadata_["chosen_spans"] for metadata_ in metadata]
+            )
+        if "rejected_spans" in metadata[0]:
+            out["image_patches"] = RangeReaderConfig.blend_metadata(
+                [metadata_["image_patches"] for metadata_ in metadata]
+            )
+        if "image_patches" in metadata[0]:
+            out["image_patches"] = PatchReaderConfig.blend_metadata(
+                [metadata_["image_patches"] for metadata_ in metadata]
+            )
+        return out
+
 
 class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
     _model_preprocessing: LanguageModelPreprocessingConfig
@@ -325,6 +362,23 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
 
     def get_document_size(self, index: int) -> int:
         return self._tokens.get_document_size(index)
+
+    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
+        begin_index, end_index, token_metadata = self._tokens.get_split(begin_ratio, end_ratio)
+        metadata = {
+            "num_tokens": token_metadata["num_tokens"],
+            "tokens": token_metadata,
+        }
+        if hasattr(self, "_loss_masking_spans") and isinstance(self._loss_masking_spans, RangeReader):
+            metadata["loss_masking_spans"] = self._loss_masking_spans.get_split(begin_index, end_index)
+        if hasattr(self, "_chosen_spans") and isinstance(self._chosen_spans, RangeReader):
+            metadata["chosen_spans"] = self._chosen_spans.get_split(begin_index, end_index)
+        if hasattr(self, "_rejected_spans") and isinstance(self._rejected_spans, RangeReader):
+            metadata["rejected_spans"] = self._rejected_spans.get_split(begin_index, end_index)
+        if hasattr(self, "_image_patches") and isinstance(self._image_patches, PatchReader):
+            metadata["image_patches"] = self._image_patches.get_split(begin_index, end_index)
+
+        return begin_index, end_index, metadata
 
 
 class LanguageModelWriter(MemmapWriter):

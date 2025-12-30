@@ -147,6 +147,10 @@ class ModelTestingConfig:
     def base_model_config_class(self):
         return self.model_config_class.get_base_model_config_class()
 
+    @functools.cached_property
+    def distributed_backend(self):
+        return self.config_dict["model"]["distributed"]["backend"]
+
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
         return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
@@ -256,6 +260,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "distributed": {
                 "reproducible_init": True,
                 "timeout": 20,
+                "backend": "nccl",
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
