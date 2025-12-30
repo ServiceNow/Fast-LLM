@@ -36,6 +36,7 @@ from fast_llm.engine.training.config import (
     TrainingCheckpointConfig,
     TrainingEvaluatorConfig,
 )
+from fast_llm.engine.training.trainer_events import TrainerEvents
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, log_memory_usage
 from fast_llm.utils import Assert, Interrupter, get_and_reset_memory_usage_mib
@@ -130,6 +131,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         super().__init__(config)
 
         self._is_evaluation_only = config.training.train_iters == 0
+
+        self.trainer_events = TrainerEvents(config.events)
 
         self._data = self._get_data()
         log_main_rank("Creating model...")
@@ -286,6 +289,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._is_setup
         with self._wandb:
             self._run_training()
+        self.trainer_events.send_training_finished()
 
     def _run_training(self) -> None:
         self._prepare_training_state()
@@ -358,6 +362,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # TODO: Synchronization is probably unnecessary.
         safe_barrier(self._distributed.world_group, "train begin")
+
+        self.trainer_events.send_initial_weights_step(
+            self._completed_steps, self._multi_stage, self._config.training.export
+        )
+
         torch.cuda.synchronize()
         start_time = time.perf_counter()
         last_time = start_time
@@ -384,6 +393,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     advanced_iters += 1
                     for name, value in reduced_losses.items():
                         total_losses[name] += value
+                    self.trainer_events.send_weights(
+                        self._completed_steps, self._multi_stage, self._config.training.export
+                    )
                 else:
                     skipped_iters += 1
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())

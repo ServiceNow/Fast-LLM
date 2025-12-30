@@ -29,6 +29,7 @@ from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
+from fast_llm.redis.config import RedisConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -321,6 +322,113 @@ class TrainingConfig(Config):
         self.wandb.alert.assert_sub_interval(self.logs)
 
 
+@config_class()
+class TrainerEventsRedisConfig(RedisConfig):
+    stream_key: str = FieldUpdate(default="fast_llm_events")
+
+    payload_key: str = FieldUpdate(default="event")
+
+
+@config_class()
+class TrainerEvent(Config):
+    enabled: bool = Field(
+        default=False,
+        desc="Flag indicating whether this event is enabled. If False, the event will be skipped.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class WeightsBroadcastEventConfig(TrainerEvent):
+    """
+    Event sent to indicate that updated weights are ready for broadcast.
+    """
+
+    initial_weights_step_message_type: str = Field(
+        default="initial_weights_step",
+        desc="Message indicating that weights the training starting/ continuing from.",
+        hint=FieldHint.feature,
+    )
+
+    initial_weights_step_message_includes_weights: bool = Field(
+        default=False,
+        desc=(
+            "Whether to include the loaded model weights in the initial event message. "
+            "Useful when training restarts from an internal checkpoint format that "
+            "which does not have an exported checkpoint for that step."
+        ),
+        hint=FieldHint.feature,
+    )
+
+    weights_ready_message_type: str = Field(
+        default="weights_ready",
+        desc="Message indicating that weights are ready to be broadcast.",
+        hint=FieldHint.feature,
+    )
+
+    # NCCL rendezvous details
+    rdvz_master_address: str | None = Field(
+        default=None,
+        desc="Master address for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    rdvz_master_port: int | None = Field(
+        default=None,
+        desc="Master port for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    world_size: int | None = Field(
+        default=None,
+        desc="World size of the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+    rank: int | None = Field(
+        default=None,
+        desc="Rank of this process in the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class TrainingFinishedEventConfig(TrainerEvent):
+    """
+    Event sent to indicate that training has completed.
+    """
+
+    training_finished_message_type: str = Field(
+        default="training_finished",
+        desc="Message indicating that weights the training starting/ continuing from.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class TrainerEventsConfig(Config):
+    """
+    Aggregates all trainer-side Redis-based event configurations.
+    """
+
+    redis: TrainerEventsRedisConfig = Field(
+        desc="Redis connection and stream settings used to fetch incoming training data.",
+        hint=FieldHint.core,
+    )
+
+    weights_broadcast: WeightsBroadcastEventConfig = Field(
+        default=None,
+        desc="Configuration for signaling weight-ready events via Redis.",
+        hint=FieldHint.feature,
+    )
+
+    training_finished: TrainingFinishedEventConfig = Field(
+        default=None,
+        desc="Configuration for signaling training-finished events via Redis.",
+        hint=FieldHint.feature,
+    )
+
+
 @config_class(registry=True, dynamic_type={RunnableConfig: "train"})
 class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     _abstract = True
@@ -349,6 +457,12 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     reference_models: dict[str, PretrainedFastLLMModelConfig] = Field(
         default_factory=dict,
         desc="Auxiliary models used during training, ex. for knowledge distillation.",
+        hint=FieldHint.feature,
+    )
+
+    events: TrainerEventsConfig = Field(
+        default=None,
+        desc="Optional Trainer event configurations (weight broadcast, training finished, etc.).",
         hint=FieldHint.feature,
     )
 
