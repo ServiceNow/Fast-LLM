@@ -3,7 +3,6 @@ import logging
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
@@ -137,6 +136,8 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
                 else lm_target[:, lm_target_slice]
             ).flatten()
             if sequence_parallel_logits:
+                from fast_llm.core.ops import split_op
+
                 lm_target = split_op(lm_target, group, 0)
         return {TargetsKwargs.lm_target: lm_target}
 
@@ -205,6 +206,8 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         if reference_model_logits is not None:
             reference_model_logits = reference_model_logits.flatten(0, -2)
             if sequence_parallel_logits:
+                from fast_llm.core.ops import split_op
+
                 reference_model_logits = split_op(reference_model_logits, group, 0)
         return {TargetsKwargs.reference_model_logits: reference_model_logits}
 
@@ -296,12 +299,15 @@ class DPOLossConfig(LanguageModelLossConfig):
 
         reference_model_logits = kwargs.get(f"{head_config.dpo_reference_model}_logits")
         dpo_target = kwargs.get(LanguageModelKwargs.labels)
-        if reference_model_logits is not None:
-            reference_model_logits = reference_model_logits.flatten(0, -2)
-            if sequence_parallel_logits:
-                reference_model_logits = split_op(reference_model_logits, group, 0)
-        if dpo_target is not None:
-            dpo_target = split_op(dpo_target, group, 0)
+        if reference_model_logits is not None or dpo_target is not None:
+            from fast_llm.core.ops import split_op
+
+            if reference_model_logits is not None:
+                reference_model_logits = reference_model_logits.flatten(0, -2)
+                if sequence_parallel_logits:
+                    reference_model_logits = split_op(reference_model_logits, group, 0)
+            if dpo_target is not None:
+                dpo_target = split_op(dpo_target, group, 0)
         return {
             TargetsKwargs.dpo_reference_model_logits: reference_model_logits,
             TargetsKwargs.dpo_target: dpo_target,
