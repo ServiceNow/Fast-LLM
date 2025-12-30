@@ -1,6 +1,7 @@
 """Apriel2 HuggingFace model implementation."""
 
 import math
+import os
 import random
 from types import SimpleNamespace
 from typing import Any, Optional, TypedDict, Union
@@ -1697,7 +1698,10 @@ class Apriel2StochasticMixer(nn.Module):
 
         # Get sub-mixer configs
         mixers_config = mixer_config.get("mixers", {})
-        self.main_mixer_name = mixer_config.get("main_mixer_name", list(mixers_config.keys())[0])
+        self.main_mixer_name = mixer_config.get(
+            "main_mixer_name", os.environ.get("APRIEL_MAIN_MIXER_NAME", list(mixers_config.keys())[0])
+        )
+        self._stochastic_eval = os.environ.get("APRIEL_STOCHASTIC_EVAL", "0") == "1"
 
         # Sampling strategy
         self.sampling_strategy = mixer_config.get("sampling_strategy", "uniform")
@@ -1733,7 +1737,7 @@ class Apriel2StochasticMixer(nn.Module):
         self, hidden_states: torch.Tensor, attention_mask=None, position_embeddings: Optional[dict] = None, **kwargs
     ):
         # Sample mixer during training, use main_mixer during inference
-        if self.training:
+        if self.training or self._stochastic_eval:
             mixer_name = random.choices(self._mixer_names, weights=self._sampling_probs)[0]
         else:
             mixer_name = self.main_mixer_name
