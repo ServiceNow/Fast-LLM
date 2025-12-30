@@ -39,6 +39,14 @@ try:
 except ImportError:
     rms_norm_gated = None
 
+# KDA implementation - matches Fast-LLM's kda.py
+try:
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
+except ImportError:
+    chunk_kda = None
+    fused_recurrent_kda = None
+    fused_kda_gate = None
 
 is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
@@ -1332,8 +1340,22 @@ class Apriel2GatedDeltaNet(nn.Module):
         return {}
 
 
-class KimiLinearAttention(nn.Module):
-    """KimiLinearAttention mixer - stub for future implementation."""
+class KimiDeltaAttention(nn.Module):
+    """
+    Kimi Delta Attention (KDA) implementation matching Fast-LLM's kda.py.
+
+    Weight names match Fast-LLM:
+    - q_proj, k_proj, v_proj, o_proj - main projections
+    - f_a_proj, f_b_proj - gate kernel (low-rank)
+    - g_a_proj, g_b_proj - output gate (low-rank)
+    - beta_proj - beta gating
+    - q_conv, k_conv, v_conv - CausalConv1d modules
+    - A_log, dt_bias - learnable parameters
+    - norm - gated RMS normalization
+
+    Uses fla.ops.kda.chunk_kda and fused_recurrent_kda kernels.
+    Uses CausalConv1d for convolutions (CUDA fast path with PyTorch fallback).
+    """
 
     def __init__(
         self,
@@ -1344,7 +1366,203 @@ class KimiLinearAttention(nn.Module):
         dtype=None,
     ):
         super().__init__()
-        raise NotImplementedError("KimiLinearAttention not yet implemented in apriel2")
+
+        if chunk_kda is None or fused_kda_gate is None:
+            raise ImportError(
+                "KimiDeltaAttention requires the `fla` package. " "Please install it with `pip install -U fla-core`."
+            )
+
+        self.layer_idx = layer_idx
+        self.hidden_size = d_model
+        self.mode = "chunk"
+
+        # Config params - match Fast-LLM naming
+        self.num_heads = config_dict.get("heads", 32)
+        self.head_dim = config_dict.get("head_dim", 64)
+        conv_config = config_dict.get("convolution_layer", {})
+        self.conv_kernel_size = conv_config.get("kernel_size", 4)
+        norm_config = config_dict.get("normalization", {})
+        self.norm_eps = norm_config.get("epsilon", 1e-5)
+        self.norm_activation = norm_config.get("activation", "sigmoid")
+
+        # Derived dimensions
+        self.projection_size = self.head_dim * self.num_heads
+
+        # Projection layers - names match Fast-LLM exactly
+        self.q_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.k_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+        self.v_proj = nn.Linear(d_model, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Convolutions - use CausalConv1d for proper left-only padding
+        # Named to match Fast-LLM (q_conv, k_conv, v_conv)
+        self.q_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,  # depthwise
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+        self.k_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+        self.v_conv = CausalConv1d(
+            in_channels=self.projection_size,
+            out_channels=self.projection_size,
+            kernel_size=self.conv_kernel_size,
+            groups=self.projection_size,
+            bias=False,
+            activation="silu",
+            device=device,
+            dtype=dtype,
+        )
+
+        # Gate kernel projections (low-rank: hidden -> head_dim -> projection)
+        self.f_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.f_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Output gate projections (low-rank)
+        self.g_a_proj = nn.Linear(d_model, self.head_dim, bias=False, device=device, dtype=dtype)
+        self.g_b_proj = nn.Linear(self.head_dim, self.projection_size, bias=False, device=device, dtype=dtype)
+
+        # Beta projection - named beta_proj to match Fast-LLM (not b_proj)
+        self.beta_proj = nn.Linear(d_model, self.num_heads, bias=False, device=device, dtype=dtype)
+
+        # Output projection
+        self.o_proj = nn.Linear(self.projection_size, d_model, bias=False, device=device, dtype=dtype)
+
+        # Learnable parameters - match Fast-LLM shapes
+        # A_log: 1D shape (num_heads,) to match Fast-LLM
+        self.A_log = nn.Parameter(
+            torch.zeros(self.num_heads, device=device, dtype=torch.float32).uniform_(1, 16).log()
+        )
+        self.dt_bias = nn.Parameter(torch.ones(self.projection_size, device=device, dtype=torch.float32))
+
+        # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
+        self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation=self.norm_activation)
+
+    def _apply_conv(self, x: torch.Tensor, conv: CausalConv1d, conv_state: torch.Tensor | None, use_cache: bool):
+        """
+        Apply causal convolution with cache support.
+
+        Args:
+            x: Input tensor [batch, seq, dim]
+            conv: CausalConv1d module
+            conv_state: Previous conv state [batch, dim, kernel_size-1] or None
+            use_cache: Whether to output final state for caching
+
+        Returns:
+            (output, new_conv_state) tuple
+        """
+        seq_len = x.shape[1]
+        x = x.transpose(1, 2)  # [batch, dim, seq]
+
+        # Single token decode with existing cache
+        if conv_state is not None and seq_len == 1:
+            out = conv.update(x.squeeze(2), conv_state)
+            return out.unsqueeze(1), conv_state  # [batch, 1, dim]
+
+        # Prefill mode
+        if use_cache:
+            out, final_state = conv(x, conv_state=conv_state, return_final_state=True)
+        else:
+            out = conv(x, conv_state=conv_state)
+            final_state = None
+
+        return out.transpose(1, 2), final_state  # [batch, seq, dim]
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_values=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        batch_size, seq_len, _ = hidden_states.shape
+        mode = "fused_recurrent" if seq_len <= 64 else self.mode
+        if self.training:
+            mode = "chunk"
+
+        # Get cache states if available
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        use_cache = past_key_values is not None
+
+        if past_key_values is not None:
+            conv_states = past_key_values.conv_states[self.layer_idx]
+            if conv_states is not None:
+                conv_state_q, conv_state_k, conv_state_v = conv_states
+            recurrent_state = past_key_values.recurrent_states[self.layer_idx]
+
+        # Project Q, K, V and apply convolutions
+        q, conv_state_q = self._apply_conv(self.q_proj(hidden_states), self.q_conv, conv_state_q, use_cache)
+        k, conv_state_k = self._apply_conv(self.k_proj(hidden_states), self.k_conv, conv_state_k, use_cache)
+        v, conv_state_v = self._apply_conv(self.v_proj(hidden_states), self.v_conv, conv_state_v, use_cache)
+
+        # Gate kernel computation
+        g = self.f_b_proj(self.f_a_proj(hidden_states))
+        g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
+        g = fused_kda_gate(g, self.A_log.float(), dt_bias=self.dt_bias)
+
+        # Beta gating
+        beta = self.beta_proj(hidden_states).float().sigmoid()
+
+        # Reshape Q, K, V to head format
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Run KDA kernel
+        if mode == "chunk":
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=False,
+                use_qk_l2norm_in_kernel=True,
+            )
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+            )
+
+        # Update cache
+        if past_key_values is not None:
+            past_key_values.recurrent_states[self.layer_idx] = recurrent_state
+            past_key_values.conv_states[self.layer_idx] = (conv_state_q, conv_state_k, conv_state_v)
+
+        # Output gating and normalization
+        g_out = self.g_b_proj(self.g_a_proj(hidden_states))
+        g_out = rearrange(g_out, "... (h d) -> ... h d", d=self.head_dim)
+
+        # Flatten for normalization, then reshape back
+        o_shape = o.shape
+        o = self.norm(o.reshape(-1, o.shape[-1]), g_out.reshape(-1, g_out.shape[-1]))
+        o = o.reshape(o_shape)
+
+        # Reshape and project output
+        o = rearrange(o, "b t h d -> b t (h d)")
+        o = self.o_proj(o)
+
+        return (o,)
 
     @classmethod
     def setup(

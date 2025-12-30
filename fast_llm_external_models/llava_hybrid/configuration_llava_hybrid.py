@@ -59,6 +59,7 @@ class LlavaHybridConfig(PretrainedConfig):
         text_config=None,
         image_token_index=32000,
         projector_hidden_act="gelu",
+        projector_intermediate_size=4096,
         vision_feature_select_strategy="default",
         vision_feature_layer=-2,
         image_seq_length=576,
@@ -67,6 +68,8 @@ class LlavaHybridConfig(PretrainedConfig):
     ):
         self.image_token_index = image_token_index
         self.projector_hidden_act = projector_hidden_act
+        # projector_intermediate_size is an addition to the original Llava config
+        self.projector_intermediate_size = projector_intermediate_size
         self.image_seq_length = image_seq_length
 
         if vision_feature_select_strategy not in ["default", "full"]:
