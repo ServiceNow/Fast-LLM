@@ -22,9 +22,9 @@ from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
-    LanguageModelKwargs,
 )
-from fast_llm.layers.language_model.lm_head_losses import Targets, _format_name
+from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
+from fast_llm.layers.language_model.lm_head_losses import _format_name
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
@@ -101,10 +101,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             peft=self._peft,
         )
 
-        self._formatted_loss_names = {
-            loss_name: loss_config.get_formatted_name(loss_name, self._prediction_distance)
-            for loss_name, loss_config in self._config.losses.items()
-        }
+        self._formatted_loss_names = {}
+        for loss_name, loss_config in self._config.losses.items():
+            if loss_config.weight > 0.0:
+                self._formatted_loss_names[loss_name] = loss_config.get_formatted_name(
+                    loss_name, self._prediction_distance
+                )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -154,6 +156,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         targets = self._get_targets(kwargs)
+        loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
+        if loss_mask is not None:
+            loss_mask = loss_mask.flatten()
+            if self._sequence_parallel_logits:
+                loss_mask = split_op(loss_mask, self._parallel_dim.group, 0)
+
         input_ = input_.detach().requires_grad_(do_grad := targets is not None and self.training)
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
@@ -167,7 +175,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         output_weights = self.output_weights
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
-            ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
+            ln_output.detach(), targets, loss_mask, output_weights, grad_output, kwargs, losses
         )
 
         if do_grad:
@@ -176,62 +184,20 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         else:
             return loss, None
 
-    def _get_targets(self, kwargs: dict) -> Targets | None:
-        (
-            lm_target,
-            dpo_target,
-            reference_model_logits,
-            loss_mask,
-            dpo_reference_model_logits,
-        ) = (None, None, None, None, None)
-        if self._config.enable_dpo:
-            dpo_target = kwargs.get(LanguageModelKwargs.labels)
-            dpo_reference_model_logits = (kwargs.get(f"{self._config.dpo_reference_model}_logits"),)
-        else:
-            if self._config.distillation_model is not None:
-                # Target is reference model logits.
-                reference_model_logits = kwargs[f"{self._config.distillation_model}_logits"].flatten(0, -2)
-                loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-                if loss_mask is not None:
-                    loss_mask = loss_mask.flatten()
-
-            lm_target = kwargs.get(LanguageModelKwargs.labels)
-            if lm_target is not None:
-                # MTP: Shift the labels
-                lm_target_sequence_length = (
-                    lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
-                )
-                if LanguageModelKwargs.sequence_q_dim in kwargs:
-                    Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
-                lm_target_slice = slice(
-                    self._prediction_distance, self._prediction_distance + lm_target_sequence_length
-                )
-                lm_target = (
-                    lm_target[lm_target_slice]
-                    if kwargs[LanguageModelKwargs.sequence_first]
-                    else lm_target[:, lm_target_slice]
-                ).flatten()
-
-        if self._sequence_parallel_logits:
-            if dpo_target is not None:
-                dpo_target = split_op(dpo_target, self._parallel_dim.group, 0)
-            if lm_target is not None:
-                lm_target = split_op(lm_target, self._parallel_dim.group, 0)
-            if loss_mask is not None:
-                loss_mask = split_op(loss_mask, self._parallel_dim.group, 0)
-            if reference_model_logits is not None:
-                reference_model_logits = split_op(reference_model_logits, self._parallel_dim.group, 0)
-
-        targets = Targets(
-            dpo_target=dpo_target,
-            lm_target=lm_target,
-            loss_mask=loss_mask,
-            reference_model_logits=reference_model_logits,
-            dpo_reference_model_logits=dpo_reference_model_logits,
-        )
-
-        # Return None if no targets are set
-        if not targets.has_any_target():
+    def _get_targets(self, kwargs: dict) -> dict | None:
+        targets = {}
+        for loss_config in self._config.losses.values():
+            if loss_config.weight == 0.0:
+                continue
+            loss_targets = loss_config.extract_targets_from_global_kwargs(
+                kwargs,
+                prediction_distance=self._prediction_distance,
+                prediction_heads=self._prediction_heads,
+                head_config=self._config,
+                sequence_parallel_logits=self._sequence_parallel_logits,
+            )
+            targets.update({k: v for k, v in loss_targets.items() if v is not None})
+        if len(targets) == 0:
             return None
         return targets
 
@@ -241,15 +207,16 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     def _logits_cross_entropy_forward_backward_split(
         self,
         input_: torch.Tensor,
-        targets: Targets | None,
+        targets: dict[str, "torch.Tensor"] | None,
+        loss_mask: torch.Tensor | None,
         weight: torch.Tensor,
         grad_output: float,
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if self._config.cross_entropy_splits is None or targets is None:
+        if self._config.cross_entropy_splits is None:
             loss, logit_input_grad = self._logits_loss_forward_backward(
-                input_, targets, weight, grad_output, kwargs, losses
+                input_, targets, loss_mask, weight, grad_output, kwargs, losses
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
@@ -273,34 +240,28 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             else:
                 logit_input_grad = None
 
-            # Extract target tensors for splitting (keep same order as original tuple)
-            target_tensors = [
-                targets.lm_target,
-                targets.dpo_target,
-                targets.reference_model_logits,
-                targets.loss_mask,
-            ]
             split_size = div(
-                get_unique(target.size(0) for target in target_tensors if target is not None),
+                get_unique(target.size(0) for target in targets.values() if target is not None),
                 self._config.cross_entropy_splits,
             )
             tensors_split = [
                 [None] * self._config.cross_entropy_splits if tensor is None else tensor.split(split_size)
-                for tensor in [logit_input, *target_tensors, logit_input_grad]
+                for tensor in [logit_input, loss_mask, logit_input_grad]
             ]
-            for logit_input_, lm_target_, dpo_target_, reference_model_logits_, loss_mask_, logit_input_grad_ in zip(
-                *tensors_split, strict=True
-            ):
-                targets_ = Targets(
-                    lm_target=lm_target_,
-                    dpo_target=dpo_target_,
-                    reference_model_logits=reference_model_logits_,
-                    loss_mask=loss_mask_,
-                    dpo_reference_model_logits=targets.dpo_reference_model_logits,
+            target_split = {
+                name: (
+                    [None] * self._config.cross_entropy_splits
+                    if targets[name] is None
+                    else targets[name].split(split_size)
                 )
+                for name in targets
+            }
+
+            for i, (logit_input_, loss_mask_, logit_input_grad_) in enumerate(zip(*tensors_split, strict=True)):
                 loss_, grad_ = self._logits_loss_forward_backward(
                     logit_input_,
-                    targets_,
+                    {name: target_split[name][i] for name in target_split},
+                    loss_mask_,
                     weight,
                     grad_output,
                     kwargs,
@@ -323,7 +284,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     def _logits_loss_forward_backward(
         self,
         input_: torch.Tensor,
-        targets: Targets | None,
+        targets: dict[str, "torch.Tensor"] | None,
+        loss_mask: torch.Tensor | None,
         weight: torch.Tensor,
         grad_output: float,
         kwargs: dict,
@@ -370,10 +332,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             if loss_config.weight == 0.0:
                 continue
             # losses are returned unscaled but the grads are already scaled
-            # we log unscaled losses seperately and the scaled total loss
             loss_unscaled_, grad_ = loss_config.compute_loss(
                 logits,
-                targets,
+                loss_mask,
                 grad_output=(
                     (grad_output * self._loss_coefficient * loss_config.weight if grad_output is not None else None)
                     if loss_config.weight != 0.0
@@ -382,7 +343,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 group=group,
                 logits_scale_factor=self._config.logits_scale_factor,
                 vocab_parallel=self._vocab_parallel,
-                kwargs=kwargs,
+                kwargs={**kwargs, **targets},
             )
             loss_ = loss_unscaled_ * loss_config.weight * self._loss_coefficient
 

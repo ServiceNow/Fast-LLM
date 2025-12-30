@@ -1,18 +1,20 @@
 import abc
-import dataclasses
 import logging
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
+from fast_llm.layers.language_model.kwargs import LanguageModelKwargs, TargetsKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.core.distributed import ProcessGroup
+    from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,23 +31,10 @@ def _format_name(name: str) -> str:
     return name.replace("_", " ")
 
 
-@dataclasses.dataclass
-class Targets:
-    lm_target: "torch.Tensor | None" = None
-    dpo_target: "torch.Tensor | None" = None
-    loss_mask: "torch.Tensor | None" = None
-    reference_model_logits: "torch.Tensor | None" = None
-    dpo_reference_model_logits: "torch.Tensor | None" = None
-
-    def has_any_target(self) -> bool:
-        return any(getattr(self, field.name) is not None for field in dataclasses.fields(self))
-
-
 @config_class(registry=True)
 class LanguageModelLossConfig(Config):
     """
-    Losses canm register themselves
-    using @config_class(dynamic_type= {LanguageModelLossConfig: "loss_type_name"})
+    Losses can register themselves using @config_class(dynamic_type= {LanguageModelLossConfig: "loss_type_name"}).
     """
 
     _name: typing.ClassVar[str]
@@ -62,7 +51,7 @@ class LanguageModelLossConfig(Config):
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        targets: Targets,
+        loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
@@ -90,6 +79,18 @@ class LanguageModelLossConfig(Config):
             name = f"{name}_{prediction_distance}"
         return name
 
+    @abc.abstractmethod
+    def extract_targets_from_global_kwargs(
+        self,
+        kwargs: dict | None = None,
+        prediction_distance: int | None = None,
+        prediction_heads: int | None = None,
+        head_config: "LanguageModelHeadConfig | None" = None,
+        sequence_parallel_logits: bool | None = None,
+        group: "ProcessGroup" = None,
+    ) -> dict[str, "torch.Tensor"]:
+        pass
+
 
 @config_class(dynamic_type={LanguageModelLossConfig: "cross_entropy"})
 class CrossEntropyLMLossConfig(LanguageModelLossConfig):
@@ -109,10 +110,40 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
+    def extract_targets_from_global_kwargs(
+        self,
+        kwargs: dict | None = None,
+        prediction_distance: int | None = None,
+        prediction_heads: int | None = None,
+        head_config: "LanguageModelHeadConfig | None" = None,
+        sequence_parallel_logits: bool | None = None,
+        group: "ProcessGroup" = None,
+    ) -> dict[str, "torch.Tensor"]:
+        if kwargs is None:
+            kwargs = {}
+
+        lm_target = kwargs.get(LanguageModelKwargs.labels)
+        if lm_target is not None:
+            # MTP: Shift the labels
+            lm_target_sequence_length = (
+                lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - prediction_heads
+            )
+            if LanguageModelKwargs.sequence_q_dim in kwargs:
+                Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
+            lm_target_slice = slice(prediction_distance, prediction_distance + lm_target_sequence_length)
+            lm_target = (
+                lm_target[lm_target_slice]
+                if kwargs[LanguageModelKwargs.sequence_first]
+                else lm_target[:, lm_target_slice]
+            ).flatten()
+            if sequence_parallel_logits:
+                lm_target = split_op(lm_target, group, 0)
+        return {TargetsKwargs.lm_target: lm_target}
+
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        targets: Targets,
+        loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
@@ -121,9 +152,7 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 
-        target = targets.lm_target
-        if target is None:
-            raise ValueError("CrossEntropyLoss requires lm_target to be set in Targets")
+        target = kwargs.get(TargetsKwargs.lm_target)
         implementation = self.implementation
         if implementation == CrossEntropyImpl.auto:
             if vocab_parallel:
@@ -160,10 +189,29 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
+    def extract_targets_from_global_kwargs(
+        self,
+        kwargs: dict | None = None,
+        prediction_distance: int | None = None,
+        prediction_heads: int | None = None,
+        head_config: "LanguageModelHeadConfig | None" = None,
+        sequence_parallel_logits: bool | None = None,
+        group: "ProcessGroup" = None,
+    ) -> dict[str, "torch.Tensor"]:
+        if kwargs is None:
+            kwargs = {}
+
+        reference_model_logits = kwargs.get(f"{head_config.distillation_model}_logits")
+        if reference_model_logits is not None:
+            reference_model_logits = reference_model_logits.flatten(0, -2)
+            if sequence_parallel_logits:
+                reference_model_logits = split_op(reference_model_logits, group, 0)
+        return {TargetsKwargs.reference_model_logits: reference_model_logits}
+
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        targets: Targets,
+        loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
@@ -172,14 +220,12 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.cross_entropy import forward_kl_forward_backward
 
-        target = targets.reference_model_logits
-        if target is None:
-            raise ValueError("ForwardKLLoss requires distillation_target to be set in Targets")
+        target = kwargs.get(TargetsKwargs.reference_model_logits)
 
         return forward_kl_forward_backward(
             logits=logits.flatten(0, -2),
             target=target,
-            loss_mask=targets.loss_mask,
+            loss_mask=loss_mask,
             grad_output=grad_output,
             group=group,
             logits_scale_factor=logits_scale_factor,
@@ -189,23 +235,16 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "reverse_kl_distillation"})
-class ReverseKLLossConfig(LanguageModelLossConfig):
+class ReverseKLLossConfig(ForwardKLLossConfig):
     """Reverse KL divergence KL(q||p) for distillation (mode-seeking)."""
 
     _name: typing.ClassVar[str] = "RevKL"
     _abstract: typing.ClassVar[bool] = False
 
-    teacher_softmax_temperature: float = Field(
-        default=1.0,
-        hint=FieldHint.optional,
-        desc="Temperature for teacher softmax.",
-        valid=check_field(Assert.gt, 0.0),
-    )
-
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        targets: Targets,
+        loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
@@ -215,14 +254,12 @@ class ReverseKLLossConfig(LanguageModelLossConfig):
         from fast_llm.functional.cross_entropy import reverse_kl_forward_backward
 
         # Use distillation_target for KL losses
-        target = targets.reference_model_logits
-        if target is None:
-            raise ValueError("ReverseKLLoss requires distillation_target to be set in Targets")
+        target = kwargs.get(TargetsKwargs.reference_model_logits)
 
         return reverse_kl_forward_backward(
             logits=logits.flatten(0, -2),
             target=target,
-            loss_mask=targets.loss_mask,
+            loss_mask=loss_mask,
             grad_output=grad_output,
             group=group,
             logits_scale_factor=logits_scale_factor,
@@ -245,10 +282,35 @@ class DPOLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
+    def extract_targets_from_global_kwargs(
+        self,
+        kwargs: dict | None = None,
+        prediction_distance: int | None = None,
+        prediction_heads: int | None = None,
+        head_config: "LanguageModelHeadConfig | None" = None,
+        sequence_parallel_logits: bool | None = None,
+        group: "ProcessGroup" = None,
+    ) -> dict[str, "torch.Tensor"]:
+        if kwargs is None:
+            kwargs = {}
+
+        reference_model_logits = kwargs.get(f"{head_config.dpo_reference_model}_logits")
+        dpo_target = kwargs.get(LanguageModelKwargs.labels)
+        if reference_model_logits is not None:
+            reference_model_logits = reference_model_logits.flatten(0, -2)
+            if sequence_parallel_logits:
+                reference_model_logits = split_op(reference_model_logits, group, 0)
+        if dpo_target is not None:
+            dpo_target = split_op(dpo_target, group, 0)
+        return {
+            TargetsKwargs.dpo_reference_model_logits: reference_model_logits,
+            TargetsKwargs.dpo_target: dpo_target,
+        }
+
     def compute_loss(
         self,
         logits: "torch.Tensor",
-        targets: Targets,
+        loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
         group: "ProcessGroup" = None,
         logits_scale_factor: float | None = None,
@@ -256,15 +318,16 @@ class DPOLossConfig(LanguageModelLossConfig):
         kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.dpo import compute_dpo_loss
-        from fast_llm.layers.language_model.config import LanguageModelKwargs
 
+        dpo_target = kwargs.get(TargetsKwargs.dpo_target)
+        dpo_reference_model_logits = kwargs.get(TargetsKwargs.dpo_reference_model_logits)
         chosen_spans = kwargs.get(LanguageModelKwargs.chosen_spans)
         rejected_spans = kwargs.get(LanguageModelKwargs.rejected_spans)
 
         return compute_dpo_loss(
             logits=logits,
-            targets=targets.dpo_target,
-            reference_model_logits=targets.dpo_reference_model_logits,
+            targets=dpo_target,
+            reference_model_logits=dpo_reference_model_logits,
             chosen_spans=chosen_spans,
             rejected_spans=rejected_spans,
             beta=self.beta,

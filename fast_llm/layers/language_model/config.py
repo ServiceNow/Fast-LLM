@@ -5,7 +5,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
+from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -17,21 +17,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
     from fast_llm.layers.language_model.language_model import LanguageModel
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
-
-
-class LanguageModelKwargs(BlockKwargs):
-    token_ids = "token_ids"
-    position_ids = "position_ids"
-    token_map = "token_map"
-    sample_map = "sample_map"
-    embedding_map = "embedding_map"
-    # TODO: These are generic
-    labels = "labels"
-    phase = "phase"
-    chosen_spans = "chosen_spans"
-    rejected_spans = "rejected_spans"
-    loss_mask = "loss_mask"
-    mask_inputs = "mask_inputs"
 
 
 @config_class()

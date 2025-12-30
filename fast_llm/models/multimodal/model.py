@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNam
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
-from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
 from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
 from fast_llm.models.gpt.config import GPTBatchConfig
