@@ -1033,6 +1033,8 @@ def torch_chunk_gated_delta_rule(
 
     if not output_final_state:
         last_recurrent_state = None
+    elif last_recurrent_state is not None:
+        last_recurrent_state = last_recurrent_state.to(initial_dtype)
     core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
     core_attn_out = core_attn_out[:, :, :sequence_length]
     core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
@@ -1286,8 +1288,14 @@ class Apriel2GatedDeltaNet(nn.Module):
                 output_final_state=past_key_values is not None,
                 use_qk_l2norm_in_kernel=True,
             )
+            # Ensure state is in same dtype as hidden_states (fla kernel may return float32)
+            if last_recurrent_state is not None:
+                last_recurrent_state = last_recurrent_state.to(hidden_states.dtype)
         else:
             # Recurrent mode for single token decode
+            # Convert recurrent_state to match hidden_states dtype if needed
+            if recurrent_state is not None and recurrent_state.dtype != hidden_states.dtype:
+                recurrent_state = recurrent_state.to(hidden_states.dtype)
             output, last_recurrent_state = self._recurrent_gated_delta_rule(
                 query, key, value, g, beta_gate, recurrent_state
             )
@@ -1310,7 +1318,16 @@ class Apriel2GatedDeltaNet(nn.Module):
         return (output,)
 
     def _recurrent_gated_delta_rule(self, query, key, value, g, beta, state):
-        """Single-step recurrent update for cached inference."""
+        """Single-step recurrent update for cached inference.
+
+        Input shapes: [batch, seq=1, heads, dim]
+        Need shapes: [batch, heads, dim] for einsum operations
+        """
+        # Transpose from [batch, seq, heads, dim] to [batch, heads, seq, dim]
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
         # L2 normalize query and key
         query = _l2norm(query, dim=-1, eps=1e-6)
         key = _l2norm(key, dim=-1, eps=1e-6)
@@ -1323,13 +1340,21 @@ class Apriel2GatedDeltaNet(nn.Module):
         beta = beta.squeeze(1)
 
         # Update state: S = exp(g) * S + beta * k^T @ v
-        decay = g.exp().unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
+        # Keep everything in the same dtype as input (exp() returns float32, need to convert back)
+        input_dtype = query.dtype
+        decay = g.exp().to(input_dtype).unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
         k_outer_v = torch.einsum("bhk,bhv->bhkv", key * beta.unsqueeze(-1), value)
         state = decay * state + k_outer_v
 
         # Output: o = q @ S
         output = torch.einsum("bhk,bhkv->bhv", query, state)
         output = output.unsqueeze(2)  # [batch, heads, 1, v_dim]
+
+        # Transpose back to [batch, seq=1, heads, v_dim]
+        output = output.transpose(1, 2)
+
+        # Ensure state matches output dtype
+        state = state.to(output.dtype)
 
         return output, state
 
