@@ -163,7 +163,6 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         )
         if metrics["num_skipped"] > 0:
             formatted += f" [{metrics['num_skipped']} skipped]"
-        log_main_rank(formatted)
 
         return EvaluationMetrics(
             {f"validation.{self._name}": {k: v for k, v in metrics.items() if k != "num_skipped"}},
@@ -178,23 +177,45 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         if len(data) == 0:
             return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
 
-        batch_size = self._config.batch_size
-        student_log_probs_batches: list[torch.Tensor] = []
+        # Switch to eval mode so StochasticMixer uses the main (attention) mixer
+        # instead of randomly sampling. This ensures we evaluate the attention-only path.
+        was_training = self._multi_stage._training
+        self._multi_stage.train(False)
 
-        for i in range(0, len(data), batch_size):
-            batch_log_probs = self._compute_batch_log_probs(
-                data.tokens[i : i + batch_size],
-                data.prompt_lens[i : i + batch_size],
-                data.completion_lens[i : i + batch_size],
-            )
-            if batch_log_probs is not None:
-                student_log_probs_batches.append(batch_log_probs)
+        try:
+            batch_size = self._config.batch_size
+            student_log_probs_batches: list[torch.Tensor] = []
 
-        if not student_log_probs_batches:  # non-last PP rank
-            return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
+            for i in range(0, len(data), batch_size):
+                batch_log_probs = self._compute_batch_log_probs(
+                    data.tokens[i : i + batch_size],
+                    data.prompt_lens[i : i + batch_size],
+                    data.completion_lens[i : i + batch_size],
+                )
+                if batch_log_probs is not None:
+                    student_log_probs_batches.append(batch_log_probs)
+
+            if not student_log_probs_batches:  # non-last PP rank
+                return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
+        finally:
+            # Restore original training mode
+            if was_training:
+                self._multi_stage.train(True)
 
         student_log_probs = torch.cat(student_log_probs_batches)
         log_w = student_log_probs - data.teacher_log_probs
+
+        # Diagnostic logging with percentiles
+        pcts = torch.tensor([0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99], device=log_w.device)
+        pct_labels = ["1%", "5%", "10%", "25%", "50%", "75%", "90%", "95%", "99%"]
+
+        def fmt_percentiles(t: torch.Tensor) -> str:
+            q = torch.quantile(t.float(), pcts)
+            return ", ".join(f"{l}={v:.1f}" for l, v in zip(pct_labels, q.tolist()))
+
+        logger.info(f"student_log_probs: [{fmt_percentiles(student_log_probs)}]")
+        logger.info(f"teacher_log_probs: [{fmt_percentiles(data.teacher_log_probs)}]")
+        logger.info(f"log_w: [{fmt_percentiles(log_w)}]")
 
         log_sum_all = self._scatter_logsumexp(log_w, data.problem_indices, data.num_problems)
         log_w_correct = log_w.masked_fill(~data.corrects, float("-inf"))
@@ -206,6 +227,19 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         # ESS = exp(2*logsumexp(log_w) - logsumexp(2*log_w))
         log_sum_sq = self._scatter_logsumexp(2 * log_w, data.problem_indices, data.num_problems)
         ess = (2 * log_sum_all - log_sum_sq).exp().clamp(min=0.0)
+
+        # ESS diagnostics with percentiles
+        traces_per_problem = torch.bincount(data.problem_indices, minlength=data.num_problems)
+        multi_trace_mask = traces_per_problem > 1
+        if multi_trace_mask.any():
+            multi_ess = ess[multi_trace_mask]
+            multi_traces = traces_per_problem[multi_trace_mask]
+            logger.info(
+                f"ESS ({multi_trace_mask.sum().item()} multi-trace problems): [{fmt_percentiles(multi_ess)}]"
+            )
+            logger.info(
+                f"traces/problem: [{fmt_percentiles(multi_traces.float())}]"
+            )
 
         return self._reduce_metrics(
             accuracy.sum().item(),
