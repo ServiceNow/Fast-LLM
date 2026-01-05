@@ -97,9 +97,6 @@ class SafeLoad:
             for stage, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
                 for shard_name, fsdp_shard in fsdp_shards.items():
                     buffer = fsdp.reconstruct_from_shard(fsdp_shard)
-                    # Skip empty buffers (can happen with different distributed configs)
-                    if buffer.numel() == 0:
-                        continue
                     for parameter_name, parameter in fsdp.split_buffer(buffer).items():
                         missing_for_param = parameter.isnan().sum().item()
                         if missing_for_param > 0:
