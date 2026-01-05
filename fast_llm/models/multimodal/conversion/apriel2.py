@@ -326,9 +326,7 @@ class Apriel2MultimodalBaseModelConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         text_config = Apriel2BaseModelConverter.import_config(config)
-        vision_config = (
-            cls.vision_model_converter_class.import_config(config) if "vision_encoder" in config else None
-        )
+        vision_config = cls.vision_model_converter_class.import_config(config) if "vision_encoder" in config else None
 
         result = safe_merge_dicts(
             text_config,
@@ -388,10 +386,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
     @classmethod
     def get_model_files(cls) -> tuple[str, str, str | None]:
-        from fast_llm_external_models.apriel2 import (
-            configuration_apriel2,
-            modeling_apriel2,
-        )
+        from fast_llm_external_models.apriel2 import configuration_apriel2, modeling_apriel2
 
         return configuration_apriel2.__file__, modeling_apriel2.__file__, None
 

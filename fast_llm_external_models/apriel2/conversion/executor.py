@@ -29,7 +29,8 @@ so results are reproducible and independent of execution order.
 from __future__ import annotations
 
 import hashlib
-from typing import Callable, Iterator
+from collections.abc import Iterator
+from typing import Callable
 
 import torch
 from torch import Tensor
@@ -81,8 +82,7 @@ class StreamingExecutor:
                     break
             else:
                 raise ValueError(
-                    "Cannot infer device/dtype: plan has no source references. "
-                    "Provide device and dtype explicitly."
+                    "Cannot infer device/dtype: plan has no source references. " "Provide device and dtype explicitly."
                 )
 
         generator = torch.Generator(device=device)
@@ -94,10 +94,7 @@ class StreamingExecutor:
             # Verify device/dtype consistency
             for key, tensor in sources.items():
                 if tensor.device != device or tensor.dtype != dtype:
-                    raise ValueError(
-                        f"Source {key} has {tensor.device}/{tensor.dtype}, "
-                        f"expected {device}/{dtype}"
-                    )
+                    raise ValueError(f"Source {key} has {tensor.device}/{tensor.dtype}, " f"expected {device}/{dtype}")
 
             # Deterministic per-target seed
             key_offset = int(hashlib.md5(str(target_key).encode()).hexdigest()[:8], 16)

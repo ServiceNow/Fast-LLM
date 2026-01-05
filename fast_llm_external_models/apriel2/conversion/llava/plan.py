@@ -1,11 +1,6 @@
 """Llava to Apriel2 weight conversion plan."""
 
-from fast_llm_external_models.apriel2.conversion.expr import (
-    Expr,
-    ExprPlan,
-    Ref,
-    W,
-)
+from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan, Ref, W
 
 
 def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:

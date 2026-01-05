@@ -28,15 +28,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from fast_llm_external_models.apriel2.conversion import (
-    Concat,
-    ExprPlan,
-    Ref,
-    Slice,
-    W,
-    execute,
-)
-
+from fast_llm_external_models.apriel2.conversion import Concat, ExprPlan, Ref, Slice, W, execute
 
 # =============================================================================
 # Shared Fixtures
@@ -69,10 +61,10 @@ def hidden_size(request):
 
 @pytest.fixture(
     params=[
-        pytest.param((8, 8, 32), id="mha-8h-32d"),   # MHA: 8 heads, 8 kv heads, 32 head_dim
-        pytest.param((8, 4, 32), id="gqa-8h4kv-32d"), # GQA: 8 heads, 4 kv heads, 32 head_dim
-        pytest.param((8, 2, 64), id="gqa-8h2kv-64d"), # GQA: 8 heads, 2 kv heads, 64 head_dim
-        pytest.param((4, 1, 64), id="mqa-4h1kv-64d"), # MQA: 4 heads, 1 kv head, 64 head_dim
+        pytest.param((8, 8, 32), id="mha-8h-32d"),  # MHA: 8 heads, 8 kv heads, 32 head_dim
+        pytest.param((8, 4, 32), id="gqa-8h4kv-32d"),  # GQA: 8 heads, 4 kv heads, 32 head_dim
+        pytest.param((8, 2, 64), id="gqa-8h2kv-64d"),  # GQA: 8 heads, 2 kv heads, 64 head_dim
+        pytest.param((4, 1, 64), id="mqa-4h1kv-64d"),  # MQA: 4 heads, 1 kv head, 64 head_dim
     ]
 )
 def attention_config(request):
@@ -90,7 +82,7 @@ def attention_config(request):
     params=[
         pytest.param((8, 4, 32, 32), id="8v-4k-32d"),  # 8 value heads, 4 key heads, symmetric dims
         pytest.param((8, 2, 64, 64), id="8v-2k-64d"),  # 8 value heads, 2 key heads, larger dims
-        pytest.param((4, 2, 32, 64), id="4v-2k-asym"), # Asymmetric key/value dims
+        pytest.param((4, 2, 32, 64), id="4v-2k-asym"),  # Asymmetric key/value dims
     ]
 )
 def gdn_config(request):
@@ -100,9 +92,9 @@ def gdn_config(request):
 
 @pytest.fixture(
     params=[
-        pytest.param((4, 8), id="4h-8d"),   # 4 heads, 8 head_dim (small)
-        pytest.param((8, 16), id="8h-16d"), # 8 heads, 16 head_dim (medium)
-        pytest.param((4, 32), id="4h-32d"), # 4 heads, 32 head_dim (large head_dim)
+        pytest.param((4, 8), id="4h-8d"),  # 4 heads, 8 head_dim (small)
+        pytest.param((8, 16), id="8h-16d"),  # 8 heads, 16 head_dim (medium)
+        pytest.param((4, 32), id="4h-32d"),  # 4 heads, 32 head_dim (large head_dim)
     ]
 )
 def kda_config(request):
@@ -283,9 +275,21 @@ def plan_qwen3next_gdn_to_apriel2(
     for g in range(num_k_heads):
         base = g * group_size
         q_slices.append(Slice(expr=qkvz_ref, slices=((base, base + head_k_dim, None), (None, None, None))))
-        k_slices.append(Slice(expr=qkvz_ref, slices=((base + head_k_dim, base + 2 * head_k_dim, None), (None, None, None))))
-        v_slices.append(Slice(expr=qkvz_ref, slices=((base + 2 * head_k_dim, base + 2 * head_k_dim + v_per_group, None), (None, None, None))))
-        z_slices.append(Slice(expr=qkvz_ref, slices=((base + 2 * head_k_dim + v_per_group, base + group_size, None), (None, None, None))))
+        k_slices.append(
+            Slice(expr=qkvz_ref, slices=((base + head_k_dim, base + 2 * head_k_dim, None), (None, None, None)))
+        )
+        v_slices.append(
+            Slice(
+                expr=qkvz_ref,
+                slices=((base + 2 * head_k_dim, base + 2 * head_k_dim + v_per_group, None), (None, None, None)),
+            )
+        )
+        z_slices.append(
+            Slice(
+                expr=qkvz_ref,
+                slices=((base + 2 * head_k_dim + v_per_group, base + group_size, None), (None, None, None)),
+            )
+        )
 
     in_proj_qkvz_expr = Concat(
         exprs=(
@@ -304,8 +308,15 @@ def plan_qwen3next_gdn_to_apriel2(
     b_slices, a_slices = [], []
     for g in range(num_k_heads):
         base = g * ba_per_group
-        b_slices.append(Slice(expr=ba_ref, slices=((base, base + num_v_heads // num_k_heads, None), (None, None, None))))
-        a_slices.append(Slice(expr=ba_ref, slices=((base + num_v_heads // num_k_heads, base + ba_per_group, None), (None, None, None))))
+        b_slices.append(
+            Slice(expr=ba_ref, slices=((base, base + num_v_heads // num_k_heads, None), (None, None, None)))
+        )
+        a_slices.append(
+            Slice(
+                expr=ba_ref,
+                slices=((base + num_v_heads // num_k_heads, base + ba_per_group, None), (None, None, None)),
+            )
+        )
 
     in_proj_ba_expr = Concat(
         exprs=(Concat(exprs=tuple(b_slices), dim=0), Concat(exprs=tuple(a_slices), dim=0)),
@@ -565,6 +576,7 @@ class TestAttentionEquivalence:
     ):
         """Verify Apriel2Attention (causal) matches MistralAttention output."""
         from transformers.models.mistral.modeling_mistral import MistralAttention, MistralRotaryEmbedding
+
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
         mixer_config = apriel2_config.decoder["block"]["mixer"]
@@ -593,13 +605,20 @@ class TestAttentionEquivalence:
         apriel2_attn.eval()
 
         with torch.no_grad():
-            mistral_out = mistral_attn(hidden_states, position_embeddings=position_embeddings, attention_mask=causal_mask)[0]
-            apriel2_out = apriel2_attn(hidden_states, attention_mask=causal_mask, position_embeddings=position_embeddings)[0]
+            mistral_out = mistral_attn(
+                hidden_states, position_embeddings=position_embeddings, attention_mask=causal_mask
+            )[0]
+            apriel2_out = apriel2_attn(
+                hidden_states, attention_mask=causal_mask, position_embeddings=position_embeddings
+            )[0]
 
         rtol, atol = tolerance
         assert_close(
-            apriel2_out, mistral_out, rtol=rtol, atol=atol,
-            msg=f"Apriel2Attention vs MistralAttention (batch={batch_size}, seq={seq_len}, hidden={hidden_size})"
+            apriel2_out,
+            mistral_out,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Apriel2Attention vs MistralAttention (batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
@@ -613,8 +632,9 @@ class TestAttentionEquivalence:
         tolerance,
     ):
         """Verify Apriel2Attention (non-causal) matches PixtralAttention output."""
-        from transformers.models.pixtral.modeling_pixtral import PixtralAttention, PixtralRotaryEmbedding
         from transformers.models.pixtral.configuration_pixtral import PixtralVisionConfig
+        from transformers.models.pixtral.modeling_pixtral import PixtralAttention, PixtralRotaryEmbedding
+
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Attention
 
@@ -689,8 +709,11 @@ class TestAttentionEquivalence:
 
         rtol, atol = tolerance
         assert_close(
-            apriel2_out, pixtral_out, rtol=rtol, atol=atol,
-            msg=f"Apriel2Attention (non-causal) vs PixtralAttention (batch={batch_size}, seq={seq_len})"
+            apriel2_out,
+            pixtral_out,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Apriel2Attention (non-causal) vs PixtralAttention (batch={batch_size}, seq={seq_len})",
         )
 
 
@@ -737,6 +760,7 @@ class TestGDNEquivalence:
     ):
         """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet output."""
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
+
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
@@ -758,8 +782,10 @@ class TestGDNEquivalence:
 
         # Transfer weights
         plan = plan_qwen3next_gdn_to_apriel2(
-            num_k_heads=key_heads, num_v_heads=value_heads,
-            head_k_dim=key_head_dim, head_v_dim=value_head_dim,
+            num_k_heads=key_heads,
+            num_v_heads=value_heads,
+            head_k_dim=key_head_dim,
+            head_v_dim=value_head_dim,
         )
         source_weights = extract_module_weights(qwen_gdn)
         target_weights = execute(plan, source_weights, seed=seed)
@@ -778,8 +804,11 @@ class TestGDNEquivalence:
 
         rtol, atol = tolerance
         assert_close(
-            apriel2_out, qwen_out, rtol=rtol, atol=atol,
-            msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet (batch={batch_size}, seq={seq_len})"
+            apriel2_out,
+            qwen_out,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet (batch={batch_size}, seq={seq_len})",
         )
 
 
@@ -803,6 +832,7 @@ class TestKDAEquivalence:
     ):
         """Verify Apriel2 KimiDeltaAttention matches FLA KimiDeltaAttention output."""
         from fla.layers.kda import KimiDeltaAttention as FLA_KDA
+
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention as Apriel2_KDA
 
         num_heads, head_dim = kda_config
@@ -853,8 +883,11 @@ class TestKDAEquivalence:
 
         rtol, atol = tolerance
         assert_close(
-            apriel2_out, fla_out, rtol=rtol, atol=atol,
-            msg=f"Apriel2 KDA vs FLA KDA (batch={batch_size}, seq={seq_len}, hidden={hidden_size})"
+            apriel2_out,
+            fla_out,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Apriel2 KDA vs FLA KDA (batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
 
 
@@ -913,7 +946,4 @@ class TestFastVsSlowPath:
             slow_out = model(hidden_states)[0].clone()
 
         # Looser tolerance for kernel vs reference comparison
-        assert_close(
-            fast_out, slow_out, rtol=1e-3, atol=1e-3,
-            msg="GDN fast path (CUDA) vs slow path (PyTorch)"
-        )
+        assert_close(fast_out, slow_out, rtol=1e-3, atol=1e-3, msg="GDN fast path (CUDA) vs slow path (PyTorch)")
