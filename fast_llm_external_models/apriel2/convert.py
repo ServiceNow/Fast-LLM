@@ -30,10 +30,7 @@ from typing import Callable
 import yaml
 from tqdm import tqdm
 
-# Allow running as script or module
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
+# Import source-specific converters
 from fast_llm_external_models.apriel2.conversion import (
     DEFAULT_MAX_SHARD_SIZE,
     ExprPlan,
@@ -42,13 +39,16 @@ from fast_llm_external_models.apriel2.conversion import (
     StreamingExecutor,
     compose,
     compose_configs,
-    plan_surgery,
-    strip_init_fields,
 )
-
-# Import source-specific converters
 from fast_llm_external_models.apriel2.conversion import llava as llava_converter
+from fast_llm_external_models.apriel2.conversion import plan_surgery
 from fast_llm_external_models.apriel2.conversion import qwen2 as qwen2_converter
+from fast_llm_external_models.apriel2.conversion import strip_init_fields
+
+# Allow running as script or module
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,9 @@ def build_plan(
 
             # S × T → Plan: build plan from source state and transition spec
             surgery_plan = plan_surgery(current_config, target_config)
-            logger.info(f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets")
+            logger.info(
+                f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets"
+            )
 
             # Compose plans
             current_plan = compose(current_plan, surgery_plan)
@@ -223,9 +225,7 @@ def convert(
         executor = StreamingExecutor(full_plan, loader)
 
         with ShardedSafetensorWriter(output_dir, max_shard_size=max_shard_size) as writer:
-            for target_key, tensor in tqdm(
-                executor.execute(seed), desc="Converting", total=len(full_plan)
-            ):
+            for target_key, tensor in tqdm(executor.execute(seed), desc="Converting", total=len(full_plan)):
                 writer.add(target_key, tensor)
 
     return final_config
@@ -294,9 +294,7 @@ def resolve_input(input_path: str) -> Path:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Convert HuggingFace checkpoint to Apriel2 HF format"
-    )
+    parser = argparse.ArgumentParser(description="Convert HuggingFace checkpoint to Apriel2 HF format")
     parser.add_argument(
         "input",
         type=str,
@@ -396,8 +394,7 @@ def main():
     safetensor_files = sorted(input_dir.glob("*.safetensors"))
     if not safetensor_files:
         raise ValueError(
-            f"No safetensor files found in {input_dir}. "
-            "Plan-based conversion requires safetensor files."
+            f"No safetensor files found in {input_dir}. " "Plan-based conversion requires safetensor files."
         )
 
     # Convert using plan-based approach with streaming sharded output

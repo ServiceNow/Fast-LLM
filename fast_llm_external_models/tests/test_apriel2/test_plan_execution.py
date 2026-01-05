@@ -61,26 +61,26 @@ Design Principles
 - Tests document the laws they verify in their docstrings
 """
 
-import pytest
-import torch
 from functools import reduce
 
+import pytest
+import torch
+
 from fast_llm_external_models.apriel2.conversion import (
+    Concat,
+    ExprPlan,
+    Init,
+    Ref,
+    Slice,
+    W,
     compose,
     compose_configs,
     execute,
     plan_surgery,
-    ExprPlan,
-    W,
-    Ref,
-    Concat,
-    Slice,
-    Init,
 )
 
 # Import shared helper from conftest
 from fast_llm_external_models.tests.test_apriel2.conftest import make_weights_for_config
-
 
 # =============================================================================
 # Fixtures: Use shared fixtures from conftest.py where possible
@@ -125,7 +125,9 @@ class TestPlanCompositionAssociativity:
             p3 = ExprPlan(mappings={W("out"): Ref(key=W("part"))})
         elif expr_type == "with_init":
             p1 = ExprPlan(mappings={W("x"): Ref(key=W("a"))})
-            p2 = ExprPlan(mappings={W("y"): Concat(exprs=(Ref(key=W("x")), Init(shape=(5,), init_type="zeros")), dim=0)})
+            p2 = ExprPlan(
+                mappings={W("y"): Concat(exprs=(Ref(key=W("x")), Init(shape=(5,), init_type="zeros")), dim=0)}
+            )
             p3 = ExprPlan(mappings={W("z"): Ref(key=W("y"))})
 
         left = compose(compose(p1, p2), p3)
@@ -194,7 +196,7 @@ class TestPlanSurgeryFunctoriality:
             configs.append(compose_configs(configs[-1], s))
 
         # Build incremental plans: Pₖ = plan_surgery(Cₖ₋₁, Cₖ)
-        plans = [plan_surgery(configs[i], configs[i+1]) for i in range(len(surgeries))]
+        plans = [plan_surgery(configs[i], configs[i + 1]) for i in range(len(surgeries))]
 
         # Compose all incremental plans
         composed_plan = reduce(compose, plans)
@@ -208,12 +210,14 @@ class TestPlanSurgeryFunctoriality:
         direct_weights = execute(direct_plan, weights, seed=42)
 
         # Verify semantic equivalence
-        assert set(composed_weights.keys()) == set(direct_weights.keys()), \
-            f"Key sets differ for chain_length={chain_length}, use_bias={use_bias}"
+        assert set(composed_weights.keys()) == set(
+            direct_weights.keys()
+        ), f"Key sets differ for chain_length={chain_length}, use_bias={use_bias}"
 
         for key in composed_weights:
-            assert torch.allclose(composed_weights[key], direct_weights[key], atol=1e-6), \
-                f"Weight mismatch for {key} with chain_length={chain_length}, use_bias={use_bias}"
+            assert torch.allclose(
+                composed_weights[key], direct_weights[key], atol=1e-6
+            ), f"Weight mismatch for {key} with chain_length={chain_length}, use_bias={use_bias}"
 
     @pytest.mark.parametrize("split_point", [1, 2])
     def test_arbitrary_grouping(
@@ -240,7 +244,7 @@ class TestPlanSurgeryFunctoriality:
             configs.append(compose_configs(configs[-1], s))
 
         # Build incremental plans
-        plans = [plan_surgery(configs[i], configs[i+1]) for i in range(3)]
+        plans = [plan_surgery(configs[i], configs[i + 1]) for i in range(3)]
 
         # Different groupings
         left_grouped = compose(compose(plans[0], plans[1]), plans[2])
@@ -296,21 +300,19 @@ class TestBiasInheritancePreservation:
         for s in surgeries:
             configs.append(compose_configs(configs[-1], s))
 
-        plans = [plan_surgery(configs[i], configs[i+1]) for i in range(num_surgeries)]
+        plans = [plan_surgery(configs[i], configs[i + 1]) for i in range(num_surgeries)]
         final_plan = reduce(compose, plans) if len(plans) > 1 else plans[0]
 
         # Check bias keys present
         target_keys = {str(k) for k in final_plan.target_keys()}
 
-        assert any("q_proj.bias" in k for k in target_keys), \
-            f"q_proj.bias missing after {num_surgeries} surgeries"
-        assert any("k_proj.bias" in k for k in target_keys), \
-            f"k_proj.bias missing after {num_surgeries} surgeries"
-        assert any("v_proj.bias" in k for k in target_keys), \
-            f"v_proj.bias missing after {num_surgeries} surgeries"
+        assert any("q_proj.bias" in k for k in target_keys), f"q_proj.bias missing after {num_surgeries} surgeries"
+        assert any("k_proj.bias" in k for k in target_keys), f"k_proj.bias missing after {num_surgeries} surgeries"
+        assert any("v_proj.bias" in k for k in target_keys), f"v_proj.bias missing after {num_surgeries} surgeries"
         # O bias should NOT be present (disabled in source)
-        assert not any("o_proj.bias" in k for k in target_keys), \
-            f"o_proj.bias should not be present (disabled in source)"
+        assert not any(
+            "o_proj.bias" in k for k in target_keys
+        ), f"o_proj.bias should not be present (disabled in source)"
 
     def test_bias_values_preserved(
         self,
@@ -331,8 +333,7 @@ class TestBiasInheritancePreservation:
             dst_key = W(f"model.decoder.blocks.{i}.mixer.mixers.attention.q_proj.bias")
 
             assert dst_key in result, f"Missing {dst_key}"
-            assert torch.allclose(weights[src_key], result[dst_key]), \
-                f"Bias values differ for block {i}"
+            assert torch.allclose(weights[src_key], result[dst_key]), f"Bias values differ for block {i}"
 
 
 # =============================================================================
@@ -379,8 +380,9 @@ class TestBuildPlanIntegration:
 
         # Verify bias mappings in plan
         target_keys = {str(k) for k in plan.target_keys()}
-        assert any("q_proj.bias" in k for k in target_keys), \
-            f"build_plan with {num_surgeries} surgeries missing q_proj.bias"
+        assert any(
+            "q_proj.bias" in k for k in target_keys
+        ), f"build_plan with {num_surgeries} surgeries missing q_proj.bias"
 
 
 # =============================================================================
@@ -435,7 +437,7 @@ class TestInitFieldPreservation:
                     has_init_expr = True
                     break
                 # Also check inside Concat/other composite expressions
-                if hasattr(expr, 'exprs'):
+                if hasattr(expr, "exprs"):
                     for sub in expr.exprs:
                         if isinstance(sub, Init):
                             has_init_expr = True
@@ -533,9 +535,7 @@ class TestInitFieldPreservation:
         substitutes Ref → Init, but the semantics are correct: GDN is initialized
         once (in surgery 1), not re-randomized in surgery 2.
         """
-        from fast_llm_external_models.apriel2.conversion import (
-            compose_configs, strip_init_fields, plan_surgery, compose
-        )
+        from fast_llm_external_models.apriel2.conversion import compose_configs, plan_surgery, strip_init_fields
 
         # Surgery 1: Add GDN with random init
         surgery1 = {
@@ -581,8 +581,9 @@ class TestInitFieldPreservation:
 
         # Iteration 2: s1 has no init for GDN
         t2 = compose_configs(s1, surgery2)
-        assert t2["decoder"]["block"]["mixer"]["mixers"]["gdn"].get("init") is None, \
-            "GDN should have no init in T2 (wasn't in surgery2, stripped from s1)"
+        assert (
+            t2["decoder"]["block"]["mixer"]["mixers"]["gdn"].get("init") is None
+        ), "GDN should have no init in T2 (wasn't in surgery2, stripped from s1)"
 
         # plan_surgery(s1, t2) should use Ref for GDN (transfer, not random)
         plan2 = plan_surgery(s1, t2)

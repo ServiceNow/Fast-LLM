@@ -30,9 +30,9 @@ from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import (
     ConversationSourceConfig,
+    DocumentSourceConfig,
     GPTMemmapDatasetPreparatorConfig,
     LanguageModelSourceConfig,
-    DocumentSourceConfig,
 )
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
@@ -317,7 +317,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     end = end + tokens_shift
                     if span_type == SpanType.image:
                         # Shift the token map to the image location.
-                        image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
+                        image_token_maps[
+                            patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]
+                        ] += begin
                         # Insert the placeholder and image break tokens.
                         tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
                         tokens_shift += len(image_token_ids[image_index])
@@ -509,5 +511,3 @@ def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:
     if left == len(cumsum):
         return left.item()
     return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
-
-

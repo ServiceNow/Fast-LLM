@@ -16,21 +16,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
-
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.conversion import (
-    compose,
-    compose_configs,
-    execute,
-    plan_surgery,
-)
-from fast_llm_external_models.apriel2.conversion.llava import (
-    convert_config as convert_llava_config,
-    plan_llava_to_apriel2,
-)
+from fast_llm_external_models.apriel2.conversion import compose, compose_configs, execute, plan_surgery
+from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
+from fast_llm_external_models.apriel2.conversion.llava import plan_llava_to_apriel2
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
-
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 # =============================================================================
 # Cycling Surgery Generation
@@ -87,40 +78,20 @@ def generate_cycling_surgeries(config: dict) -> list[tuple[dict, str]]:
             if sub_name != main_mixer:
                 # Build surgery path based on block_path
                 if block_path == "block":
-                    surgery = {
-                        "decoder": {
-                            "block": {"mixer": {"main_mixer_name": sub_name}}
-                        }
-                    }
+                    surgery = {"decoder": {"block": {"mixer": {"main_mixer_name": sub_name}}}}
                 else:
                     # block_path is "blocks.block_name"
                     block_name = block_path.split(".")[1]
-                    surgery = {
-                        "decoder": {
-                            "blocks": {
-                                block_name: {"mixer": {"main_mixer_name": sub_name}}
-                            }
-                        }
-                    }
+                    surgery = {"decoder": {"blocks": {block_name: {"mixer": {"main_mixer_name": sub_name}}}}}
                 surgeries.append((surgery, f"cycle {block_path} to {sub_name}"))
 
         # Restore original main_mixer_name
         if any(sub_name != main_mixer for sub_name in sub_mixer_names):
             if block_path == "block":
-                restore = {
-                    "decoder": {
-                        "block": {"mixer": {"main_mixer_name": main_mixer}}
-                    }
-                }
+                restore = {"decoder": {"block": {"mixer": {"main_mixer_name": main_mixer}}}}
             else:
                 block_name = block_path.split(".")[1]
-                restore = {
-                    "decoder": {
-                        "blocks": {
-                            block_name: {"mixer": {"main_mixer_name": main_mixer}}
-                        }
-                    }
-                }
+                restore = {"decoder": {"blocks": {block_name: {"mixer": {"main_mixer_name": main_mixer}}}}}
             surgeries.append((restore, f"restore {block_path} to {main_mixer}"))
 
     return surgeries
@@ -194,9 +165,7 @@ class TestPlanCompositionTorture:
         with open(llava_pixtral_checkpoint / "config.json") as f:
             return json.load(f)
 
-    def test_initial_conversion_produces_working_model(
-        self, source_config, source_weights
-    ):
+    def test_initial_conversion_produces_working_model(self, source_config, source_weights):
         """Test that Llava → Apriel2 conversion produces a working model."""
         # Convert config
         apriel2_config_dict = convert_llava_config(source_config)
@@ -219,9 +188,7 @@ class TestPlanCompositionTorture:
 
         assert outputs.logits.shape == (1, 8, config.vocab_size)
 
-    def test_each_surgery_step_produces_working_model(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_each_surgery_step_produces_working_model(self, source_config, source_weights, additive_surgery_chain):
         """Test that each surgery step produces a model that can forward pass.
 
         Key insight: Surgery plans reference Apriel2 keys, so we must COMPOSE
@@ -290,9 +257,7 @@ class TestPlanCompositionTorture:
                 except Exception as e:
                     pytest.fail(f"Step {i+1}: Forward pass failed - {e}")
 
-    def test_all_stochastic_submixers_via_cycling(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_all_stochastic_submixers_via_cycling(self, source_config, source_weights, additive_surgery_chain):
         """Test ALL sub-mixers in stochastic blocks, not just the main mixer.
 
         Problem: Forward pass only exercises the main_mixer_name. Other sub-mixers
@@ -312,9 +277,7 @@ class TestPlanCompositionTorture:
         conversion_plan = plan_llava_to_apriel2(source_config)
 
         # Expand surgery chain with cycling
-        expanded_chain = expand_surgery_chain_with_cycling(
-            additive_surgery_chain, apriel2_config
-        )
+        expanded_chain = expand_surgery_chain_with_cycling(additive_surgery_chain, apriel2_config)
 
         # Build cumulative plan: conversion | surgery_1 | cycling_1a | ... | restore_1 | surgery_2 | ...
         current_plan = conversion_plan
@@ -359,9 +322,7 @@ class TestPlanCompositionTorture:
                 except Exception as e:
                     pytest.fail(f"{desc}: Forward pass failed - {e}")
 
-    def test_composed_plan_equals_sequential_execution(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_composed_plan_equals_sequential_execution(self, source_config, source_weights, additive_surgery_chain):
         """Test that composing plans gives same result as sequential execution.
 
         This verifies plan composition associativity:
@@ -399,13 +360,9 @@ class TestPlanCompositionTorture:
         # Compare weights
         for key in seq_weights:
             if key in composed_weights:
-                assert torch.allclose(
-                    seq_weights[key], composed_weights[key], atol=1e-5
-                ), f"Weight mismatch for {key}"
+                assert torch.allclose(seq_weights[key], composed_weights[key], atol=1e-5), f"Weight mismatch for {key}"
 
-    def test_final_model_structure(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_final_model_structure(self, source_config, source_weights, additive_surgery_chain):
         """Verify the final model has the expected structure."""
         # Initial conversion
         current_config = convert_llava_config(source_config)
@@ -504,9 +461,7 @@ class TestPlanConfigConsistency:
         """Set up base config and weights after Llava conversion."""
         from safetensors.torch import load_file
 
-        from fast_llm_external_models.apriel2.conversion.llava import (
-            convert_config as convert_llava_config,
-        )
+        from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
 
         # Load source config and weights
         with open(llava_pixtral_checkpoint / "config.json") as f:
@@ -534,9 +489,7 @@ class TestPlanConfigConsistency:
             result = _deep_merge(result, s)
         return result
 
-    def _build_incremental_plans(
-        self, base_config: dict, surgeries: list[dict]
-    ) -> tuple[list, list[dict]]:
+    def _build_incremental_plans(self, base_config: dict, surgeries: list[dict]) -> tuple[list, list[dict]]:
         """Build incremental plans for each surgery step.
 
         Returns (plans, configs) where configs[i] is the config after surgery i.
@@ -552,9 +505,7 @@ class TestPlanConfigConsistency:
             config = target_config
         return plans, configs
 
-    def test_incremental_equals_direct_full_chain(
-        self, base_setup, additive_surgery_chain
-    ):
+    def test_incremental_equals_direct_full_chain(self, base_setup, additive_surgery_chain):
         """Test that composing all incremental plans equals one direct plan.
 
         compose(P1, P2, ..., Pn) ≡ plan_surgery(base, final)
@@ -575,9 +526,7 @@ class TestPlanConfigConsistency:
         direct_plan = plan_surgery(base_config, final_config)
 
         # Verify same target keys
-        assert set(composed_plan.mappings.keys()) == set(
-            direct_plan.mappings.keys()
-        ), "Plan keys should match"
+        assert set(composed_plan.mappings.keys()) == set(direct_plan.mappings.keys()), "Plan keys should match"
 
         # Execute both and compare weights
         composed_weights = execute(composed_plan, base_weights, seed=0)
@@ -611,9 +560,7 @@ class TestPlanConfigConsistency:
             direct = plan_surgery(base_config, configs[k])
 
             # Verify keys match
-            assert set(composed.mappings.keys()) == set(
-                direct.mappings.keys()
-            ), f"Prefix {k}: keys don't match"
+            assert set(composed.mappings.keys()) == set(direct.mappings.keys()), f"Prefix {k}: keys don't match"
 
             # Execute and compare
             composed_weights = execute(composed, base_weights, seed=0)
@@ -781,9 +728,7 @@ class TestComprehensiveTortureChain:
         """Set up for comprehensive torture tests."""
         from safetensors.torch import load_file
 
-        from fast_llm_external_models.apriel2.conversion.llava import (
-            convert_config as convert_llava_config,
-        )
+        from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
 
         # Load source
         with open(llava_pixtral_checkpoint / "config.json") as f:
@@ -801,9 +746,7 @@ class TestComprehensiveTortureChain:
 
         return base_config, base_weights
 
-    def test_each_step_produces_valid_config(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_each_step_produces_valid_config(self, torture_setup, comprehensive_torture_chain):
         """Test that each surgery step produces a valid config."""
         base_config, _ = torture_setup
 
@@ -818,9 +761,7 @@ class TestComprehensiveTortureChain:
                 pytest.fail(f"Step {i+1} produced invalid config: {e}")
 
     @requires_cuda
-    def test_each_step_produces_working_model(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_each_step_produces_working_model(self, torture_setup, comprehensive_torture_chain):
         """Test that each surgery step produces a model that can forward pass.
 
         This is the ultimate integration test - config composition + plan building
@@ -875,9 +816,7 @@ class TestComprehensiveTortureChain:
             current_weights = new_weights
 
     @requires_cuda
-    def test_final_supernet_structure(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_final_supernet_structure(self, torture_setup, comprehensive_torture_chain):
         """Verify the final architecture has supernet blocks with all 4 mixer types."""
         base_config, base_weights = torture_setup
 
@@ -914,9 +853,7 @@ class TestComprehensiveTortureChain:
         assert outputs.logits.shape == (1, 8, config.vocab_size)
 
     @requires_cuda
-    def test_plan_config_consistency_comprehensive(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_plan_config_consistency_comprehensive(self, torture_setup, comprehensive_torture_chain):
         """Test that incremental plan composition works for the comprehensive chain.
 
         Note: We cannot compare to a "direct plan" because the comprehensive chain
@@ -1106,7 +1043,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(mamba_config, surgery)
 
         # Verify the plan has the expected target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixer.q_proj" in k for k in target_keys)
 
     def test_plan_surgery_transfer_fails_for_unsupported_type_pair(self, mamba_config):
@@ -1159,7 +1096,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(base_config, surgery)
 
         # Verify the plan has mamba target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixer.in_proj" in k for k in target_keys)
 
     def test_stochastic_init_random_succeeds_for_any_submixer_type(self, mamba_config):
@@ -1199,7 +1136,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(mamba_config, surgery)
 
         # Verify both sub-mixers have target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixers.attention.q_proj" in k for k in target_keys)
         assert any("mixers.swa.q_proj" in k for k in target_keys)
 
@@ -1234,7 +1171,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(base_config, surgery)
 
         # Verify both sub-mixers have target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixers.attention.q_proj" in k for k in target_keys)
         assert any("mixers.gdn.in_proj_qkvz" in k for k in target_keys)
 
@@ -1369,8 +1306,8 @@ class TestMarkovianProperty:
         plan_from_b = plan_surgery(config_b, final_surgery)
 
         # Compare plan mappings
-        keys_a = set(str(k) for k in plan_from_a.mappings.keys())
-        keys_b = set(str(k) for k in plan_from_b.mappings.keys())
+        keys_a = {str(k) for k in plan_from_a.mappings.keys()}
+        keys_b = {str(k) for k in plan_from_b.mappings.keys()}
         assert keys_a == keys_b, "Plans from same config via different paths should be identical"
 
     def test_init_in_source_config_does_not_affect_plan(self, attention_config_dict):
@@ -1408,8 +1345,8 @@ class TestMarkovianProperty:
         plan_with = plan_surgery(config_with_init, surgery)
         plan_without = plan_surgery(config_without_init, surgery)
 
-        keys_with = set(str(k) for k in plan_with.mappings.keys())
-        keys_without = set(str(k) for k in plan_without.mappings.keys())
+        keys_with = {str(k) for k in plan_with.mappings.keys()}
+        keys_without = {str(k) for k in plan_without.mappings.keys()}
 
         # Plans should be identical - source's init field is ignored
         assert keys_with == keys_without, "Plan should not depend on init in source config"
@@ -1614,7 +1551,7 @@ class TestCyclingSurgeryGeneration:
         # Verify restore flag
         assert expanded[0][2] is False  # surgery - not restore
         assert expanded[1][2] is False  # cycle - not restore
-        assert expanded[2][2] is True   # restore
+        assert expanded[2][2] is True  # restore
 
     def test_expand_surgery_chain_preserves_invariant(self):
         """Test that cycling leaves the chain state invariant."""

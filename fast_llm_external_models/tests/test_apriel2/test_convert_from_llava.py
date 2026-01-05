@@ -14,22 +14,14 @@ Run with: pytest fast_llm_external_models/tests/test_apriel2/test_convert_from_l
 """
 
 import json
-from pathlib import Path
 
-import pytest
 import torch
 from safetensors import safe_open
-from safetensors.torch import save_file
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.conversion import (
-    convert_llava_config as convert_config,
-    execute,
-    plan_llava_to_apriel2,
-    plan_surgery,
-)
+from fast_llm_external_models.apriel2.conversion import convert_llava_config as convert_config
+from fast_llm_external_models.apriel2.conversion import execute, plan_llava_to_apriel2, plan_surgery
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
-
 
 # =============================================================================
 # Config Conversion Tests
@@ -330,9 +322,9 @@ class TestPlanIntegration:
         extra_in_plan = plan_keys - model_keys
 
         # Filter out expected missing keys (caches, positions, etc.)
-        missing_in_plan = {k for k in missing_in_plan if not any(
-            skip in k.lower() for skip in ["cache", "position", "mask"]
-        )}
+        missing_in_plan = {
+            k for k in missing_in_plan if not any(skip in k.lower() for skip in ["cache", "position", "mask"])
+        }
 
         assert not missing_in_plan, f"Model keys not in plan: {sorted(missing_in_plan)[:10]}"
         assert not extra_in_plan, f"Plan keys not in model: {sorted(extra_in_plan)[:10]}"

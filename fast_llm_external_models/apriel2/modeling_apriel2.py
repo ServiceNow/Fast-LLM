@@ -1243,7 +1243,9 @@ class Apriel2GatedDeltaNet(nn.Module):
             mixed_qkv = self.convolution.update(
                 mixed_qkv.squeeze(2),  # [batch, conv_dim, 1] -> [batch, conv_dim]
                 conv_state,
-            ).unsqueeze(2)  # [batch, conv_dim] -> [batch, conv_dim, 1]
+            ).unsqueeze(
+                2
+            )  # [batch, conv_dim] -> [batch, conv_dim, 1]
         else:
             # Prefill mode
             use_cache = past_key_values is not None
@@ -1488,9 +1490,7 @@ class KimiDeltaAttention(nn.Module):
         # Normalization - use GatedRMSNormalization (same wrapper as GDN, with sigmoid activation)
         self.norm = GatedRMSNormalization(self.head_dim, eps=self.norm_eps, activation=self.norm_activation)
 
-    def _apply_conv(
-        self, x: torch.Tensor, conv: CausalConv1d, conv_state: torch.Tensor | None, use_cache: bool
-    ):
+    def _apply_conv(self, x: torch.Tensor, conv: CausalConv1d, conv_state: torch.Tensor | None, use_cache: bool):
         """
         Apply causal convolution with cache support.
 

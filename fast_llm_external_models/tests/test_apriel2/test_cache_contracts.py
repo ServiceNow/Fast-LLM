@@ -27,8 +27,7 @@ Fixtures used from conftest.py:
 import pytest
 import torch
 
-from fast_llm_external_models.apriel2.cache import _AttentionCache, _SSMCache, Apriel2Cache
-
+from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache
 
 # =============================================================================
 # SECTION 1: FULL ATTENTION - _AttentionCache vs DynamicLayer
@@ -78,9 +77,9 @@ class TestFullAttentionContract:
             hf_dynamic_layer.update(key.clone(), value.clone())
             apriel_attention_cache.update(key.clone(), value.clone())
 
-            assert apriel_attention_cache.cumulative_length == hf_dynamic_layer.get_seq_length(), (
-                f"Mismatch at decode step {step}"
-            )
+            assert (
+                apriel_attention_cache.cumulative_length == hf_dynamic_layer.get_seq_length()
+            ), f"Mismatch at decode step {step}"
 
     # -------------------------------------------------------------------------
     # get_mask_sizes: Verify HF behavior for documentation
@@ -343,9 +342,9 @@ class TestSlidingWindowContract:
             hf_sliding_layer.update(key.clone(), value.clone())
             apriel_sliding_cache.update(key.clone(), value.clone())
 
-            assert apriel_sliding_cache.cumulative_length == hf_sliding_layer.get_seq_length(), (
-                f"cumulative_length mismatch at step {i}"
-            )
+            assert (
+                apriel_sliding_cache.cumulative_length == hf_sliding_layer.get_seq_length()
+            ), f"cumulative_length mismatch at step {i}"
 
 
 # =============================================================================
@@ -496,7 +495,7 @@ class TestMaskCorrectness:
 
     def test_full_attention_decode_can_attend_to_all(self):
         """During decode, query can attend to all cached positions."""
-        from transformers.masking_utils import sdpa_mask, causal_mask_function
+        from transformers.masking_utils import causal_mask_function, sdpa_mask
 
         cache = _AttentionCache(window=None)
 
@@ -559,13 +558,13 @@ class TestMaskCorrectness:
                 causal = abs_pos <= query_pos
                 expected = in_window and causal
 
-                assert query_mask[kv_idx].item() == expected, (
-                    f"Position {abs_pos}: expected {expected}, got {query_mask[kv_idx].item()}"
-                )
+                assert (
+                    query_mask[kv_idx].item() == expected
+                ), f"Position {abs_pos}: expected {expected}, got {query_mask[kv_idx].item()}"
 
     def test_prefill_has_causal_pattern(self):
         """During prefill, mask has proper causal (lower triangular) pattern."""
-        from transformers.masking_utils import sdpa_mask, causal_mask_function
+        from transformers.masking_utils import causal_mask_function, sdpa_mask
 
         cache = _AttentionCache(window=None)
         cache.update(torch.randn(1, 1, 5, 16), torch.randn(1, 1, 5, 16))

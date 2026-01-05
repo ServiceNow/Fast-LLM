@@ -1,7 +1,7 @@
 """Test fixtures for Apriel2 model tests."""
 
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 import torch
@@ -18,7 +18,6 @@ def pytest_configure(config):
 def _can_import_fast_llm():
     """Check if Fast-LLM is available."""
     try:
-        from fast_llm.engine.checkpoint.convert import ConvertConfig
         return True
     except ImportError:
         return False
@@ -26,15 +25,11 @@ def _can_import_fast_llm():
 
 # Skip marker for tests that require CUDA for Mamba forward pass
 requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="SSM mixers (Mamba) require CUDA for forward pass"
+    not torch.cuda.is_available(), reason="SSM mixers (Mamba) require CUDA for forward pass"
 )
 
 # Skip marker for tests that require Fast-LLM
-requires_fastllm = pytest.mark.skipif(
-    not _can_import_fast_llm(),
-    reason="Fast-LLM not available"
-)
+requires_fastllm = pytest.mark.skipif(not _can_import_fast_llm(), reason="Fast-LLM not available")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -164,14 +159,11 @@ def model_pair(request, small_pixtral_model, tmp_path):
         tuple: (source_model, target_model, expected_atol, variant_name)
     """
     import json
+
     from safetensors import safe_open
 
     from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-    from fast_llm_external_models.apriel2.conversion import (
-        convert_llava_config,
-        execute,
-        plan_llava_to_apriel2,
-    )
+    from fast_llm_external_models.apriel2.conversion import convert_llava_config, execute, plan_llava_to_apriel2
     from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
 
     source = small_pixtral_model
@@ -667,12 +659,12 @@ def apriel2_config_comprehensive():
             "type": "pattern",
             "num_blocks": 6,
             "pattern": [
-                "attn",          # 0: pure full attention
-                "swa",           # 1: pure sliding window attention
-                "mamba",         # 2: pure mamba
-                "gdn",           # 3: pure gated delta net
-                "stoch_attn_mamba",   # 4: stochastic attention + mamba
-                "stoch_swa_gdn",      # 5: stochastic swa + gated delta net
+                "attn",  # 0: pure full attention
+                "swa",  # 1: pure sliding window attention
+                "mamba",  # 2: pure mamba
+                "gdn",  # 3: pure gated delta net
+                "stoch_attn_mamba",  # 4: stochastic attention + mamba
+                "stoch_swa_gdn",  # 5: stochastic swa + gated delta net
             ],
             "blocks": {
                 "attn": {
@@ -1031,7 +1023,7 @@ def comprehensive_torture_chain():
     # MIL requires: d_inner <= Q rows (256), d_xb <= K/V rows (128)
     mamba_params = {
         "d_inner": 256,  # Must be <= heads*head_size = 256
-        "d_xb": 64,      # Must be <= head_groups*head_size = 128
+        "d_xb": 64,  # Must be <= head_groups*head_size = 128
         "dt_rank": 16,
         "d_state": 16,
         "d_conv": 4,

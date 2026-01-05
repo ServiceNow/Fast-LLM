@@ -61,16 +61,7 @@ respective subpackages (e.g., `conversion.llava`).
 
 from __future__ import annotations
 
-from fast_llm_external_models.apriel2.conversion.expr import (
-    Concat,
-    Expr,
-    ExprPlan,
-    Init,
-    Ref,
-    Slice,
-    W,
-)
-
+from fast_llm_external_models.apriel2.conversion.expr import Concat, Expr, ExprPlan, Init, Ref, Slice, W
 
 # =============================================================================
 # SECTION 1: Per-Mixer Plan Functions
@@ -195,20 +186,22 @@ def _plan_mamba_mixer(
     """
     if source_prefix is not None:
         # Passthrough - include all possible weights
-        return ExprPlan(mappings={
-            prefix / name: Ref(key=source_prefix / name)
-            for name in [
-                "in_proj.weight",
-                "out_proj.weight",
-                "dt_in_proj.weight",
-                "dt_proj.weight",
-                "dt_proj.bias",
-                "conv1d.weight",
-                "conv1d.bias",
-                "A_log",
-                "D",
-            ]
-        })
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "in_proj.weight",
+                    "out_proj.weight",
+                    "dt_in_proj.weight",
+                    "dt_proj.weight",
+                    "dt_proj.bias",
+                    "conv1d.weight",
+                    "conv1d.bias",
+                    "A_log",
+                    "D",
+                ]
+            }
+        )
 
     # Random init
     d_inner = config["d_inner"]
@@ -226,9 +219,7 @@ def _plan_mamba_mixer(
     conv_channels = d_inner if repeat_kv_before_conv else d_xb
 
     mappings: dict[W, Expr] = {
-        prefix / "in_proj" / "weight": Init(
-            shape=(2 * d_inner + 2 * d_xb, hidden_size), init_type="kaiming"
-        ),
+        prefix / "in_proj" / "weight": Init(shape=(2 * d_inner + 2 * d_xb, hidden_size), init_type="kaiming"),
         prefix / "out_proj" / "weight": Init(shape=(hidden_size, d_inner), init_type="kaiming"),
         prefix / "dt_in_proj" / "weight": Init(shape=(dt_rank, hidden_size), init_type="kaiming"),
         prefix / "dt_proj" / "weight": Init(shape=(d_inner, dt_rank), init_type="kaiming"),
@@ -275,18 +266,20 @@ def _plan_gdn_mixer(
     """
     if source_prefix is not None:
         # Passthrough
-        return ExprPlan(mappings={
-            prefix / name: Ref(key=source_prefix / name)
-            for name in [
-                "in_proj_qkvz.weight",
-                "in_proj_ba.weight",
-                "out_proj.weight",
-                "convolution.weight",
-                "A_log",
-                "dt_bias",
-                "norm.weight",
-            ]
-        })
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "in_proj_qkvz.weight",
+                    "in_proj_ba.weight",
+                    "out_proj.weight",
+                    "convolution.weight",
+                    "A_log",
+                    "dt_bias",
+                    "norm.weight",
+                ]
+            }
+        )
 
     # Random init
     num_v_heads = config["value_heads"]
@@ -300,17 +293,19 @@ def _plan_gdn_mixer(
     conv_dim = key_dim * 2 + value_dim
     qkvz_size = key_dim * 2 + value_dim * 2  # Q, K both key_dim; V, Z both value_dim
 
-    return ExprPlan(mappings={
-        prefix / "in_proj_qkvz" / "weight": Init(shape=(qkvz_size, hidden_size), init_type="kaiming"),
-        prefix / "in_proj_ba" / "weight": Init(shape=(num_v_heads * 2, hidden_size), init_type="zeros"),
-        prefix / "out_proj" / "weight": Init(shape=(hidden_size, value_dim), init_type="kaiming"),
-        prefix / "convolution" / "weight": Init(
-            shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
-        prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
-        prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
-    })
+    return ExprPlan(
+        mappings={
+            prefix / "in_proj_qkvz" / "weight": Init(shape=(qkvz_size, hidden_size), init_type="kaiming"),
+            prefix / "in_proj_ba" / "weight": Init(shape=(num_v_heads * 2, hidden_size), init_type="zeros"),
+            prefix / "out_proj" / "weight": Init(shape=(hidden_size, value_dim), init_type="kaiming"),
+            prefix
+            / "convolution"
+            / "weight": Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
+            prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
+            prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
+        }
+    )
 
 
 def _plan_kda_mixer(
@@ -343,26 +338,28 @@ def _plan_kda_mixer(
     """
     if source_prefix is not None:
         # Passthrough
-        return ExprPlan(mappings={
-            prefix / name: Ref(key=source_prefix / name)
-            for name in [
-                "q_proj.weight",
-                "k_proj.weight",
-                "v_proj.weight",
-                "o_proj.weight",
-                "q_conv.weight",
-                "k_conv.weight",
-                "v_conv.weight",
-                "f_a_proj.weight",
-                "f_b_proj.weight",
-                "g_a_proj.weight",
-                "g_b_proj.weight",
-                "beta_proj.weight",
-                "A_log",
-                "dt_bias",
-                "norm.weight",
-            ]
-        })
+        return ExprPlan(
+            mappings={
+                prefix / name: Ref(key=source_prefix / name)
+                for name in [
+                    "q_proj.weight",
+                    "k_proj.weight",
+                    "v_proj.weight",
+                    "o_proj.weight",
+                    "q_conv.weight",
+                    "k_conv.weight",
+                    "v_conv.weight",
+                    "f_a_proj.weight",
+                    "f_b_proj.weight",
+                    "g_a_proj.weight",
+                    "g_b_proj.weight",
+                    "beta_proj.weight",
+                    "A_log",
+                    "dt_bias",
+                    "norm.weight",
+                ]
+            }
+        )
 
     # Random init
     num_heads = config["heads"]
@@ -370,36 +367,38 @@ def _plan_kda_mixer(
     projection_size = num_heads * head_dim
     conv_kernel_size = config.get("convolution_layer", {}).get("kernel_size", 4)
 
-    return ExprPlan(mappings={
-        # Main projections
-        prefix / "q_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
-        prefix / "k_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
-        prefix / "v_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
-        prefix / "o_proj" / "weight": Init(shape=(hidden_size, projection_size), init_type="kaiming"),
-        # Convolutions
-        prefix / "q_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        prefix / "k_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        prefix / "v_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        # Gate kernels (low-rank factorization)
-        prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
-        prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
-        # Output gate (low-rank factorization)
-        prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
-        prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
-        # Beta projection
-        prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
-        # Learnable parameters
-        prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
-        prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
-        # Normalization
-        prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
-    })
+    return ExprPlan(
+        mappings={
+            # Main projections
+            prefix / "q_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "k_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "v_proj" / "weight": Init(shape=(projection_size, hidden_size), init_type="kaiming"),
+            prefix / "o_proj" / "weight": Init(shape=(hidden_size, projection_size), init_type="kaiming"),
+            # Convolutions
+            prefix
+            / "q_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix
+            / "k_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            prefix
+            / "v_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            # Gate kernels (low-rank factorization)
+            prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Output gate (low-rank factorization)
+            prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Beta projection
+            prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
+            # Learnable parameters
+            prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
+            prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
+            # Normalization
+            prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
+        }
+    )
 
 
 # Dispatcher for per-mixer plan functions
@@ -454,16 +453,13 @@ def plan_mil_attention_to_mamba(
         exprs=(
             Init(shape=(d_inner, hidden_size), init_type="kaiming"),  # z: random
             Slice(
-                expr=Ref(key=source_prefix / "v_proj" / "weight"),
-                slices=((0, d_xb, None), (None, None, None))
+                expr=Ref(key=source_prefix / "v_proj" / "weight"), slices=((0, d_xb, None), (None, None, None))
             ),  # x <- V
             Slice(
-                expr=Ref(key=source_prefix / "k_proj" / "weight"),
-                slices=((0, d_xb, None), (None, None, None))
+                expr=Ref(key=source_prefix / "k_proj" / "weight"), slices=((0, d_xb, None), (None, None, None))
             ),  # B <- K
             Slice(
-                expr=Ref(key=source_prefix / "q_proj" / "weight"),
-                slices=((0, d_inner, None), (None, None, None))
+                expr=Ref(key=source_prefix / "q_proj" / "weight"), slices=((0, d_inner, None), (None, None, None))
             ),  # C <- Q
         ),
         dim=0,
@@ -577,19 +573,21 @@ def plan_dil_attention_to_gdn(
         dim=0,
     )
 
-    return ExprPlan(mappings={
-        target_prefix / "in_proj_qkvz" / "weight": in_proj_qkvz_expr,
-        target_prefix / "in_proj_ba" / "weight": Init(
-            shape=(2 * num_v_heads, hidden_size), init_type="zeros"
-        ),  # b=a=0 → β=0.5
-        target_prefix / "out_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
-        target_prefix / "convolution" / "weight": Init(
-            shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        target_prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
-        target_prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
-        target_prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
-    })
+    return ExprPlan(
+        mappings={
+            target_prefix / "in_proj_qkvz" / "weight": in_proj_qkvz_expr,
+            target_prefix
+            / "in_proj_ba"
+            / "weight": Init(shape=(2 * num_v_heads, hidden_size), init_type="zeros"),  # b=a=0 → β=0.5
+            target_prefix / "out_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
+            target_prefix
+            / "convolution"
+            / "weight": Init(shape=(conv_dim, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix / "A_log": Init(shape=(num_v_heads,), init_type="slow_decay"),
+            target_prefix / "dt_bias": Init(shape=(num_v_heads,), init_type="zeros"),
+            target_prefix / "norm" / "weight": Init(shape=(head_v_dim,), init_type="ones"),
+        }
+    )
 
 
 def plan_kil_attention_to_kda(
@@ -640,9 +638,7 @@ def plan_kil_attention_to_kda(
         for h in range(num_heads):
             src_h = h % source_num_q_heads
             row_start = src_h * source_head_dim
-            q_slices.append(
-                Slice(expr=q_ref, slices=((row_start, row_start + head_dim, None), (None, None, None)))
-            )
+            q_slices.append(Slice(expr=q_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
         q_expr = Concat(exprs=tuple(q_slices), dim=0)
 
     # K: tile source KV heads to fill target projection_size
@@ -653,9 +649,7 @@ def plan_kil_attention_to_kda(
         for h in range(num_heads):
             src_h = h % source_num_kv_heads
             row_start = src_h * source_head_dim
-            k_slices.append(
-                Slice(expr=k_ref, slices=((row_start, row_start + head_dim, None), (None, None, None)))
-            )
+            k_slices.append(Slice(expr=k_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
         k_expr = Concat(exprs=tuple(k_slices), dim=0)
 
     # V: tile source KV heads to fill target projection_size
@@ -666,41 +660,41 @@ def plan_kil_attention_to_kda(
         for h in range(num_heads):
             src_h = h % source_num_kv_heads
             row_start = src_h * source_head_dim
-            v_slices.append(
-                Slice(expr=v_ref, slices=((row_start, row_start + head_dim, None), (None, None, None)))
-            )
+            v_slices.append(Slice(expr=v_ref, slices=((row_start, row_start + head_dim, None), (None, None, None))))
         v_expr = Concat(exprs=tuple(v_slices), dim=0)
 
-    return ExprPlan(mappings={
-        # Transfer main projections
-        target_prefix / "q_proj" / "weight": q_expr,
-        target_prefix / "k_proj" / "weight": k_expr,
-        target_prefix / "v_proj" / "weight": v_expr,
-        target_prefix / "o_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
-        # Random init: convolutions (scaled identity for near-passthrough initially)
-        target_prefix / "q_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        target_prefix / "k_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        target_prefix / "v_conv" / "weight": Init(
-            shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"
-        ),
-        # Random init: gate kernels (low-rank factorization)
-        target_prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
-        target_prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
-        # Random init: output gate (low-rank factorization)
-        target_prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
-        target_prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
-        # Random init: beta projection
-        target_prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
-        # Random init: learnable parameters
-        target_prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
-        target_prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
-        # Random init: normalization
-        target_prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
-    })
+    return ExprPlan(
+        mappings={
+            # Transfer main projections
+            target_prefix / "q_proj" / "weight": q_expr,
+            target_prefix / "k_proj" / "weight": k_expr,
+            target_prefix / "v_proj" / "weight": v_expr,
+            target_prefix / "o_proj" / "weight": Ref(key=source_prefix / "o_proj" / "weight"),
+            # Random init: convolutions (scaled identity for near-passthrough initially)
+            target_prefix
+            / "q_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix
+            / "k_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            target_prefix
+            / "v_conv"
+            / "weight": Init(shape=(projection_size, 1, conv_kernel_size), init_type="scaled_identity_conv"),
+            # Random init: gate kernels (low-rank factorization)
+            target_prefix / "f_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            target_prefix / "f_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Random init: output gate (low-rank factorization)
+            target_prefix / "g_a_proj" / "weight": Init(shape=(head_dim, hidden_size), init_type="kaiming"),
+            target_prefix / "g_b_proj" / "weight": Init(shape=(projection_size, head_dim), init_type="kaiming"),
+            # Random init: beta projection
+            target_prefix / "beta_proj" / "weight": Init(shape=(num_heads, hidden_size), init_type="kaiming"),
+            # Random init: learnable parameters
+            target_prefix / "A_log": Init(shape=(num_heads,), init_type="slow_decay"),
+            target_prefix / "dt_bias": Init(shape=(projection_size,), init_type="zeros"),
+            # Random init: normalization
+            target_prefix / "norm" / "weight": Init(shape=(head_dim,), init_type="ones"),
+        }
+    )
 
 
 # =============================================================================
@@ -912,18 +906,24 @@ def plan_surgery(
         target_block = _get_block_config(target_decoder, target_layer_idx)
 
         plan += _plan_mixer(
-            target_layer_idx, source_layer_idx,
-            source_block.get("mixer", {}), target_block.get("mixer", {}),
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mixer", {}),
+            target_block.get("mixer", {}),
             hidden_size,
         )
         plan += _plan_mlp(
-            target_layer_idx, source_layer_idx,
-            source_block.get("mlp", {}), target_block.get("mlp", {}),
+            target_layer_idx,
+            source_layer_idx,
+            source_block.get("mlp", {}),
+            target_block.get("mlp", {}),
             hidden_size,
         )
         plan += _plan_norms(
-            target_layer_idx, source_layer_idx,
-            source_block, target_block,
+            target_layer_idx,
+            source_layer_idx,
+            source_block,
+            target_block,
             hidden_size,
         )
 
@@ -1060,9 +1060,13 @@ def _plan_mixer(
                 source_prefix = source_mixer_base
 
                 plan += _plan_mixer_transfer(
-                    matched_source_type, sub_type,
-                    matched_source, sub_config,
-                    source_prefix, target_prefix, hidden_size,
+                    matched_source_type,
+                    sub_type,
+                    matched_source,
+                    sub_config,
+                    source_prefix,
+                    target_prefix,
+                    hidden_size,
                 )
 
         # Passthrough source sub-mixers not in target spec
@@ -1073,8 +1077,13 @@ def _plan_mixer(
                     source_prefix = source_layer / "mixer" / "mixers" / sub_name
                     target_prefix = target_layer / "mixer" / "mixers" / sub_name
                     plan += _plan_mixer_transfer(
-                        sub_type, sub_type, sub_config, sub_config,
-                        source_prefix, target_prefix, hidden_size,
+                        sub_type,
+                        sub_type,
+                        sub_config,
+                        sub_config,
+                        source_prefix,
+                        target_prefix,
+                        hidden_size,
                     )
 
         return plan
@@ -1090,9 +1099,13 @@ def _plan_mixer(
             source_prefix = source_layer / "mixer"
 
         return _plan_mixer_transfer(
-            main_source_type, target_type,
-            main_source, target_mixer,
-            source_prefix, target_prefix, hidden_size,
+            main_source_type,
+            target_type,
+            main_source,
+            target_mixer,
+            source_prefix,
+            target_prefix,
+            hidden_size,
         )
 
 
@@ -1163,8 +1176,7 @@ def _plan_mlp_transfer(
         weight_projs = ["up_proj", "down_proj"]
 
     mappings: dict[W, Expr] = {
-        target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight")
-        for proj in weight_projs
+        target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight") for proj in weight_projs
     }
 
     # Passthrough biases if enabled
@@ -1259,10 +1271,12 @@ def _plan_norms_transfer(
             f"Use 'init: random' to initialize randomly."
         )
 
-    return ExprPlan(mappings={
-        target_layer / norm_name / "weight": Ref(key=source_layer / norm_name / "weight")
-        for norm_name in ["input_layernorm", "post_attention_layernorm"]
-    })
+    return ExprPlan(
+        mappings={
+            target_layer / norm_name / "weight": Ref(key=source_layer / norm_name / "weight")
+            for norm_name in ["input_layernorm", "post_attention_layernorm"]
+        }
+    )
 
 
 def _plan_random_norms(
@@ -1271,7 +1285,9 @@ def _plan_random_norms(
 ) -> ExprPlan:
     """Random initialization for normalization layers."""
     target_layer = W("model", "decoder", "blocks", target_layer_idx)
-    return ExprPlan(mappings={
-        target_layer / norm_name / "weight": Init(shape=(hidden_size,), init_type="ones")
-        for norm_name in ["input_layernorm", "post_attention_layernorm"]
-    })
+    return ExprPlan(
+        mappings={
+            target_layer / norm_name / "weight": Init(shape=(hidden_size,), init_type="ones")
+            for norm_name in ["input_layernorm", "post_attention_layernorm"]
+        }
+    )

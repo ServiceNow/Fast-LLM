@@ -315,4 +315,3 @@ def _train_mask_to_loss_spans(train_mask: list[bool]) -> list[tuple[int, int]]:
     if start is not None:
         spans.append((start, len(train_mask)))
     return spans
-

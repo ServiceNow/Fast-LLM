@@ -1,11 +1,6 @@
 """Qwen2/Qwen2.5 to Apriel2 weight conversion plan."""
 
-from fast_llm_external_models.apriel2.conversion.expr import (
-    Expr,
-    ExprPlan,
-    Ref,
-    W,
-)
+from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan, Ref, W
 
 
 def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
@@ -55,9 +50,7 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
 
     # lm_head - only if not tied
     if not qwen2_config.get("tie_word_embeddings", False):
-        static_mappings.append(
-            (W("lm_head", "weight"), W("lm_head", "weight"))
-        )
+        static_mappings.append((W("lm_head", "weight"), W("lm_head", "weight")))
 
     for src, tgt in static_mappings:
         mappings[tgt] = Ref(key=src)
@@ -89,9 +82,7 @@ def plan_qwen2_to_apriel2(qwen2_config: dict) -> ExprPlan:
             mappings[tgt] = Ref(key=src)
 
         # Layer norms
-        mappings[apriel_layer / "input_layernorm" / "weight"] = Ref(
-            key=qwen_layer / "input_layernorm" / "weight"
-        )
+        mappings[apriel_layer / "input_layernorm" / "weight"] = Ref(key=qwen_layer / "input_layernorm" / "weight")
         mappings[apriel_layer / "post_attention_layernorm" / "weight"] = Ref(
             key=qwen_layer / "post_attention_layernorm" / "weight"
         )

@@ -18,8 +18,7 @@ Fixtures used from conftest.py:
 import pytest
 import torch
 
-from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache, _SSMCache
-
+from fast_llm_external_models.apriel2.cache import Apriel2Cache
 
 # =============================================================================
 # STOCHASTIC MIXER ROUTING

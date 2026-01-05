@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.conversion.config import apply_surgery, compose_configs
+from fast_llm_external_models.apriel2.conversion.config import compose_configs
 
 
 class TestComposeConfigsLaws:
@@ -314,7 +314,13 @@ class TestComposeConfigsLaws:
         Parameterized to test with 2 and 3 surgeries.
         """
         surgeries = [
-            {"decoder": {"block": {"mixer": {"type": "stochastic", "main_mixer_name": "attention", "mixers": {"attention": {}}}}}},
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {"type": "stochastic", "main_mixer_name": "attention", "mixers": {"attention": {}}}
+                    }
+                }
+            },
             {"decoder": {"block": {"mixer": {"mixers": {"sliding_window": {"window_size": 512}}}}}},
             {"decoder": {"block": {"mixer": {"mixers": {"gdn": {"type": "gdn"}}}}}},
         ][:num_surgeries]

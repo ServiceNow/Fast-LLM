@@ -20,19 +20,13 @@ import pytest
 import torch
 
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
-from fast_llm_external_models.apriel2.conversion import (
-    compose,
-    compose_configs,
-    execute,
-    plan_surgery,
-)
+from fast_llm_external_models.apriel2.conversion import compose, compose_configs, execute, plan_surgery
 from fast_llm_external_models.apriel2.conversion.expr import W
 from fast_llm_external_models.apriel2.conversion.qwen2.config import convert_config as convert_qwen2_config
 from fast_llm_external_models.apriel2.conversion.qwen2.plan import plan_qwen2_to_apriel2
+from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
 
 from .conftest import requires_fastllm
-
 
 # =============================================================================
 # Test Input Variations
@@ -56,13 +50,11 @@ TEST_INPUTS = pytest.mark.parametrize(
 @pytest.fixture(scope="module")
 def qwen2_source():
     """Load Qwen2.5-0.5B as the source/reference model."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     model_name = "Qwen/Qwen2.5-0.5B"
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32, trust_remote_code=True
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32, trust_remote_code=True)
     config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     model.eval()
 
@@ -139,11 +131,7 @@ def roundtrip_converted(supernet_converted, qwen2_source):
     if not torch.cuda.is_available():
         pytest.skip("Roundtrip conversion requires CUDA (integration tests need realistic hardware)")
 
-    from fast_llm.engine.checkpoint.config import (
-        CheckpointLoadConfig,
-        CheckpointSaveConfig,
-        FastLLMCheckpointFormat,
-    )
+    from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, FastLLMCheckpointFormat
     from fast_llm.engine.checkpoint.convert import ConvertConfig
     from fast_llm.models.gpt.config import GPTModelConfig
     from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
@@ -302,9 +290,9 @@ class TestNumericalEquivalence:
             ).logits.cpu()
 
         max_diff = (ref_logits - test_logits).abs().max().item()
-        assert torch.allclose(ref_logits, test_logits, rtol=1e-4, atol=1e-4), (
-            f"{stage} logits mismatch: max diff = {max_diff:.6f}"
-        )
+        assert torch.allclose(
+            ref_logits, test_logits, rtol=1e-4, atol=1e-4
+        ), f"{stage} logits mismatch: max diff = {max_diff:.6f}"
 
     @TEST_INPUTS
     def test_generation_match(self, qwen2_source, converted_model, prompts, max_new_tokens):

@@ -686,41 +686,45 @@ class Apriel2BlockConverter:
 
         if config.mlp.gated:
             # Gated MLP: gate_proj + up_proj -> layer_1 (split), down_proj -> layer_2
-            converters.extend([
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_1",
-                    (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                    layer_1_bias,
-                    SplitWeightConverter,
-                    drop_on_export=drop_on_export,
-                ),
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_2",
-                    f"{hf_prefix}.mlp.down_proj",
-                    layer_2_bias,
-                    MLPLayer2Converter,
-                    drop_on_export=drop_on_export,
-                ),
-            ])
+            converters.extend(
+                [
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_1",
+                        (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                        layer_1_bias,
+                        SplitWeightConverter,
+                        drop_on_export=drop_on_export,
+                    ),
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_2",
+                        f"{hf_prefix}.mlp.down_proj",
+                        layer_2_bias,
+                        MLPLayer2Converter,
+                        drop_on_export=drop_on_export,
+                    ),
+                ]
+            )
         else:
             # Non-gated MLP: up_proj -> layer_1, down_proj -> layer_2
             # Note: layer_2 still needs MLPLayer2Converter for the transpose
-            converters.extend([
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_1",
-                    f"{hf_prefix}.mlp.up_proj",
-                    layer_1_bias,
-                    WeightConverter,
-                    drop_on_export=drop_on_export,
-                ),
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_2",
-                    f"{hf_prefix}.mlp.down_proj",
-                    layer_2_bias,
-                    MLPLayer2Converter,
-                    drop_on_export=drop_on_export,
-                ),
-            ])
+            converters.extend(
+                [
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_1",
+                        f"{hf_prefix}.mlp.up_proj",
+                        layer_1_bias,
+                        WeightConverter,
+                        drop_on_export=drop_on_export,
+                    ),
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_2",
+                        f"{hf_prefix}.mlp.down_proj",
+                        layer_2_bias,
+                        MLPLayer2Converter,
+                        drop_on_export=drop_on_export,
+                    ),
+                ]
+            )
 
         converters.extend(
             [
