@@ -1741,3 +1741,214 @@ class TestEndToEndConversion:
 
         assert not missing_from_plan, f"Plan missing keys that model expects: {sorted(missing_from_plan)}"
         assert not extra_in_plan, f"Plan has extra keys model doesn't expect: {sorted(extra_in_plan)}"
+
+
+class TestBiasPlanGeneration:
+    """Test that surgery plans correctly handle per-layer bias configurations.
+
+    These tests verify that plan_surgery correctly includes/excludes bias
+    weight mappings based on the per-layer bias settings:
+    - query_layer.bias.enabled, key_layer.bias.enabled, etc. for attention
+    - layer_1.bias.enabled, layer_2.bias.enabled for MLP
+    """
+
+    @pytest.fixture
+    def source_config_with_bias(self):
+        """Source config with Qwen-style bias (QKV enabled, O disabled)."""
+        return {
+            "model_type": "apriel2",
+            "hidden_size": 256,
+            "vocab_size": 1000,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 2,
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                        # Qwen-style: QKV bias enabled, O bias disabled
+                        "query_layer": {"bias": {"enabled": True}},
+                        "key_layer": {"bias": {"enabled": True}},
+                        "value_layer": {"bias": {"enabled": True}},
+                        "dense_layer": {"bias": {"enabled": False}},
+                    },
+                    "mlp": {
+                        "type": "mlp",
+                        "intermediate_size": 512,
+                        "gated": False,
+                        # Per-layer MLP bias: layer_1 enabled, layer_2 disabled
+                        "layer_1": {"bias": {"enabled": True}},
+                        "layer_2": {"bias": {"enabled": False}},
+                    },
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+    def test_plan_includes_enabled_attention_biases(self, source_config_with_bias):
+        """Surgery plan includes bias mappings for enabled attention biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have q_proj.bias, k_proj.bias, v_proj.bias mappings
+        q_bias = [m for m in mapping_strs if "q_proj.bias" in m]
+        k_bias = [m for m in mapping_strs if "k_proj.bias" in m]
+        v_bias = [m for m in mapping_strs if "v_proj.bias" in m]
+
+        assert len(q_bias) > 0, "Should have q_proj.bias mappings"
+        assert len(k_bias) > 0, "Should have k_proj.bias mappings"
+        assert len(v_bias) > 0, "Should have v_proj.bias mappings"
+
+    def test_plan_excludes_disabled_attention_biases(self, source_config_with_bias):
+        """Surgery plan excludes bias mappings for disabled attention biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should NOT have o_proj.bias mappings (disabled)
+        o_bias = [m for m in mapping_strs if "o_proj.bias" in m]
+        assert len(o_bias) == 0, f"Should not have o_proj.bias mappings, found: {o_bias}"
+
+    def test_plan_includes_enabled_mlp_biases(self, source_config_with_bias):
+        """Surgery plan includes bias mappings for enabled MLP biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have up_proj.bias (layer_1) mappings
+        up_bias = [m for m in mapping_strs if "up_proj.bias" in m]
+        assert len(up_bias) > 0, "Should have up_proj.bias mappings"
+
+    def test_plan_excludes_disabled_mlp_biases(self, source_config_with_bias):
+        """Surgery plan excludes bias mappings for disabled MLP biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should NOT have down_proj.bias (layer_2) mappings
+        down_bias = [m for m in mapping_strs if "down_proj.bias" in m]
+        assert len(down_bias) == 0, f"Should not have down_proj.bias mappings, found: {down_bias}"
+
+    def test_plan_random_init_creates_init_expressions_for_bias(self, source_config_with_bias):
+        """Random init creates Init expressions for bias weights."""
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        # Surgery spec - pass directly to plan_surgery (NOT composed, to preserve init)
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                            "new_attention": {
+                                "type": "attention",
+                                "init": "random",  # This triggers random init
+                                "heads": 8,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                                "add_linear_biases": True,  # All biases enabled
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        # Pass surgery spec directly - init fields are preserved
+        plan = plan_surgery(source_config_with_bias, surgery)
+
+        # Check that new_attention biases use Init expressions
+        new_mixer_bias_keys = [k for k in plan.mappings.keys() if "new_attention" in str(k) and "bias" in str(k)]
+
+        assert len(new_mixer_bias_keys) > 0, "Should have bias mappings for new_attention"
+
+        for key in new_mixer_bias_keys:
+            expr = plan.mappings[key]
+            assert isinstance(expr, Init), f"{key} should be Init, got {type(expr)}"

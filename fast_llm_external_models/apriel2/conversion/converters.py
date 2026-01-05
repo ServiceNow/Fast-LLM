@@ -70,6 +70,21 @@ from fast_llm_external_models.apriel2.conversion.expr import Concat, Expr, ExprP
 # This is the single source of truth for each mixer's weight schema.
 
 
+def _get_attention_bias_enabled(config: dict, layer_name: str) -> bool:
+    """Get whether bias is enabled for an attention layer.
+
+    Checks per-layer bias config (e.g., query_layer.bias.enabled).
+    Falls back to add_linear_biases if not set.
+    """
+    layer_cfg = config.get(layer_name, {})
+    bias_cfg = layer_cfg.get("bias", {})
+    enabled = bias_cfg.get("enabled")
+    if enabled is not None:
+        return enabled
+    # Fall back to add_linear_biases
+    return config.get("add_linear_biases", False)
+
+
 def _plan_attention_mixer(
     *,
     prefix: W,
@@ -81,9 +96,13 @@ def _plan_attention_mixer(
 
     Weight schema:
     - q_proj.weight: (q_size, hidden_size)
+    - q_proj.bias: (q_size,) [if query_layer.bias.enabled]
     - k_proj.weight: (kv_size, hidden_size)
+    - k_proj.bias: (kv_size,) [if key_layer.bias.enabled]
     - v_proj.weight: (kv_size, hidden_size)
+    - v_proj.bias: (kv_size,) [if value_layer.bias.enabled]
     - o_proj.weight: (hidden_size, q_size)
+    - o_proj.bias: (hidden_size,) [if dense_layer.bias.enabled]
 
     Args:
         prefix: Target weight path prefix.
@@ -91,14 +110,28 @@ def _plan_attention_mixer(
         hidden_size: Model hidden size.
         source_prefix: If provided, passthrough from source. If None, random init.
     """
+    # Check per-layer bias configuration
+    q_bias = _get_attention_bias_enabled(config, "query_layer")
+    k_bias = _get_attention_bias_enabled(config, "key_layer")
+    v_bias = _get_attention_bias_enabled(config, "value_layer")
+    o_bias = _get_attention_bias_enabled(config, "dense_layer")
+
     if source_prefix is not None:
-        # Passthrough
-        return ExprPlan(
-            mappings={
-                prefix / proj / "weight": Ref(key=source_prefix / proj / "weight")
-                for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]
-            }
-        )
+        # Passthrough weights
+        mappings: dict[W, Expr] = {
+            prefix / proj / "weight": Ref(key=source_prefix / proj / "weight")
+            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]
+        }
+        # Passthrough biases if enabled
+        if q_bias:
+            mappings[prefix / "q_proj" / "bias"] = Ref(key=source_prefix / "q_proj" / "bias")
+        if k_bias:
+            mappings[prefix / "k_proj" / "bias"] = Ref(key=source_prefix / "k_proj" / "bias")
+        if v_bias:
+            mappings[prefix / "v_proj" / "bias"] = Ref(key=source_prefix / "v_proj" / "bias")
+        if o_bias:
+            mappings[prefix / "o_proj" / "bias"] = Ref(key=source_prefix / "o_proj" / "bias")
+        return ExprPlan(mappings=mappings)
 
     # Random init
     heads = config["heads"]
@@ -107,14 +140,22 @@ def _plan_attention_mixer(
     q_size = heads * head_size
     kv_size = head_groups * head_size
 
-    return ExprPlan(
-        mappings={
-            prefix / "q_proj" / "weight": Init(shape=(q_size, hidden_size), init_type="kaiming"),
-            prefix / "k_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
-            prefix / "v_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
-            prefix / "o_proj" / "weight": Init(shape=(hidden_size, q_size), init_type="kaiming"),
-        }
-    )
+    mappings = {
+        prefix / "q_proj" / "weight": Init(shape=(q_size, hidden_size), init_type="kaiming"),
+        prefix / "k_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
+        prefix / "v_proj" / "weight": Init(shape=(kv_size, hidden_size), init_type="kaiming"),
+        prefix / "o_proj" / "weight": Init(shape=(hidden_size, q_size), init_type="kaiming"),
+    }
+    # Random init biases if enabled
+    if q_bias:
+        mappings[prefix / "q_proj" / "bias"] = Init(shape=(q_size,), init_type="zeros")
+    if k_bias:
+        mappings[prefix / "k_proj" / "bias"] = Init(shape=(kv_size,), init_type="zeros")
+    if v_bias:
+        mappings[prefix / "v_proj" / "bias"] = Init(shape=(kv_size,), init_type="zeros")
+    if o_bias:
+        mappings[prefix / "o_proj" / "bias"] = Init(shape=(hidden_size,), init_type="zeros")
+    return ExprPlan(mappings=mappings)
 
 
 def _plan_mamba_mixer(
@@ -784,7 +825,70 @@ def plan_surgery(
     source_config: dict,
     target_config: dict,
 ) -> ExprPlan:
-    """Build plan for Apriel2→Apriel2 surgery (MIL, DIL, KIL, stochastic mixers, etc.)."""
+    """Build a weight conversion plan: S × T → Plan.
+
+    Creates an ExprPlan mapping target weight keys to expressions over source weights.
+    Handles same-type passthrough, cross-type conversions (MIL, DIL, KIL), and
+    stochastic mixer routing.
+
+    Type Signature::
+
+        plan_surgery : S × T → Plan
+
+    Where S is a state (source) and T is a transition spec (target with ``init`` fields).
+
+    The ``init`` Field
+    ------------------
+
+    The ``init`` field in ``target_config`` controls weight initialization:
+
+    - ``init: transfer`` (or absent) → create Ref expressions (transfer from source)
+    - ``init: random`` → create Init expressions (random initialization)
+
+    This is why ``target_config`` should be a transition spec (T) from ``compose_configs``,
+    not a stripped state (S). If ``init`` fields are missing, all components default to
+    transfer mode.
+
+    Args:
+        source_config: State (S) - complete config describing source architecture.
+            Must have hidden_size, decoder, etc. No ``init`` fields expected.
+        target_config: Transition spec (T) - complete config with ``init`` fields.
+            Use ``compose_configs(source, surgery)`` to produce this.
+
+    Returns:
+        ExprPlan mapping target weight keys to expressions over source weights.
+
+    Example::
+
+        # Apply a surgery that wraps attention in a stochastic mixer
+        surgery_spec = {
+            "decoder": {"block": {"mixer": {
+                "type": "stochastic",
+                "mixers": {
+                    "attention": {"init": "transfer"},
+                    "gdn": {"type": "gdn", "init": "random"},
+                }
+            }}}
+        }
+
+        # S × P → T
+        transition = compose_configs(source_config, surgery_spec)
+
+        # S × T → Plan
+        plan = plan_surgery(source_config, transition)
+
+        # Execute
+        new_weights = execute(plan, source_weights, seed=42)
+
+        # T → S for saving
+        target_state = strip_init_fields(transition)
+
+    Note:
+        Both arguments must be complete (have hidden_size and decoder).
+        The target_config should retain ``init`` fields from the surgery spec.
+        Passing a stripped state as target will cause all components to use
+        transfer mode, which may not be intended.
+    """
     hidden_size = target_config.get("hidden_size", source_config.get("hidden_size"))
     assert hidden_size is not None, "hidden_size must be specified in source or target config"
 
@@ -843,14 +947,16 @@ def _plan_non_decoder_weights(config: dict) -> ExprPlan:
     embed = W("model", "embed_tokens", "weight")
     mappings[embed] = Ref(key=embed)
 
-    head = W("lm_head", "weight")
-    mappings[head] = Ref(key=head)
+    # lm_head only if not tied to embeddings
+    if not config.get("tie_word_embeddings", False):
+        head = W("lm_head", "weight")
+        mappings[head] = Ref(key=head)
 
     norm = W("model", "norm", "weight")
     mappings[norm] = Ref(key=norm)
 
-    if "vision_encoder" in config:
-        vision_config = config["vision_encoder"]
+    vision_config = config.get("vision_encoder")
+    if vision_config:
         vision = W("model", "vision_encoder")
 
         patch_emb = vision / "embeddings" / "patch_embeddings" / "weight"
@@ -1003,6 +1109,24 @@ def _plan_mixer(
         )
 
 
+def _get_mlp_bias_enabled(config: dict, layer_name: str) -> bool:
+    """Get whether bias is enabled for an MLP layer.
+
+    Checks per-layer bias config (e.g., layer_1.bias.enabled, layer_2.bias.enabled).
+    Falls back to add_linear_biases if not set.
+
+    Note: layer_1 corresponds to gate_proj and up_proj (gated MLP) or just up_proj (non-gated)
+          layer_2 corresponds to down_proj
+    """
+    layer_cfg = config.get(layer_name, {})
+    bias_cfg = layer_cfg.get("bias", {})
+    enabled = bias_cfg.get("enabled")
+    if enabled is not None:
+        return enabled
+    # Fall back to add_linear_biases
+    return config.get("add_linear_biases", False)
+
+
 def _plan_mlp(
     target_layer_idx: int,
     source_layer_idx: int,
@@ -1023,7 +1147,7 @@ def _plan_mlp_transfer(
     target_mlp: dict,
     hidden_size: int,
 ) -> ExprPlan:
-    """Passthrough for MLP weights."""
+    """Passthrough for MLP weights and biases."""
     source_mlp_path = W("model", "decoder", "blocks", source_layer_idx, "mlp")
     target_mlp_path = W("model", "decoder", "blocks", target_layer_idx, "mlp")
 
@@ -1036,12 +1160,36 @@ def _plan_mlp_transfer(
             f"Use 'init: random' to initialize randomly."
         )
 
-    return ExprPlan(
-        mappings={
-            target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight")
-            for proj in ["gate_proj", "up_proj", "down_proj"]
-        }
-    )
+    # Check per-layer bias configuration
+    layer_1_bias = _get_mlp_bias_enabled(target_mlp, "layer_1")
+    layer_2_bias = _get_mlp_bias_enabled(target_mlp, "layer_2")
+
+    # Check if gated MLP (has gate_proj) or non-gated (only up_proj)
+    gated = target_mlp.get("gated", True)  # Default to gated for backwards compatibility
+
+    # Passthrough weights
+    # layer_1 = gate_proj + up_proj (gated) or just up_proj (non-gated)
+    # layer_2 = down_proj
+    if gated:
+        weight_projs = ["gate_proj", "up_proj", "down_proj"]
+    else:
+        weight_projs = ["up_proj", "down_proj"]
+
+    mappings: dict[W, Expr] = {
+        target_mlp_path / proj / "weight": Ref(key=source_mlp_path / proj / "weight") for proj in weight_projs
+    }
+
+    # Passthrough biases if enabled
+    if layer_1_bias:
+        if gated:
+            mappings[target_mlp_path / "gate_proj" / "bias"] = Ref(key=source_mlp_path / "gate_proj" / "bias")
+        mappings[target_mlp_path / "up_proj" / "bias"] = Ref(key=source_mlp_path / "up_proj" / "bias")
+
+    # layer_2 = down_proj
+    if layer_2_bias:
+        mappings[target_mlp_path / "down_proj" / "bias"] = Ref(key=source_mlp_path / "down_proj" / "bias")
+
+    return ExprPlan(mappings=mappings)
 
 
 def _plan_random_mlp(
@@ -1049,20 +1197,41 @@ def _plan_random_mlp(
     target_mlp: dict,
     hidden_size: int,
 ) -> ExprPlan:
-    """Random initialization for MLP."""
+    """Random initialization for MLP weights and biases."""
     target_mlp_path = W("model", "decoder", "blocks", target_layer_idx, "mlp")
     intermediate_size = target_mlp["intermediate_size"]
-    return ExprPlan(
-        mappings={
-            target_mlp_path
-            / "gate_proj"
-            / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
-            target_mlp_path / "up_proj" / "weight": Init(shape=(intermediate_size, hidden_size), init_type="kaiming"),
-            target_mlp_path
-            / "down_proj"
-            / "weight": Init(shape=(hidden_size, intermediate_size), init_type="kaiming"),
-        }
+
+    # Check per-layer bias configuration
+    layer_1_bias = _get_mlp_bias_enabled(target_mlp, "layer_1")
+    layer_2_bias = _get_mlp_bias_enabled(target_mlp, "layer_2")
+
+    # Check if gated MLP (has gate_proj) or non-gated (only up_proj)
+    gated = target_mlp.get("gated", True)  # Default to gated for backwards compatibility
+
+    # Random init weights
+    mappings: dict[W, Expr] = {}
+    if gated:
+        mappings[target_mlp_path / "gate_proj" / "weight"] = Init(
+            shape=(intermediate_size, hidden_size), init_type="kaiming"
+        )
+    mappings[target_mlp_path / "up_proj" / "weight"] = Init(
+        shape=(intermediate_size, hidden_size), init_type="kaiming"
     )
+    mappings[target_mlp_path / "down_proj" / "weight"] = Init(
+        shape=(hidden_size, intermediate_size), init_type="kaiming"
+    )
+
+    # Random init biases if enabled
+    if layer_1_bias:
+        if gated:
+            mappings[target_mlp_path / "gate_proj" / "bias"] = Init(shape=(intermediate_size,), init_type="zeros")
+        mappings[target_mlp_path / "up_proj" / "bias"] = Init(shape=(intermediate_size,), init_type="zeros")
+
+    # layer_2 = down_proj
+    if layer_2_bias:
+        mappings[target_mlp_path / "down_proj" / "bias"] = Init(shape=(hidden_size,), init_type="zeros")
+
+    return ExprPlan(mappings=mappings)
 
 
 def _plan_norms(

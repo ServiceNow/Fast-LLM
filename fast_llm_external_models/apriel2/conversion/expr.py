@@ -52,14 +52,14 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Annotated, Any, Callable, Iterator, Literal, TypedDict, Union, Unpack
+from collections.abc import Iterator
+from typing import Annotated, Any, Callable, Literal, TypedDict, Union, Unpack
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, TypeAdapter
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
 from torch import Tensor
-
 
 # =============================================================================
 # Weight Path Builder
@@ -78,7 +78,7 @@ class W(str):
         mappings[q] = Ref(key=source_q)
     """
 
-    def __new__(cls, *parts) -> "W":
+    def __new__(cls, *parts) -> W:
         # Join parts, stripping any leading/trailing dots from each
         cleaned = []
         for p in parts:
@@ -89,12 +89,12 @@ class W(str):
                 cleaned.append(s)
         return super().__new__(cls, ".".join(cleaned))
 
-    def __truediv__(self, other) -> "W":
+    def __truediv__(self, other) -> W:
         if isinstance(other, (list, tuple)):
             return W(self, *other)
         return W(self, other)
 
-    def __rtruediv__(self, other) -> "W":
+    def __rtruediv__(self, other) -> W:
         return W(other, self)
 
     @classmethod
@@ -156,7 +156,7 @@ class Slice(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["slice"] = "slice"
-    expr: "Expr"
+    expr: Expr
     slices: tuple[tuple[int | None, int | None, int | None], ...]
 
     def find_refs(self) -> set[W]:
@@ -184,7 +184,7 @@ class Concat(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["concat"] = "concat"
-    exprs: tuple["Expr", ...]
+    exprs: tuple[Expr, ...]
     dim: int = 0
 
     def find_refs(self) -> set[W]:
@@ -303,7 +303,7 @@ class Reshape(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["reshape"] = "reshape"
-    expr: "Expr"
+    expr: Expr
     shape: tuple[int, ...]
 
     def find_refs(self) -> set[W]:
@@ -442,10 +442,10 @@ class ExprPlan(BaseModel):
     def __contains__(self, key: W) -> bool:
         return key in self.mappings
 
-    def __or__(self, other: "ExprPlan") -> "ExprPlan":
+    def __or__(self, other: ExprPlan) -> ExprPlan:
         return compose(self, other)
 
-    def __add__(self, other: "ExprPlan") -> "ExprPlan":
+    def __add__(self, other: ExprPlan) -> ExprPlan:
         return merge(self, other)
 
     def source_keys(self) -> set[str]:
@@ -471,7 +471,7 @@ class ExprPlan(BaseModel):
             "metadata": self.metadata,
         }
 
-    def fuse(self) -> "ExprPlan":
+    def fuse(self) -> ExprPlan:
         return ExprPlan(
             mappings={k: fuse(v) for k, v in self.mappings.items()},
             source_format=self.source_format,
