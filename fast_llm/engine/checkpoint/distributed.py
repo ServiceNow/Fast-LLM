@@ -123,7 +123,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         for loaded_stage, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
             # Skip tied weight copies to avoid duplicate loads.
             # We can't call `loaded_stage.is_tied_weight_copy` because the loaded model isn't setup.
-            if not loaded_stage.index not in loaded_model.stages_owned:
+            if loaded_stage.index not in loaded_model.stages_owned:
                 for self_stage, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
                     counter = self_fsdp.copy_shard_overlaps(
                         loaded_fsdp,
