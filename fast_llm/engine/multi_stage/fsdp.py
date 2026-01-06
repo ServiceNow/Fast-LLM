@@ -277,7 +277,9 @@ class FSDP:
         # Also ensures a correct parameter count in loading context.
         shard_meta = self._weight_shard_meta if shard_name == ShardName.weights else self._grad_shard_meta
         shard_meta.validate(shard)
-        if self._shard_pad > 0:
+        # Only count padding for non-empty shards. Frozen FSDPs have empty optimizer shards
+        # (numel()==0) but non-zero shard_pad, which would incorrectly inflate the count.
+        if self._shard_pad > 0 and shard.numel() > 0:
             shard[-self._shard_pad :].zero_()
             return self._shard_pad
         return 0
