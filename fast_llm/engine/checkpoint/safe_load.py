@@ -34,6 +34,7 @@ class SafeLoad:
     def __enter__(self) -> "SafeLoad":
         self._loaded = 0
         self._loaded_parameters = {}
+        self._loaded_from_padding = 0  # Debug: track padding separately
         # Track the number of loaded entries.
         # Use nan to mark non-loaded entries.
         for self_shard in self._self_shards.values():
@@ -41,7 +42,10 @@ class SafeLoad:
         # Reset and count shard pads
         for _, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
             for shard_name, fsdp_shard in fsdp_shards.items():
-                self._loaded += fsdp.reset_shard_pad(fsdp_shard, shard_name)
+                pad_count = fsdp.reset_shard_pad(fsdp_shard, shard_name)
+                self._loaded += pad_count
+                self._loaded_from_padding += pad_count
+        logger.info(f"SafeLoad: padding count = {self._loaded_from_padding:,}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -76,7 +80,11 @@ class SafeLoad:
         to_load = sum(self_shard.numel() for self_shard in self._self_shards.values())
         if self._loaded != to_load:
             # Ensure the right amount of weights is loaded.
-            errors.append(f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,}")
+            loaded_from_params = self._loaded - self._loaded_from_padding
+            errors.append(
+                f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,} "
+                f"(padding={self._loaded_from_padding:,}, params={loaded_from_params:,}, diff={self._loaded - to_load:,})"
+            )
 
     def _check_missing(self, errors: list[str]) -> None:
         # Ensure the loaded weights have a 1-1 mapping by looking for nans.
