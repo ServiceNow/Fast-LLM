@@ -490,16 +490,19 @@ _update_and_add_testing_config(
     "qwen_2",
     # TODO: replace
     updates={
-        ("model", "base_model", "decoder", "block", "add_linear_biases"): "only_attn_qkv",
+        ("model", "base_model", "decoder", "block", "mixer", "query_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "key_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "value_layer", "bias", "enabled"): True,
+        ("model", "base_model", "decoder", "block", "mixer", "dense_layer", "bias", "enabled"): False,
     },
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=Qwen2CheckpointFormat,
     # TODO: Add back generate as `normal` when stable.
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
