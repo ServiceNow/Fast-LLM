@@ -14,8 +14,8 @@ class DatasetDiscoveryConfig(DatasetPreparatorConfig):
     """
     Configuration for the dataset discovery preparator.
 
-    This preparator recursively discovers datasets in a directory and generates
-    a blended dataset config with weights proportional to token counts.
+    This preparator recursively discovers .fast_llm_dataset files in a directory
+    and generates a blended dataset config with weights proportional to token counts.
     """
 
     directory: pathlib.Path = Field(
@@ -25,11 +25,6 @@ class DatasetDiscoveryConfig(DatasetPreparatorConfig):
     output: pathlib.Path = Field(
         desc="Output path for the generated config YAML file",
         hint=FieldHint.core,
-    )
-    use_file_refs: bool = Field(
-        default=True,
-        desc="Use file references (type: file) instead of inlining configs",
-        hint=FieldHint.optional,
     )
     ignore_paths: list[pathlib.Path] = Field(
         default_factory=list,

@@ -1,8 +1,8 @@
 """
 Dataset discovery preparator.
 
-This module provides functionality to recursively discover datasets in a directory
-and generate a blended dataset config with weights proportional to token counts.
+This module discovers datasets by directly scanning for .fast_llm_dataset files
+and reading token counts from their binary headers.
 """
 
 import json
@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPreparator[ConfigType]):
     """
-    Preparator for discovering datasets in a directory tree and generating blended configs.
+    Preparator for discovering datasets by scanning .fast_llm_dataset files.
+
+    Scans a directory tree for .fast_llm_dataset files and reads token counts
+    from their binary headers to generate a hierarchical blended config.
     """
 
     _config: DatasetDiscoveryConfig
@@ -29,10 +32,9 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         """
         Run the dataset discovery preparator.
         """
-        # Generate the hierarchical config
+        # Generate the hierarchical config by finding .fast_llm_dataset files
         config = self._create_hierarchical_config(
             self._config.directory.resolve(),
-            use_file_refs=self._config.use_file_refs,
             ignore_paths=self._config.ignore_paths,
         )
 
@@ -46,7 +48,6 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
             )
             f.write(f"# Configuration:\n")
             f.write(f"#   directory: {self._config.directory}\n")
-            f.write(f"#   use_file_refs: {self._config.use_file_refs}\n")
             if self._config.ignore_paths:
                 f.write(f"#   ignore_paths:\n")
                 for ignore_path in self._config.ignore_paths:
@@ -60,7 +61,7 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         # Print a preview of the config
         logger.info("\nGenerated config preview:")
         preview = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
-        for line in preview.split("\n")[:50]:  # Show first 50 lines
+        for line in preview.split("\n")[:50]:
             logger.info(line)
 
         if len(preview.split("\n")) > 50:
@@ -75,18 +76,18 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         except ValueError:
             return False
 
-    def _find_dataset_configs(
+    def _find_dataset_files(
         self, root_dir: pathlib.Path, ignore_paths: list[pathlib.Path] | None = None
     ) -> list[pathlib.Path]:
         """
-        Recursively find all fast_llm_config*.yaml files in the directory tree.
+        Recursively find all .fast_llm_dataset files in the directory tree.
 
         Args:
             root_dir: Root directory to search
             ignore_paths: List of paths to ignore (can be absolute or relative to root_dir)
 
         Returns:
-            List of paths to fast_llm_config*.yaml files
+            List of paths to .fast_llm_dataset files
         """
         # Normalize ignore paths to absolute paths
         ignore_paths_absolute = set()
@@ -97,32 +98,32 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
                 else:
                     ignore_paths_absolute.add((root_dir / ignore_path).resolve())
 
-        # Find all fast_llm_config*.yaml files and filter out ignored ones
-        config_files = []
-        for config_file in root_dir.rglob("fast_llm_config*.yaml"):
-            config_file_resolved = config_file.resolve()
+        # Find all .fast_llm_dataset files and filter out ignored ones
+        dataset_files = []
+        for dataset_file in root_dir.rglob("*.fast_llm_dataset"):
+            dataset_file_resolved = dataset_file.resolve()
 
             # Check if this file is under any ignored path
             is_ignored = any(
-                self._is_subpath(config_file_resolved, ignore_path) for ignore_path in ignore_paths_absolute
+                self._is_subpath(dataset_file_resolved, ignore_path) for ignore_path in ignore_paths_absolute
             )
 
             if not is_ignored:
-                config_files.append(config_file)
+                dataset_files.append(dataset_file)
 
         # Sort by path for consistent ordering
-        return sorted(config_files)
-
-    @staticmethod
-    def _load_dataset_config(config_path: pathlib.Path) -> dict:
-        """Load a dataset config from a YAML file."""
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-        return config
+        return sorted(dataset_files)
 
     @staticmethod
     def _read_memmap_num_tokens(memmap_path: pathlib.Path) -> int:
-        """Read number of tokens from a memmap file."""
+        """Read number of tokens from a .fast_llm_dataset memmap file."""
+        # Import preprocessing and sample configs to register them
+        import fast_llm.data.preprocessing.image_patch  # noqa
+        import fast_llm.data.preprocessing.language_model  # noqa
+        import fast_llm.data.sample.language_model  # noqa
+        import fast_llm.data.sample.patch  # noqa
+        import fast_llm.data.sample.range  # noqa
+        import fast_llm.data.sample.token  # noqa
         from fast_llm.data.dataset.memmap import FILE_HEADER
         from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 
@@ -144,81 +145,31 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
             logger.warning(f"Failed to read memmap file {memmap_path}: {e}")
             return 0
 
-    @staticmethod
-    def _resolve_path(path: str | pathlib.Path, relative_to: pathlib.Path) -> pathlib.Path:
-        """Resolve a path relative to a base directory if not absolute."""
-        path = pathlib.Path(path)
-        return path if path.is_absolute() else relative_to / path
-
-    def _get_config_num_tokens(self, config_dict: dict, base_dir: pathlib.Path) -> int:
-        """Get number of tokens from a config dict (handles inline configs recursively)."""
-        dataset_type = config_dict.get("type")
-
-        if dataset_type == "file":
-            file_path = self._resolve_path(config_dict["path"], base_dir)
-            return self._get_dataset_num_tokens(file_path)
-
-        if dataset_type == "memmap":
-            memmap_path = self._resolve_path(config_dict.get("path", ""), base_dir)
-            return self._read_memmap_num_tokens(memmap_path)
-
-        if dataset_type in ["blended", "sampled", "concatenated"]:
-            return sum(self._get_config_num_tokens(sub, base_dir) for sub in config_dict.get("datasets", []))
-
-        if dataset_type == "slice":
-            base_config = config_dict.get("dataset", {})
-            begin = config_dict.get("begin", 0)
-            end = config_dict.get("end", 1)
-            base_tokens = self._get_config_num_tokens(base_config, base_dir)
-            return int(base_tokens * (end - begin))
-
-        logger.warning(f"Unsupported inline config type '{dataset_type}'")
-        return 0
-
-    def _get_dataset_num_tokens(self, config_path: pathlib.Path) -> int:
+    def _get_token_count(self, dataset_file: pathlib.Path) -> float | None:
         """
-        Load a dataset config and get its number of tokens.
-
-        Args:
-            config_path: Path to the dataset config file
+        Get token count in billions for a .fast_llm_dataset file.
 
         Returns:
-            Number of tokens in the dataset
+            Token count in billions, or None if the file couldn't be read
         """
-        # Import preprocessing and sample configs to register them
-        import fast_llm.data.preprocessing.image_patch  # noqa
-        import fast_llm.data.preprocessing.language_model  # noqa
-        import fast_llm.data.sample.language_model  # noqa
-        import fast_llm.data.sample.patch  # noqa
-        import fast_llm.data.sample.range  # noqa
-        import fast_llm.data.sample.token  # noqa
-
-        config_dict = self._load_dataset_config(config_path)
-        return self._get_config_num_tokens(config_dict, config_path.parent)
-
-    def _get_token_count(self, config_file: pathlib.Path) -> float:
-        """
-        Get token count in billions for a dataset config file.
-        """
-        num_tokens = self._get_dataset_num_tokens(config_file)
-        logger.info(f"  - {config_file.name}: {num_tokens:,} tokens")
+        num_tokens = self._read_memmap_num_tokens(dataset_file)
+        if num_tokens == 0:
+            logger.warning(f"  - {dataset_file.name}: skipping (0 tokens or read error)")
+            return None
+        logger.debug(f"  - {dataset_file.name}: {num_tokens:,} tokens")
         return num_tokens / 1e9
 
-    def _create_dataset_reference(self, config_file: pathlib.Path, use_file_refs: bool) -> dict:
+    def _create_memmap_config_for_dataset(self, dataset_file: pathlib.Path) -> dict:
         """
-        Create a dataset reference or inline config.
+        Create a memmap config dictionary for a .fast_llm_dataset file.
 
         Args:
-            config_file: Path to the dataset config file
-            use_file_refs: If True, create a file reference; if False, inline the config
+            dataset_file: Path to the .fast_llm_dataset file
 
         Returns:
-            Dictionary representing the dataset
+            Dictionary representing a memmap dataset config
         """
-        if use_file_refs:
-            return {"type": "file", "path": str(config_file)}
-        else:
-            return self._load_dataset_config(config_file)
+        return {"type": "memmap", "path": str(dataset_file)}
 
     @staticmethod
     def _get_directory_name(directory: pathlib.Path, root_dir: pathlib.Path, suffix: str = "") -> str:
@@ -237,73 +188,20 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         base_name = str(rel_path).replace("/", "_").replace(".", root_dir.name)
         return f"{base_name}{suffix}" if suffix else base_name
 
-    def _create_blended_config(
-        self,
-        config_files: list[pathlib.Path],
-        name: str = "blended",
-        use_file_refs: bool = True,
-    ) -> dict:
-        """
-        Create a blended dataset config from a list of config files.
-
-        Args:
-            config_files: List of paths to dataset config files
-            name: Name for the blended dataset
-            use_file_refs: If True, use file references (type: file, path: ...).
-                          If False, inline the full configs.
-
-        Returns:
-            Dictionary representing a blended dataset config
-        """
-        if len(config_files) == 0:
-            raise ValueError("No config files provided")
-
-        if len(config_files) == 1:
-            # If only one dataset, just reference it directly
-            if use_file_refs:
-                return {
-                    "type": "file",
-                    "path": str(config_files[0]),
-                }
-            else:
-                return self._load_dataset_config(config_files[0])
-
-        # Build datasets and weights in a single pass
-        logger.info("Calculating token counts for blended dataset weights...")
-        datasets = []
-        weights = []
-
-        for config_file in config_files:
-            # Add dataset reference or inline config
-            if use_file_refs:
-                datasets.append({"type": "file", "path": str(config_file)})
-            else:
-                datasets.append(self._load_dataset_config(config_file))
-
-            # Get token count for weight
-            weights.append(self._get_token_count(config_file))
-
-        return {
-            "type": "blended",
-            "name": name,
-            "datasets": datasets,
-            "weights": weights,
-        }
-
     @staticmethod
-    def _group_configs_by_directory(config_files: list[pathlib.Path]) -> dict[pathlib.Path, list[pathlib.Path]]:
+    def _group_files_by_directory(dataset_files: list[pathlib.Path]) -> dict[pathlib.Path, list[pathlib.Path]]:
         """
-        Group config files by their parent directory.
+        Group dataset files by their parent directory.
 
         Args:
-            config_files: List of config file paths
+            dataset_files: List of dataset file paths
 
         Returns:
-            Dictionary mapping directory paths to lists of config files in that directory
+            Dictionary mapping directory paths to lists of dataset files in that directory
         """
         groups: dict[pathlib.Path, list[pathlib.Path]] = defaultdict(list)
-        for config_file in config_files:
-            groups[config_file.parent].append(config_file)
+        for dataset_file in dataset_files:
+            groups[dataset_file.parent].append(dataset_file)
 
         return dict(groups)
 
@@ -315,7 +213,7 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         Build a tree structure of directories showing parent-child relationships.
 
         Args:
-            groups: Dictionary mapping directories to their config files
+            groups: Dictionary mapping directories to their dataset files
             root_dir: Root directory
 
         Returns:
@@ -343,17 +241,15 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         groups: dict[pathlib.Path, list[pathlib.Path]],
         tree: dict[pathlib.Path, set[pathlib.Path]],
         root_dir: pathlib.Path,
-        use_file_refs: bool,
     ) -> tuple[dict, float] | None:
         """
         Recursively create a blended config for a directory and its subdirectories.
 
         Args:
             directory: Current directory to process
-            groups: Dictionary mapping directories to their config files
+            groups: Dictionary mapping directories to their dataset files
             tree: Directory tree structure
             root_dir: Root directory
-            use_file_refs: Whether to use file references
 
         Returns:
             Tuple of (config dictionary, total token count in billions), or None if directory has no datasets
@@ -361,18 +257,20 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         local_datasets = []
         local_tokens = []
 
-        # Collect configs directly in this directory (not in subdirectories)
+        # Collect dataset files directly in this directory (not in subdirectories)
         if directory in groups:
-            for config_file in sorted(groups[directory]):
-                local_datasets.append(self._create_dataset_reference(config_file, use_file_refs))
-                local_tokens.append(self._get_token_count(config_file))
+            for dataset_file in sorted(groups[directory]):
+                token_count = self._get_token_count(dataset_file)
+                if token_count is not None:  # Skip files that couldn't be read
+                    local_datasets.append(self._create_memmap_config_for_dataset(dataset_file))
+                    local_tokens.append(token_count)
 
         # Recursively process subdirectories
         subdir_datasets = []
         subdir_tokens = []
         if directory in tree:
             for subdir in sorted(tree[directory]):
-                subdir_result = self._create_directory_config(subdir, groups, tree, root_dir, use_file_refs)
+                subdir_result = self._create_directory_config(subdir, groups, tree, root_dir)
                 if subdir_result is not None:
                     subdir_config, subdir_token_count = subdir_result
                     subdir_datasets.append(subdir_config)
@@ -420,54 +318,51 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
     def _create_hierarchical_config(
         self,
         root_dir: pathlib.Path,
-        use_file_refs: bool = True,
         ignore_paths: list[pathlib.Path] | None = None,
     ) -> dict:
         """
-        Create a hierarchical blended dataset config from all datasets in a directory.
+        Create a hierarchical blended dataset config from all .fast_llm_dataset files in a directory.
 
         Datasets in the same directory are grouped together with weights proportional to token counts,
         and these groups are nested following the directory structure.
 
         Args:
             root_dir: Root directory to search for datasets
-            use_file_refs: If True, use file references (type: file).
-                          If False, inline the full configs.
             ignore_paths: List of paths to ignore (can be absolute or relative to root_dir)
 
         Returns:
             Dictionary representing the hierarchical blended dataset config
         """
-        logger.info(f"Discovering datasets in {root_dir}...")
+        logger.info(f"Discovering .fast_llm_dataset files in {root_dir}...")
 
         if ignore_paths:
             logger.info(f"Ignoring {len(ignore_paths)} path(s):")
             for ignore_path in ignore_paths:
                 logger.info(f"  - {ignore_path}")
 
-        config_files = self._find_dataset_configs(root_dir, ignore_paths=ignore_paths)
+        dataset_files = self._find_dataset_files(root_dir, ignore_paths=ignore_paths)
 
-        if not config_files:
-            raise ValueError(f"No fast_llm_config*.yaml files found in {root_dir}")
+        if not dataset_files:
+            raise ValueError(f"No .fast_llm_dataset files found in {root_dir}")
 
-        logger.info(f"Found {len(config_files)} dataset config(s):")
-        for config_file in config_files:
-            logger.info(f"  - {config_file.relative_to(root_dir)}")
+        logger.debug(f"Found {len(dataset_files)} dataset file(s):")
+        for dataset_file in dataset_files:
+            logger.debug(f"  - {dataset_file.relative_to(root_dir)}")
 
-        # Group configs by directory
-        groups = self._group_configs_by_directory(config_files)
+        # Group dataset files by directory
+        groups = self._group_files_by_directory(dataset_files)
 
         # Build directory tree
         tree = self._build_directory_tree(groups, root_dir)
 
         # Create hierarchical config
-        result = self._create_directory_config(root_dir, groups, tree, root_dir, use_file_refs)
+        result = self._create_directory_config(root_dir, groups, tree, root_dir)
 
         if result is None:
             raise ValueError("Failed to create config")
 
         config, total_tokens = result
 
-        logger.info(f"Total tokens across all datasets: {total_tokens:,}")
+        logger.info(f"Total tokens across all datasets: {total_tokens:.2f}B")
 
         return config
