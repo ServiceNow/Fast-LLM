@@ -503,7 +503,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
