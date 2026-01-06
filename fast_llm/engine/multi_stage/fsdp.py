@@ -78,6 +78,13 @@ class FSDP:
             self._shard_size,
         )
 
+        logger.info(
+            f"FSDP {name}: param_count={self._parameter_count:,}, global_pad={self._global_pad}, "
+            f"shard_size={self._shard_size:,}, shard_pad={self._shard_pad}, "
+            f"dp_rank={self._fsdp_dim.rank}/{self._fsdp_dim.size}, requires_grad={self._requires_grad}, "
+            f"tied_copy={is_tied_weight_copy}, num_params={len(self._parameter_metas)}"
+        )
+
         # TODO: Use parallel_dim property instead?
         weight_shard_dim = TensorDim("weight_shard", self._shard_size)
         grad_shard_dim = TensorDim("grad_shard", self._shard_size if self._requires_grad else 0)
