@@ -1,5 +1,7 @@
 import collections
+import datetime
 import enum
+import functools
 import json
 import logging
 import math
@@ -26,7 +28,14 @@ from fast_llm.data.dataset.config import (
 )
 from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, LanguageModelSourceConfig
+from fast_llm.data.preparator.gpt_memmap.config import (
+    ConversationSourceConfig,
+    DocumentSourceConfig,
+    GPTMemmapDatasetPreparatorConfig,
+    LanguageModelSourceConfig,
+)
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import Tokenizer
 from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
@@ -35,7 +44,7 @@ from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
+from fast_llm.utils import normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +137,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Load tokenizer
         self._tokenizer = self._config.tokenizer.get_tokenizer()
 
+        # Validate chat template for conversation format
+        if isinstance(self._source_schema, ConversationSourceConfig):
+            self._tokenizer.validate_chat_template()
+
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
             get_unsigned_integer_type(self._tokenizer.vocab_size)
@@ -142,6 +155,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 backend=self._config.distributed.backend,
                 rank=self._config.distributed.rank,
                 world_size=self._config.distributed.world_size,
+                timeout=datetime.timedelta(seconds=self._config.distributed.timeout),
             )
 
         # Prepare output directory
@@ -194,99 +208,129 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
+            self._preprocessing_config,
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 
-    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
-        # TODO: ======= Extract so we can use elsewhere? (ex. inference) ======
-        text = sample[self._source_schema.text]
-        all_spans = []
-        if self._source_schema.has_loss_masking_span:
-            # TODO: ====== What is the exact input format? ======
-            # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
-            loss_masking_spans = _sort_spans(
-                (SpanType.loss_masking, (begin, last + 1))
-                for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
-                .reshape(-1, 2)
-                .tolist()
-            )
-            all_spans.extend(loss_masking_spans)
-
-        if self._source_schema.has_preference_spans:
-            # TODO: ===== Was `self._config.dataset.field` (bug?) ======
-            full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
-            full_rejected_text = self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
-            # compute chosen span
-            chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
-
-            # compute rejected span
-            rejected_span = [
-                (
-                    SpanType.rejected,
-                    (
-                        len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
-                        len(full_chosen_text) + len(full_rejected_text),
-                    ),
-                )
-            ]
-            # pack texts
-            text = full_chosen_text + full_rejected_text
-            all_spans.extend(chosen_spans + rejected_span)
-
-        if self._source_schema.has_images:
-            # Get the images and positions, sorted by position.
-            images, image_positions = (
-                zip(
-                    *sorted(
-                        zip(
-                            sample[self._source_schema.images],
-                            sample[self._source_schema.image_positions],
-                            strict=True,
-                        ),
-                        key=lambda x: x[1],
-                    )
-                )
-                if len(sample[self._source_schema.images]) > 0
-                else ([], [])
-            )
-            # Get the image patches and associated data.
-            image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
-                self._config.image_patches.get_patches_from_images(images, self._data_type)
-            )
-            patch_count_cumsum = padded_cumsum(patch_counts).tolist()
-            # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
-            all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
-
-        # Sort the spans by location (begin), keeping track of their type.
-        # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
-        span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
-        # Tokenize the text, and determine the span locations in the tokenized text.
-        tokens, token_spans = self._tokenizer.tokenize_with_spans(
-            text, True, True, text_spans=spans, data_type=self._data_type
+    @functools.cached_property
+    def _preprocessing_config(self) -> LanguageModelPreprocessingConfig:
+        return LanguageModelPreprocessingConfig(
+            tokenizer=self._config.tokenizer,
+            vocab_size=self._tokenizer.vocab_size,
+            image_patches=(
+                self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
+            ),
+            use_loss_masking_spans=self._source_schema.has_loss_masking_span,
+            use_preference_spans=self._source_schema.has_preference_spans,
         )
 
-        # Gather token spans by type.
+    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
         token_spans_by_type = collections.defaultdict(list)
-        if self._source_schema.has_images:
-            # Insert the image token ids in the token sequence and shift the spans accordingly.
-            tokens_shift = 0
-            image_index = 0
-            for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
-                # Account for the tokens already inserted.
-                begin = begin + tokens_shift
-                end = end + tokens_shift
-                if span_type == SpanType.image:
-                    # Shift the token map to the image location.
-                    image_token_maps[patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]] += begin
-                    # Insert the placeholder and image break tokens.
-                    tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
-                    tokens_shift += len(image_token_ids[image_index])
-                    image_index += 1
-                else:
-                    token_spans_by_type[span_type].append((begin, end))
+        image_patches = image_token_maps = image_position_ids = patch_counts = None
+
+        if isinstance(self._source_schema, ConversationSourceConfig):
+            # Conversation format: tokenize messages and get loss masking spans from chat template
+            tokens, loss_masking_spans = self._tokenizer.tokenize_chat(
+                sample[self._source_schema.messages],
+                True,
+                True,
+                data_type=self._data_type,
+            )
+            token_spans_by_type[SpanType.loss_masking] = loss_masking_spans
+        elif isinstance(self._source_schema, DocumentSourceConfig):
+            # Document format: use the text-spans pipeline
+            text = sample[self._source_schema.text]
+            all_spans = []
+
+            if self._source_schema.has_loss_masking_span:
+                # Spans are typically stored in the (begin, last) format. We convert to (begin, end) range format.
+                loss_masking_spans = _sort_spans(
+                    (SpanType.loss_masking, (begin, last + 1))
+                    for begin, last in np.array(sample[self._source_schema.loss_masking_spans], dtype=np.int32)
+                    .reshape(-1, 2)
+                    .tolist()
+                )
+                all_spans.extend(loss_masking_spans)
+
+            if self._source_schema.has_preference_spans:
+                full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
+                full_rejected_text = (
+                    self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
+                )
+                # compute chosen span
+                chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
+
+                # compute rejected span
+                rejected_span = [
+                    (
+                        SpanType.rejected,
+                        (
+                            len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
+                            len(full_chosen_text) + len(full_rejected_text),
+                        ),
+                    )
+                ]
+                # pack texts
+                text = full_chosen_text + full_rejected_text
+                all_spans.extend(chosen_spans + rejected_span)
+
+            if self._source_schema.has_images:
+                # Get the images and positions, sorted by position.
+                images, image_positions = (
+                    zip(
+                        *sorted(
+                            zip(
+                                sample[self._source_schema.images],
+                                sample[self._source_schema.image_positions],
+                                strict=True,
+                            ),
+                            key=lambda x: x[1],
+                        )
+                    )
+                    if len(sample[self._source_schema.images]) > 0
+                    else ([], [])
+                )
+                # Get the image patches and associated data.
+                image_patches, image_position_ids, image_token_maps, image_token_ids, patch_counts = (
+                    self._config.image_patches.get_patches_from_images(images, self._data_type)
+                )
+                patch_count_cumsum = padded_cumsum(patch_counts).tolist()
+                # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
+                all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
+
+            # Sort the spans by location (begin), keeping track of their type.
+            # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
+            span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
+            # Tokenize the text, and determine the span locations in the tokenized text.
+            tokens, token_spans = self._tokenizer.tokenize_with_spans(
+                text, True, True, text_spans=spans, data_type=self._data_type
+            )
+
+            # Gather token spans by type.
+            if self._source_schema.has_images:
+                # Insert the image token ids in the token sequence and shift the spans accordingly.
+                tokens_shift = 0
+                image_index = 0
+                for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
+                    # Account for the tokens already inserted.
+                    begin = begin + tokens_shift
+                    end = end + tokens_shift
+                    if span_type == SpanType.image:
+                        # Shift the token map to the image location.
+                        image_token_maps[
+                            patch_count_cumsum[image_index] : patch_count_cumsum[image_index + 1]
+                        ] += begin
+                        # Insert the placeholder and image break tokens.
+                        tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
+                        tokens_shift += len(image_token_ids[image_index])
+                        image_index += 1
+                    else:
+                        token_spans_by_type[span_type].append((begin, end))
+            else:
+                for span_type, token_span in zip(span_types, token_spans, strict=True):
+                    token_spans_by_type[span_type].append(token_span)
         else:
-            for span_type, token_span in zip(span_types, token_spans, strict=True):
-                token_spans_by_type[span_type].append(token_span)
+            raise NotImplementedError(f"Unsupported source schema type: {type(self._source_schema)}")
 
         sample_size = len(tokens)
 
@@ -331,16 +375,18 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Create the config file(s) on rank 0
             dataset_configs, reader_configs = zip(*dataset_and_reader_configs)
             if self._config.splits:
-                for split_name, split_config in self._split_and_blend_dataset_configs(
+                for split_name, (split_config, metadata) in self._split_and_blend_dataset_configs(
                     dataset_configs, reader_configs, self._config.splits, self._config.output_path
                 ).items():
                     self._save_dataset_config(
-                        split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
+                        split_config,
+                        metadata,
+                        output_path=self._config.output_path / f"fast_llm_config_{split_name}.yaml",
                     )
             else:
                 self._save_dataset_config(
-                    self._blend_dataset_configs(dataset_configs, reader_configs),
-                    self._config.output_path / f"fast_llm_config.yaml",
+                    *self._blend_dataset_configs(dataset_configs, reader_configs),
+                    output_path=self._config.output_path / f"fast_llm_config.yaml",
                 )
 
             # Save metadata on rank 0
@@ -353,38 +399,38 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _save_dataset_config(
-        cls, dataset_config: IndexedDatasetConfig[_sample_type], output_path: pathlib.Path
+        cls,
+        dataset_config: IndexedDatasetConfig[_sample_type],
+        metadata: dict[str, typing.Any],
+        output_path: pathlib.Path,
     ) -> None:
         logger.info(f"Saving config to {output_path}")
-        yaml.safe_dump(
-            dataset_config.to_dict(),
-            output_path.open("w"),
-        )
+        yaml.safe_dump({"config": dataset_config.to_dict(), "metadata": metadata}, output_path.open("w"))
 
     @classmethod
     def _blend_dataset_configs(
         cls,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         reader_configs: list[MemmapIndexDatasetReaderConfig],
-    ) -> IndexedDatasetConfig[_sample_type]:
+    ) -> tuple[IndexedDatasetConfig[_sample_type], dict[str, typing.Any]]:
+        datasets_metadata = [reader_config.get_metadata() for reader_config in reader_configs]
         if len(dataset_configs) == 1:
-            return dataset_configs[0]
+            return dataset_configs[0], datasets_metadata[0]
         return SampledDatasetConfig[cls._sample_type].from_dict(
             {
                 "type": "blended",
                 "datasets": dataset_configs,
                 "weights": [reader_config.num_tokens for reader_config in reader_configs],
             }
-        )
+        ), reader_configs[0].blend_metadata(datasets_metadata)
 
-    @classmethod
     def _split_and_blend_dataset_configs(
-        cls,
+        self,
         dataset_configs: list[MemmapDatasetConfig[_sample_type]],
         reader_configs: list[MemmapIndexDatasetReaderConfig],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
-    ) -> dict[str, SampledDatasetConfig[_sample_type]]:
+    ) -> dict[str, tuple[SampledDatasetConfig[_sample_type], dict[str, typing.Any]]]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [reader_config.num_tokens for reader_config in reader_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
@@ -393,7 +439,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         for split_index, split_name in enumerate(splits):
             datasets_in_split = []
-            dataset_tokens_in_split = []
+            datasets_metadata = []
             for dataset_index, (dataset_config, reader_config) in enumerate(
                 zip(dataset_configs, reader_configs, strict=True)
             ):
@@ -410,18 +456,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 if split_begin_in_dataset == 0 and split_end_in_dataset == 1:
                     # All the dataset belongs to the split.
                     datasets_in_split.append(dataset_configs[dataset_index])
-                    dataset_tokens_in_split.append(dataset_sizes[dataset_index])
+                    datasets_metadata.append(reader_config.get_metadata())
+
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
-                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
-                    sizes_cumsum = dataset.get_document_sizes().numpy().cumsum()
-                    Assert.eq(sizes_cumsum[-1], reader_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * reader_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * reader_config.num_tokens)
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
+                        self._preprocessing_config
+                    )
+                    begin_index, end_index, metadata = dataset.reader.get_split(
+                        split_begin_in_dataset, split_end_in_dataset
+                    )
                     if end_index > begin_index:
                         datasets_in_split.append(
-                            DatasetSliceConfig[cls._sample_type].from_dict(
+                            DatasetSliceConfig[self._sample_type].from_dict(
                                 {
                                     "type": "slice",
                                     "dataset": dataset_configs[dataset_index],
@@ -430,10 +478,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                                 }
                             )
                         )
-                        dataset_tokens_in_split.append(
-                            sizes_cumsum[end_index - 1].item()
-                            - (sizes_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
-                        )
+                        datasets_metadata.append(metadata)
 
                 # [else] None of the dataset belongs to the split.
 
@@ -441,14 +486,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 # This is a big problem, but we don't want to crash the whole run.
                 logger.error(f"Datasets split {split_name} is empty!")
             elif len(datasets_in_split) == 1:
-                dataset_splits[split_name] = datasets_in_split[0]
+                dataset_splits[split_name] = (datasets_in_split[0], datasets_metadata[0])
             else:
-                dataset_splits[split_name] = BlendedDatasetConfig[cls._sample_type].from_dict(
-                    {
-                        "type": "blended",
-                        "datasets": datasets_in_split,
-                        "weights": dataset_tokens_in_split,
-                    }
+                dataset_splits[split_name] = (
+                    BlendedDatasetConfig[self._sample_type].from_dict(
+                        {
+                            "type": "blended",
+                            "datasets": datasets_in_split,
+                            "weights": [dataset_metadata["num_tokens"] for dataset_metadata in datasets_metadata],
+                        }
+                    ),
+                    reader_configs[0].blend_metadata(datasets_metadata),
                 )
 
         return dataset_splits

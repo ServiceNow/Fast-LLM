@@ -5,9 +5,11 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
+    MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
@@ -148,16 +150,28 @@ class PatchBatch(Batch):
         self.positions = self.positions.to(device, non_blocking=True)
 
 
-@config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
-class PatchReaderConfig(MemmapReaderConfig):
+@config_class()
+class PatchReaderBaseConfig(MemmapReaderBaseConfig):
     _abstract = False
+    patch_shape: tuple[int, ...] = Field()
+    data_type: DataType = Field()
+
+    @property
+    def patch_size(self) -> int:
+        return math.prod(self.patch_shape)
+
+    @property
+    def grid_dims(self) -> int:
+        return len(self.patch_shape) - 1
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "patch"})
+class PatchReaderConfig(PatchReaderBaseConfig, MemmapReaderConfig):
     header: typing.ClassVar[bytes] = b"patch begin"
     footer: typing.ClassVar[bytes] = b"patch end"
     num_documents: int = Field()
     num_patches: int = Field()
     num_patch_groups: int = Field()
-    patch_shape: tuple[int, ...] = Field()
-    data_type: DataType = Field()
 
     def __len__(self) -> int:
         return self.num_documents
@@ -171,14 +185,6 @@ class PatchReaderConfig(MemmapReaderConfig):
         return PatchWriter
 
     @property
-    def patch_size(self) -> int:
-        return math.prod(self.patch_shape)
-
-    @property
-    def grid_dims(self) -> int:
-        return len(self.patch_shape) - 1
-
-    @property
     def _expected_buffer_size(self) -> int:
         return (
             self.num_patches * self.patch_size * self.data_type.torch.itemsize
@@ -186,10 +192,31 @@ class PatchReaderConfig(MemmapReaderConfig):
             * torch.int32.itemsize
         )
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_documents": self.num_documents,
+            "num_patches": self.num_patches,
+            "num_patch_groups": self.num_patch_groups,
+            "num_pixels": self.patch_size * self.num_patches,
+            "patch_shape": self.patch_shape,
+            "data_type": str(self.data_type),
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "num_patches": sum(metadata_["num_patches"] for metadata_ in metadata),
+            "num_patch_groups": sum(metadata_["num_patch_groups"] for metadata_ in metadata),
+            "num_pixels": sum(metadata_["num_pixels"] for metadata_ in metadata),
+            "patch_shape": get_unique(metadata_["patch_shape"] for metadata_ in metadata),
+            "data_type": get_unique(metadata_["data_type"] for metadata_ in metadata),
+        }
+
 
 class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._patches = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
@@ -247,6 +274,29 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
             ),
         )
 
+    def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])
+        num_patches = self._patch_count_cumsums[end_index].item() - self._patch_count_cumsums[begin_index].item()
+        return {
+            "num_documents": end_index - begin_index,
+            "num_patches": num_patches,
+            "num_patch_groups": self._group_count_cumsums[end_index].item()
+            - self._group_count_cumsums[begin_index].item(),
+            "num_pixels": self._config.patch_size * num_patches,
+            "patch_shape": self._config.patch_shape,
+            "data_type": str(self._config.data_type),
+        }
+
+
+class EmptyPatchReader[ConfigType: PatchReaderBaseConfig](MemmapReaderBase[ConfigType]):
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        return PatchSample(
+            torch.empty(0, *self._config.patch_shape, dtype=self._config.data_type.torch),
+            torch.empty(0, dtype=torch.int32),
+            torch.empty(0, self._config.grid_dims, dtype=torch.int32),
+            end - begin,
+        )
+
 
 class PatchWriter(MemmapWriter):
     def __enter__(self):
@@ -300,4 +350,5 @@ class PatchWriter(MemmapWriter):
             num_patch_groups=self._group_count_cumsum[-1],
             patch_shape=self._patch_shape,
             data_type=DataType.from_torch(self._data_type),
+            preprocessing=self._preprocessing_config,
         )

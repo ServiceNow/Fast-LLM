@@ -8,6 +8,8 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert, compare_nested, log
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.engine.base_model.base_model import BaseModel
 
 
@@ -58,6 +60,17 @@ class ModuleConfig(Config):
             return self._serialize_value(value)
 
 
+def set_model_names(model: "torch.nn.Module"):
+    from fast_llm.tensor import ParameterMeta
+
+    for key, value in model.named_modules():
+        value.module_name = key
+    for key, value in model.named_parameters():
+        Assert.custom(isinstance, value, ParameterMeta)
+        # Rename to the parameter full name
+        value.tensor_name = key
+
+
 @config_class()
 class BaseModelConfig(ModuleConfig):
     """
@@ -65,17 +78,11 @@ class BaseModelConfig(ModuleConfig):
     """
 
     def get_base_model(self, distributed_config: DistributedConfig) -> "BaseModel":
-        from fast_llm.tensor import ParameterMeta
 
         model = self.base_model_class(self, distributed_config)
         # Storing the global name of each module and tensor.
         # Done here because it needs to run right after `model.__init__()`
-        for key, value in model.named_modules():
-            value.module_name = key
-        for key, value in model.named_parameters():
-            Assert.custom(isinstance, value, ParameterMeta)
-            # Rename to the parameter full name
-            value.tensor_name = key
+        set_model_names(model)
         return model
 
     @property

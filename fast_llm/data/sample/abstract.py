@@ -4,6 +4,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Configurable, Field, config_class
+from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -72,6 +73,13 @@ class MemmapReaderBaseConfig(Config):
         """
         raise NotImplementedError()
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        raise NotImplementedError()
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        raise NotImplementedError()
+
 
 @config_class(dynamic_type={MemmapReaderBaseConfig: "none"})
 class NullReaderConfig(MemmapReaderBaseConfig):
@@ -101,13 +109,15 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
     # Constant strings for alignment safety.
     header: typing.ClassVar[bytes]
     footer: typing.ClassVar[bytes]
+    # Additional information about how the dataset was prepared.
+    preprocessing: PreprocessingConfig = Field()
 
     @property
     def reader_class(self) -> "type[MemmapReader]":
         raise NotImplementedError()
 
-    def get_reader(self, buffer: memoryview) -> "MemmapReader":
-        return self.reader_class(self, buffer)
+    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None) -> "MemmapReader":
+        return self.reader_class(self, buffer, model_preprocessing)
 
     @property
     def expected_buffer_size(self) -> int:
@@ -153,25 +163,35 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     def reader_class(self) -> "type[MemmapIndexedDatasetReader]":
         raise NotImplementedError()
 
-    def get_reader(
-        self,
-        buffer: memoryview,
-    ) -> "MemmapIndexedDatasetReader":
-        return self.reader_class(self, buffer)
+    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig) -> "MemmapIndexedDatasetReader":
+        return self.reader_class(self, buffer, model_preprocessing)
+
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {"num_tokens": self.num_tokens}
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {"num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata)}
 
 
-class MemmapReader[ConfigType: MemmapReaderConfig](Configurable[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
+class MemmapReaderBase[ConfigType: MemmapReaderBaseConfig](Configurable[ConfigType]):
+    @abc.abstractmethod
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        pass
+
+
+class MemmapReader[ConfigType: MemmapReaderConfig](MemmapReaderBase[ConfigType]):
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
         super().__init__(config)
+        # Note: This is the requirement at reading time (ex. from the model),
+        # which may differ from how the dataset was actually preprocessed (`config.preprocessing`)
+        # Compatibility checked in `MemmapDataset`.
+        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
         buffer_begin = self._config.begin + len(self._config.header)
         buffer_end = self._config.end - len(self._config.footer)
         Assert.eq(buffer[self._config.begin : buffer_begin].tobytes(), self._config.header)
         Assert.eq(buffer[buffer_end : self._config.end].tobytes(), self._config.footer)
         self._buffer = buffer[buffer_begin:buffer_end]
-
-    @abc.abstractmethod
-    def get_document(self, index: int, begin: int, end: int) -> Sample:
-        pass
 
 
 class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](MemmapReader[ConfigType]):
@@ -190,13 +210,21 @@ class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](Mem
     def get_document_size(self, index: int) -> int:
         pass
 
+    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
+        raise NotImplementedError()
+
 
 class MemmapWriter(abc.ABC):
-    def __init__(self, stream: io.BufferedWriter | pathlib.Path):
+    def __init__(
+        self, stream: io.BufferedWriter | pathlib.Path, preprocessing_config: PreprocessingConfig | None = None
+    ):
         self._owns_stream = isinstance(stream, pathlib.Path)
         if self._owns_stream:
             stream = stream.open("wb")
         self._stream = stream
+        self._preprocessing_config = (
+            NullPreprocessingConfig() if preprocessing_config is None else preprocessing_config
+        )
 
     def __enter__(self):
         self._begin = self._stream.tell()
@@ -227,8 +255,13 @@ class MemmapWriter(abc.ABC):
         pass
 
     @classmethod
-    def write_dataset(cls, stream: io.BufferedWriter, documents: typing.Iterable[Sample]) -> MemmapReaderConfig:
-        with cls(stream) as writer:
+    def write_dataset(
+        cls,
+        stream: io.BufferedWriter,
+        documents: typing.Iterable[Sample],
+        preprocessing_config: PreprocessingConfig | None = None,
+    ) -> MemmapReaderConfig:
+        with cls(stream, preprocessing_config) as writer:
             for document in documents:
                 writer.write(document)
         return writer.get_config()

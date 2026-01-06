@@ -1,4 +1,5 @@
 import logging
+import re
 import typing
 
 import torch
@@ -166,14 +167,28 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         if preprocessed_meta is None:
             preprocessed_meta = self.preprocess_meta(batch, phase)
 
+        distillation_models = self._config.decoder.get_distillation_models()
+        # TODO: Support multiple distillation models?
+        assert len(distillation_models) <= 1
         reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_meta = [
                 (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
             ]
 
+            # Set output_hidden_states in reference metadata before preprocessing if needed for distillation
+            if name in distillation_models:
+                reference_output_hidden_states = [r"decoder\.\d+\.mixer_output$"]
+                for _, ref_kwargs_meta in reference_preprocessed_meta:
+                    ref_kwargs_meta[BlockKwargs.output_hidden_states] = [
+                        re.compile(pattern) for pattern in reference_output_hidden_states
+                    ]
+
             reference_batch = reference_model.fast_llm_model.base_model.preprocess_batch(
-                batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
+                batch,
+                reference_preprocessed_meta,
+                phase=PhaseType.inference,
+                iteration=iteration,
             )
 
             # TODO: Do things work with >1?
@@ -181,6 +196,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
+                if BlockKwargs.hidden_states in reference_kwargs and reference_kwargs[BlockKwargs.hidden_states]:
+                    # Extract activations from hidden_states dict (stored by _debug method)
+                    # Format: {layer_name: (meta, tensor), ...}
+                    activations = {
+                        layer_name: tensor
+                        for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
+                    }
+                    reference_logits[i][f"{name}_activations"] = activations
 
         preprocessed = []
         presents = None
@@ -194,16 +217,48 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
 
+            # Create activation mask for activation distillation
+            # This mask should:
+            # - Be 0 on padding tokens (added at the end when documents aren't truncated)
+            # - Be 1 on image placeholder tokens (token value -100 but not padding)
+            # - Be 1 on all other valid tokens (ignores loss-masking-spans)
+            #
+            # Note: Padding is added as a separate document with all tokens = -100
+            # We detect padding by checking if all tokens in a document segment are -100
+            activation_mask = torch.ones_like(cropped_tokens.tokens, dtype=torch.bool)
+
+            for sample_index, sample_lengths in enumerate(cropped_tokens.lengths):
+                # Iterate through documents in this sample
+                pos = 0
+                for doc_length in sample_lengths:
+                    # Check if this document is padding (all tokens are -100)
+                    doc_tokens = cropped_tokens.tokens[sample_index, pos : pos + doc_length]
+                    is_padding_doc = torch.all(doc_tokens == -100).item()
+
+                    if is_padding_doc:
+                        # This is a padding document, mask it out
+                        activation_mask[sample_index, pos : pos + doc_length] = False
+
+                    pos += doc_length
+
             kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                BlockKwargs.activation_mask: activation_mask,
                 AttentionKwargs.device: self._distributed.device,
                 BlockKwargs.hidden_states: {},
                 **reference_logits[i],
             }
+
+            # Add activation-distillation targets
+            assert len(distillation_models) <= 1
+            for distillation_model in distillation_models:
+                teacher_key = f"{distillation_model}_activations"
+                if teacher_key in reference_logits[i]:
+                    kwargs[BlockKwargs.activation_distillation_targets] = reference_logits[i].pop(teacher_key)
 
             if phase != PhaseType.inference:
                 labels_begin = tokens_begin + 1
@@ -217,13 +272,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
                         for begin, end in loss_masking_spans:
                             loss_mask[sample_index, begin:end] = False
-                    if self._config.output_layer.distillation_model is not None:
+                    if (
+                        self._config.head.distillation_model is not None
+                        or self._config.decoder.block.distillation_model is not None
+                    ):
                         kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     labels = torch.where(loss_mask, labels, -100)
 
                 kwargs[LanguageModelKwargs.labels] = (
                     labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels
                 ).contiguous()
+                if LanguageModelKwargs.loss_mask in kwargs and kwargs[AttentionKwargs.sequence_first]:
+                    kwargs[LanguageModelKwargs.loss_mask] = (
+                        kwargs[LanguageModelKwargs.loss_mask].transpose(0, 1).contiguous()
+                    )
 
                 if batch.chosen_spans is not None:
                     kwargs[LanguageModelKwargs.chosen_spans] = batch.chosen_spans.crop(labels_begin, labels_end).ranges

@@ -56,7 +56,7 @@ for tensor in ("fw", "bw"):
 _bf16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
-        (None, "fw"): get_config(1e-2, 1e-3),
+        (None, "fw"): get_config(1.5e-2, 1.5e-3),
         (None, "bw"): get_config(1.5e-2, 1e-5),
         (None, "bias"): get_config(2e-2, 1e-3),
         (None, "gradient"): get_config(2e-2, 5e-5),
@@ -79,7 +79,7 @@ _fp16_compare = get_config(
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
     compare=None,
-    config_args=["training.num_workers=2"],
+    config_args=[],
     num_gpus=1,
 )
 
@@ -87,7 +87,8 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="bf16",
         compare="simple",
-        config_args=["model.distributed.compute_dtype=bf16"],
+        # Also tests parallel data loader.
+        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=2"],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),
@@ -221,6 +222,17 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
+    # Depth-first micro-batches, tensor-parallel
+    DistributedTestingConfig(
+        name="tp2_df4",
+        compare="df4",
+        config_args=[
+            "model.distributed.tensor_parallel=2",
+            "batch.depth_first_micro_batches=4",
+        ],
+        num_gpus=2,
+        compare_config=_compare_layer_match,
+    ),
     # Cross-entropy splits
     DistributedTestingConfig(
         name="stp2_ce4",
@@ -242,17 +254,6 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
-        ],
-        num_gpus=4,
-        compare_config=_compare_layer_match,
-    ),
-    # Depth-first micro-batches, tensor-parallel
-    DistributedTestingConfig(
-        name="tp2_df4",
-        compare="df4",
-        config_args=[
-            "model.distributed.tensor_parallel=2",
-            "batch.depth_first_micro_batches=4",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,

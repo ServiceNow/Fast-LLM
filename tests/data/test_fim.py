@@ -22,9 +22,9 @@ GPT_FIM_SAMPLES = [
 
 def test_gpt_fim():
     # Make sure the FIM wrapper works in a simple case and check for unintended changes in behavior.
-    _, config, _ = get_common_test_dataset()
+    _, config, _, preprocessing = get_common_test_dataset()
     # The test tokenizer doesn't have fim tokens, so we work around it.
-    sampling_config = get_sampling_data(8, sequence_length=5)
+    sampling_config = get_sampling_data(8, sequence_length=5, preprocessing=preprocessing)
     sampled = get_dataset_config(
         dataset_config := {
             "type": "fim",
@@ -45,4 +45,5 @@ def test_gpt_fim():
         8,
         sequence_length=5,
         expected_samples=GPT_FIM_SAMPLES,
+        preprocessing=preprocessing,
     )

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapIndexedDatasetReader,
@@ -13,7 +14,7 @@ from fast_llm.data.sample.abstract import (
     Sample,
 )
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_unique
 
 
 def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
@@ -109,10 +110,25 @@ class TokenReaderConfig(MemmapReaderConfig):
     def _expected_buffer_size(self) -> int:
         return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.int64.itemsize
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_tokens": self.num_tokens,
+            "num_documents": self.num_documents,
+            "data_type": str(self.data_type),
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata),
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "data_type": get_unique(metadata_["data_type"] for metadata_ in metadata),
+        }
+
 
 class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._tokens = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
@@ -125,6 +141,7 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         begin_ = self._size_cumsums[index].item()
         # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
+        # Convert begin and end to int to avoid numpy dtype overflow when adding to begin_
         return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -132,6 +149,28 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
 
     def get_document_size(self, index: int) -> int:
         return self._size_cumsums[index + 1].item() - self._size_cumsums[index].item()
+
+    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_ratio, end_ratio, 1])
+        begin_index = _get_nearest_split(self._size_cumsums[1:], begin_ratio * self.num_tokens)
+        end_index = _get_nearest_split(self._size_cumsums[1:], end_ratio * self.num_tokens)
+
+        return (
+            begin_index,
+            end_index,
+            {
+                "num_tokens": self._size_cumsums[end_index].item() - self._size_cumsums[begin_index].item(),
+                "num_documents": end_index - begin_index,
+                "data_type": str(self._config.data_type),
+            },
+        )
+
+
+def _get_nearest_split(cumsum: torch.Tensor, value: float) -> int:
+    left = torch.searchsorted(cumsum, value, side="right")
+    if left == len(cumsum):
+        return left.item()
+    return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
 
 
 class TokenWriter(MemmapWriter):
@@ -166,4 +205,5 @@ class TokenWriter(MemmapWriter):
             num_documents=len(self._size_cumsum) - 1,
             num_tokens=self._size_cumsum[-1],
             data_type=DataType.from_torch(self._data_type),
+            preprocessing=self._preprocessing_config,
         )

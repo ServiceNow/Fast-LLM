@@ -134,10 +134,11 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
                     TensorDim("patch_width", self._config.vision_encoder.embeddings.patch_width),
                 )
             )
+            # Use vision encoder's internal hidden dim (for embeddings/encoder), not the output dim (for adapter)
             hidden_dims = (
-                (hidden_batch_and_sequence_q_dim, scalar_dim, self.vision_encoder._hidden_dim)
+                (hidden_batch_and_sequence_q_dim, scalar_dim, self.vision_encoder._vision_hidden_dim)
                 if (sequence_first := kwargs[LanguageModelKwargs.sequence_first])
-                else (scalar_dim, hidden_batch_and_sequence_q_dim, self.vision_encoder._hidden_dim)
+                else (scalar_dim, hidden_batch_and_sequence_q_dim, self.vision_encoder._vision_hidden_dim)
             )
             kwargs[self._vision_encoder_namespace] = {
                 VisionKwargs.sequence_first: sequence_first,

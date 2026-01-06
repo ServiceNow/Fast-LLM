@@ -2,7 +2,7 @@ import logging
 
 from fast_llm.cli import fast_llm_main_wrapper
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from tests.utils.distributed_configs import DISTRIBUTED_TESTING_CONFIGS
 from tests.utils.run_test_script import do_run_test_script_for_all_models, parse_run_distributed_script
@@ -20,7 +20,10 @@ def main(args: list[str] | None = None) -> None:
         )
 
     # TODO: Why are barriers needed?
-    with ProcessGroupPool(timeout=60) as pool:
+    with ProcessGroupPool(
+        timeout=60,
+        backend=DistributedBackend(model_testing_config.distributed_backend),
+    ) as pool:
         failures = []
         world_size = DistributedConfig.default_world_size
         rank = DistributedConfig.default_rank

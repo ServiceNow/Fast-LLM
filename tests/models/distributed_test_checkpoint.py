@@ -12,7 +12,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
     FastLLMCheckpointFormat,
 )
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.utils import Assert, header
@@ -37,11 +37,11 @@ def _test_load_and_save_parallel(
     model = model_testing_config.model_class.from_pretrained(
         load_config,
         # The world size and rank are already set through environment variable.
-        {"distributed": config.distributed},
+        {"distributed": {**config.distributed, "backend": model_testing_config.distributed_backend}},
         mode=StageMode.inference,
     )
     for save_format in (DistributedCheckpointFormat, FastLLMCheckpointFormat):
-        logger.info(f"Loading {save_format.name} checkpoint to {config.save_path / save_format.name}")
+        logger.info(f"Saving {save_format.name} checkpoint to {config.save_path / save_format.name}")
         model.save_checkpoint(CheckpointSaveConfig(path=config.save_path / save_format.name, format=save_format))
     del model
     gc.collect()
@@ -56,7 +56,10 @@ def main(args: list[str] | None = None) -> None:
             "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
         )
 
-    with ProcessGroupPool(timeout=20) as pool:
+    with ProcessGroupPool(
+        timeout=20,
+        backend=DistributedBackend(model_testing_config.distributed_backend),
+    ) as pool:
         failures = []
         world_size = DistributedConfig.default_world_size
         rank = DistributedConfig.default_rank

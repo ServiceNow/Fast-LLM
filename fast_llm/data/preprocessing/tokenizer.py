@@ -1,7 +1,9 @@
+import functools
 import pathlib
 import typing
 
-from fast_llm.config import Config, Configurable, Field, FieldHint, config_class
+from fast_llm.config import Configurable, Field, FieldHint, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -11,12 +13,14 @@ if typing.TYPE_CHECKING:
     import torch
 
 
-@config_class()
-class TokenizerConfig(Config):
+@config_class(dynamic_type={PreprocessingConfig: "tokenizer"})
+class TokenizerConfig(PreprocessingConfig):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
     """
+
+    _abstract = False
 
     path: pathlib.Path = Field(
         default=None,
@@ -35,8 +39,6 @@ class TokenizerConfig(Config):
     )
 
     def get_tokenizer(self) -> "Tokenizer":
-        from fast_llm.data.preprocessing.tokenizer import Tokenizer
-
         return Tokenizer(self)
 
 
@@ -66,9 +68,12 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
 
-    @property
+    @functools.cached_property
     def vocab_size(self) -> int:
-        return len(self.tokenizer)
+        out = len(self.tokenizer)
+        if self._config.max_vocab_size is not None:
+            out = min(out, self._config.max_vocab_size)
+        return out
 
     @property
     def vocab(self) -> dict[str, int]:
@@ -83,14 +88,23 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     ) -> "torch.Tensor":
         import torch
 
-        tokens = torch.tensor(
-            ([self.bod_id] if begin else [])
-            + self.tokenizer.encode(text, add_special_tokens=False)
-            + ([self.eod_id] if end else []),
-            dtype=data_type.torch,
-        )
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        if begin:
+            tokens.insert(0, self.bod_id)
+        if end:
+            tokens.append(self.eod_id)
+
         if self._config.max_vocab_size is not None:
-            tokens %= self._config.max_vocab_size
+            # In some cases creating a tensor before restricting the vocab size may cause an overflow.
+            tokens = (
+                torch.tensor(
+                    tokens,
+                    dtype=torch.int64 if len(self.tokenizer) > torch.iinfo(data_type.torch).max else data_type.torch,
+                )
+                % self._config.max_vocab_size
+            ).to(data_type.torch)
+        else:
+            tokens = torch.tensor(tokens, dtype=data_type.torch)
         return tokens
 
     def tokenize_with_spans(
@@ -123,9 +137,13 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     ) -> tuple["torch.Tensor", list[int]]:
         if not text_splits:
             return self.tokenize(text, begin, end, data_type=data_type), []
+        import numpy as np
         import torch
 
-        Assert.eq(sorted(text_splits), text_splits)
+        # Sort the splits
+        text_splits = np.array(text_splits)
+        text_splits = text_splits[order := np.argsort(text_splits)].tolist()
+
         input_ids = []
         text_splits = [0, *text_splits, len(text)]
         token_splits = []
@@ -143,7 +161,8 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
             total_tokens += len(split_tokens)
             token_splits.append(total_tokens)
 
-        return torch.cat(input_ids), token_splits[:-1]
+        # Undo the sorting with double argsort.
+        return torch.cat(input_ids), np.array(token_splits[:-1])[np.argsort(order)].tolist()
 
     def detokenize(
         self, tokens: "int | list[int] | np.ndarray | torch.Tensor", begin: bool = False, end: bool = False
@@ -194,3 +213,105 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     @property
     def eod(self):
         return self.eod_id
+
+    @staticmethod
+    def _has_generation_markers(template: str | None) -> bool:
+        """Check if a template has generation markers."""
+        return template is not None and "{% generation %}" in template
+
+    def validate_chat_template(self) -> None:
+        """
+        Validate the tokenizer's chat template has generation markers.
+
+        Raises:
+            ValueError: If the tokenizer lacks a chat template or generation markers.
+        """
+        template = self.tokenizer.chat_template
+
+        if template is None:
+            raise ValueError(
+                "Tokenizer does not have a chat template. "
+                "Conversation format requires a tokenizer with a built-in chat template "
+                "containing {% generation %}...{% endgeneration %} markers."
+            )
+
+        if not self._has_generation_markers(template):
+            raise ValueError(
+                "Tokenizer's chat template does not contain {% generation %}...{% endgeneration %} markers. "
+                "These markers are required to determine which tokens to train on. "
+                "Please use a tokenizer with generation markers in its chat template."
+            )
+
+    def tokenize_chat(
+        self,
+        messages: list[dict[str, str]],
+        begin: bool = True,
+        end: bool = True,
+        data_type: DataType = DataType.int64,
+    ) -> tuple["torch.Tensor", list[tuple[int, int]]]:
+        """
+        Apply chat template and return (tokens, loss_masking_spans).
+
+        The loss_masking_spans mark token ranges to EXCLUDE from training (where the model
+        should not learn). These are derived from the chat template's generation markers -
+        tokens outside {% generation %}...{% endgeneration %} blocks are masked.
+        """
+        import torch
+
+        result = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            add_generation_prompt=False,
+        )
+        tokens = result["input_ids"]
+        train_mask = result["assistant_masks"]
+
+        # Prepend BOS / append EOS if not already present anywhere in the sequence.
+        # We check anywhere (not just first/last) because some chat templates add trailing
+        # whitespace after the final EOS token, e.g. "<|im_end|>\n".
+        prepend_bos = begin and self.bod_id not in tokens
+        append_eos = end and self.eod_id not in tokens
+        tokens = [self.bod_id] * prepend_bos + list(tokens) + [self.eod_id] * append_eos
+        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [False] * append_eos
+
+        # Convert boolean train mask to loss masking spans (spans where train_mask[i] == False)
+        loss_masking_spans = _train_mask_to_loss_spans(train_mask)
+
+        if self._config.max_vocab_size is not None:
+            tokens = (
+                torch.tensor(
+                    tokens,
+                    dtype=torch.int64 if len(self.tokenizer) > torch.iinfo(data_type.torch).max else data_type.torch,
+                )
+                % self._config.max_vocab_size
+            ).to(data_type.torch)
+        else:
+            tokens = torch.tensor(tokens, dtype=data_type.torch)
+        return tokens, loss_masking_spans
+
+
+def _train_mask_to_loss_spans(train_mask: list[bool]) -> list[tuple[int, int]]:
+    """
+    Convert a boolean train mask to loss masking spans.
+
+    Args:
+        train_mask: Boolean list where True = train on this token, False = don't train
+
+    Returns:
+        List of (begin, end) spans marking token ranges to EXCLUDE from training
+        (i.e., where train_mask[i] == False).
+    """
+    spans = []
+    start = None
+    for i, should_train in enumerate(train_mask):
+        if not should_train:
+            if start is None:
+                start = i
+        elif start is not None:
+            spans.append((start, i))
+            start = None
+    if start is not None:
+        spans.append((start, len(train_mask)))
+    return spans

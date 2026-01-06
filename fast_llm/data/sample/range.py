@@ -4,9 +4,11 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, config_class
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapReader,
+    MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
@@ -31,12 +33,15 @@ class RangeSample(Sample):
 
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
+        """
+        Used to merge ranges from multiple documents, i.e. when multiple docuemnts are packed together.
+        """
         document: RangeSample
         ranges = []
         sample_size = 0
         for document in documents:
             for begin, end in document.ranges:
-                ranges.extend((begin + sample_size, end + sample_size))
+                ranges.append((begin + sample_size, end + sample_size))
             sample_size += document.sample_size
         return cls(ranges, sample_size)
 
@@ -63,9 +68,13 @@ class RangeBatch(Batch):
         return self.__class__([crop_ranges(sample_ranges, begin, end) for sample_ranges in self.ranges], end - begin)
 
 
-@config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
-class RangeReaderConfig(MemmapReaderConfig):
+@config_class()
+class RangeReaderBaseConfig(MemmapReaderBaseConfig):
     _abstract = False
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "range"})
+class RangeReaderConfig(RangeReaderBaseConfig, MemmapReaderConfig):
     header: typing.ClassVar[bytes] = b"range begin"
     footer: typing.ClassVar[bytes] = b"range end"
     num_documents: int = Field()
@@ -83,10 +92,23 @@ class RangeReaderConfig(MemmapReaderConfig):
     def _expected_buffer_size(self) -> int:
         return self.num_ranges * torch.int32.itemsize * 2 + (self.num_documents + 1) * torch.int32.itemsize
 
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_documents": self.num_documents,
+            "num_ranges": self.num_ranges,
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "num_ranges": sum(metadata_["num_ranges"] for metadata_ in metadata),
+        }
+
 
 class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview):
-        super().__init__(config, buffer)
+    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+        super().__init__(config, buffer, model_preprocessing)
         self._ranges = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -106,6 +128,18 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
             for begin_, end_ in self._ranges[self._count_cumsums[index] : self._count_cumsums[index + 1]].tolist()
         )
         return RangeSample([(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_], sample_size)
+
+    def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])
+        return {
+            "num_documents": end_index - begin_index,
+            "num_ranges": self._count_cumsums[end_index].item() - self._count_cumsums[begin_index].item(),
+        }
+
+
+class EmptyRangeReader[ConfigType: RangeReaderBaseConfig](MemmapReaderBase[ConfigType]):
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        return RangeSample([], end - begin)
 
 
 class RangeWriter(MemmapWriter):
@@ -135,4 +169,5 @@ class RangeWriter(MemmapWriter):
             end=end,
             num_documents=len(self._count_cumsum) - 1,
             num_ranges=self._count_cumsum[-1],
+            preprocessing=self._preprocessing_config,
         )

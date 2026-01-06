@@ -1,7 +1,6 @@
 import abc
 
 import torch
-import torch.nn.functional as F
 
 from fast_llm.config import Configurable
 from fast_llm.engine.config_utils.initialization import init_ones_, init_zeros_
@@ -324,7 +323,7 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
             gate,
             self.weight,
             None,
-            activation="silu",
+            activation=self._config.activation.hf_name,
             eps=self._config.epsilon,
             residual=None,
             prenorm=False,
@@ -333,4 +332,4 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
 
     def _forward_local(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         normalized = self._forward(input_)
-        return normalized * F.silu(gate)
+        return normalized * self._config.activation.activation_fn(gate)
