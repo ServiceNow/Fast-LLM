@@ -554,21 +554,6 @@ class FSDP:
             - loaded_shard_begin_in_buffer
         )
 
-        # Ensure we don't write into padding regions that were already counted.
-        max_valid_self_shard = self._shard_size - self._shard_pad
-        max_valid_loaded_shard = loaded_fsdp._shard_size - loaded_fsdp._shard_pad
-
-        # Clamp overlap to exclude padding in destination shard.
-        if overlap_begin_in_self_shard + overlap_size > max_valid_self_shard:
-            overlap_size = max(0, max_valid_self_shard - overlap_begin_in_self_shard)
-
-        # Clamp overlap to exclude padding in source shard.
-        if overlap_begin_in_loaded_shard + overlap_size > max_valid_loaded_shard:
-            overlap_size = max(0, max_valid_loaded_shard - overlap_begin_in_loaded_shard)
-
-        if overlap_size <= 0:
-            return
-
         if shards is None:
             # Dry run.
             counter[(parameter_name, "")] = overlap_size

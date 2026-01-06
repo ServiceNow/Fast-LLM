@@ -34,7 +34,6 @@ class SafeLoad:
     def __enter__(self) -> "SafeLoad":
         self._loaded = 0
         self._loaded_parameters = {}
-        self._loaded_from_padding = 0  # Debug: track padding separately
         # Track the number of loaded entries.
         # Use nan to mark non-loaded entries.
         for self_shard in self._self_shards.values():
@@ -42,10 +41,7 @@ class SafeLoad:
         # Reset and count shard pads
         for _, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
             for shard_name, fsdp_shard in fsdp_shards.items():
-                pad_count = fsdp.reset_shard_pad(fsdp_shard, shard_name)
-                self._loaded += pad_count
-                self._loaded_from_padding += pad_count
-        logger.info(f"SafeLoad: padding count = {self._loaded_from_padding:,}")
+                self._loaded += fsdp.reset_shard_pad(fsdp_shard, shard_name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -80,11 +76,7 @@ class SafeLoad:
         to_load = sum(self_shard.numel() for self_shard in self._self_shards.values())
         if self._loaded != to_load:
             # Ensure the right amount of weights is loaded.
-            loaded_from_params = self._loaded - self._loaded_from_padding
-            errors.append(
-                f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,} "
-                f"(padding={self._loaded_from_padding:,}, params={loaded_from_params:,}, diff={self._loaded - to_load:,})"
-            )
+            errors.append(f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,}")
 
     def _check_missing(self, errors: list[str]) -> None:
         # Ensure the loaded weights have a 1-1 mapping by looking for nans.
@@ -138,18 +130,10 @@ class SafeLoad:
                 )
 
     def _check_parameters(self, errors: list[str]) -> None:
-        # Debug: log total per-shard counts
-        for shard_name, params in self._loaded_parameters.items():
-            total = sum(params.values())
-            logger.info(f"Per-shard loaded: {shard_name} = {total:,} across {len(params)} parameters")
-
         if set(self._loaded_parameters) != set(self._self_shards):
             errors.append(f"Incorrect loaded shards: {tuple(self._loaded_parameters)}!={tuple(self._self_shards)}")
 
         counters = []
-        total_expected = 0
-        total_loaded = 0
-        mismatches = []
         # Compare local counts against expected values.
         for stage, fsdp, parameter_name, parameter_meta in self._model.stages_fsdp_parameters:
             for shard_name in self._self_shards if fsdp.requires_grad else [ShardName.weights]:
@@ -159,17 +143,10 @@ class SafeLoad:
                     if self._model.is_parameter_on_device(parameter_name)
                     else 0
                 )
-                total_expected += local_size
-                total_loaded += counter
                 if counter != local_size:
-                    diff = counter - local_size
-                    mismatches.append(
-                        (parameter_name, shard_name, counter, local_size, diff, stage.is_tied_weight_copy)
-                    )
                     errors.append(
                         f'Local counter mismatch for parameter "{parameter_name}"'
                         f' and shard "{shard_name}": loaded {counter}, expected {local_size}'
-                        f" (diff={diff}, tied={stage.is_tied_weight_copy})"
                     )
 
                 counter_ = counter
@@ -184,12 +161,6 @@ class SafeLoad:
                         f"Parameter {parameter_name} local {counter_} keep {counter} (size {parameter_meta.numel()} / {parameter_meta.global_shape.numel()})"
                     )
                 counters.append(counter)
-
-        # Log summary of parameter counts
-        logger.info(
-            f"Parameter count summary: total_loaded={total_loaded:,}, total_expected={total_expected:,}, "
-            f"diff={total_loaded - total_expected:,}, num_mismatches={len(mismatches)}"
-        )
 
         # Check for unexpected parameters.
         for shard_name, loaded in self._loaded_parameters.items():
