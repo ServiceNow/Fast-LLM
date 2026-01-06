@@ -7,6 +7,7 @@ import typing
 
 from fast_llm.config import (
     Config,
+    Configurable,
     Field,
     FieldHint,
     FieldUpdate,
@@ -25,6 +26,7 @@ from fast_llm.engine.checkpoint.config import (
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
+from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
@@ -33,6 +35,8 @@ from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+    from fast_llm.engine.training.streaming import StreamingTrainerCallback
     from fast_llm.engine.training.trainer import Trainer, TrainingEvaluator
 
 
@@ -322,99 +326,63 @@ class TrainingConfig(Config):
         self.wandb.alert.assert_sub_interval(self.logs)
 
 
-@config_class()
-class TrainerEvent(Config):
-    enabled: bool = Field(
-        default=False,
-        desc="Flag indicating whether this event is enabled. If False, the event will be skipped.",
-        hint=FieldHint.feature,
-    )
+@config_class(registry=True)
+class TrainerCallbackConfig(Config):
+    def get_callback(self, model: "FastLLMModel") -> "TrainerCallback":
+        raise NotImplementedError()
+
+    def setup(self, config: "TrainerConfig") -> None:
+        pass
 
 
 @config_class()
-class WeightsBroadcastEventConfig(TrainerEvent):
-    """
-    Event sent to indicate that updated weights are ready for broadcast.
-    """
-
-    initial_weights_step_message_type: str = Field(
-        default="initial_weights_step",
-        desc="Message indicating that weights the training starting/ continuing from.",
-        hint=FieldHint.feature,
-    )
-
-    initial_weights_step_message_includes_weights: bool = Field(
-        default=False,
-        desc=(
-            "Whether to include the loaded model weights in the initial event message. "
-            "Useful when training restarts from an internal checkpoint format that "
-            "which does not have an exported checkpoint for that step."
-        ),
-        hint=FieldHint.feature,
-    )
-
-    weights_ready_message_type: str = Field(
-        default="weights_ready",
-        desc="Message indicating that weights are ready to be broadcast.",
-        hint=FieldHint.feature,
-    )
-
-    # NCCL rendezvous details
-    rdvz_master_address: str | None = Field(
-        default=None,
+class WeightsBroadcastConfig(Config):
+    # TODO: Have the external model send these instead?
+    host: str = Field(
+        default="localhost",
         desc="Master address for the external NCCL process group.",
         hint=FieldHint.feature,
     )
-
-    rdvz_master_port: int | None = Field(
-        default=None,
+    port: int = Field(
+        default=23456,
         desc="Master port for the external NCCL process group.",
         hint=FieldHint.feature,
     )
-
-    world_size: int | None = Field(
-        default=None,
+    external_world_size: int = Field(
+        default=1,
         desc="World size of the external NCCL process group.",
         hint=FieldHint.feature,
     )
-
-    rank: int | None = Field(
-        default=None,
-        desc="Rank of this process in the external NCCL process group.",
+    backend: DistributedBackend = Field(
+        default=DistributedBackend.nccl,
+        desc="Backend for the external NCCL process group.",
         hint=FieldHint.feature,
     )
 
 
-@config_class()
-class TrainingFinishedEventConfig(TrainerEvent):
-    """
-    Event sent to indicate that training has completed.
-    """
-
-    training_finished_message_type: str = Field(
-        default="training_finished",
-        desc="Message indicating that weights the training starting/ continuing from.",
-        hint=FieldHint.feature,
-    )
-
-
-@config_class()
-class TrainerEventsConfig(RedisConfig):
+@config_class(dynamic_type={TrainerCallbackConfig: "streaming"})
+class StreamingTrainerCallbackConfig(TrainerCallbackConfig, RedisConfig):
     """
     Aggregates all trainer-side Redis-based event configurations.
     """
 
-    weights_broadcast: WeightsBroadcastEventConfig = Field(
-        default=None,
+    broadcast: WeightsBroadcastConfig = Field(
         desc="Configuration for signaling weight-ready events via Redis.",
-        hint=FieldHint.feature,
+        hint=FieldHint.core,
     )
 
-    training_finished: TrainingFinishedEventConfig = Field(
-        default=None,
-        desc="Configuration for signaling training-finished events via Redis.",
-        hint=FieldHint.feature,
+    export: CheckpointStateSaveConfigBase = Field(
+        desc="Configuration for exporting checkpoints before broadcasting them.",
+        hint=FieldHint.core,
     )
+
+    def get_callback(self, model: "FastLLMModel") -> "StreamingTrainerCallback":
+        from fast_llm.engine.training.streaming import StreamingTrainerCallback
+
+        return StreamingTrainerCallback(self, model)
+
+    def setup(self, config: "TrainerConfig") -> None:
+        self.export.setup(config.model)
 
 
 @config_class(registry=True, dynamic_type={RunnableConfig: "train"})
@@ -448,14 +416,16 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         hint=FieldHint.feature,
     )
 
-    events: TrainerEventsConfig = Field(
-        default=None,
-        desc="Optional Trainer event configurations (weight broadcast, training finished, etc.).",
+    callbacks: dict[str, TrainerCallbackConfig] = Field(
+        default_factory=dict,
+        desc="Configuration for training callbacks.",
         hint=FieldHint.feature,
     )
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
+        for callback in self.callbacks.values():
+            callback.setup(self)
         for reference_model in self.reference_models.values():
             self._add_reference_distributed_to_pretrained(reference_model)
         super()._validate()
@@ -505,3 +475,21 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             old_setup()
 
         object.__setattr__(pretrained, "_setup", new_setup)
+
+
+class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType]):
+    # TODO: Make a more exhaustive set of events and arguments.
+    def run_begin(self, step: int):
+        pass
+
+    def step_end(
+        self,
+        step: int,
+        reduced_losses: dict[str, float | int],
+        update_successful: bool,
+        train_metrics: dict[str, typing.Any] | None,
+    ):
+        pass
+
+    def train_end(self, step: int):
+        pass

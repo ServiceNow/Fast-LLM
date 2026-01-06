@@ -155,7 +155,7 @@ def test_conversion(model_testing_config, run_conversion, get_convert_path):
         )
 
 
-def _compare_safetensor_files(
+def compare_safetensor_files(
     reference: pathlib.Path | dict[str, torch.Tensor],
     *other_paths: pathlib.Path,
     expected_keys: set[str] | None = None,
@@ -180,24 +180,24 @@ def _compare_safetensor_files(
 def test_converted_round_trip(model_testing_config, get_convert_path):
     # Test that the various possible conversion paths yield identical results.
     if model_testing_config.checkpoint_format is None:
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path() / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
             expected_keys={_WEIGHT_SHARD_SAVE_NAME},
         )
     else:
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path() / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, model_testing_config.checkpoint_format)
             / "rank_0.safetensors",
             expected_keys={_WEIGHT_SHARD_SAVE_NAME},
         )
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / "model_0.safetensors",
             get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format) / "model_0.safetensors",
         )
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat)
             / "model_0.safetensors",
             get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat) / "model_0.safetensors",
@@ -499,7 +499,7 @@ def test_parallel_checkpoint_consistency(model_testing_config, run_test_script_b
     # Compare Distributed checkpoints
     for config in ("dp2", "tp2", "stp2", "pp2"):
         for rank in range(2):
-            _compare_safetensor_files(
+            compare_safetensor_files(
                 *[
                     DISTRIBUTED_SAVE_LOAD_CONFIGS[f"load_{format_}_in_{config}"]
                     .resolve(base_path=run_test_script_base_path, model_testing_config=model_testing_config)
@@ -537,7 +537,7 @@ def test_multi_gpu_fast_llm_checkpoint(
         base_path=run_test_script_base_path, model_testing_config=model_testing_config
     )
 
-    _compare_safetensor_files(
+    compare_safetensor_files(
         reference_fast_llm_shard,
         distributed_save_load_config_non_pp.save_path / f"{FastLLMCheckpointFormat.name}/model_0.safetensors",
     )

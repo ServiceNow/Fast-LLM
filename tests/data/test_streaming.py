@@ -20,7 +20,8 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
-from tests.utils.redis import find_free_port, make_sampling, push_msg, redis_batch_producer
+from tests.conftest import WorkerResources
+from tests.utils.redis import make_sampling, push_msg, redis_batch_producer
 from tests.utils.subtest import DistributedTestContext
 from tests.utils.utils import requires_cuda
 
@@ -49,9 +50,10 @@ def fake_redis(monkeypatch):
 def test_streaming_dataset(
     fake_redis: fakeredis.FakeRedis,
     messages: tuple[list[int], ...],
+    worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
-    stream_config = StreamingDatasetConfig(port=find_free_port())
+    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
     dataset_iterator = iter(RedisStreamingDataset(stream_config, DistributedConfig()))
     for message in messages:
         push_msg(fake_redis, list(message))
@@ -89,9 +91,10 @@ def test_streaming_sampled_dataset(
     messages: tuple[list[int], ...],
     expected_samples: tuple[list[int], ...],
     expected_lengths: tuple[int, ...],
+    worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
-    stream_config = StreamingDatasetConfig(port=find_free_port())
+    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
     distributed = Distributed(DistributedConfig(), use_cpu=True)
     dataset_iterator = iter(
         RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(5, 1, distributed))
@@ -216,6 +219,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
 
 
 @requires_cuda
+@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
 def test_run_data_streaming_distributed(run_parallel_script, result_path, worker_resources):
     if torch.cuda.device_count() < 2:
@@ -228,9 +232,10 @@ def test_run_data_streaming_distributed(run_parallel_script, result_path, worker
 
 
 @requires_cuda
+@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
 @pytest.mark.parametrize(("name", "num_gpus", "distributed_config_dict"), _DISTRIBUTED_TESTING_CONFIGS)
-def test_run_streaming_distributed(result_path, name, num_gpus, distributed_config_dict, report_subtest):
+def test_data_streaming_distributed(result_path, name, num_gpus, distributed_config_dict, report_subtest):
     report_subtest(path := result_path / f"data_streaming/{name}", num_gpus)
     distributed_config, batch_config = _get_distributed_and_batch_config(distributed_config_dict, num_gpus)
     check_data_streaming_results(path, distributed_config, batch_config)

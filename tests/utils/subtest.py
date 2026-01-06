@@ -67,6 +67,14 @@ class DistributedTestContext:
     def _configure_logging(self):
         configure_logging(rank=self._rank, world_size=self._world_size)
 
+    @property
+    def rank(self) -> int:
+        return self._rank
+
+    @property
+    def world_size(self) -> int:
+        return self._world_size
+
     class DistributedSubtestContext:
         def __init__(
             self, test_context: "DistributedTestContext", base_path: pathlib.Path, name: str, num_gpus: int
