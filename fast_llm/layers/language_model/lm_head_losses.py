@@ -72,8 +72,11 @@ class LanguageModelLossConfig(Config):
         Assert.geq(self.weight, 0.0)
         super()._validate()
 
-    def get_formatted_name(self, name=None, prediction_distance: int | None = None) -> str:
-        name = f"{self._name}({name})"
+    def get_formatted_name(self, registered_loss_name=None, prediction_distance: int | None = None) -> str:
+        """
+        Retruns loss name for logging as '<registered_loss_name>(<self._name>)', e.g. lm_loss(CE_loss), distillation(FwdKL_loss)
+        """
+        name = f"{registered_loss_name}({self._name})"
         if prediction_distance is not None:
             name = f"{name}_{prediction_distance}"
         return name
@@ -93,7 +96,7 @@ class LanguageModelLossConfig(Config):
 
 @config_class(dynamic_type={LanguageModelLossConfig: "cross_entropy"})
 class CrossEntropyLMLossConfig(LanguageModelLossConfig):
-    _name: typing.ClassVar[str] = "CE"
+    _name: typing.ClassVar[str] = "CE_loss"
     _abstract: typing.ClassVar[bool] = False
 
     implementation: CrossEntropyImpl = Field(
@@ -180,7 +183,7 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
 class ForwardKLLossConfig(LanguageModelLossConfig):
     """Forward KL divergence KL(p||q) for distillation (mode-covering)."""
 
-    _name: typing.ClassVar[str] = "FwdKL"
+    _name: typing.ClassVar[str] = "FwdKL_loss"
     _abstract: typing.ClassVar[bool] = False
 
     teacher_softmax_temperature: float = Field(
@@ -241,7 +244,7 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
 class ReverseKLLossConfig(ForwardKLLossConfig):
     """Reverse KL divergence KL(q||p) for distillation (mode-seeking)."""
 
-    _name: typing.ClassVar[str] = "RevKL"
+    _name: typing.ClassVar[str] = "RevKL_loss"
     _abstract: typing.ClassVar[bool] = False
 
     def compute_loss(
@@ -275,7 +278,7 @@ class ReverseKLLossConfig(ForwardKLLossConfig):
 class DPOLossConfig(LanguageModelLossConfig):
     """Direct Preference Optimization (DPO) loss for alignment."""
 
-    _name: typing.ClassVar[str] = "DPO"
+    _name: typing.ClassVar[str] = "DPO_loss"
     _abstract: typing.ClassVar[bool] = False
 
     beta: float = Field(

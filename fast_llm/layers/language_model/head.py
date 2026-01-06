@@ -102,10 +102,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         )
 
         self._formatted_loss_names = {}
-        for loss_name, loss_config in self._config.losses.items():
+        for registered_loss_name, loss_config in self._config.losses.items():
             if loss_config.weight > 0.0:
-                self._formatted_loss_names[loss_name] = loss_config.get_formatted_name(
-                    loss_name, self._prediction_distance
+                self._formatted_loss_names[registered_loss_name] = loss_config.get_formatted_name(
+                    registered_loss_name, self._prediction_distance
                 )
 
     def forward(
