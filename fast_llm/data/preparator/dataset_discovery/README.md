@@ -4,11 +4,12 @@ Automatically discover `.fast_llm_dataset` files and generate a blended config w
 
 ## Quick Start
 
+Using the tools wrapper:
 ```bash
 python tools/discover_datasets.py <directory> -o <output.yaml>
 ```
 
-Or with config file:
+Using Fast-LLM CLI with config file:
 ```yaml
 type: prepare_dataset_discovery
 directory: /path/to/datasets
@@ -17,7 +18,7 @@ ignore_paths: [test_data, checkpoints]  # Optional
 ```
 
 ```bash
-python -m fast_llm.engine.config_utils.run --config config.yaml
+python -m fast_llm.cli --config config.yaml
 ```
 
 ## What It Does
