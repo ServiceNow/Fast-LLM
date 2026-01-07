@@ -169,9 +169,10 @@ def compare_safetensor_files(
 
     for other_path in other_paths:
         other = safetensors.torch.load_file(other_path)
-        Assert.eq(other.keys(), expected_keys)
+        if other.keys() != expected_keys:
+            raise ValueError(f"Expected keys {expected_keys} but got {other.keys()} in {other_path}")
         for key in expected_keys:
-            Assert.all_equal(reference[key], other[key])
+            Assert.all_equal(reference[key], other[key], msg=f"tensor = {key}, path = {other_path}")
 
 
 @requires_cuda

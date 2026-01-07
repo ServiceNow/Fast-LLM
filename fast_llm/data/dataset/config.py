@@ -301,8 +301,18 @@ class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
             raise FileNotFoundError(self.path)
 
 
+REDIS_DATA_STREAM = "fast_llm_streaming"
+REDIS_FIELD = "data"
+REDIS_GROUP_NAME = "fast_llm_group"
+
+
 @config_class()
 class RedisConfig(Config):
+    REDIS_FIELD: typing.ClassVar[str] = "data"
+    REDIS_FIELD_B: typing.ClassVar[bytes] = REDIS_FIELD.encode()
+    REDIS_GROUP_NAME: typing.ClassVar[str] = "fast_llm_group"
+    REDIS_GROUP_NAME_B: typing.ClassVar[bytes] = REDIS_GROUP_NAME.encode()
+
     # TODO: Move elsewhere? (Also used in trainer) Get it from the trainer in sampling config?
     host: str = Field(
         default="localhost",

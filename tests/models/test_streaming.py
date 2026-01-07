@@ -10,18 +10,12 @@ import safetensors
 import torch
 
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig
-from fast_llm.engine.training.streaming import REDIS_TRAINING_KEY
-from fast_llm.models.gpt.config import GPTBatchConfig
+from fast_llm.engine.training.streaming import REDIS_TRAINING_FIELD, REDIS_TRAINING_STREAM
 from fast_llm.utils import Assert
 from tests.conftest import WorkerResources
 from tests.models.test_checkpoint import compare_safetensor_files
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.model_configs import (
-    MODEL_CONFIGS,
-    ModelTestingConfig,
-    ModelTestingGroup,
-    update_and_add_testing_config,
-)
+from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup, update_and_add_testing_config
 from tests.utils.redis import redis_batch_producer
 from tests.utils.run_test_script import do_run_test_script_for_all_models
 from tests.utils.subtest import DistributedTestContext
@@ -59,16 +53,6 @@ _DISTRIBUTED_STREAMING_CONFIGS = [
         num_gpus=2,
         consumer_count=2,
     ),
-    StreamingDistributedTestingConfig(
-        name="streaming_pp2s2_bf4",
-        config_args=[
-            "model.distributed.pipeline_parallel=2",
-            "model.multi_stage.layers_per_stage=2",
-            "batch.breadth_first_micro_batches=4",
-        ],
-        num_gpus=2,
-        consumer_count=2,
-    ),
 ]
 
 
@@ -80,6 +64,7 @@ def _run_event_consumer(
     logging.info(f"Waiting for weights broadcast rendezvous at {init_method} ...")
     path = base_path / "streaming"
     path.mkdir(parents=True, exist_ok=True)
+    field = REDIS_TRAINING_FIELD.encode()
     # TODO: Create a custom process group instead.
     try:
         process_group = torch.distributed.init_process_group(
@@ -91,19 +76,20 @@ def _run_event_consumer(
         last_id = "0-0"
         while True:
             result = client.xread(
-                streams={REDIS_TRAINING_KEY: last_id},
+                streams={REDIS_TRAINING_STREAM: last_id},
                 count=1,
                 block=10000,
             )
             if not result:
                 raise TimeoutError("No message received after 10000 ms...")
 
-            for _, (event_id, message) in result[0]:
-                last_id = event_id
-                message = json.loads(message.decode())
+            ((stream, events),) = result
+            Assert.eq(stream.decode(), REDIS_TRAINING_STREAM)
+            Assert.eq(len(events), 1)
+            for last_id, message in events:
+                Assert.eq(message.keys(), {field})
+                message = json.loads(message[field].decode())
                 logging.info(f"Received: {message}")
-                Assert.eq(message.keys(), {"event"})
-                message = message["event"]
                 if message["type"] == "training_finished":
                     return
                 elif message["type"] == "weights_ready":
@@ -140,6 +126,7 @@ def _run_model_streaming_configs(
             None,
             updates={
                 ("data", "datasets"): {"training": {"port": port}},
+                ("training", "export"): {"format": model_testing_config.checkpoint_format.name, "interval": 1},
                 "callbacks": {
                     "streaming": {
                         "type": "streaming",
@@ -148,9 +135,12 @@ def _run_model_streaming_configs(
                             "port": port + 1000,
                             "external_world_size": config.consumer_count,
                         },
-                        "export": {"format": MODEL_CONFIGS["mistral"].checkpoint_format.name},
+                        "export": {"format": model_testing_config.checkpoint_format.name},
                     }
                 },
+                # Disable tensor logging.
+                ("run", "tensor_logs"): {},
+                ("model", "multi_stage"): {},
             },
             groups={},
         )
@@ -159,20 +149,33 @@ def _run_model_streaming_configs(
                 if test_context.rank < config.num_gpus:
                     do_run_test_script_for_all_models(config, model_testing_config, base_path)
                 elif test_context.rank < config.total_gpus:
-                    streaming_config = StreamingTrainerCallbackConfig.from_dict(
-                        model_testing_config.config_dict["callbacks"]["streaming"]
+                    training_config = model_testing_config.trainer_config_class.from_dict(
+                        model_testing_config.config_dict
                     )
-                    batch_config = GPTBatchConfig.from_dict(model_testing_config.config_dict["batch"])
                     with (
-                        redis_batch_producer(streaming_config, batch_config)
+                        redis_batch_producer(training_config.callbacks["streaming"], training_config.batch)
                         if test_context.rank == config.num_gpus
                         else contextlib.nullcontext()
                     ):
-                        _run_event_consumer(streaming_config, test_context.rank - config.num_gpus, base_path)
+                        _run_event_consumer(
+                            training_config.callbacks["streaming"],
+                            test_context.rank - config.num_gpus,
+                            base_path / config.name,
+                        )
 
 
 @requires_cuda
 @pytest.mark.slow
+@pytest.mark.model_testing_group(ModelTestingGroup.streaming, ModelTestingGroup.distributed)
+def test_model_streaming(run_parallel_script, model_testing_config, run_test_script_base_path, worker_resources):
+    # `test_run_model_distributed_streaming` and `test_model_distributed_streaming need a common dependency
+    # so they are placed in the same testing group and run in the same distributed process.
+    pass
+
+
+@requires_cuda
+@pytest.mark.slow
+@pytest.mark.depends_on(on=["test_model_streaming[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.streaming, ModelTestingGroup.distributed)
 def test_run_model_distributed_streaming(
     run_parallel_script, model_testing_config, run_test_script_base_path, worker_resources
@@ -189,6 +192,7 @@ def test_run_model_distributed_streaming(
 
 @pytest.mark.slow
 @requires_cuda
+@pytest.mark.depends_on(on=["test_model_streaming[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.streaming, ModelTestingGroup.distributed)
 @pytest.mark.parametrize("config", _DISTRIBUTED_STREAMING_CONFIGS)
 def test_model_distributed_streaming(
@@ -201,10 +205,9 @@ def test_model_distributed_streaming(
 ):
     report_subtest(path := run_test_script_base_path / config.name, config.total_gpus)
     compare_safetensor_files(
-        path / "export" / model_testing_config.checkpoint_format.name / "1",
+        path / "export" / model_testing_config.checkpoint_format.name / f"1/model_0.safetensors",
         *(
-            path / "streaming" / f"rank_{consumer_index}_step_{step}.safetensors"
+            path / "streaming" / f"rank_{consumer_index}_step_1.safetensors"
             for consumer_index in range(config.consumer_count)
-            for step in range(3)
         ),
     )

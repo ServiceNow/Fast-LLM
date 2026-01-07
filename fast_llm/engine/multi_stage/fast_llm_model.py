@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
-from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointStateSaveConfigBase
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
@@ -34,7 +34,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
 
     def iter_checkpoint(
         self,
-        config: CheckpointSaveConfig,
+        config: CheckpointStateSaveConfigBase,
         extra_metadata: dict | None = None,
     ) -> typing.Iterator[tuple[str, str, torch.Tensor]]:
         # TODO: Handle barriers, ok file, mkdir, etc. here

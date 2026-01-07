@@ -10,7 +10,8 @@ from fast_llm.engine.training.config import StreamingTrainerCallbackConfig, Trai
 logger = logging.getLogger(__name__)
 
 
-REDIS_TRAINING_KEY = "fast_llm_events"
+REDIS_TRAINING_STREAM = "fast_llm_events"
+REDIS_TRAINING_FIELD = "event"
 
 
 class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](TrainerCallback[ConfigType]):
@@ -48,17 +49,23 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
     def train_end(self, step: int):
         # TODO: ====== Send something on unsuccessful ends? ======
         if self._do_broadcast:
-            self._client.xadd(REDIS_TRAINING_KEY, {"event": json.dumps({"type": "training_finished"})})
-        torch.distributed.destroy_process_group()
+            self._client.xadd(REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "training_finished"})})
+        self._clear()
 
     def __del__(self):
-        if self._do_broadcast:
-            torch.distributed.destroy_process_group()
+        self._clear()
+
+    def _clear(self):
+        if hasattr(self, "_process_group"):
+            torch.distributed.destroy_process_group(self._process_group)
+            del self._process_group
 
     def _broadcast_weights(self, step: int):
         if self._do_broadcast:
-            self._client.xadd(REDIS_TRAINING_KEY, {"event": json.dumps({"type": "weights_ready", "step": step})})
-        for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.get_save_config("", 10), {}):
+            self._client.xadd(
+                REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "weights_ready", "step": step})}
+            )
+        for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.export, {}):
             if self._do_broadcast:
                 # TODO: ====== Broadcast metadata in advance =======
                 meta = [(shard_name, layer_name, tensor.shape, tensor.dtype)]

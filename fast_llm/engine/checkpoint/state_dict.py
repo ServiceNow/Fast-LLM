@@ -15,6 +15,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
     CheckpointSaveMetadataConfig,
+    CheckpointStateSaveConfigBase,
     FastLLMCheckpointFormat,
     export_safetensors_metadata,
 )
@@ -72,7 +73,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
             self._save_serialized_metadata(config, serialized_metadata, index)
 
     def iter_tensors(
-        self, config: CheckpointSaveConfig, metadata: "CheckpointMetadata"
+        self, config: CheckpointStateSaveConfigBase, metadata: "CheckpointMetadata"
     ) -> typing.Iterator[tuple[str, str, torch.Tensor]]:
         # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
         #   `state_dict` that are ready for conversion,

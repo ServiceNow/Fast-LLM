@@ -424,10 +424,11 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
-        for callback in self.callbacks.values():
-            callback.setup(self)
         for reference_model in self.reference_models.values():
             self._add_reference_distributed_to_pretrained(reference_model)
+        for callback in self.callbacks.values():
+            # We don't know anything about the callbacks, so we forward `self` and let them handle their own setup.
+            callback.setup(self)
         super()._validate()
         if self.reference_models:
             # TODO: Add support.

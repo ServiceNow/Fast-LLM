@@ -6,7 +6,7 @@ import torch.utils.data
 
 from fast_llm.config import Configurable
 from fast_llm.data.dataset.abstract import SamplableIterableDataset
-from fast_llm.data.dataset.config import StreamingDatasetConfig
+from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_FIELD, REDIS_GROUP_NAME, StreamingDatasetConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
@@ -18,10 +18,6 @@ def dtype_from_string(name: str) -> torch.dtype:
         return getattr(torch, name)
     except AttributeError:
         raise ValueError(f"Unknown torch dtype: {name}")
-
-
-REDIS_DATA_KEY = "fast_llm_streaming"
-REDIS_GROUP_NAME = "fast_llm_group"
 
 
 class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: LanguageModelSample](
@@ -36,7 +32,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
         # the training step.
         # raise NotImplementedError("Streaming dataset support is not implemented for pipeline-parallel training.")
 
-        self._name = f"redis[{config.host}:{config.port}]({REDIS_DATA_KEY}|{REDIS_GROUP_NAME})[data]"
+        self._name = f"redis[{config.host}:{config.port}]({REDIS_DATA_STREAM}|{REDIS_GROUP_NAME})[data]"
         self._config = config
         self._rank = distributed_config.batch_data_rank
         self.is_batch_data_group_leader = (
@@ -69,7 +65,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
         # Create the consumer group at the start of the stream ("0")
         # If the stream already exists, XGROUP CREATE will fail unless we add mkstream=True
         try:
-            client.xgroup_create(name=REDIS_DATA_KEY, groupname=REDIS_GROUP_NAME, id="0", mkstream=True)
+            client.xgroup_create(name=REDIS_DATA_STREAM, groupname=REDIS_GROUP_NAME, id="0", mkstream=True)
         except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" in str(e):
                 # Consumer group already exists
@@ -86,7 +82,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
                 groupname=REDIS_GROUP_NAME,
                 consumername=f"fast_llm_consumer_{self._rank}",
                 # ">" reads only new messages that have not been delivered to any consumer
-                streams={REDIS_DATA_KEY: ">"},
+                streams={REDIS_DATA_STREAM: ">"},
                 count=1,
                 block=1000,
                 # No explicit ACK: messages are processed immediately; on rank failure the job restarts,
@@ -95,14 +91,14 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
             )
             if messages:
                 for stream_key, msgs in messages:
-                    assert stream_key == REDIS_DATA_KEY.encode()
+                    assert stream_key == REDIS_DATA_STREAM.encode()
                     for msg_id, msg_data in msgs:
                         processed += 1
                         # TODO: or do it after processing all received messaged then count > 1?
                         if processed % self._config.acknowledge_interval == 0:
-                            client.hset(f"{REDIS_DATA_KEY}:ack", str(self._rank), msg_id)
+                            client.hset(f"{REDIS_DATA_STREAM}:ack", str(self._rank), msg_id)
 
-                        yield self._read_document(json.loads(msg_data[b"data"]))
+                        yield self._read_document(json.loads(msg_data[REDIS_FIELD.encode()]))
 
     def _read_document(self, data: dict) -> LanguageModelSample:
         tokens = torch.tensor(data["tokens"], dtype=dtype_from_string(data["tokens_dtype"]))
