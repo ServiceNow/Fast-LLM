@@ -213,3 +213,105 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
     @property
     def eod(self):
         return self.eod_id
+
+    @staticmethod
+    def _has_generation_markers(template: str | None) -> bool:
+        """Check if a template has generation markers."""
+        return template is not None and "{% generation %}" in template
+
+    def validate_chat_template(self) -> None:
+        """
+        Validate the tokenizer's chat template has generation markers.
+
+        Raises:
+            ValueError: If the tokenizer lacks a chat template or generation markers.
+        """
+        template = self.tokenizer.chat_template
+
+        if template is None:
+            raise ValueError(
+                "Tokenizer does not have a chat template. "
+                "Conversation format requires a tokenizer with a built-in chat template "
+                "containing {% generation %}...{% endgeneration %} markers."
+            )
+
+        if not self._has_generation_markers(template):
+            raise ValueError(
+                "Tokenizer's chat template does not contain {% generation %}...{% endgeneration %} markers. "
+                "These markers are required to determine which tokens to train on. "
+                "Please use a tokenizer with generation markers in its chat template."
+            )
+
+    def tokenize_chat(
+        self,
+        messages: list[dict[str, str]],
+        begin: bool = True,
+        end: bool = True,
+        data_type: DataType = DataType.int64,
+    ) -> tuple["torch.Tensor", list[tuple[int, int]]]:
+        """
+        Apply chat template and return (tokens, loss_masking_spans).
+
+        The loss_masking_spans mark token ranges to EXCLUDE from training (where the model
+        should not learn). These are derived from the chat template's generation markers -
+        tokens outside {% generation %}...{% endgeneration %} blocks are masked.
+        """
+        import torch
+
+        result = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            add_generation_prompt=False,
+        )
+        tokens = result["input_ids"]
+        train_mask = result["assistant_masks"]
+
+        # Prepend BOS / append EOS if not already present anywhere in the sequence.
+        # We check anywhere (not just first/last) because some chat templates add trailing
+        # whitespace after the final EOS token, e.g. "<|im_end|>\n".
+        prepend_bos = begin and self.bod_id not in tokens
+        append_eos = end and self.eod_id not in tokens
+        tokens = [self.bod_id] * prepend_bos + list(tokens) + [self.eod_id] * append_eos
+        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [False] * append_eos
+
+        # Convert boolean train mask to loss masking spans (spans where train_mask[i] == False)
+        loss_masking_spans = _train_mask_to_loss_spans(train_mask)
+
+        if self._config.max_vocab_size is not None:
+            tokens = (
+                torch.tensor(
+                    tokens,
+                    dtype=torch.int64 if len(self.tokenizer) > torch.iinfo(data_type.torch).max else data_type.torch,
+                )
+                % self._config.max_vocab_size
+            ).to(data_type.torch)
+        else:
+            tokens = torch.tensor(tokens, dtype=data_type.torch)
+        return tokens, loss_masking_spans
+
+
+def _train_mask_to_loss_spans(train_mask: list[bool]) -> list[tuple[int, int]]:
+    """
+    Convert a boolean train mask to loss masking spans.
+
+    Args:
+        train_mask: Boolean list where True = train on this token, False = don't train
+
+    Returns:
+        List of (begin, end) spans marking token ranges to EXCLUDE from training
+        (i.e., where train_mask[i] == False).
+    """
+    spans = []
+    start = None
+    for i, should_train in enumerate(train_mask):
+        if not should_train:
+            if start is None:
+                start = i
+        elif start is not None:
+            spans.append((start, i))
+            start = None
+    if start is not None:
+        spans.append((start, len(train_mask)))
+    return spans

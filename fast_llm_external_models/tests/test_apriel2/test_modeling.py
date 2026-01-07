@@ -2,18 +2,23 @@
 
 import pytest
 import torch
+
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
 
 
 class TestApriel2Modeling:
     """End-to-end tests for Apriel2 model with different configurations."""
 
-    @pytest.mark.parametrize("config_name", [
-        "apriel2_config_tiny",
-        "apriel2_config_stochastic",
-        "apriel2_config_multi_mixer",
-        "apriel2_config_all_mixers"  # Tests all 4 mixer types
-    ])
+    @pytest.mark.parametrize(
+        "config_name",
+        [
+            "apriel2_config_tiny",
+            "apriel2_config_stochastic",
+            "apriel2_config_multi_mixer",
+            "apriel2_config_all_mixers",  # Tests all 4 mixer types
+            "apriel2_config_with_bias",  # Tests per-layer bias and non-gated MLP
+        ],
+    )
     def test_model_end_to_end(self, config_name, request):
         """Test instantiation, forward pass, cache correctness, and generation.
 
@@ -42,7 +47,7 @@ class TestApriel2Modeling:
         # 2. Forward pass - basic shape validation
         outputs = model(input_ids, use_cache=False)
         assert outputs.logits.shape == (2, seq_len, config.vocab_size)
-        assert hasattr(outputs, 'logits')
+        assert hasattr(outputs, "logits")
 
         # 3. Verify cache is actually being used (not dormant)
         split_pos = 30
@@ -52,28 +57,23 @@ class TestApriel2Modeling:
         assert outputs_part1.past_key_values is not None
 
         outputs_correct_cache = model(
-            input_ids[:, split_pos:split_pos+1],
-            past_key_values=outputs_part1.past_key_values,
-            use_cache=True
+            input_ids[:, split_pos : split_pos + 1], past_key_values=outputs_part1.past_key_values, use_cache=True
         )
 
         # Test 1: Empty cache should give different results than filled cache
         # This verifies cache is being used at all
         from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache
+
         empty_cache = Apriel2Cache(config)
 
         outputs_empty_cache = model(
-            input_ids[:, split_pos:split_pos+1],
-            past_key_values=empty_cache,
-            use_cache=True
+            input_ids[:, split_pos : split_pos + 1], past_key_values=empty_cache, use_cache=True
         )
 
-        cache_affects_output = not torch.allclose(
-            outputs_correct_cache.logits,
-            outputs_empty_cache.logits,
-            atol=1e-3
-        )
-        assert cache_affects_output, f"Cache appears dormant for {config_name} - empty cache gives same results as filled cache"
+        cache_affects_output = not torch.allclose(outputs_correct_cache.logits, outputs_empty_cache.logits, atol=1e-3)
+        assert (
+            cache_affects_output
+        ), f"Cache appears dormant for {config_name} - empty cache gives same results as filled cache"
 
         # Test 2: Corrupted cache (zeros) should give different results than correct cache
         # This verifies the actual cache VALUES are being used
@@ -98,17 +98,15 @@ class TestApriel2Modeling:
                         corrupted_layer[name].value = torch.zeros_like(correct_sub.value)
 
         outputs_corrupted_cache = model(
-            input_ids[:, split_pos:split_pos+1],
-            past_key_values=corrupted_cache,
-            use_cache=True
+            input_ids[:, split_pos : split_pos + 1], past_key_values=corrupted_cache, use_cache=True
         )
 
         cache_values_matter = not torch.allclose(
-            outputs_correct_cache.logits,
-            outputs_corrupted_cache.logits,
-            atol=1e-3
+            outputs_correct_cache.logits, outputs_corrupted_cache.logits, atol=1e-3
         )
-        assert cache_values_matter, f"Cache values not used for {config_name} - zeroed cache gives same results as correct cache"
+        assert (
+            cache_values_matter
+        ), f"Cache values not used for {config_name} - zeroed cache gives same results as correct cache"
 
         # 4. Cache correctness - validate cache produces same results as no-cache
         # Compute full sequence without cache
@@ -117,18 +115,14 @@ class TestApriel2Modeling:
         # Compute in two steps with cache
         outputs_part1 = model(input_ids[:, :split_pos], use_cache=True)
         outputs_part2 = model(
-            input_ids[:, split_pos:split_pos+1],
-            past_key_values=outputs_part1.past_key_values,
-            use_cache=True
+            input_ids[:, split_pos : split_pos + 1], past_key_values=outputs_part1.past_key_values, use_cache=True
         )
 
         # Logits should match between cached and non-cached
         # Note: GPU execution with bfloat16/float16 has lower precision than CPU float32,
         # so we use a looser tolerance here.
         assert torch.allclose(
-            outputs_full.logits[:, split_pos, :],
-            outputs_part2.logits[:, 0, :],
-            atol=1e-3
+            outputs_full.logits[:, split_pos, :], outputs_part2.logits[:, 0, :], atol=1e-3
         ), f"Cache correctness failed for {config_name}: cached and non-cached logits differ"
 
         # 5. Generation - end-to-end validation

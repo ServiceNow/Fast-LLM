@@ -1,23 +1,44 @@
 """Test fixtures for Apriel2 model tests."""
 
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
 
+from fast_llm_external_models.apriel2.cache import _AttentionCache, _SSMCache
+
+
+# Register custom marks
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+
+
+def _can_import_fast_llm():
+    """Check if Fast-LLM is available."""
+    try:
+        return True
+    except ImportError:
+        return False
+
 
 # Skip marker for tests that require CUDA for Mamba forward pass
 requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="SSM mixers (Mamba) require CUDA for forward pass"
+    not torch.cuda.is_available(), reason="SSM mixers (Mamba) require CUDA for forward pass"
 )
 
+# Skip marker for tests that require Fast-LLM
+requires_fastllm = pytest.mark.skipif(not _can_import_fast_llm(), reason="Fast-LLM not available")
 
-@pytest.fixture(autouse=True)
+
+@pytest.fixture(scope="module", autouse=True)
 def set_default_device():
-    """Set default device to CUDA for all tests (Mamba requires CUDA)."""
+    """Set default device to CUDA for all tests (Mamba requires CUDA).
+
+    Module-scoped to ensure it runs before any module-scoped fixtures
+    that load models (e.g., qwen2_model_and_tokenizer).
+    """
     if torch.cuda.is_available():
         old_device = torch.get_default_device()
         torch.set_default_device("cuda")
@@ -27,9 +48,12 @@ def set_default_device():
         yield
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def set_default_dtype():
-    """Set default dtype to float32 for numerical comparison tests."""
+    """Set default dtype to float32 for numerical comparison tests.
+
+    Module-scoped to ensure it runs before any module-scoped fixtures.
+    """
     old_dtype = torch.get_default_dtype()
     torch.set_default_dtype(torch.float32)
     yield
@@ -135,14 +159,11 @@ def model_pair(request, small_pixtral_model, tmp_path):
         tuple: (source_model, target_model, expected_atol, variant_name)
     """
     import json
+
     from safetensors import safe_open
 
     from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-    from fast_llm_external_models.apriel2.conversion import (
-        convert_llava_config,
-        execute,
-        plan_llava_to_apriel2,
-    )
+    from fast_llm_external_models.apriel2.conversion import convert_llava_config, execute, plan_llava_to_apriel2
     from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
 
     source = small_pixtral_model
@@ -638,12 +659,12 @@ def apriel2_config_comprehensive():
             "type": "pattern",
             "num_blocks": 6,
             "pattern": [
-                "attn",          # 0: pure full attention
-                "swa",           # 1: pure sliding window attention
-                "mamba",         # 2: pure mamba
-                "gdn",           # 3: pure gated delta net
-                "stoch_attn_mamba",   # 4: stochastic attention + mamba
-                "stoch_swa_gdn",      # 5: stochastic swa + gated delta net
+                "attn",  # 0: pure full attention
+                "swa",  # 1: pure sliding window attention
+                "mamba",  # 2: pure mamba
+                "gdn",  # 3: pure gated delta net
+                "stoch_attn_mamba",  # 4: stochastic attention + mamba
+                "stoch_swa_gdn",  # 5: stochastic swa + gated delta net
             ],
             "blocks": {
                 "attn": {
@@ -762,6 +783,52 @@ def apriel2_config_comprehensive():
 
 
 @pytest.fixture
+def apriel2_config_with_bias():
+    """Apriel2 config with Qwen-style per-layer bias and non-gated MLP.
+
+    This config exercises:
+    - Per-layer attention bias (QKV bias enabled, O bias disabled)
+    - Non-gated MLP with per-layer bias (layer_1 enabled, layer_2 disabled)
+    - Config structure parity with Fast-LLM's AffineLinearConfig
+
+    Critical for testing bias inheritance through surgery operations.
+    """
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 4,
+                    "head_groups": 2,
+                    "head_size": 16,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                    # Qwen-style: QKV bias enabled, O bias disabled
+                    "query_layer": {"bias": {"enabled": True}},
+                    "key_layer": {"bias": {"enabled": True}},
+                    "value_layer": {"bias": {"enabled": True}},
+                    "dense_layer": {"bias": {"enabled": False}},
+                },
+                "mlp": {
+                    "type": "mlp",
+                    "intermediate_size": 256,
+                    "gated": False,  # Non-gated MLP (SimpleMLP)
+                    # Per-layer MLP bias
+                    "layer_1": {"bias": {"enabled": True}},
+                    "layer_2": {"bias": {"enabled": False}},
+                },
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
 def apriel2_cache(apriel2_config_tiny):
     """Create empty Apriel2Cache from tiny config."""
     from fast_llm_external_models.apriel2.cache import Apriel2Cache
@@ -864,6 +931,77 @@ def additive_surgery_chain():
 
 
 @pytest.fixture
+def bias_surgery_chain():
+    """Surgery chain that exercises bias inheritance through surgery operations.
+
+    Designed to be used with apriel2_config_with_bias as the source config.
+    Tests that per-layer bias settings (Qwen-style QKV bias, non-gated MLP bias)
+    are correctly inherited through:
+    - Stochastic wrapper creation
+    - Adding new sub-mixers that inherit from source
+    - Cross-type derivation (attention → sliding_window)
+
+    Source config has:
+    - Attention: query/key/value bias enabled, dense bias disabled
+    - MLP: layer_1 bias enabled, layer_2 bias disabled (non-gated)
+    """
+    return [
+        # S1: Wrap in stochastic - bias should transfer to attention sub-mixer
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                        },
+                    },
+                    "mlp": {"init": "transfer"},
+                    "normalization": {"init": "transfer"},
+                },
+            },
+        },
+        # S2: Add sliding_window - should inherit bias from source attention
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "sliding_window": {
+                                "type": "attention",
+                                "init": "transfer",
+                                "window_size": 512,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        # S3: Add new attention with DIFFERENT bias config (random init)
+        {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "mixers": {
+                            "full_bias_attn": {
+                                "type": "attention",
+                                "init": "random",
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                                "add_linear_biases": True,  # All biases enabled
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    ]
+
+
+@pytest.fixture
 def comprehensive_torture_chain():
     """Comprehensive torture chain exercising ALL conversion paths.
 
@@ -885,7 +1023,7 @@ def comprehensive_torture_chain():
     # MIL requires: d_inner <= Q rows (256), d_xb <= K/V rows (128)
     mamba_params = {
         "d_inner": 256,  # Must be <= heads*head_size = 256
-        "d_xb": 64,      # Must be <= head_groups*head_size = 128
+        "d_xb": 64,  # Must be <= head_groups*head_size = 128
         "dt_rank": 16,
         "d_state": 16,
         "d_conv": 4,
@@ -1532,3 +1670,330 @@ def torture_surgery_chain():
             },
         },
     ]
+
+
+# =============================================================================
+# Shared Config Dict Fixtures (for compose_configs / plan_surgery tests)
+# =============================================================================
+
+
+@pytest.fixture
+def base_config_dict():
+    """Complete Apriel2 config dict without biases (Llama-style).
+
+    Use this as the base config for testing compose_configs and plan_surgery.
+    Returns a dict (not Apriel2Config) for direct use with compose_configs.
+    """
+    return {
+        "model_type": "apriel2",
+        "hidden_size": 256,
+        "vocab_size": 1000,
+        "bos_token_id": 1,
+        "eos_token_id": 2,
+        "tie_word_embeddings": False,
+        "decoder": {
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 8,
+                    "head_groups": 4,
+                    "head_size": 32,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 512, "gated": True},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    }
+
+
+@pytest.fixture
+def base_config_with_bias_dict():
+    """Complete Apriel2 config dict with Qwen-style biases.
+
+    - QKV bias enabled, O bias disabled
+    - Gated MLP (no per-layer bias control in this style)
+
+    Use this for testing bias inheritance through surgery operations.
+    Returns a dict (not Apriel2Config) for direct use with compose_configs.
+    """
+    return {
+        "model_type": "apriel2",
+        "hidden_size": 256,
+        "vocab_size": 1000,
+        "bos_token_id": 1,
+        "eos_token_id": 2,
+        "tie_word_embeddings": False,
+        "decoder": {
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 8,
+                    "head_groups": 4,
+                    "head_size": 32,
+                    "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                    "query_layer": {"bias": {"enabled": True}},
+                    "key_layer": {"bias": {"enabled": True}},
+                    "value_layer": {"bias": {"enabled": True}},
+                    "dense_layer": {"bias": {"enabled": False}},
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 512, "gated": True},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    }
+
+
+def make_weights_for_config(config: dict) -> dict:
+    """Create random weights matching a config's expected schema.
+
+    This is a helper function (not a fixture) for creating test weights.
+    Use it in tests that need weights for plan execution.
+
+    Args:
+        config: Complete Apriel2 config dict
+
+    Returns:
+        Dict mapping weight key strings to torch tensors
+    """
+    from fast_llm_external_models.apriel2.conversion import W
+
+    hidden = config["hidden_size"]
+    vocab = config["vocab_size"]
+    decoder = config["decoder"]
+    num_blocks = decoder["num_blocks"]
+    block = decoder["block"]
+    mixer = block["mixer"]
+    mlp = block["mlp"]
+
+    heads = mixer["heads"]
+    head_groups = mixer["head_groups"]
+    head_size = mixer["head_size"]
+    inter = mlp["intermediate_size"]
+
+    # Check bias settings
+    has_q_bias = mixer.get("query_layer", {}).get("bias", {}).get("enabled", False)
+    has_k_bias = mixer.get("key_layer", {}).get("bias", {}).get("enabled", False)
+    has_v_bias = mixer.get("value_layer", {}).get("bias", {}).get("enabled", False)
+
+    weights = {}
+    weights["model.embed_tokens.weight"] = torch.randn(vocab, hidden)
+
+    for i in range(num_blocks):
+        p = f"model.decoder.blocks.{i}"
+
+        # Attention
+        weights[f"{p}.mixer.q_proj.weight"] = torch.randn(heads * head_size, hidden)
+        weights[f"{p}.mixer.k_proj.weight"] = torch.randn(head_groups * head_size, hidden)
+        weights[f"{p}.mixer.v_proj.weight"] = torch.randn(head_groups * head_size, hidden)
+        weights[f"{p}.mixer.o_proj.weight"] = torch.randn(hidden, heads * head_size)
+
+        if has_q_bias:
+            weights[f"{p}.mixer.q_proj.bias"] = torch.randn(heads * head_size)
+        if has_k_bias:
+            weights[f"{p}.mixer.k_proj.bias"] = torch.randn(head_groups * head_size)
+        if has_v_bias:
+            weights[f"{p}.mixer.v_proj.bias"] = torch.randn(head_groups * head_size)
+
+        # MLP
+        weights[f"{p}.mlp.up_proj.weight"] = torch.randn(inter, hidden)
+        weights[f"{p}.mlp.gate_proj.weight"] = torch.randn(inter, hidden)
+        weights[f"{p}.mlp.down_proj.weight"] = torch.randn(hidden, inter)
+
+        # Norms
+        weights[f"{p}.input_layernorm.weight"] = torch.randn(hidden)
+        weights[f"{p}.post_attention_layernorm.weight"] = torch.randn(hidden)
+
+    weights["model.norm.weight"] = torch.randn(hidden)
+    weights["lm_head.weight"] = torch.randn(vocab, hidden)
+
+    return {W(k): v for k, v in weights.items()}
+
+
+# =============================================================================
+# Cache Test Fixtures - Tensor Dimensions
+# =============================================================================
+
+
+@pytest.fixture
+def batch_size():
+    """Default batch size for cache tests."""
+    return 2
+
+
+@pytest.fixture
+def num_heads():
+    """Default number of attention heads for cache tests."""
+    return 4
+
+
+@pytest.fixture
+def head_dim():
+    """Default head dimension for cache tests."""
+    return 16
+
+
+@pytest.fixture
+def make_kv(batch_size, num_heads, head_dim):
+    """Factory fixture for creating KV tensors."""
+
+    def _make_kv(seq_len):
+        return (
+            torch.randn(batch_size, num_heads, seq_len, head_dim),
+            torch.randn(batch_size, num_heads, seq_len, head_dim),
+        )
+
+    return _make_kv
+
+
+# =============================================================================
+# Cache Test Fixtures - HuggingFace Cache Layers
+# =============================================================================
+
+
+@pytest.fixture
+def hf_dynamic_layer():
+    """HuggingFace DynamicLayer for full attention contract testing."""
+    from transformers.cache_utils import DynamicLayer
+
+    return DynamicLayer()
+
+
+@pytest.fixture
+def hf_sliding_layer(window_size):
+    """HuggingFace DynamicSlidingWindowLayer for sliding window contract testing."""
+    from transformers.cache_utils import DynamicSlidingWindowLayer
+
+    return DynamicSlidingWindowLayer(sliding_window=window_size)
+
+
+# =============================================================================
+# Cache Test Fixtures - Apriel2 Low-level Caches
+# =============================================================================
+
+
+@pytest.fixture
+def apriel_attention_cache():
+    """Apriel2 attention cache without window (full attention)."""
+    return _AttentionCache(window=None)
+
+
+@pytest.fixture
+def apriel_sliding_cache(window_size):
+    """Apriel2 attention cache with sliding window."""
+    return _AttentionCache(window=window_size)
+
+
+@pytest.fixture
+def ssm_cache():
+    """Apriel2 SSM cache for Mamba/GDN/KDA layers."""
+    return _SSMCache()
+
+
+# =============================================================================
+# Cache Test Fixtures - Apriel2 Configs (Simple Versions)
+# =============================================================================
+
+
+@pytest.fixture
+def attention_config():
+    """Pure attention config (2 layers, no sliding window)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {"type": "attention", "heads": 4, "head_groups": 2, "head_size": 16},
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def swa_config():
+    """Sliding window attention config (2 layers, window=8)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "attention",
+                    "heads": 4,
+                    "head_groups": 2,
+                    "head_size": 16,
+                    "window_size": 8,
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def ssm_config():
+    """Pure SSM config (2 layers)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {"type": "mamba", "state_size": 16},
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+@pytest.fixture
+def stochastic_config():
+    """Stochastic mixer config with attention and mamba (2 layers)."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
+
+    return Apriel2Config(
+        vocab_size=100,
+        hidden_size=64,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 2,
+            "block": {
+                "mixer": {
+                    "type": "stochastic",
+                    "main_mixer_name": "attention",
+                    "mixers": {
+                        "attention": {"type": "attention", "heads": 4, "head_groups": 2, "head_size": 16},
+                        "mamba": {"type": "mamba", "state_size": 16},
+                    },
+                },
+                "mlp": {"type": "mlp", "intermediate_size": 256},
+                "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+            },
+        },
+    )
+
+
+# Parameterized window size fixture (used by hf_sliding_layer and apriel_sliding_cache)
+@pytest.fixture(params=[4, 8, 16, 32])
+def window_size(request):
+    """Parameterized window sizes for sliding window tests."""
+    return request.param

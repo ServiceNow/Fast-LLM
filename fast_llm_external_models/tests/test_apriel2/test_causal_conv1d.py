@@ -24,7 +24,6 @@ import torch
 
 from fast_llm_external_models.apriel2.modeling_apriel2 import CausalConv1d, _causal_conv1d_fn
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -63,6 +62,7 @@ def kernel_size():
 def to_device(conv: CausalConv1d, device: str) -> CausalConv1d:
     """Create a copy of conv on the specified device."""
     import copy
+
     return copy.deepcopy(conv).to(device)
 
 
@@ -71,7 +71,9 @@ def prefill(conv: CausalConv1d, x: torch.Tensor, state: torch.Tensor = None) -> 
     return conv(x, conv_state=state, return_final_state=True)
 
 
-def decode_sequence(conv: CausalConv1d, tokens: torch.Tensor, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def decode_sequence(
+    conv: CausalConv1d, tokens: torch.Tensor, state: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Decode multiple tokens one-by-one, return (stacked_outputs, final_state).
 
     Args:
@@ -223,7 +225,7 @@ class TestChunkingConsistency:
         outputs = []
         state = None
         for start in range(0, total_len, chunk_size):
-            chunk = x[:, :, start:start + chunk_size]
+            chunk = x[:, :, start : start + chunk_size]
             out, state = prefill(conv, chunk, state)
             outputs.append(out)
 
@@ -248,7 +250,7 @@ class TestChunkingConsistency:
         outputs = []
         state = None
         for start in range(0, total_len, chunk_size):
-            chunk = x[:, :, start:start + chunk_size].cuda()
+            chunk = x[:, :, start : start + chunk_size].cuda()
             out, state = prefill(conv_cuda, chunk, state)
             outputs.append(out)
 
@@ -329,7 +331,7 @@ class TestGlobalConsistency:
         outputs = []
         state = None
         for start in range(0, total_len, chunk_size):
-            chunk = x[:, :, start:start + chunk_size]
+            chunk = x[:, :, start : start + chunk_size]
             out, state = prefill(conv, chunk, state)
             outputs.append(out)
         path1 = torch.cat(outputs, dim=-1)
@@ -374,7 +376,7 @@ class TestGlobalConsistency:
         # CPU chunked
         outputs, state = [], None
         for start in range(0, total_len, chunk_size):
-            out, state = prefill(conv, x[:, :, start:start + chunk_size], state)
+            out, state = prefill(conv, x[:, :, start : start + chunk_size], state)
             outputs.append(out)
         results["cpu_chunked"] = torch.cat(outputs, dim=-1)
 
@@ -393,7 +395,7 @@ class TestGlobalConsistency:
         # CUDA chunked
         outputs, state = [], None
         for start in range(0, total_len, chunk_size):
-            out, state = prefill(conv_cuda, x[:, :, start:start + chunk_size].cuda(), state)
+            out, state = prefill(conv_cuda, x[:, :, start : start + chunk_size].cuda(), state)
             outputs.append(out.cpu())
         results["cuda_chunked"] = torch.cat(outputs, dim=-1)
 
@@ -431,8 +433,7 @@ class TestGlobalConsistency:
         for name, result in results.items():
             tol = tolerances[name]
             torch.testing.assert_close(
-                result, reference, atol=tol, rtol=tol,
-                msg=f"Path '{name}' diverged from reference"
+                result, reference, atol=tol, rtol=tol, msg=f"Path '{name}' diverged from reference"
             )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -468,8 +469,8 @@ class TestGlobalConsistency:
 
         # Check no systematic drift (errors shouldn't consistently increase)
         decode_errors = errors[prefill_len:]
-        first_half = decode_errors[:len(decode_errors)//2].mean()
-        second_half = decode_errors[len(decode_errors)//2:].mean()
+        first_half = decode_errors[: len(decode_errors) // 2].mean()
+        second_half = decode_errors[len(decode_errors) // 2 :].mean()
         assert second_half < first_half * 2, "Errors growing over decode steps (drift detected)"
 
 

@@ -104,7 +104,9 @@ def _reverse_kl_forward_backward_torch(logits: torch.Tensor, target: torch.Tenso
         reduction="none",
         log_target=True,
     ).sum(dim=-1)
-    output = per_sample.mean() if loss_mask is None else (per_sample * loss_mask).sum() / loss_mask.sum()
+    if loss_mask is not None:
+        per_sample = per_sample * loss_mask
+    output = per_sample.mean()
     output.backward()
     return output, logits.grad
 
