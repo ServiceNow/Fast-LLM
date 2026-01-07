@@ -25,24 +25,12 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
 ):
     def __init__(self, config: ConfigType, distributed_config: DistributedConfig):
         super().__init__(config)
-        # if distributed_config.pipeline_parallel > 1:
-        # NOTE: It is not yet clear whether the issue comes from the streaming dataset
-        # itself or from the distributed data-loader wrappers, but currently it
-        # interferes with pipeline-parallel training and causes a timeout during
-        # the training step.
-        # raise NotImplementedError("Streaming dataset support is not implemented for pipeline-parallel training.")
-
         self._name = f"redis[{config.host}:{config.port}]({REDIS_DATA_STREAM}|{REDIS_GROUP_NAME})[data]"
         self._config = config
         self._rank = distributed_config.batch_data_rank
         self.is_batch_data_group_leader = (
             distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).rank == 0
         )
-
-        # TODO: Not needed?
-        # if distributed_config.rank == 0:
-        #    redis_client = redis.Redis(host=self._config.host, port=self._config.port)
-        #    redis_client.hset(f"{REDIS_DATA_KEY}:consumer_count", "0", str(distributed_config.batch_data_parallel))
 
     @property
     def requires_broadcast(self) -> bool:
