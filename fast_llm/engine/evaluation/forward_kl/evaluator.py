@@ -11,7 +11,7 @@ from fast_llm.core.distributed import allreduce_scalar, safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.sample.language_model import LanguageModelBatch, LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
-from fast_llm.engine.config_utils.run import Run, log_main_rank
+from fast_llm.engine.config_utils.run import Run
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.config import ForwardKLEvaluatorConfig
@@ -177,10 +177,21 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         if len(data) == 0:
             return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
 
-        # Switch to eval mode so StochasticMixer uses the main (attention) mixer
-        # instead of randomly sampling. This ensures we evaluate the attention-only path.
+        # Switch to eval mode so StochasticMixer uses the main mixer
+        # instead of randomly sampling.
         was_training = self._multi_stage._training
         self._multi_stage.train(False)
+
+        # Optionally override the inference mixer for StochasticMixer layers
+        stochastic_mixers: list = []
+        if self._config.inference_mixer is not None:
+            from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+            for name, module in self._multi_stage.base_model.named_modules():
+                if isinstance(module, StochasticMixer):
+                    stochastic_mixers.append(module)
+                    module._inference_mixer_override = self._config.inference_mixer
+                    logger.info(f"ForwardKL: Set {name} inference mixer to '{self._config.inference_mixer}'")
 
         try:
             batch_size = self._config.batch_size
@@ -198,6 +209,10 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             if not student_log_probs_batches:  # non-last PP rank
                 return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
         finally:
+            # Clear inference mixer override for StochasticMixer layers
+            for module in stochastic_mixers:
+                module._inference_mixer_override = None
+
             # Restore original training mode
             if was_training:
                 self._multi_stage.train(True)
@@ -234,12 +249,8 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         if multi_trace_mask.any():
             multi_ess = ess[multi_trace_mask]
             multi_traces = traces_per_problem[multi_trace_mask]
-            logger.info(
-                f"ESS ({multi_trace_mask.sum().item()} multi-trace problems): [{fmt_percentiles(multi_ess)}]"
-            )
-            logger.info(
-                f"traces/problem: [{fmt_percentiles(multi_traces.float())}]"
-            )
+            logger.info(f"ESS ({multi_trace_mask.sum().item()} multi-trace problems): [{fmt_percentiles(multi_ess)}]")
+            logger.info(f"traces/problem: [{fmt_percentiles(multi_traces.float())}]")
 
         return self._reduce_metrics(
             accuracy.sum().item(),
