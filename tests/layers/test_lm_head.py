@@ -39,7 +39,7 @@ def _reverse_kl_loss(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask.flatten()).sum() / loss_mask.sum()
+            loss = (loss_per_sample * loss_mask.flatten()).mean()
     return loss
 
 
