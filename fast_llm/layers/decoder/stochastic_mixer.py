@@ -106,7 +106,8 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
     def _sample_mixer_name(self, kwargs: dict[str, typing.Any]) -> str:
         if not self.training:
-            return self._config.main_mixer_name
+            # Allow runtime override of the inference mixer (e.g., for evaluation)
+            return getattr(self, "_inference_mixer_override", None) or self._config.main_mixer_name
 
         generator = kwargs[StochasticMixerKwargs.generator]
         mixer_idx = torch.multinomial(self._sampling_probs, num_samples=1, generator=generator).item()
