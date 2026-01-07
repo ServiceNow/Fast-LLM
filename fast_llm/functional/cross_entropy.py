@@ -35,10 +35,12 @@ def _torch_cross_entropy_forward_backward(
                 logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
             )
         else:
-            per_sample_loss = torch.nn.functional.cross_entropy(
-                logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
-            )
-            loss = (per_sample_loss * loss_mask).sum() / loss_mask.sum()
+            loss = (
+                torch.nn.functional.cross_entropy(
+                    logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
+                )
+                * loss_mask
+            ).mean()
         if grad_output is None:
             grad = None
         else:
@@ -127,8 +129,7 @@ def _fused_cross_entropy_forward_backward(
         else:
             grad_base = exp_logits - sum_exp_logits * target
 
-        normalizer = loss_mask.sum() if loss_mask is not None else logits.size(0)
-        grad = grad_base.mul((grad_output / normalizer) / sum_exp_logits)
+        grad = grad_base.mul((grad_output / logits.size(0)) / sum_exp_logits)
         if logits_scale_factor != 1.0:
             grad *= logits_scale_factor
         if loss_mask is not None:
@@ -154,8 +155,7 @@ def _fused_cross_entropy_forward_backward(
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
 
-    valid_tokens = loss_mask.sum() if loss_mask is not None else logits.size(0)
-    loss = per_sample_loss.sum() / valid_tokens
+    loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
 
