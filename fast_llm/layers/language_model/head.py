@@ -301,18 +301,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
 
-        # # TODO: also move to lm_head_losses?
-        # if self._config.logit_z_loss > 0.0:
-        #     logits = z_loss(
-        #         logits,
-        #         self._config.logit_z_loss,
-        #         self.training,
-        #         grad_output,
-        #         losses,
-        #         self._z_loss_name,
-        #         logits_scale_factor=self._config.logits_scale_factor,
-        #     )
-
         sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
         if LanguageModelKwargs.hidden_dims in kwargs:
             batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
