@@ -98,10 +98,10 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target_logits, exp_logits, sum_exp_target_logits = _fused_softmax_base(
+        target_logits, exp_logits_targets, sum_exp_target_logits = _fused_softmax_base(
             target, logits_scale_factor / teacher_softmax_temperature, group
         )
-        target = exp_logits / sum_exp_target_logits
+        target = exp_logits_targets / sum_exp_target_logits
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)

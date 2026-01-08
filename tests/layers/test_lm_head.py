@@ -213,6 +213,27 @@ VOCAB_SIZE = 500
                             "weight": 0.0,
                         },
                         "dist_loss": {
+                            "type": "forward_kl_distillation",
+                            "weight": 1.0,
+                            "distillation_model": "distillation",
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+            id="forward_kl_distillation",
+        ),
+        pytest.param(
+            {
+                "head": {
+                    "losses": {
+                        "lm_loss": {
+                            "type": "cross_entropy",
+                            "weight": 0.0,
+                        },
+                        "dist_loss": {
                             "type": "reverse_kl_distillation",
                             "weight": 0.0,
                             "distillation_model": "distillation",
@@ -224,7 +245,7 @@ VOCAB_SIZE = 500
             False,
             1,
             marks=pytest.mark.xfail(
-                reason="Cannot track both losses with zero factor",
+                reason="At least one loss has to have non-zero factor to track gradients",
                 strict=True,
             ),
             id="track_both_zero_factors",
