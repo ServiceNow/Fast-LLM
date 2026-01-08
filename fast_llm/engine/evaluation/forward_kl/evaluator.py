@@ -2,9 +2,11 @@ import dataclasses
 import gc
 import hashlib
 import logging
+import math
 
 import torch
 import torch.nn.functional as F
+import tqdm
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.core.distributed import allreduce_scalar, safe_barrier
@@ -196,8 +198,19 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         try:
             batch_size = self._config.batch_size
             student_log_probs_batches: list[torch.Tensor] = []
+            num_batches = math.ceil(len(data) / batch_size)
 
-            for i in range(0, len(data), batch_size):
+            # Only show progress bar on rank 0
+            batch_iter = range(0, len(data), batch_size)
+            if self._distributed.config.rank == 0:
+                batch_iter = tqdm.tqdm(
+                    batch_iter,
+                    total=num_batches,
+                    desc=f"ForwardKL ({self._name})",
+                    unit="batch",
+                )
+
+            for i in batch_iter:
                 batch_log_probs = self._compute_batch_log_probs(
                     data.tokens[i : i + batch_size],
                     data.prompt_lens[i : i + batch_size],
