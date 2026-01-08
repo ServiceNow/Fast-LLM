@@ -98,7 +98,10 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = _fused_softmax(target, logits_scale_factor / teacher_softmax_temperature, group)
+        target_logits, exp_logits, sum_exp_target_logits = _fused_softmax_base(
+            target, logits_scale_factor / teacher_softmax_temperature, group
+        )
+        target = exp_logits / sum_exp_target_logits
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -159,9 +162,11 @@ def _fused_cross_entropy_forward_backward(
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
-    if return_target_entropy and target_format == TargetFormat.logits:
-        # Compute teacher entropy
-        teacher_log_prob = torch.log(target + 1e-20)
+    if return_target_entropy:
+        if target_format == TargetFormat.logits:
+            teacher_log_prob = target_logits - sum_exp_target_logits.log()
+        else:
+            teacher_log_prob = torch.log(target + 1e-20)
         target_entropy = -(target * teacher_log_prob).sum(dim=-1)
         if loss_mask is not None:
             target_entropy = target_entropy * loss_mask.squeeze(-1)

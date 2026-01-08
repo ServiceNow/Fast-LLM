@@ -13,7 +13,6 @@ if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.core.distributed import ProcessGroup
-    from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +45,15 @@ class LanguageModelLossConfig(Config):
         valid=check_field(Assert.geq, 0.0),
     )
 
+    distillation_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for knowledge distillation."
+        "If provided, replace the loss with a distillation loss.",
+        hint=FieldHint.feature,
+    )
+
     @abc.abstractmethod
-    def compute_loss(
+    def get_loss(
         self,
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
@@ -59,7 +65,7 @@ class LanguageModelLossConfig(Config):
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
-    def get_loss_def(self, name: str, count: int = 1, prediction_distance: int | None = None) -> LossDef:
+    def get_loss_definitions(self, name: str, count: int = 1, prediction_distance: int | None = None) -> LossDef:
         name = self.get_formatted_name(name, prediction_distance)
         return LossDef(
             name=name,
@@ -82,12 +88,11 @@ class LanguageModelLossConfig(Config):
         return name
 
     @abc.abstractmethod
-    def extract_targets_from_global_kwargs(
+    def get_targets(
         self,
         kwargs: dict | None = None,
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
-        head_config: "LanguageModelHeadConfig | None" = None,
         sequence_parallel_logits: bool | None = None,
         group: "ProcessGroup" = None,
     ) -> dict[str, "torch.Tensor"]:
@@ -112,12 +117,11 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
-    def extract_targets_from_global_kwargs(
+    def get_targets(
         self,
         kwargs: dict | None = None,
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
-        head_config: "LanguageModelHeadConfig | None" = None,
         sequence_parallel_logits: bool | None = None,
         group: "ProcessGroup" = None,
     ) -> dict[str, "torch.Tensor"]:
@@ -144,7 +148,7 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
                 lm_target = split_op(lm_target, group, 0)
         return {TargetsKwargs.lm_target: lm_target}
 
-    def compute_loss(
+    def get_loss(
         self,
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
@@ -193,19 +197,22 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
-    def extract_targets_from_global_kwargs(
+    def _validate(self):
+        assert self.distillation_model is not None, "Distillation loss required by ForwardKL Loss."
+        super()._validate()
+
+    def get_targets(
         self,
         kwargs: dict | None = None,
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
-        head_config: "LanguageModelHeadConfig | None" = None,
         sequence_parallel_logits: bool | None = None,
         group: "ProcessGroup" = None,
     ) -> dict[str, "torch.Tensor"]:
         if kwargs is None:
             kwargs = {}
 
-        reference_model_logits = kwargs.get(f"{head_config.distillation_model}_logits")
+        reference_model_logits = kwargs.get(f"{self.distillation_model}_logits")
         if reference_model_logits is not None:
             reference_model_logits = reference_model_logits.flatten(0, -2)
             if sequence_parallel_logits:
@@ -214,7 +221,7 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
                 reference_model_logits = split_op(reference_model_logits, group, 0)
         return {TargetsKwargs.reference_model_logits: reference_model_logits}
 
-    def compute_loss(
+    def get_loss(
         self,
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
@@ -247,7 +254,11 @@ class ReverseKLLossConfig(ForwardKLLossConfig):
     _name: typing.ClassVar[str] = "RevKL_loss"
     _abstract: typing.ClassVar[bool] = False
 
-    def compute_loss(
+    def _validate(self):
+        assert self.distillation_model is not None, "Distillation loss required by Reverse KL Loss."
+        super()._validate()
+
+    def get_loss(
         self,
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
@@ -288,19 +299,28 @@ class DPOLossConfig(LanguageModelLossConfig):
         valid=check_field(Assert.gt, 0.0),
     )
 
-    def extract_targets_from_global_kwargs(
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self):
+        assert self.dpo_reference_model is not None, "DPO loss requires a reference model."
+        super()._validate()
+
+    def get_targets(
         self,
         kwargs: dict | None = None,
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
-        head_config: "LanguageModelHeadConfig | None" = None,
         sequence_parallel_logits: bool | None = None,
         group: "ProcessGroup" = None,
     ) -> dict[str, "torch.Tensor"]:
         if kwargs is None:
             kwargs = {}
 
-        reference_model_logits = kwargs.get(f"{head_config.dpo_reference_model}_logits")
+        reference_model_logits = kwargs.get(f"{self.dpo_reference_model}_logits")
         dpo_target = kwargs.get(LanguageModelKwargs.labels)
         if reference_model_logits is not None or dpo_target is not None:
             from fast_llm.core.ops import split_op
@@ -316,7 +336,7 @@ class DPOLossConfig(LanguageModelLossConfig):
             TargetsKwargs.dpo_target: dpo_target,
         }
 
-    def compute_loss(
+    def get_loss(
         self,
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",

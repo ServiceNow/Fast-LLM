@@ -155,7 +155,6 @@ VOCAB_SIZE = 500
         pytest.param(
             {
                 "head": {
-                    "distillation_model": "distillation",
                     "losses": {
                         "lm_loss": {
                             "type": "cross_entropy",
@@ -164,6 +163,7 @@ VOCAB_SIZE = 500
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
                             "weight": 1.0,
+                            "distillation_model": "distillation",
                         },
                     },
                 }
@@ -176,7 +176,6 @@ VOCAB_SIZE = 500
         pytest.param(
             {
                 "head": {
-                    "distillation_model": "distillation",
                     "losses": {
                         "lm_loss": {
                             "type": "cross_entropy",
@@ -185,6 +184,7 @@ VOCAB_SIZE = 500
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
                             "weight": 0.0,
+                            "distillation_model": "distillation",
                         },
                     },
                 }
@@ -209,6 +209,7 @@ VOCAB_SIZE = 500
                         "dist_loss": {
                             "type": "reverse_kl_distillation",
                             "weight": 1.0,
+                            "distillation_model": "distillation",
                         },
                     },
                 }

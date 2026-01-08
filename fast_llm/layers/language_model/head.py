@@ -67,9 +67,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=lr_scale,
             peft=peft,
         )
-        if prediction_distance > 0 and (
-            self._config.distillation_model is not None or self._config.dpo_reference_model is not None
-        ):
+        if prediction_distance > 0 and (self._config.enable_dpo or self._config.enable_distillation):
             raise NotImplementedError("Multi-token prediction not supported with distillation or dpo.")
 
         Assert.in_range(prediction_distance, 0, prediction_heads)
@@ -189,11 +187,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         for loss_config in self._config.losses.values():
             if loss_config.weight == 0.0:
                 continue
-            loss_targets = loss_config.extract_targets_from_global_kwargs(
+            loss_targets = loss_config.get_targets(
                 kwargs,
                 prediction_distance=self._prediction_distance,
                 prediction_heads=self._prediction_heads,
-                head_config=self._config,
                 sequence_parallel_logits=self._sequence_parallel_logits,
                 group=self._parallel_dim.group,
             )
@@ -339,7 +336,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             if loss_config.weight == 0.0:
                 continue
             # losses are returned unscaled but the grads are already scaled
-            loss_unscaled_, grad_ = loss_config.compute_loss(
+            loss_unscaled_, grad_ = loss_config.get_loss(
                 logits,
                 loss_mask,
                 grad_output=(
@@ -401,7 +398,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
             )
         for loss_name, loss_config in self._config.losses.items():
-            loss_def: LossDef = loss_config.get_loss_def(
+            loss_def: LossDef = loss_config.get_loss_definitions(
                 name=loss_name, count=count, prediction_distance=self._prediction_distance
             )
             loss_defs.append(loss_def)

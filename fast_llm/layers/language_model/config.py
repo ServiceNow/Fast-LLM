@@ -1,5 +1,7 @@
 import abc
 import typing
+import warnings
+from functools import cached_property
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
@@ -9,7 +11,13 @@ from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.language_model.lm_head_losses import LanguageModelLossConfig
+from fast_llm.layers.language_model.lm_head_losses import (
+    CrossEntropyLMLossConfig,
+    DPOLossConfig,
+    ForwardKLLossConfig,
+    LanguageModelLossConfig,
+    ReverseKLLossConfig,
+)
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -151,17 +159,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    dpo_reference_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for dpo.",
-        hint=FieldHint.feature,
-    )
-    distillation_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for knowledge distillation."
-        "If provided, replace the loss with a distillation loss.",
-        hint=FieldHint.feature,
-    )
 
     def get_layer(
         self,
@@ -193,23 +190,37 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
 
         return LanguageModelHead
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        removed_fields = ["distillation_loss_factor", "distillation_model", "language_model_loss_factor"]
+        for field in removed_fields:
+            if field in default:
+                warnings.warn(
+                    f"Field `{field}` has been removed from {cls.__name__}. "
+                    "Loss configuration should now be done via the `losses` field.",
+                    DeprecationWarning,
+                )
+                default.pop(field)
+        return super()._from_dict(default, strict=strict)
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if not self.losses:
                 if "losses" not in self._explicit_fields:
-                    self.losses = {
-                        "lm_loss": LanguageModelLossConfig._from_dict(
-                            {
-                                "type": "cross_entropy",
-                                "weight": 1.0,
-                            }
-                        )
-                    }
-        for loss_config in self.losses.values():
-            if "distillation" in loss_config.type:
-                assert self.distillation_model is not None, "Distillation loss requires a distillation model."
+                    self.losses = {"lm_loss": CrossEntropyLMLossConfig()}
         super()._validate()
-        assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
+        if DPOLossConfig in self._loss_configs:
+            assert ForwardKLLossConfig not in self._loss_configs.keys()  # currently don't support both
+            assert ReverseKLLossConfig not in self._loss_configs.keys()  # currently don't support both
+        if ForwardKLLossConfig in self._loss_configs.keys() and ReverseKLLossConfig in self._loss_configs.keys():
+            assert (
+                self._loss_configs[ForwardKLLossConfig].distillation_model
+                == self._loss_configs[ReverseKLLossConfig].distillation_model
+            ), "Distillation losses must use the same teacher."
+
+    @cached_property
+    def _loss_configs(self) -> dict[type, LanguageModelLossConfig]:
+        return {loss.__class__: loss for loss in self.losses.values()}
 
     @property
     def max_prediction_distance(self) -> int:
@@ -217,7 +228,24 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
 
     @property
     def enable_dpo(self) -> bool:
-        return self.dpo_reference_model is not None
+        return DPOLossConfig in self._loss_configs.keys()
+
+    @property
+    def enable_distillation(self) -> bool:
+        return ForwardKLLossConfig in self._loss_configs.keys() or ReverseKLLossConfig in self._loss_configs.keys()
+
+    @property
+    def distillation_model(self) -> str | None:
+        for loss_type in [ForwardKLLossConfig, ReverseKLLossConfig]:
+            if loss_type in self._loss_configs:
+                return self._loss_configs[loss_type].distillation_model
+        return None
+
+    @property
+    def dpo_reference_model(self) -> str | None:
+        if DPOLossConfig in self._loss_configs:
+            return self._loss_configs[DPOLossConfig].dpo_reference_model
+        return None
 
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
