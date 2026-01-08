@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import tqdm
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.core.distributed import allreduce_scalar, safe_barrier
+from fast_llm.core.distributed import ReduceOp, allreduce_scalar, safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.sample.language_model import LanguageModelBatch, LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
@@ -176,9 +176,6 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         device = self._distributed.device
         data = self._load_traces(device)
 
-        if len(data) == 0:
-            return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
-
         # Switch to eval mode so StochasticMixer uses the main mixer
         # instead of randomly sampling.
         was_training = self._multi_stage._training
@@ -198,28 +195,52 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         try:
             batch_size = self._config.batch_size
             student_log_probs_batches: list[torch.Tensor] = []
-            num_batches = math.ceil(len(data) / batch_size)
+            local_num_batches = math.ceil(len(data) / batch_size) if len(data) > 0 else 0
+
+            # Synchronize batch count across all world ranks.
+            # All ranks must execute the same number of forward passes because the forward
+            # pass involves collective operations (e.g., ZeRO all-gather) that require
+            # participation from all ranks in the process group.
+            max_num_batches = int(
+                allreduce_scalar(local_num_batches, torch.int64, self._distributed.world_group, ReduceOp.MAX)
+            )
+
+            if max_num_batches == 0:
+                return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
+
+            # Create dummy data for ranks that have no data or finish early.
+            # These ranks still need to participate in collective operations.
+            dummy_tokens = torch.zeros((batch_size, self._sequence_length), dtype=torch.int64, device=device)
+            dummy_prompt_lens = torch.ones(batch_size, dtype=torch.int64, device=device)
+            dummy_completion_lens = torch.ones(batch_size, dtype=torch.int64, device=device)
 
             # Only show progress bar on rank 0
-            batch_iter = range(0, len(data), batch_size)
+            batch_iter = range(max_num_batches)
             if self._distributed.config.rank == 0:
                 batch_iter = tqdm.tqdm(
                     batch_iter,
-                    total=num_batches,
+                    total=max_num_batches,
                     desc=f"ForwardKL ({self._name})",
                     unit="batch",
                 )
 
-            for i in batch_iter:
-                batch_log_probs = self._compute_batch_log_probs(
-                    data.tokens[i : i + batch_size],
-                    data.prompt_lens[i : i + batch_size],
-                    data.completion_lens[i : i + batch_size],
-                )
-                if batch_log_probs is not None:
-                    student_log_probs_batches.append(batch_log_probs)
+            for batch_idx in batch_iter:
+                i = batch_idx * batch_size
+                if i < len(data):
+                    # This rank has real data for this batch
+                    batch_log_probs = self._compute_batch_log_probs(
+                        data.tokens[i : i + batch_size],
+                        data.prompt_lens[i : i + batch_size],
+                        data.completion_lens[i : i + batch_size],
+                    )
+                    if batch_log_probs is not None:
+                        student_log_probs_batches.append(batch_log_probs)
+                else:
+                    # This rank has no more data but must still participate in collectives.
+                    # Run a dummy forward pass and discard the result.
+                    self._compute_batch_log_probs(dummy_tokens, dummy_prompt_lens, dummy_completion_lens)
 
-            if not student_log_probs_batches:  # non-last PP rank
+            if not student_log_probs_batches:  # non-last PP rank or no local data
                 return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
         finally:
             # Clear inference mixer override for StochasticMixer layers
