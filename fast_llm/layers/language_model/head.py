@@ -16,7 +16,7 @@ from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
@@ -101,10 +101,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         self._formatted_loss_names = {}
         for registered_loss_name, loss_config in self._config.losses.items():
-            if loss_config.weight > 0.0:
-                self._formatted_loss_names[registered_loss_name] = loss_config.get_formatted_name(
-                    registered_loss_name, self._prediction_distance
-                )
+            self._formatted_loss_names[registered_loss_name] = loss_config.get_formatted_name(
+                registered_loss_name, self._prediction_distance
+            )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -185,8 +184,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     def _get_targets(self, kwargs: dict) -> dict | None:
         targets = {}
         for loss_config in self._config.losses.values():
-            if loss_config.weight == 0.0:
-                continue
             loss_targets = loss_config.get_targets(
                 kwargs,
                 prediction_distance=self._prediction_distance,
@@ -304,17 +301,17 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
 
-        # TODO: also move to lm_head_losses?
-        if self._config.logit_z_loss > 0.0:
-            logits = z_loss(
-                logits,
-                self._config.logit_z_loss,
-                self.training,
-                grad_output,
-                losses,
-                self._z_loss_name,
-                logits_scale_factor=self._config.logits_scale_factor,
-            )
+        # # TODO: also move to lm_head_losses?
+        # if self._config.logit_z_loss > 0.0:
+        #     logits = z_loss(
+        #         logits,
+        #         self._config.logit_z_loss,
+        #         self.training,
+        #         grad_output,
+        #         losses,
+        #         self._z_loss_name,
+        #         logits_scale_factor=self._config.logits_scale_factor,
+        #     )
 
         sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
         if LanguageModelKwargs.hidden_dims in kwargs:
@@ -333,8 +330,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         total_loss, grad = None, None
         for loss_name, loss_config in self._config.losses.items():
-            if loss_config.weight == 0.0:
-                continue
             # losses are returned unscaled but the grads are already scaled
             loss_unscaled_, grad_ = loss_config.get_loss(
                 logits,
@@ -349,6 +344,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 vocab_parallel=self._vocab_parallel,
                 kwargs={**kwargs, **targets},
             )
+
             loss_ = loss_unscaled_ * loss_config.weight * self._loss_coefficient
 
             if losses is not None:
@@ -393,10 +389,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 name=self._total_head_loss_name, formatted_name=_format_name(self._total_head_loss_name), count=count
             )
         ]
-        if self._config.logit_z_loss > 0.0:
-            loss_defs.append(
-                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
-            )
         for loss_name, loss_config in self._config.losses.items():
             loss_def: LossDef = loss_config.get_loss_definitions(
                 name=loss_name, count=count, prediction_distance=self._prediction_distance

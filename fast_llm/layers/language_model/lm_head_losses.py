@@ -362,3 +362,39 @@ class DPOLossConfig(LanguageModelLossConfig):
             beta=self.beta,
             grad_output=grad_output,
         )
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "z_loss"})
+class ZLossConfig(LanguageModelLossConfig):
+    """Z-loss regularization to prevent overconfidence."""
+
+    _name: typing.ClassVar[str] = "Z_loss"
+    _abstract: typing.ClassVar[bool] = False
+
+    def get_targets(
+        self,
+        kwargs: dict | None = None,
+        prediction_distance: int | None = None,
+        prediction_heads: int | None = None,
+        sequence_parallel_logits: bool | None = None,
+        group: "ProcessGroup" = None,
+    ) -> dict[str, "torch.Tensor"]:
+        return {}
+
+    def get_loss(
+        self,
+        logits: "torch.Tensor",
+        loss_mask: "torch.Tensor | None",
+        grad_output: float | None = None,
+        group: "ProcessGroup" = None,
+        logits_scale_factor: float | None = None,
+        vocab_parallel: bool = False,
+        kwargs: dict | None = None,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        from fast_llm.layers.common.auxiliary_loss import z_loss
+
+        return z_loss(
+            logits=logits.flatten(0, -2),
+            grad_scale=grad_output,
+            logits_scale_factor=logits_scale_factor,
+        )

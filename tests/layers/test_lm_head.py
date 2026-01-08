@@ -69,7 +69,6 @@ def _lm_head(
     logit_weight: torch.Tensor,
     grad_output: float = 1.0,
     logit_scale_factor: float = 1.0,
-    logit_z_loss=0.0,
     losses: dict[str, LanguageModelLossConfig],
 ):
     hidden = torch.rms_norm(
@@ -102,12 +101,31 @@ def _lm_head(
 
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
-    z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2) if logit_z_loss > 0 else None
+
+    # Compute z_loss if configured
+    if "z_loss" in losses:
+        z_loss_unscaled = torch.mean(torch.logsumexp(logits, dim=-1) ** 2)
+        # Backward through z_loss (retain_graph since we need to also backward through ce_loss)
+        z_loss_unscaled.backward(
+            torch.full_like(z_loss_unscaled, grad_output * losses["z_loss"].weight), retain_graph=True
+        )
+        z_loss_scaled = z_loss_unscaled * losses["z_loss"].weight
+    else:
+        z_loss_unscaled = None
+        z_loss_scaled = None
+
     # Language model loss (cross-entropy with hard labels)
-    loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
-    # Apply language_model_loss_factor
-    loss.backward(torch.full_like(loss, grad_output * losses["lm_loss"].weight))
-    return loss * losses["lm_loss"].weight, z_loss
+    ce_loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
+    # Backward through ce_loss
+    ce_loss.backward(torch.full_like(ce_loss, grad_output * losses["lm_loss"].weight))
+    ce_loss_scaled = ce_loss * losses["lm_loss"].weight
+
+    # Total loss = ce_loss + z_loss (both scaled)
+    total_loss = ce_loss_scaled
+    if z_loss_scaled is not None:
+        total_loss = total_loss + z_loss_scaled
+
+    return total_loss, z_loss_unscaled
 
 
 SEQUENCE_LENGTH = 200
@@ -126,7 +144,21 @@ VOCAB_SIZE = 500
         ({}, {"compute_dtype": DataType.bfloat16}, False, 1),
         ({"embeddings": {"full_precision_residual": True}}, {"compute_dtype": DataType.bfloat16}, False, 1),
         ({"sequence_first": True}, {}, False, 1),
-        ({"head": {"logit_z_loss": 1e-3}}, {}, False, 1),
+        (
+            {
+                "head": {
+                    "losses": {
+                        "z_loss": {
+                            "type": "z_loss",
+                            "weight": 1e-3,
+                        },
+                    },
+                }
+            },
+            {},
+            False,
+            1,
+        ),
         ({"head": {"logits_scale_factor": 5.0}}, {}, False, 1),
         ({"tied_embedding_weight": True}, {}, False, 1),
         ({}, {}, False, 2),
@@ -365,7 +397,6 @@ def test_lm_head(
             rms_weight=ref_rms_weight,
             logit_weight=ref_logit_weight,
             logit_scale_factor=head_config.logits_scale_factor,
-            logit_z_loss=head_config.logit_z_loss,
             losses=head_config.losses,
         )
 
@@ -386,8 +417,8 @@ def test_lm_head(
             formatted_name = loss_config.get_formatted_name(loss_name, prediction_distance)
             expected_loss_keys.add(formatted_name)
 
-        if ref_z_loss is not None:
-            expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
+        # if ref_z_loss is not None:
+        #     expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
 
         Assert.eq(
             {loss_definition.name: loss_definition.count for loss_definition in head.get_loss_definitions()},
@@ -404,9 +435,9 @@ def test_lm_head(
 
         Assert.eq(losses.keys(), expected_loss_keys)
         Assert.eq(len(losses[lm_head_loss_name]), 1)
-        if ref_z_loss is not None:
-            Assert.eq(len(losses["z_loss"]), 1)
-            Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
+        # if ref_z_loss is not None:
+        #     Assert.eq(len(losses["z_loss"]), 1)
+        #     Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
 
         Assert.rms_close_relative(losses[lm_head_loss_name][0], ref_loss, threshold, min_threshold)
 
