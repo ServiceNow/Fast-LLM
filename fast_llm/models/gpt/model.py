@@ -267,19 +267,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 labels_end = tokens_end + self._config.head.max_prediction_distance
 
                 labels = batch.tokens.crop(labels_begin, labels_end).tokens
-
+                loss_mask = labels >= 0
                 if batch.loss_masking_spans is not None:
                     loss_masking_spans = batch.loss_masking_spans.crop(labels_begin, labels_end)
-                    loss_mask = torch.ones_like(labels, dtype=torch.bool)
+                    # loss_mask = torch.ones_like(labels, dtype=torch.bool)
                     for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
                         for begin, end in loss_masking_spans:
                             loss_mask[sample_index, begin:end] = False
-                    if (
-                        self._config.head.distillation_model is not None
-                        or self._config.decoder.block.distillation_model is not None
-                    ):
-                        kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     labels = torch.where(loss_mask, labels, -100)
+
+                if (
+                    self._config.head.distillation_model is not None
+                    or self._config.decoder.block.distillation_model is not None
+                ):
+                    kwargs[LanguageModelKwargs.loss_mask] = loss_mask
 
                 kwargs[LanguageModelKwargs.labels] = (
                     labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels
