@@ -5,13 +5,13 @@ This module discovers datasets by directly scanning for .fast_llm_dataset files
 and reading token counts from their binary headers.
 """
 
-import json
 import logging
 import pathlib
 from collections import defaultdict
 
 import yaml
 
+from fast_llm.data.dataset.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.dataset_discovery.config import DatasetDiscoveryConfig
 
@@ -117,30 +117,14 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
     @staticmethod
     def _read_memmap_num_tokens(memmap_path: pathlib.Path) -> int:
         """Read number of tokens from a .fast_llm_dataset memmap file."""
-        # Import preprocessing and sample configs to register them
-        import fast_llm.data.preprocessing.image_patch  # noqa
-        import fast_llm.data.preprocessing.language_model  # noqa
-        import fast_llm.data.sample.language_model  # noqa
-        import fast_llm.data.sample.patch  # noqa
-        import fast_llm.data.sample.range  # noqa
-        import fast_llm.data.sample.token  # noqa
-        from fast_llm.data.dataset.memmap import FILE_HEADER
-        from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
 
         if not memmap_path.exists():
             logger.warning(f"Memmap file not found: {memmap_path}")
             return 0
 
         try:
-            with memmap_path.open("rb") as stream:
-                header = stream.read(len(FILE_HEADER))
-                if header != FILE_HEADER:
-                    logger.warning(f"Invalid memmap file format: {memmap_path}")
-                    return 0
-                stream.seek(int.from_bytes(stream.read(8), signed=False))
-                config_bytes = stream.read(int.from_bytes(stream.read(4), signed=False))
-                reader_config = MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
-                return reader_config.num_tokens
+            reader_config = MemmapDataset.read_reader_config(memmap_path)
+            return reader_config.num_tokens
         except Exception as e:
             logger.warning(f"Failed to read memmap file {memmap_path}: {e}")
             return 0
