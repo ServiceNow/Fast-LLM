@@ -235,14 +235,13 @@ def mlp_forward(
         input_ = None
 
     # Activation
-    if TritonConfig.TRITON_ENABLED:
+    if TritonConfig.TRITON_ENABLED and intermediate_1.device.type == "cuda":
         intermediate_2, _ = triton_mlp_activation_forward(intermediate_1, gated, activation_type)
     else:
         do_grad = training and not recompute_level.recompute_activation
         with torch.set_grad_enabled(do_grad):
-            intermediate_2 = torch_mlp_activation(
-                intermediate_1.detach().requires_grad_(do_grad), gated, activation_type
-            )
+            intermediate_1 = intermediate_1.detach().requires_grad_(do_grad)
+            intermediate_2 = torch_mlp_activation(intermediate_1, gated, activation_type)
     if recompute_level.recompute_layer_1:
         intermediate_1 = None
 
@@ -345,20 +344,20 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
         )[0]
 
     # Activation recomputation and/or backward
-    if TritonConfig.TRITON_ENABLED:
+    if TritonConfig.TRITON_ENABLED and grad_output.device.type == "cuda":
         grad_intermediate_1, intermediate_2_ = triton_mlp_activation_backward(
             grad_intermediate_2, (intermediate_1, gated, activation_type), intermediate_2 is None
         )
     else:
         if intermediate_2 is None:
+            intermediate_1 = intermediate_1.detach().requires_grad_(True)
             with torch.set_grad_enabled(True):
-                intermediate_2_ = torch_mlp_activation(
-                    intermediate_1.detach().requires_grad_(True), gated, activation_type
-                )
+                intermediate_2_ = torch_mlp_activation(intermediate_1, gated, activation_type)
         else:
             intermediate_2_ = intermediate_2
         intermediate_2_.backward(grad_intermediate_2)
         grad_intermediate_1 = intermediate_1.grad
+        print("AAAAA", intermediate_2 is None, grad_intermediate_1)
 
     # Layer 2 parameter grad
     del grad_intermediate_2, intermediate_1

@@ -10,12 +10,12 @@ import torch
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.utils import Assert
-from tests.utils.utils import requires_cuda
 
 
 def _get_cross_entropy_inputs(
-    num_columns: int, loss_masking: bool, target_format: TargetFormat, device="cuda"
+    num_columns: int, loss_masking: bool, target_format: TargetFormat
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # We want something moderately close to the target for the test to be meaningful
     logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device=device) / 3
     loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device=device) if loss_masking else None
@@ -49,7 +49,6 @@ def _compare_cross_entropy_outputs(
         assert ref_grad is None
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking"),
@@ -85,6 +84,8 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
     threshold = 2e-5 if logits_scale_factor == 1.0 else 1e-2
     _compare_cross_entropy_outputs(out_fused, out_torch, grad_output is not None, grad_fused, grad_torch, threshold)
 
+    if not torch.cuda.is_available():
+        return
     if num_columns > 65536:
         with pytest.raises(AssertionError):
             cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
@@ -111,7 +112,6 @@ def _reverse_kl_forward_backward_torch(logits: torch.Tensor, target: torch.Tenso
     return output, logits.grad
 
 
-@requires_cuda
 @pytest.mark.slow
 # TODO: Support the same parameterization as above in the reference implementation.
 @pytest.mark.parametrize("loss_masking", [False, True])
@@ -206,7 +206,6 @@ def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGr
         raise RuntimeError("Test failed")
 
 
-@requires_cuda
 @pytest.mark.slow
 def test_distillation_losses():
     _spawn_dist(2, compare_parallel_cross_entropy)

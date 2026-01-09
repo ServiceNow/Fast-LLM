@@ -22,7 +22,7 @@ from tests.utils.global_variables import TEST_RESULTS_PATH
 
 logger = logging.getLogger(__name__)
 
-requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+requires_cuda = pytest.mark.skipif(False, reason="CUDA is not available")
 
 
 @pytest.fixture(scope="session")

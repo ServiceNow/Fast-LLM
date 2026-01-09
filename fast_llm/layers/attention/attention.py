@@ -459,6 +459,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
         if self._config.causal:
+            print(
+                "WWWWW",
+                kwargs[AttentionKwargs.sequence_length],
+                self._backup_attention_tensor_cache_max_sequence_length,
+            )
             if (
                 sequence_length := kwargs[AttentionKwargs.sequence_length]
             ) > self._backup_attention_tensor_cache_max_sequence_length:
@@ -491,6 +496,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             if attention_mask is None:
                 attention_mask = document_mask
             else:
+                print("AAAA", attention_mask.shape, document_mask.shape, kwargs)
                 attention_mask = attention_mask & document_mask
 
         kwargs[AttentionKwargs.attention_mask] = attention_mask

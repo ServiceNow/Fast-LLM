@@ -18,24 +18,29 @@ except ImportError:
 
 
 def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor) -> torch.Tensor:
-    assert _apex_available
-    norm, _ = _multi_tensor_applier(
-        _multi_tensor_l2norm,
-        noop_flag,
-        [tensors],
-        False,  # no per-parameter norm
-    )
+    if _apex_available:
+        norm, _ = _multi_tensor_applier(
+            _multi_tensor_l2norm,
+            noop_flag,
+            [tensors],
+            False,  # no per-parameter norm
+        )
+    else:
+        norm = sum(torch.norm(tensor) ** 2 for tensor in tensors) ** 0.5
     return norm
 
 
 def scale_(tensors: list[torch.Tensor], noop_flag: torch.Tensor, scale: torch.Tensor | float) -> None:
-    assert _apex_available
-    _multi_tensor_applier(
-        _multi_tensor_scale,
-        noop_flag,
-        [tensors, tensors],
-        scale,
-    )
+    if _apex_available:
+        _multi_tensor_applier(
+            _multi_tensor_scale,
+            noop_flag,
+            [tensors, tensors],
+            scale,
+        )
+    else:
+        for tensor in tensors:
+            tensor.mul_(scale)
 
 
 # TODO: Same as torch._fused_adam_?
@@ -52,16 +57,35 @@ def fused_adam(
     eps: float,
     step: int,
 ) -> None:
-    _multi_tensor_applier(
-        _multi_tensor_adam,
-        noop_flag,
-        [grads, params, exp_avgs, exp_avg_sqs],
-        lr,
-        beta1,
-        beta2,
-        eps,
-        step,
-        1,  # adamw
-        1,  # bias correction
-        wd,
-    )
+    if _apex_available:
+        _multi_tensor_applier(
+            _multi_tensor_adam,
+            noop_flag,
+            [grads, params, exp_avgs, exp_avg_sqs],
+            lr,
+            beta1,
+            beta2,
+            eps,
+            step,
+            1,  # adamw
+            1,  # bias correction
+            wd,
+        )
+    else:
+        import torch.optim.adamw as adamw
+
+        adamw.adamw(
+            params,
+            grads,
+            exp_avgs,
+            exp_avg_sqs,
+            None,
+            lr=lr,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
+            state_steps=torch.full([len(params)], step, dtype=torch.int64, device=params[0].device).unbind(),
+            weight_decay=wd,
+            amsgrad=False,
+            maximize=False,
+        )

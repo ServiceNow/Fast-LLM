@@ -1,12 +1,10 @@
 import abc
 import math
 import typing
-import warnings
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -59,22 +57,6 @@ class DefaultRotaryConfig(RotaryConfig):
         desc="Scale for the rotary positional embeddings",
         hint=FieldHint.architecture,
     )
-    # TODO: Make a backup implementation that doesn't affect the layout.
-    triton: bool = Field(
-        default=True,
-        desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
-        hint=FieldHint.architecture,
-    )
-
-    @property
-    def complex_format(self) -> bool:
-        # TODO: Make a backup implementation that doesn't affect the layout.
-        return not self.triton
-
-    def _validate(self) -> None:
-        super()._validate()
-        if self.triton and not TritonConfig.TRITON_ENABLED:
-            warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
     def _get_configurable_class(self) -> "type[DefaultRotary]":
         from fast_llm.layers.attention.rotary.rotary import DefaultRotary

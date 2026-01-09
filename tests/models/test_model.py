@@ -14,7 +14,6 @@ from tests.utils.utils import check_subtest_success, requires_cuda, set_subtest_
 logger = logging.getLogger(__name__)
 
 
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_simple(run_test_script_for_all_models, run_test_script_base_path):
     # A simple config to prevent unnecessary testing and creation of dependency group

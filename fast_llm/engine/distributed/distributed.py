@@ -27,7 +27,7 @@ class ProcessGroupPool:
         world_size: int | None = None,
         local_world_size: int | None = None,
         timeout: float = 60,
-        use_cpu: bool = False,
+        use_cuda: bool = True,
         backend: DistributedBackend = DistributedBackend.nccl,
     ):
 
@@ -37,19 +37,20 @@ class ProcessGroupPool:
             DistributedConfig.default_local_world_size if local_world_size is None else local_world_size
         )
         self._timeout = timeout
-        self._use_cpu = use_cpu
+        self._use_cuda = use_cuda
         self._backend = backend
         self._process_groups = {}
 
-        if self._use_cpu:
-            if backend == DistributedBackend.nccl:
-                Assert.eq(self._world_size, 1)
-            self._device = torch.device("cpu")
-        else:
+        if self._use_cuda:
+            assert torch.cuda.is_available()
             Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
             torch.cuda.init()
             self._device = torch.device(self._rank % self._local_world_size)
             torch.cuda.set_device(self._device)
+        else:
+            if backend == DistributedBackend.nccl:
+                Assert.eq(self._world_size, 1)
+            self._device = torch.device("cpu")
 
         if self._world_size > 1:
             if self._rank == 0:
@@ -152,7 +153,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     TODO: Clarify cpu support.
     """
 
-    def __init__(self, config: DistributedConfig, use_cpu: bool = False):
+    def __init__(self, config: DistributedConfig):
         super().__init__(config)
         assert self._config.reference_config is None
 
@@ -163,7 +164,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 self._config.world_size,
                 self._config.local_world_size,
                 self._config.timeout,
-                use_cpu,
+                self._config.use_cuda,
                 self._config.backend,
             )
         else:
@@ -171,7 +172,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             Assert.geq(self._pool.world_size, self._config.world_size)
             Assert.eq(self._pool.rank, self._config.rank)
             Assert.geq(self._pool.local_world_size, self._config.local_world_size)
-            Assert.eq(self._pool.device.type, "cpu" if use_cpu else "cuda")
+            Assert.eq(self._pool.device.type, "cuda" if self._config.use_cuda else "cpu")
             Assert.eq(self._pool.backend, self._config.backend)
 
         self.world_group = self.add_group(self._config.distributed_dims[DistributedDimNames.world])
@@ -259,5 +260,5 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self.tp_generator.manual_seed((self._tp_seed + seed_shift) % MAX_SEED)
 
     def __del__(self):
-        if self._local_pool:
+        if getattr(self, "_local_pool", False) and hasattr(self, "_pool"):
             self._pool.shutdown()

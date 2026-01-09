@@ -185,7 +185,11 @@ def recv(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, ta
 @contextlib.contextmanager
 def set_generator(generator: torch.Generator) -> typing.Generator[None, None, None]:
     """Use the generator as default, for ops that don't support a generator argument."""
-    default_generator: torch.Generator = torch.cuda.default_generators[torch.cuda.current_device()]
+    default_generator: torch.Generator = (
+        torch.cuda.default_generators[generator.device.index]
+        if generator.device.type == "cuda"
+        else torch.default_generator
+    )
     assert generator is not default_generator
     old_state = default_generator.get_state()
     default_generator.set_state(generator.get_state())
