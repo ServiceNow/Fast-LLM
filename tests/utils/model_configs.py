@@ -601,7 +601,7 @@ _update_and_add_testing_config(
         ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {
             "teacher": {
-                "model": {"base_model": base_model},
+                "model": {"base_model": copy.deepcopy(_mistral_base_model)},
             },
         },
     },
