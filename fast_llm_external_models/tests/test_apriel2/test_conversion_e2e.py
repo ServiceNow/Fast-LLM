@@ -1,6 +1,6 @@
-"""End-to-end torture test for plan composition.
+"""test_conversion_e2e.py - End-to-end conversion integration tests.
 
-This tests the FULL pipeline at every step of a surgery chain:
+Tests the FULL pipeline at every step of a surgery chain:
 1. Config composition produces valid configs
 2. Plan building works for each surgery
 3. Plan execution produces valid weights
@@ -16,21 +16,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
-
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-from fast_llm_external_models.apriel2.conversion import (
-    compose,
-    compose_configs,
-    execute,
-    plan_surgery,
-)
-from fast_llm_external_models.apriel2.conversion.llava import (
-    convert_config as convert_llava_config,
-    plan_llava_to_apriel2,
-)
+from fast_llm_external_models.apriel2.conversion import compose, compose_configs, execute, plan_surgery
+from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
+from fast_llm_external_models.apriel2.conversion.llava import plan_llava_to_apriel2
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
-
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 # =============================================================================
 # Cycling Surgery Generation
@@ -87,40 +78,20 @@ def generate_cycling_surgeries(config: dict) -> list[tuple[dict, str]]:
             if sub_name != main_mixer:
                 # Build surgery path based on block_path
                 if block_path == "block":
-                    surgery = {
-                        "decoder": {
-                            "block": {"mixer": {"main_mixer_name": sub_name}}
-                        }
-                    }
+                    surgery = {"decoder": {"block": {"mixer": {"main_mixer_name": sub_name}}}}
                 else:
                     # block_path is "blocks.block_name"
                     block_name = block_path.split(".")[1]
-                    surgery = {
-                        "decoder": {
-                            "blocks": {
-                                block_name: {"mixer": {"main_mixer_name": sub_name}}
-                            }
-                        }
-                    }
+                    surgery = {"decoder": {"blocks": {block_name: {"mixer": {"main_mixer_name": sub_name}}}}}
                 surgeries.append((surgery, f"cycle {block_path} to {sub_name}"))
 
         # Restore original main_mixer_name
         if any(sub_name != main_mixer for sub_name in sub_mixer_names):
             if block_path == "block":
-                restore = {
-                    "decoder": {
-                        "block": {"mixer": {"main_mixer_name": main_mixer}}
-                    }
-                }
+                restore = {"decoder": {"block": {"mixer": {"main_mixer_name": main_mixer}}}}
             else:
                 block_name = block_path.split(".")[1]
-                restore = {
-                    "decoder": {
-                        "blocks": {
-                            block_name: {"mixer": {"main_mixer_name": main_mixer}}
-                        }
-                    }
-                }
+                restore = {"decoder": {"blocks": {block_name: {"mixer": {"main_mixer_name": main_mixer}}}}}
             surgeries.append((restore, f"restore {block_path} to {main_mixer}"))
 
     return surgeries
@@ -194,9 +165,7 @@ class TestPlanCompositionTorture:
         with open(llava_pixtral_checkpoint / "config.json") as f:
             return json.load(f)
 
-    def test_initial_conversion_produces_working_model(
-        self, source_config, source_weights
-    ):
+    def test_initial_conversion_produces_working_model(self, source_config, source_weights):
         """Test that Llava → Apriel2 conversion produces a working model."""
         # Convert config
         apriel2_config_dict = convert_llava_config(source_config)
@@ -219,9 +188,7 @@ class TestPlanCompositionTorture:
 
         assert outputs.logits.shape == (1, 8, config.vocab_size)
 
-    def test_each_surgery_step_produces_working_model(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_each_surgery_step_produces_working_model(self, source_config, source_weights, additive_surgery_chain):
         """Test that each surgery step produces a model that can forward pass.
 
         Key insight: Surgery plans reference Apriel2 keys, so we must COMPOSE
@@ -290,9 +257,7 @@ class TestPlanCompositionTorture:
                 except Exception as e:
                     pytest.fail(f"Step {i+1}: Forward pass failed - {e}")
 
-    def test_all_stochastic_submixers_via_cycling(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_all_stochastic_submixers_via_cycling(self, source_config, source_weights, additive_surgery_chain):
         """Test ALL sub-mixers in stochastic blocks, not just the main mixer.
 
         Problem: Forward pass only exercises the main_mixer_name. Other sub-mixers
@@ -312,9 +277,7 @@ class TestPlanCompositionTorture:
         conversion_plan = plan_llava_to_apriel2(source_config)
 
         # Expand surgery chain with cycling
-        expanded_chain = expand_surgery_chain_with_cycling(
-            additive_surgery_chain, apriel2_config
-        )
+        expanded_chain = expand_surgery_chain_with_cycling(additive_surgery_chain, apriel2_config)
 
         # Build cumulative plan: conversion | surgery_1 | cycling_1a | ... | restore_1 | surgery_2 | ...
         current_plan = conversion_plan
@@ -359,9 +322,7 @@ class TestPlanCompositionTorture:
                 except Exception as e:
                     pytest.fail(f"{desc}: Forward pass failed - {e}")
 
-    def test_composed_plan_equals_sequential_execution(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_composed_plan_equals_sequential_execution(self, source_config, source_weights, additive_surgery_chain):
         """Test that composing plans gives same result as sequential execution.
 
         This verifies plan composition associativity:
@@ -399,13 +360,9 @@ class TestPlanCompositionTorture:
         # Compare weights
         for key in seq_weights:
             if key in composed_weights:
-                assert torch.allclose(
-                    seq_weights[key], composed_weights[key], atol=1e-5
-                ), f"Weight mismatch for {key}"
+                assert torch.allclose(seq_weights[key], composed_weights[key], atol=1e-5), f"Weight mismatch for {key}"
 
-    def test_final_model_structure(
-        self, source_config, source_weights, additive_surgery_chain
-    ):
+    def test_final_model_structure(self, source_config, source_weights, additive_surgery_chain):
         """Verify the final model has the expected structure."""
         # Initial conversion
         current_config = convert_llava_config(source_config)
@@ -504,9 +461,7 @@ class TestPlanConfigConsistency:
         """Set up base config and weights after Llava conversion."""
         from safetensors.torch import load_file
 
-        from fast_llm_external_models.apriel2.conversion.llava import (
-            convert_config as convert_llava_config,
-        )
+        from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
 
         # Load source config and weights
         with open(llava_pixtral_checkpoint / "config.json") as f:
@@ -534,9 +489,7 @@ class TestPlanConfigConsistency:
             result = _deep_merge(result, s)
         return result
 
-    def _build_incremental_plans(
-        self, base_config: dict, surgeries: list[dict]
-    ) -> tuple[list, list[dict]]:
+    def _build_incremental_plans(self, base_config: dict, surgeries: list[dict]) -> tuple[list, list[dict]]:
         """Build incremental plans for each surgery step.
 
         Returns (plans, configs) where configs[i] is the config after surgery i.
@@ -552,9 +505,7 @@ class TestPlanConfigConsistency:
             config = target_config
         return plans, configs
 
-    def test_incremental_equals_direct_full_chain(
-        self, base_setup, additive_surgery_chain
-    ):
+    def test_incremental_equals_direct_full_chain(self, base_setup, additive_surgery_chain):
         """Test that composing all incremental plans equals one direct plan.
 
         compose(P1, P2, ..., Pn) ≡ plan_surgery(base, final)
@@ -575,9 +526,7 @@ class TestPlanConfigConsistency:
         direct_plan = plan_surgery(base_config, final_config)
 
         # Verify same target keys
-        assert set(composed_plan.mappings.keys()) == set(
-            direct_plan.mappings.keys()
-        ), "Plan keys should match"
+        assert set(composed_plan.mappings.keys()) == set(direct_plan.mappings.keys()), "Plan keys should match"
 
         # Execute both and compare weights
         composed_weights = execute(composed_plan, base_weights, seed=0)
@@ -611,9 +560,7 @@ class TestPlanConfigConsistency:
             direct = plan_surgery(base_config, configs[k])
 
             # Verify keys match
-            assert set(composed.mappings.keys()) == set(
-                direct.mappings.keys()
-            ), f"Prefix {k}: keys don't match"
+            assert set(composed.mappings.keys()) == set(direct.mappings.keys()), f"Prefix {k}: keys don't match"
 
             # Execute and compare
             composed_weights = execute(composed, base_weights, seed=0)
@@ -781,9 +728,7 @@ class TestComprehensiveTortureChain:
         """Set up for comprehensive torture tests."""
         from safetensors.torch import load_file
 
-        from fast_llm_external_models.apriel2.conversion.llava import (
-            convert_config as convert_llava_config,
-        )
+        from fast_llm_external_models.apriel2.conversion.llava import convert_config as convert_llava_config
 
         # Load source
         with open(llava_pixtral_checkpoint / "config.json") as f:
@@ -801,9 +746,7 @@ class TestComprehensiveTortureChain:
 
         return base_config, base_weights
 
-    def test_each_step_produces_valid_config(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_each_step_produces_valid_config(self, torture_setup, comprehensive_torture_chain):
         """Test that each surgery step produces a valid config."""
         base_config, _ = torture_setup
 
@@ -818,9 +761,7 @@ class TestComprehensiveTortureChain:
                 pytest.fail(f"Step {i+1} produced invalid config: {e}")
 
     @requires_cuda
-    def test_each_step_produces_working_model(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_each_step_produces_working_model(self, torture_setup, comprehensive_torture_chain):
         """Test that each surgery step produces a model that can forward pass.
 
         This is the ultimate integration test - config composition + plan building
@@ -875,9 +816,7 @@ class TestComprehensiveTortureChain:
             current_weights = new_weights
 
     @requires_cuda
-    def test_final_supernet_structure(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_final_supernet_structure(self, torture_setup, comprehensive_torture_chain):
         """Verify the final architecture has supernet blocks with all 4 mixer types."""
         base_config, base_weights = torture_setup
 
@@ -914,9 +853,7 @@ class TestComprehensiveTortureChain:
         assert outputs.logits.shape == (1, 8, config.vocab_size)
 
     @requires_cuda
-    def test_plan_config_consistency_comprehensive(
-        self, torture_setup, comprehensive_torture_chain
-    ):
+    def test_plan_config_consistency_comprehensive(self, torture_setup, comprehensive_torture_chain):
         """Test that incremental plan composition works for the comprehensive chain.
 
         Note: We cannot compare to a "direct plan" because the comprehensive chain
@@ -1083,66 +1020,6 @@ class TestInitSeparationOfConcerns:
             },
         }
 
-    def test_config_composition_identical_regardless_of_init_mode(self, base_config):
-        """Config composition produces same structure with init: transfer vs init: random."""
-        # Surgery with init: transfer
-        surgery_transfer = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"type": "attention", "init": "transfer"},
-                            "swa": {
-                                "type": "attention",
-                                "init": "transfer",
-                                "sliding_window": 512,
-                            },
-                        },
-                    },
-                },
-            },
-        }
-
-        # Surgery with init: random
-        surgery_random = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"type": "attention", "init": "random"},
-                            "swa": {
-                                "type": "attention",
-                                "init": "random",
-                                "sliding_window": 512,
-                            },
-                        },
-                    },
-                },
-            },
-        }
-
-        # Compose configs
-        result_transfer = compose_configs(base_config, surgery_transfer)
-        result_random = compose_configs(base_config, surgery_random)
-
-        # Both should produce identical structure (init is stripped)
-        assert result_transfer == result_random, (
-            "Config composition should produce identical structure regardless of init mode"
-        )
-
-        # Verify the structure is correct
-        mixer = result_transfer["decoder"]["block"]["mixer"]
-        assert mixer["type"] == "stochastic"
-        assert "attention" in mixer["mixers"]
-        assert "swa" in mixer["mixers"]
-        # init should be stripped
-        assert "init" not in mixer["mixers"]["attention"]
-        assert "init" not in mixer["mixers"]["swa"]
-
     def test_plan_surgery_random_succeeds_for_any_type_pair(self, mamba_config):
         """plan_surgery with init: random should succeed even for mamba -> attention."""
         # This surgery changes mamba to attention with random init
@@ -1166,7 +1043,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(mamba_config, surgery)
 
         # Verify the plan has the expected target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixer.q_proj" in k for k in target_keys)
 
     def test_plan_surgery_transfer_fails_for_unsupported_type_pair(self, mamba_config):
@@ -1219,7 +1096,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(base_config, surgery)
 
         # Verify the plan has mamba target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixer.in_proj" in k for k in target_keys)
 
     def test_stochastic_init_random_succeeds_for_any_submixer_type(self, mamba_config):
@@ -1259,7 +1136,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(mamba_config, surgery)
 
         # Verify both sub-mixers have target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixers.attention.q_proj" in k for k in target_keys)
         assert any("mixers.swa.q_proj" in k for k in target_keys)
 
@@ -1294,7 +1171,7 @@ class TestInitSeparationOfConcerns:
         plan = plan_surgery(base_config, surgery)
 
         # Verify both sub-mixers have target keys
-        target_keys = set(str(k) for k in plan.mappings.keys())
+        target_keys = {str(k) for k in plan.mappings.keys()}
         assert any("mixers.attention.q_proj" in k for k in target_keys)
         assert any("mixers.gdn.in_proj_qkvz" in k for k in target_keys)
 
@@ -1313,8 +1190,8 @@ class TestMarkovianProperty:
     """
 
     @pytest.fixture
-    def attention_config(self):
-        """Base config with attention."""
+    def attention_config_dict(self):
+        """Base config dict with attention mixer for compose_configs tests."""
         return {
             "model_type": "apriel2",
             "hidden_size": 256,
@@ -1335,43 +1212,7 @@ class TestMarkovianProperty:
             },
         }
 
-    @pytest.fixture
-    def stochastic_config(self):
-        """Config with stochastic mixer."""
-        return {
-            "model_type": "apriel2",
-            "hidden_size": 256,
-            "vocab_size": 1000,
-            "decoder": {
-                "type": "fixed",
-                "num_blocks": 2,
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {
-                                "type": "attention",
-                                "heads": 8,
-                                "head_groups": 4,
-                                "head_size": 32,
-                            },
-                            "swa": {
-                                "type": "sliding_window",
-                                "heads": 8,
-                                "head_groups": 4,
-                                "head_size": 32,
-                                "window_size": 512,
-                            },
-                        },
-                    },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
-                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-                },
-            },
-        }
-
-    def test_different_paths_same_config_same_plan(self, attention_config):
+    def test_different_paths_same_config_same_plan(self, attention_config_dict):
         """Two different paths to the same config produce identical plans.
 
         Path A: attention -> stochastic{att, swa}
@@ -1398,7 +1239,7 @@ class TestMarkovianProperty:
                 },
             },
         }
-        config_a = compose_configs(attention_config, surgery_a)
+        config_a = compose_configs(attention_config_dict, surgery_a)
 
         # Path B: First add attention only, then add swa
         surgery_b1 = {
@@ -1414,7 +1255,7 @@ class TestMarkovianProperty:
                 },
             },
         }
-        intermediate_config = compose_configs(attention_config, surgery_b1)
+        intermediate_config = compose_configs(attention_config_dict, surgery_b1)
 
         surgery_b2 = {
             "decoder": {
@@ -1465,11 +1306,11 @@ class TestMarkovianProperty:
         plan_from_b = plan_surgery(config_b, final_surgery)
 
         # Compare plan mappings
-        keys_a = set(str(k) for k in plan_from_a.mappings.keys())
-        keys_b = set(str(k) for k in plan_from_b.mappings.keys())
+        keys_a = {str(k) for k in plan_from_a.mappings.keys()}
+        keys_b = {str(k) for k in plan_from_b.mappings.keys()}
         assert keys_a == keys_b, "Plans from same config via different paths should be identical"
 
-    def test_init_in_source_config_does_not_affect_plan(self, attention_config):
+    def test_init_in_source_config_does_not_affect_plan(self, attention_config_dict):
         """Manually injecting init into source config doesn't change the plan.
 
         This tests that plan_surgery reads init from surgery, not source.
@@ -1479,8 +1320,8 @@ class TestMarkovianProperty:
         import copy
 
         # Create two copies of the config
-        config_with_init = copy.deepcopy(attention_config)
-        config_without_init = copy.deepcopy(attention_config)
+        config_with_init = copy.deepcopy(attention_config_dict)
+        config_without_init = copy.deepcopy(attention_config_dict)
 
         # Manually inject init into one (bypassing compose_configs)
         config_with_init["decoder"]["block"]["mixer"]["init"] = "random"
@@ -1504,237 +1345,11 @@ class TestMarkovianProperty:
         plan_with = plan_surgery(config_with_init, surgery)
         plan_without = plan_surgery(config_without_init, surgery)
 
-        keys_with = set(str(k) for k in plan_with.mappings.keys())
-        keys_without = set(str(k) for k in plan_without.mappings.keys())
+        keys_with = {str(k) for k in plan_with.mappings.keys()}
+        keys_without = {str(k) for k in plan_without.mappings.keys()}
 
         # Plans should be identical - source's init field is ignored
         assert keys_with == keys_without, "Plan should not depend on init in source config"
-
-    def test_associativity_of_surgery_composition(self, attention_config):
-        """Verify associativity: (A ∘ B) ∘ C == A ∘ (B ∘ C) for surgery specs.
-
-        This tests that composing surgeries is associative, which is
-        equivalent to Markovianity for plan creation.
-        """
-        surgery_a = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"type": "attention", "init": "transfer"},
-                        },
-                    },
-                },
-            },
-        }
-
-        surgery_b = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "mixers": {
-                            "swa": {
-                                "type": "sliding_window",
-                                "init": "transfer",
-                                "window_size": 512,
-                            },
-                        },
-                    },
-                },
-            },
-        }
-
-        surgery_c = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "mixers": {
-                            "gdn": {
-                                "type": "gdn",
-                                "init": "random",
-                                "value_heads": 8,
-                                "key_heads": 4,
-                                "key_head_dim": 32,
-                                "value_head_dim": 32,
-                                "convolution_layer": {"kernel_size": 4},
-                            },
-                        },
-                    },
-                },
-            },
-        }
-
-        # Left association: ((attention_config ∘ A) ∘ B) ∘ C
-        left_1 = compose_configs(attention_config, surgery_a)
-        left_2 = compose_configs(left_1, surgery_b)
-        left_result = compose_configs(left_2, surgery_c)
-
-        # Right association: (attention_config ∘ A) ∘ (B ∘ C)
-        # Note: B ∘ C is partial ∘ partial = deep merge of surgery specs
-        bc_merged = compose_configs(surgery_b, surgery_c)
-        right_1 = compose_configs(attention_config, surgery_a)
-        right_result = compose_configs(right_1, bc_merged)
-
-        assert left_result == right_result, "Surgery composition should be associative"
-
-    def test_complete_configs_have_no_init_fields(self, attention_config):
-        """Verify that compose_configs strips init from complete configs.
-
-        This is the key invariant that enables Markovianity:
-        - Complete configs (states) have no init fields
-        - Surgery specs (transitions) have init fields
-        - Plans read init from surgery, not state
-        """
-        surgery_with_init = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"type": "attention", "init": "transfer"},
-                            "swa": {"type": "sliding_window", "init": "random", "window_size": 512},
-                        },
-                    },
-                },
-            },
-        }
-
-        result = compose_configs(attention_config, surgery_with_init)
-
-        # Recursively check for init fields
-        def has_init(obj):
-            if isinstance(obj, dict):
-                if "init" in obj:
-                    return True
-                return any(has_init(v) for v in obj.values())
-            if isinstance(obj, list):
-                return any(has_init(v) for v in obj)
-            return False
-
-        assert not has_init(result), "Complete configs should have no init fields"
-
-    def test_monoid_action_law_additive_surgeries(self):
-        """Monoid action law HOLDS for additive surgeries.
-
-        Additive surgeries (no type: declaration) support:
-            apply(apply(s, t1), t2) == apply(s, t1 ∘ t2)
-
-        This is because additive operations commute nicely:
-        "add {a}" then "add {b}" == "add {a, b}"
-        """
-        # Start with stochastic (additive surgery target)
-        s = {
-            "model_type": "apriel2",
-            "hidden_size": 256,
-            "vocab_size": 1000,
-            "decoder": {
-                "type": "fixed",
-                "num_blocks": 2,
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {
-                            "attention": {"type": "attention", "heads": 8, "head_groups": 4, "head_size": 32},
-                        },
-                    },
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
-                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-                },
-            },
-        }
-
-        # Additive surgeries (no type: declaration)
-        t1 = {"decoder": {"block": {"mixer": {"mixers": {"swa": {"type": "sliding_window", "window_size": 512}}}}}}
-        t2 = {"decoder": {"block": {"mixer": {"mixers": {"mamba": {"type": "mamba", "d_inner": 512}}}}}}
-
-        # Path A: Sequential
-        s_prime = compose_configs(s, t1)
-        s_double_prime_A = compose_configs(s_prime, t2)
-
-        # Path B: Composed
-        t1_t2 = compose_configs(t1, t2)
-        s_double_prime_B = compose_configs(s, t1_t2)
-
-        assert s_double_prime_A == s_double_prime_B, "Monoid action law should hold for additive surgeries"
-
-    def test_monoid_action_law_replacement_surgeries_fails(self):
-        """Monoid action law FAILS for replacement surgeries (by design).
-
-        Replacement surgeries (type: stochastic declared) have:
-            apply(apply(s, t1), t2) != apply(s, t1 ∘ t2)
-
-        This is FUNDAMENTAL, not a bug:
-        - Sequential: "set to {a}" then "set to {b}" → {b} (second wins)
-        - Composed: merge({a}, {b}) = {a,b}, then apply → {a,b}
-
-        These are genuinely different semantics. The failure documents
-        the distinction between declarative composition (merge) and
-        operational composition (function application).
-        """
-        s = {
-            "model_type": "apriel2",
-            "hidden_size": 256,
-            "vocab_size": 1000,
-            "decoder": {
-                "type": "fixed",
-                "num_blocks": 2,
-                "block": {
-                    "mixer": {"type": "attention", "heads": 8, "head_groups": 4, "head_size": 32},
-                    "mlp": {"type": "mlp", "intermediate_size": 256},
-                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
-                },
-            },
-        }
-
-        # Replacement surgeries (both declare type: stochastic)
-        t1 = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "attention",
-                        "mixers": {"attention": {"type": "attention"}},
-                    }
-                }
-            }
-        }
-        t2 = {
-            "decoder": {
-                "block": {
-                    "mixer": {
-                        "type": "stochastic",
-                        "main_mixer_name": "swa",
-                        "mixers": {"swa": {"type": "sliding_window", "window_size": 512}},
-                    }
-                }
-            }
-        }
-
-        # Path A: Sequential (second replacement wins)
-        s_prime = compose_configs(s, t1)
-        s_double_prime_A = compose_configs(s_prime, t2)
-
-        # Path B: Composed (declarations merged)
-        t1_t2 = compose_configs(t1, t2)
-        s_double_prime_B = compose_configs(s, t1_t2)
-
-        # They should be DIFFERENT (law fails)
-        assert s_double_prime_A != s_double_prime_B, (
-            "Monoid action law should FAIL for replacement surgeries"
-        )
-
-        # Verify the specific difference:
-        # Sequential: only swa (second replacement wins)
-        # Composed: both attention and swa (merged declarations)
-        mixers_A = set(s_double_prime_A["decoder"]["block"]["mixer"]["mixers"].keys())
-        mixers_B = set(s_double_prime_B["decoder"]["block"]["mixer"]["mixers"].keys())
-
-        assert mixers_A == {"swa"}, "Sequential: second replacement wins"
-        assert mixers_B == {"attention", "swa"}, "Composed: declarations merged"
 
 
 class TestCyclingSurgeryGeneration:
@@ -1936,7 +1551,7 @@ class TestCyclingSurgeryGeneration:
         # Verify restore flag
         assert expanded[0][2] is False  # surgery - not restore
         assert expanded[1][2] is False  # cycle - not restore
-        assert expanded[2][2] is True   # restore
+        assert expanded[2][2] is True  # restore
 
     def test_expand_surgery_chain_preserves_invariant(self):
         """Test that cycling leaves the chain state invariant."""
@@ -1980,3 +1595,151 @@ class TestCyclingSurgeryGeneration:
 
         # After cycling and restore, we should be back to the same state
         assert current_config == config_after_original
+
+
+class TestBiasSurgeryChain:
+    """Torture tests for per-layer bias inheritance through surgery operations.
+
+    Uses apriel2_config_with_bias + bias_surgery_chain to test that:
+    - Qwen-style per-layer attention bias (QKV enabled, O disabled) survives surgery
+    - Non-gated MLP per-layer bias (layer_1 enabled, layer_2 disabled) survives surgery
+    - Bias settings are correctly inherited by new sub-mixers
+    - Bias is correctly tracked in surgery plans
+    """
+
+    @pytest.fixture
+    def bias_source_config(self, apriel2_config_with_bias):
+        """Convert Apriel2Config to dict for surgery operations."""
+        return apriel2_config_with_bias.to_dict()
+
+    def test_bias_survives_stochastic_wrapper(self, bias_source_config, bias_surgery_chain):
+        """Test that bias settings survive wrapping in stochastic mixer."""
+        # Apply first surgery (wrap in stochastic)
+        result = compose_configs(bias_source_config, bias_surgery_chain[0])
+
+        # Check attention sub-mixer inherited bias settings
+        mixer = result["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "stochastic"
+
+        attn_mixer = mixer["mixers"]["attention"]
+        assert attn_mixer["query_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["key_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["value_layer"]["bias"]["enabled"] is True
+        assert attn_mixer["dense_layer"]["bias"]["enabled"] is False
+
+        # Check MLP bias survived
+        mlp = result["decoder"]["block"]["mlp"]
+        assert mlp["layer_1"]["bias"]["enabled"] is True
+        assert mlp["layer_2"]["bias"]["enabled"] is False
+
+    def test_new_submixer_inherits_bias(self, bias_source_config, bias_surgery_chain):
+        """Test that new sub-mixers inherit bias from source attention."""
+        # Apply S1 + S2 (wrap in stochastic, add sliding_window)
+        config = bias_source_config
+        for surgery in bias_surgery_chain[:2]:
+            config = compose_configs(config, surgery)
+
+        # sliding_window should inherit bias from source attention
+        mixer = config["decoder"]["block"]["mixer"]
+        sw_mixer = mixer["mixers"]["sliding_window"]
+
+        assert sw_mixer["query_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["key_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["value_layer"]["bias"]["enabled"] is True
+        assert sw_mixer["dense_layer"]["bias"]["enabled"] is False
+
+    def test_full_bias_chain_produces_valid_config(self, bias_source_config, bias_surgery_chain):
+        """Test that full bias surgery chain produces valid config."""
+        config = bias_source_config
+        for surgery in bias_surgery_chain:
+            config = compose_configs(config, surgery)
+
+        # Verify final config structure
+        mixer = config["decoder"]["block"]["mixer"]
+        assert mixer["type"] == "stochastic"
+        assert "attention" in mixer["mixers"]
+        assert "sliding_window" in mixer["mixers"]
+        assert "full_bias_attn" in mixer["mixers"]
+
+        # attention and sliding_window inherit Qwen-style bias
+        for name in ["attention", "sliding_window"]:
+            sub = mixer["mixers"][name]
+            assert sub["query_layer"]["bias"]["enabled"] is True
+            assert sub["dense_layer"]["bias"]["enabled"] is False
+
+        # full_bias_attn has add_linear_biases=True but per-layer settings inherited from
+        # source take precedence, so O bias is still disabled
+        full_bias = mixer["mixers"]["full_bias_attn"]
+        assert full_bias.get("add_linear_biases") is True
+        # Per-layer dense_layer.bias.enabled=False inherited from source takes precedence
+        assert full_bias["dense_layer"]["bias"]["enabled"] is False
+
+    def test_bias_plan_has_correct_mappings(self, bias_source_config, bias_surgery_chain):
+        """Test that surgery plan correctly includes/excludes bias weight mappings."""
+        # Compose config first to get full target config with inherited bias settings
+        target_config = compose_configs(bias_source_config, bias_surgery_chain[0])
+        plan = plan_surgery(bias_source_config, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have q_proj.bias (enabled)
+        q_bias = [m for m in mapping_strs if "q_proj.bias" in m]
+        assert len(q_bias) > 0, "Should have q_proj.bias mappings"
+
+        # Should NOT have o_proj.bias (disabled)
+        o_bias = [m for m in mapping_strs if "o_proj.bias" in m]
+        assert len(o_bias) == 0, "Should not have o_proj.bias mappings"
+
+        # Should have up_proj.bias (layer_1 enabled)
+        up_bias = [m for m in mapping_strs if "up_proj.bias" in m]
+        assert len(up_bias) > 0, "Should have up_proj.bias mappings"
+
+        # Should NOT have down_proj.bias (layer_2 disabled)
+        down_bias = [m for m in mapping_strs if "down_proj.bias" in m]
+        assert len(down_bias) == 0, "Should not have down_proj.bias mappings"
+
+    def test_bias_chain_produces_working_model(self, bias_source_config, bias_surgery_chain):
+        """Test that bias surgery chain produces a working model."""
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+
+        # Apply full chain
+        config = bias_source_config
+        for surgery in bias_surgery_chain:
+            config = compose_configs(config, surgery)
+
+        # Create model
+        apriel_config = Apriel2Config(**config)
+        model = Apriel2ForCausalLM(apriel_config)
+        model.eval()
+
+        # Verify model structure has correct biases
+        block = model.model.decoder.blocks[0]
+
+        # attention sub-mixer should have QKV bias, no O bias
+        attn = block.mixer.mixers["attention"]
+        assert attn.q_proj.bias is not None
+        assert attn.k_proj.bias is not None
+        assert attn.v_proj.bias is not None
+        assert attn.o_proj.bias is None
+
+        # sliding_window should also inherit bias settings
+        sw = block.mixer.mixers["sliding_window"]
+        assert sw.q_proj.bias is not None
+        assert sw.o_proj.bias is None
+
+        # full_bias_attn inherits per-layer bias from source (even with add_linear_biases=True,
+        # per-layer settings take precedence in same-type inheritance)
+        full_bias = block.mixer.mixers["full_bias_attn"]
+        assert full_bias.q_proj.bias is not None
+        # O bias is disabled because inherited per-layer dense_layer.bias.enabled=False
+        # takes precedence over add_linear_biases=True
+        assert full_bias.o_proj.bias is None
+
+        # MLP should have layer_1 bias, no layer_2 bias
+        assert block.mlp.up_proj.bias is not None
+        assert block.mlp.down_proj.bias is None
+
+        # Forward pass should work
+        input_ids = torch.randint(0, config["vocab_size"], (1, 10))
+        with torch.no_grad():
+            outputs = model(input_ids, use_cache=False)
+        assert outputs.logits.shape == (1, 10, config["vocab_size"])

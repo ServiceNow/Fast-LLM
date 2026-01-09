@@ -107,7 +107,7 @@ model:
           lr_scale: 0.0  # Freeze layer norms (norm_1 and norm_2 in each block)
         # Activation-level distillation: teach mixers to mimic teacher's attention outputs
         distillation_model: teacher
-        activation_distillation_factor: 0.1
+        activation_distillation_factor: 0.8
     embeddings:
       lr_scale: 0.0  # Freeze word embeddings
     head:

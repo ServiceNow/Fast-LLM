@@ -23,9 +23,6 @@ import pytest
 import torch
 from transformers import LlavaForConditionalGeneration
 
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
-
-
 # =============================================================================
 # Input Configuration
 # =============================================================================
@@ -487,8 +484,10 @@ class TestDiagnostics:
             batch_tgt = target.get_image_features(pixel_values).view(-1, batch_src.shape[-1])
 
             # Sequential processing
-            singles_src = [get_pixtral_vision_features(source, pixel_values[i:i+1]) for i in range(3)]
-            singles_tgt = [target.get_image_features(pixel_values[i:i+1]).view(-1, batch_src.shape[-1]) for i in range(3)]
+            singles_src = [get_pixtral_vision_features(source, pixel_values[i : i + 1]) for i in range(3)]
+            singles_tgt = [
+                target.get_image_features(pixel_values[i : i + 1]).view(-1, batch_src.shape[-1]) for i in range(3)
+            ]
 
             single_concat_src = torch.cat(singles_src, dim=0)
             single_concat_tgt = torch.cat(singles_tgt, dim=0)
@@ -500,9 +499,9 @@ class TestDiagnostics:
         print(f"Apriel2 batch vs sequential: {tgt_diff:.6f}")
 
         # Both should have the same behavior (within FP tolerance)
-        assert abs(src_diff - tgt_diff) < 1e-6, (
-            f"Batch processing behavior differs: src={src_diff:.6f}, tgt={tgt_diff:.6f}"
-        )
+        assert (
+            abs(src_diff - tgt_diff) < 1e-6
+        ), f"Batch processing behavior differs: src={src_diff:.6f}, tgt={tgt_diff:.6f}"
 
 
 if __name__ == "__main__":

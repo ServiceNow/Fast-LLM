@@ -62,7 +62,7 @@ class SafetensorLoader:
         self._handles: dict[Path, Any] = {}
         self._key_index: dict[str, Path] = {}
 
-    def __enter__(self) -> "SafetensorLoader":
+    def __enter__(self) -> SafetensorLoader:
         # Pre-build index: key -> file (one-time O(n×m), then O(1) lookups)
         for f in self.files:
             handle = safe_open(f, framework="pt", device=self.device)
@@ -128,7 +128,7 @@ class ShardedSafetensorWriter:
         self._finalized: bool = False
         self._result_path: Path | None = None
 
-    def __enter__(self) -> "ShardedSafetensorWriter":
+    def __enter__(self) -> ShardedSafetensorWriter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -180,8 +180,7 @@ class ShardedSafetensorWriter:
         shard_file = self.output_dir / f"{self.base_name}-{self._shard_index:05d}.safetensors.tmp"
 
         logger.debug(
-            f"Writing shard {self._shard_index}: {len(self._buffer)} tensors, "
-            f"{self._buffer_bytes / 1e9:.2f} GB"
+            f"Writing shard {self._shard_index}: {len(self._buffer)} tensors, " f"{self._buffer_bytes / 1e9:.2f} GB"
         )
         save_file(self._buffer, shard_file)
         self._shard_files.append(shard_file)

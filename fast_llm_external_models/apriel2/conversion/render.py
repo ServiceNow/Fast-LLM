@@ -8,16 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from fast_llm_external_models.apriel2.conversion.expr import Concat, Init, Ref, Reshape, Slice
+
 if TYPE_CHECKING:
     from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan
-
-from fast_llm_external_models.apriel2.conversion.expr import (
-    Concat,
-    Init,
-    Ref,
-    Reshape,
-    Slice,
-)
 
 
 @dataclass
@@ -28,10 +22,10 @@ class PlanTreeNode:
     After merging, leaf nodes contain aggregated values from multiple siblings.
     """
 
-    children: dict[str, "PlanTreeNode"] = field(default_factory=dict)
+    children: dict[str, PlanTreeNode] = field(default_factory=dict)
     # For leaf nodes: list of (sibling_key, expr) pairs
     # Before merge: single item, after merge: multiple items from merged siblings
-    values: list[tuple[str, "Expr"]] = field(default_factory=list)
+    values: list[tuple[str, Expr]] = field(default_factory=list)
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -61,7 +55,7 @@ def _build_plan_tree(plan: ExprPlan) -> PlanTreeNode:
     return root
 
 
-def _expr_signature(expr: "Expr") -> tuple:
+def _expr_signature(expr: Expr) -> tuple:
     """Get a signature for an expression that determines merge compatibility.
 
     Expressions with different signatures should not be merged together.
@@ -453,7 +447,7 @@ def _render_plan_tree(
             )
 
 
-def _format_aggregated_leaf(values: list[tuple[str, "Expr"]]) -> str:
+def _format_aggregated_leaf(values: list[tuple[str, Expr]]) -> str:
     """Format a leaf with aggregated values using pattern discovery.
 
     Args:
@@ -494,7 +488,7 @@ def _format_aggregated_leaf(values: list[tuple[str, "Expr"]]) -> str:
     return _format_single_expr(first_expr)
 
 
-def _format_single_expr(expr: "Expr") -> str:
+def _format_single_expr(expr: Expr) -> str:
     """Format a single expression using ML notation."""
     match expr:
         case Ref(key=key):
@@ -531,7 +525,7 @@ def _format_single_expr(expr: "Expr") -> str:
             return f"= {type(expr).__name__}"
 
 
-def _format_concat_part(expr: "Expr") -> str:
+def _format_concat_part(expr: Expr) -> str:
     """Format a single part of a concat (for short display)."""
     match expr:
         case Ref(key=key):
@@ -570,7 +564,7 @@ def _format_slice_notation(slices: tuple) -> str:
     return f"[{', '.join(slice_strs)}]"
 
 
-def _format_aggregated_concat(values: list[tuple[str, "Expr"]]) -> str:
+def _format_aggregated_concat(values: list[tuple[str, Expr]]) -> str:
     """Format aggregated Concat expressions with pattern discovery."""
     # Get the first concat to understand structure
     first_concat = values[0][1]
@@ -590,7 +584,7 @@ def _format_aggregated_concat(values: list[tuple[str, "Expr"]]) -> str:
     return f"= [{sep.join(formatted_parts)}]"
 
 
-def _format_aggregated_concat_part(values: list[tuple[str, "Expr"]]) -> str:
+def _format_aggregated_concat_part(values: list[tuple[str, Expr]]) -> str:
     """Format a single part of an aggregated concat."""
     if len(values) == 1:
         return _format_concat_part(values[0][1])
@@ -619,7 +613,7 @@ def _format_aggregated_concat_part(values: list[tuple[str, "Expr"]]) -> str:
     return _format_concat_part(first_expr)
 
 
-def _format_aggregated_slice(values: list[tuple[str, "Expr"]]) -> str:
+def _format_aggregated_slice(values: list[tuple[str, Expr]]) -> str:
     """Format aggregated Slice expressions with pattern discovery."""
     first_slice = values[0][1]
     if not isinstance(first_slice, Slice):
