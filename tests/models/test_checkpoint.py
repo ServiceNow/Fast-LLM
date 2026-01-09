@@ -1,3 +1,4 @@
+import gc
 import logging
 import pathlib
 import shutil
@@ -7,6 +8,7 @@ import safetensors.torch
 import torch
 import yaml
 
+from fast_llm.config import NoAutoValidate
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
     CheckpointLoadConfig,
@@ -16,12 +18,13 @@ from fast_llm.engine.checkpoint.config import (
     ModelConfigType,
 )
 from fast_llm.engine.checkpoint.convert import ConvertConfig
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName
-from fast_llm.utils import Assert
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
+from fast_llm.utils import Assert, header
 from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
 from tests.utils.save_load_configs import DISTRIBUTED_SAVE_LOAD_CONFIGS, DistributedSaveLoadConfig
+from tests.utils.subtest import DistributedTestContext
 from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
@@ -152,7 +155,7 @@ def test_conversion(model_testing_config, run_conversion, get_convert_path):
         )
 
 
-def _compare_safetensor_files(
+def compare_safetensor_files(
     reference: pathlib.Path | dict[str, torch.Tensor],
     *other_paths: pathlib.Path,
     expected_keys: set[str] | None = None,
@@ -166,9 +169,10 @@ def _compare_safetensor_files(
 
     for other_path in other_paths:
         other = safetensors.torch.load_file(other_path)
-        Assert.eq(other.keys(), expected_keys)
+        if other.keys() != expected_keys:
+            raise ValueError(f"Expected keys {expected_keys} but got {other.keys()} in {other_path}")
         for key in expected_keys:
-            Assert.all_equal(reference[key], other[key])
+            Assert.all_equal(reference[key], other[key], msg=f"tensor = {key}, path = {other_path}")
 
 
 @requires_cuda
@@ -177,24 +181,24 @@ def _compare_safetensor_files(
 def test_converted_round_trip(model_testing_config, get_convert_path):
     # Test that the various possible conversion paths yield identical results.
     if model_testing_config.checkpoint_format is None:
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path() / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
             expected_keys={_WEIGHT_SHARD_SAVE_NAME},
         )
     else:
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path() / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, FastLLMCheckpointFormat) / "rank_0.safetensors",
             get_convert_path(DistributedCheckpointFormat, model_testing_config.checkpoint_format)
             / "rank_0.safetensors",
             expected_keys={_WEIGHT_SHARD_SAVE_NAME},
         )
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / "model_0.safetensors",
             get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format) / "model_0.safetensors",
         )
-        _compare_safetensor_files(
+        compare_safetensor_files(
             get_convert_path(model_testing_config.checkpoint_format, DistributedCheckpointFormat)
             / "model_0.safetensors",
             get_convert_path(model_testing_config.checkpoint_format, FastLLMCheckpointFormat) / "model_0.safetensors",
@@ -391,31 +395,55 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         raise ValueError(f"Comparison failed ({len(errors)} errors)")
 
 
+def _save_and_load_in_parallel(
+    test_context: DistributedTestContext, base_path: pathlib.Path, model_testing_config: ModelTestingConfig
+) -> None:
+    # Import all dynamic classes.
+    import fast_llm.cli  # noqa
+
+    for config in DISTRIBUTED_SAVE_LOAD_CONFIGS.values():
+        if config.load_format == "{checkpoint_format}" and model_testing_config.checkpoint_format is None:
+            continue
+        config = config.resolve(base_path, model_testing_config)
+        with test_context.subtest(base_path, config.name, config.num_gpus) as subtest:
+            if subtest.do_run:
+                logger.info(header(config.name))
+                logger.info(f"Loading {config.load_format} checkpoint from {config.load_path}")
+                with NoAutoValidate():
+                    load_config = CheckpointLoadConfig(path=config.load_path, format=config.load_format)
+                load_config.setup(model_testing_config.model_config_class)
+                load_config.validate()
+                model = model_testing_config.model_class.from_pretrained(
+                    load_config,
+                    # The world size and rank are already set through environment variable.
+                    {"distributed": config.distributed},
+                    mode=StageMode.inference,
+                )
+                for save_format in (DistributedCheckpointFormat, FastLLMCheckpointFormat):
+                    logger.info(f"Saving {save_format.name} checkpoint to {config.save_path / save_format.name}")
+                    model.save_checkpoint(
+                        CheckpointSaveConfig(path=config.save_path / save_format.name, format=save_format)
+                    )
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
+
+
 @requires_cuda
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_save_and_load_in_parallel(run_distributed_script, run_test_script_base_path, model_testing_config, request):
+def test_save_and_load_in_parallel(run_parallel_script, run_test_script_base_path, model_testing_config):
     # Save and load checkpoints to and from various distributed configurations.
     # Combined in a single test to mitigate process creation overhead.
     # TODO: Test beyond 2 gpu configs?
-    import tests.models.distributed_test_checkpoint
-
     if torch.cuda.device_count() < 2:
-        pytest.skip(f"Not enough GPUs: {torch.cuda.device_count()} < 2")
-
-    script = [
-        "-m",
-        tests.models.distributed_test_checkpoint.__name__,
-        str(run_test_script_base_path),
-        model_testing_config.name,
-    ]
-    if request.config.getoption("distributed_capture"):
-        logger.warning(
-            "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
-        )
-    else:
-        script.append("--no-distributed-capture")
-    run_distributed_script(script, num_gpus=2)
+        pytest.skip(f"Not enough GPUs2")
+    run_parallel_script(
+        _save_and_load_in_parallel,
+        (run_test_script_base_path, model_testing_config),
+        world_size=2,
+        backend=model_testing_config.distributed_backend,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -472,7 +500,7 @@ def test_parallel_checkpoint_consistency(model_testing_config, run_test_script_b
     # Compare Distributed checkpoints
     for config in ("dp2", "tp2", "stp2", "pp2"):
         for rank in range(2):
-            _compare_safetensor_files(
+            compare_safetensor_files(
                 *[
                     DISTRIBUTED_SAVE_LOAD_CONFIGS[f"load_{format_}_in_{config}"]
                     .resolve(base_path=run_test_script_base_path, model_testing_config=model_testing_config)
@@ -510,7 +538,7 @@ def test_multi_gpu_fast_llm_checkpoint(
         base_path=run_test_script_base_path, model_testing_config=model_testing_config
     )
 
-    _compare_safetensor_files(
+    compare_safetensor_files(
         reference_fast_llm_shard,
         distributed_save_load_config_non_pp.save_path / f"{FastLLMCheckpointFormat.name}/model_0.safetensors",
     )

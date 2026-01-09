@@ -1,4 +1,3 @@
-import argparse
 import functools
 import os
 import pathlib
@@ -12,7 +11,7 @@ import pytest
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 from tests.utils.distributed_configs import DistributedTestingConfig
-from tests.utils.model_configs import MODEL_CONFIGS, ModelTestingConfig
+from tests.utils.model_configs import ModelTestingConfig
 
 if typing.TYPE_CHECKING:
     from tests.conftest import WorkerResources
@@ -47,11 +46,7 @@ def do_run_distributed_script(
 
 
 @pytest.fixture(scope="session")
-def run_distributed_script(
-    worker_resources: "WorkerResources",
-    run_test_script_base_path: pathlib.Path,
-    model_testing_config: ModelTestingConfig,
-):
+def run_distributed_script(worker_resources: "WorkerResources"):
     return functools.partial(
         do_run_distributed_script,
         rendezvous_port=worker_resources.rendezvous_port,
@@ -142,16 +137,6 @@ def run_test_script_for_all_models(
         base_path=run_test_script_base_path,
         model_testing_config=model_testing_config,
     )
-
-
-def parse_run_distributed_script(args: list[str] | None = None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("base_path", type=pathlib.Path)
-    parser.add_argument("model_testing_config", type=str)
-    parser.add_argument("--no-distributed-capture", dest="distributed_capture", action="store_false")
-
-    parsed = parser.parse_args(args)
-    return parsed.base_path, MODEL_CONFIGS[parsed.model_testing_config], parsed.distributed_capture
 
 
 @pytest.fixture(scope="session")
