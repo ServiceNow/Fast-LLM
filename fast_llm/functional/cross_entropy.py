@@ -85,6 +85,7 @@ def _fused_cross_entropy_forward_backward(
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
     teacher_softmax_temperature: float = 1.0,
+    return_target_entropy: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -97,7 +98,10 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = _fused_softmax(target, logits_scale_factor / teacher_softmax_temperature, group)
+        target_logits, exp_logits_targets, sum_exp_target_logits = _fused_softmax_base(
+            target, logits_scale_factor / teacher_softmax_temperature, group
+        )
+        target = exp_logits_targets / sum_exp_target_logits
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -158,6 +162,18 @@ def _fused_cross_entropy_forward_backward(
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
+    if return_target_entropy:
+        if target_format == TargetFormat.logits:
+            teacher_log_prob = target_logits - sum_exp_target_logits.log()
+        else:
+            teacher_log_prob = torch.log(target + 1e-20)
+        target_entropy = -(target * teacher_log_prob).sum(dim=-1)
+        if loss_mask is not None:
+            target_entropy = target_entropy * loss_mask.squeeze(-1)
+        target_entropy = target_entropy.mean()
+        if group is not None:
+            all_reduce(target_entropy, op=ReduceOp.SUM, group=group)
+        return loss, grad, target_entropy
 
     return loss, grad
 
@@ -237,7 +253,6 @@ def _reverse_kl_forward_backward(
     group: ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
-    **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Reverse KL using PyTorch's native kl_div function.
@@ -356,4 +371,54 @@ def reverse_kl_forward_backward(
         teacher_softmax_temperature=teacher_softmax_temperature,
         group=group,
     )
+    return distillation_loss, distillation_grad
+
+
+def forward_kl_forward_backward(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    grad_output: float | None,
+    group: ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
+    teacher_softmax_temperature: float = 1.0,
+    target_format: TargetFormat = TargetFormat.labels,
+    sequence_parallel_logits: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Compute forward KL divergence: KL(p||q) where p is the target distribution (teacher) and q is the predicted (student).
+    This is mode-covering (vs. mode-seeking for reverse KL) and useful for:
+    - Encouraging the model to cover all modes of the target distribution
+    - Spreading probability mass broadly across the target support
+    - Standard distillation scenarios where you want to match the full teacher distribution
+
+    Key differences from reverse KL:
+    - Forward KL: KL(p||q) = mode-covering (spreads mass broadly)
+    - Reverse KL: KL(q||p) = mode-seeking (focuses on target modes)
+
+    Takes:
+        logits: [BxS, V] or [B, S, V], where V is local vocab size
+        target: [BxS, V] or [B, S, V] (logits format)
+        loss_mask: [BxS] or [B, S] or None
+        ...
+
+    Returns:
+        loss: Forward KL divergence loss
+        grad: Gradients w.r.t. logits
+    """
+    assert target_format == TargetFormat.logits, "Forward KL only supports logits format"
+    Assert.eq(target.shape, logits.shape)
+    distillation_loss, distillation_grad, teacher_entropy = _fused_cross_entropy_forward_backward(
+        logits=logits,
+        target=target,
+        loss_mask=loss_mask,
+        grad_output=grad_output,
+        logits_scale_factor=logits_scale_factor,
+        target_format=target_format,
+        group=group,
+        teacher_softmax_temperature=teacher_softmax_temperature,
+        return_target_entropy=True,
+    )
+    distillation_loss -= teacher_entropy
+
     return distillation_loss, distillation_grad

@@ -12,7 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
-from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron

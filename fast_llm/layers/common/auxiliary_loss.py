@@ -21,18 +21,34 @@ def calculate_z_loss(logits: torch.Tensor, logits_scale_factor: float = 1.0) -> 
 
 def z_loss(
     logits: torch.Tensor,
-    z_loss_factor: float,
-    training: bool,
     grad_scale: float | None = None,
-    losses: dict | None = None,
-    loss_name: str | None = None,
     logits_scale_factor: float = 1.0,
-) -> torch.Tensor:
-    if losses is not None or (training and grad_scale is not None):
-        loss = calculate_z_loss(logits, logits_scale_factor=logits_scale_factor)
-        if losses is not None and loss_name is not None:
-            losses[loss_name].append(loss.detach())
-        if training and grad_scale is not None:
-            logits = AuxiliaryLoss.apply(logits, loss, z_loss_factor * grad_scale)
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Compute z-loss and its gradient.
 
-    return logits
+    Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
+
+    Returns:
+        loss: The z-loss value (unscaled)
+        grad: The gradient w.r.t. logits (scaled by grad_scale), or None if grad_scale is None
+    """
+    if logits_scale_factor != 1.0:
+        scaled_logits = logits * logits_scale_factor
+    else:
+        scaled_logits = logits
+
+    # Forward: z_loss = mean(logsumexp^2)
+    lse = torch.logsumexp(scaled_logits, dim=-1)  # (N,)
+    loss = torch.mean(lse**2)
+
+    # Backward: grad = (2/N) * lse * softmax(scaled_logits)
+    grad = None
+    if grad_scale is not None:
+        N = scaled_logits.shape[0]
+        softmax_logits = torch.softmax(scaled_logits, dim=-1)
+        grad = (2.0 / N) * lse.unsqueeze(-1) * softmax_logits * grad_scale
+        if logits_scale_factor != 1.0:
+            grad = grad * logits_scale_factor  # Chain rule for logits_scale_factor
+
+    return loss, grad
