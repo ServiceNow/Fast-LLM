@@ -8,7 +8,11 @@ import pytest
 import torch
 
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
-from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
+from fast_llm.functional.cross_entropy import (
+    cross_entropy_forward_backward,
+    forward_kl_forward_backward,
+    reverse_kl_forward_backward,
+)
 from fast_llm.utils import Assert
 from tests.utils.utils import requires_cuda
 
@@ -129,6 +133,41 @@ def test_reverse_kl(loss_masking, target_format):
     _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref, 1e-3)
 
 
+def _forward_kl_forward_backward_torch(logits: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor | None):
+    # Manual reference: sum over vocab then average over all tokens (not just valid ones).
+    # Forward KL: KL(p||q) where p=teacher, q=student
+    logits = logits.detach().requires_grad_(True)
+    per_sample = torch.nn.functional.kl_div(
+        torch.log_softmax(logits.float(), dim=-1),
+        torch.log_softmax(target.float(), dim=-1),
+        reduction="none",
+        log_target=True,
+    ).sum(dim=-1)
+    if loss_mask is not None:
+        per_sample = per_sample * loss_mask
+    output = per_sample.sum() / per_sample.numel()
+    output.backward()
+    return output, logits.grad
+
+
+@requires_cuda
+@pytest.mark.slow
+# TODO: Support the same parameterization as above in the reference implementation.
+@pytest.mark.parametrize("loss_masking", [False, True])
+@pytest.mark.parametrize("target_format", (TargetFormat.logits,))
+def test_forward_kl(loss_masking, target_format):
+    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
+    out_ref, grad_ref = _forward_kl_forward_backward_torch(logits, target, loss_mask)
+    out, grad = forward_kl_forward_backward(
+        logits=logits,
+        target=target,
+        loss_mask=loss_mask,
+        grad_output=1.0,
+        target_format=TargetFormat.logits,
+    )
+    _compare_cross_entropy_outputs(out, out_ref, True, grad, grad_ref, 1e-3)
+
+
 def _mp_worker(rank: int, world_size: int, init_method: str, fn_args: tuple):
     try:
         torch.distributed.init_process_group(backend="gloo", rank=rank, world_size=world_size, init_method=init_method)
@@ -191,7 +230,7 @@ def _compare_parallel_cross_entropy(
 
 def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGroup):
     success = True
-    for function in (reverse_kl_forward_backward, cross_entropy_forward_backward):
+    for function in (reverse_kl_forward_backward, forward_kl_forward_backward, cross_entropy_forward_backward):
         for target_format in (TargetFormat.logits,):
             for loss_masking in [False, True]:
                 try:

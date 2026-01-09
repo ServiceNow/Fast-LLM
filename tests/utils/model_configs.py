@@ -196,37 +196,6 @@ MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 init_1 = {"initialization": {"type": "normal", "std": 2**-5.5}}
 # Needed to match Megatron (init_1 / (2 * num_layers) ** 0.5)
 init_2 = {"initialization": {"type": "normal", "std": 2**-6.5}}
-base_model = {
-    "embeddings": {
-        "word_embeddings": init_1,
-        "position_embeddings": {"enabled": True, **init_1},
-        "num_position_embeddings": 512,
-        "vocab_size": MODEL_TEST_VOCAB_SIZE,
-    },
-    "decoder": {
-        "block": {
-            "mixer": {
-                "query_layer": {"weight": init_1},
-                "key_layer": {"weight": init_1},
-                "value_layer": {"weight": init_1},
-                "dense_layer": {"weight": init_2},
-                "heads": 8,
-                "head_groups": 8,
-                "head_size": 32,
-                # "cross_document_attention":False,
-            },
-            "mlp": {
-                "layer_1": {"weight": init_1},
-                "layer_2": {"weight": init_2},
-                "intermediate_size": 1024,
-            },
-        },
-        "num_blocks": 2,
-    },
-    "head": {"output_weight": init_1},
-    "hidden_size": 256,
-    "tied_embedding_weight": True,
-}
 
 MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
@@ -248,7 +217,42 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "timeout": 30,
         },
         "model": {
-            "base_model": base_model,
+            "base_model": {
+                "embeddings": {
+                    "word_embeddings": init_1,
+                    "position_embeddings": {"enabled": True, **init_1},
+                    "num_position_embeddings": 512,
+                    "vocab_size": MODEL_TEST_VOCAB_SIZE,
+                },
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "query_layer": {"weight": init_1},
+                            "key_layer": {"weight": init_1},
+                            "value_layer": {"weight": init_1},
+                            "dense_layer": {"weight": init_2},
+                            "heads": 8,
+                            "head_groups": 8,
+                            "head_size": 32,
+                            # "cross_document_attention":False,
+                        },
+                        "mlp": {
+                            "layer_1": {"weight": init_1},
+                            "layer_2": {"weight": init_2},
+                            "intermediate_size": 1024,
+                        },
+                    },
+                    "num_blocks": 2,
+                },
+                "head": {
+                    "output_weight": init_1,
+                    "losses": {
+                        "lm_loss": {"type": "cross_entropy"},
+                    },
+                },
+                "hidden_size": 256,
+                "tied_embedding_weight": True,
+            },
             "multi_stage": {
                 "debug_param_init": _LOG_LEVEL,
                 "debug_layer_outputs": _LOG_LEVEL,
@@ -559,6 +563,12 @@ _update_and_add_testing_config(
     "mistral_distill_logits",
     updates={
         ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("model", "base_model", "head", "losses"): {
+            "distillation_loss": {
+                "type": "reverse_kl_distillation",
+                "factor": 1.0,
+            },
+        },
         ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
@@ -584,31 +594,9 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     "mistral_distill_logits",
-    "mistral_reverse_kl",
-    updates={
-        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
-    },
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
-    },
-    compare_factor=2,
-    # Modes not supported with reference models
-    # TODO: ce4: cross_entropy_splits is broken, skipping it for now since its low priority and almost never used
-    skip_tests=("sdp", "ms", "pp", "ce4"),
-)
-
-_update_and_add_testing_config(
-    "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
-        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
+        ("model", "base_model", "head", "losses", "distillation_loss", "factor"): 0.001,
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
         ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
         ("reference_models"): {
