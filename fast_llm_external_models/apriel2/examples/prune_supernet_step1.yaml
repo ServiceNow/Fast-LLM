@@ -1,0 +1,53 @@
+# Example: Prune homogeneous supernet to heterogeneous network (Step 1 of 2)
+#
+# This is the first step of a two-surgery workflow for pruning a stochastic
+# supernet to a heterogeneous network where each layer uses a single mixer type.
+#
+# Step 1: Convert fixed -> pattern and set main_mixer_name per block type
+# Step 2: Unwrap stochastic to non-stochastic (prune_supernet_step2.yaml)
+#
+# Why two steps?
+# --------------
+# When unwrapping stochastic -> non-stochastic, the system uses main_mixer_name
+# as the weight source. To extract different sub-mixers for different layers,
+# we first set the appropriate main_mixer_name per block type, then unwrap.
+#
+# Source model:
+#   - Fixed decoder with stochastic mixer
+#   - Mixer has sub-mixers: attention, sliding_window, gdn, kda
+#
+# After step 1:
+#   - Pattern decoder with 4 block types, still stochastic
+#   - Each block type has different main_mixer_name
+#
+# After step 2:
+#   - Pattern decoder with 4 block types, non-stochastic
+#   - Each block uses its designated mixer with preserved weights
+#
+# Usage (chained):
+#   python convert.py supernet_checkpoint output/ \
+#       -s examples/prune_supernet_step1.yaml \
+#       -s examples/prune_supernet_step2.yaml
+
+decoder:
+  type: pattern
+  # Pattern repeats to fill all layers
+  # With 24 layers: 0=attn, 1=gdn, 2=kda, 3=swa, 4=attn, ...
+  pattern: [attn_block, gdn_block, kda_block, swa_block]
+
+  blocks:
+    attn_block:
+      mixer:
+        main_mixer_name: attention
+
+    gdn_block:
+      mixer:
+        main_mixer_name: gdn
+
+    kda_block:
+      mixer:
+        main_mixer_name: kda
+
+    swa_block:
+      mixer:
+        main_mixer_name: sliding_window
