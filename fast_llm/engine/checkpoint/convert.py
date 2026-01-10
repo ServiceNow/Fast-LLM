@@ -8,7 +8,6 @@ from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
-from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -64,8 +63,8 @@ class ConvertConfig(RunnableConfig):
         logger.info(f"Loading {self.input.format} checkpoint from {self.input.path}...")
         model = model_class.from_pretrained(
             self.input,
+            {("distributed", "use_cuda"): not self.use_cpu},
             mode=StageMode.weights,
-            use_cpu=self.use_cpu,
             stage_filter=stage_filter,
         )
         logger.info(f"Saving {output.format} checkpoint to {output.path}...")
@@ -78,9 +77,6 @@ class ConvertConfig(RunnableConfig):
         # TODO: Set logging in tests
         logging.getLogger().setLevel(logging.INFO)
         self.to_logs()
-        # Disable Triton to convert model on CPU
-        if self.use_cpu:
-            TritonConfig.TRITON_ENABLED = False
         # Skip on exist_ok=False if the model has already been processed
         if not self.exist_ok and (self.output.path / "ok").exists():
             logger.info(
@@ -100,8 +96,8 @@ class ConvertConfig(RunnableConfig):
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(
                 self.input.to_copy({"model_weights": False}),
+                {("distributed", "use_cuda"): not self.use_cpu},
                 mode=StageMode.off_device,
-                use_cpu=self.use_cpu,
             )
             stages_per_step = math.ceil(self.layers_per_step / model._config.multi_stage.layers_per_stage)
             num_stages = len(model.stages)

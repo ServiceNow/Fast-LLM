@@ -85,7 +85,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         optimizer_state_names: tuple[str, ...] | None = None,
         # setup: bool = True,
         mode: StageMode = StageMode.training,
-        use_cpu: bool = False,
         stage_filter: set | None = None,
         **kwargs,
     ) -> typing.Self:
@@ -104,7 +103,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
             optimizer_state_names=optimizer_state_names,
             setup=True,
             mode=mode,
-            use_cpu=use_cpu,
             stage_filter=stage_filter,
         )
 

@@ -222,7 +222,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
         attn_output = torch.bmm(
-            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
+            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk).to(value.dtype), value
         )
 
         if self._local_head_groups == 1:

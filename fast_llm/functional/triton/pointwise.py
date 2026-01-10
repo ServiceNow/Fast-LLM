@@ -32,7 +32,7 @@ def triton_copy(
     """
     A triton implementation of tensor copying (`torch.Tensor.copy_()`).
     """
-    if not TritonConfig.TRITON_ENABLED:
+    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
         return out.copy_(input_)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()
@@ -65,7 +65,7 @@ def triton_fill(
     """
     A faster triton implementation of tensor copying (`torch.Tensor.fill_()`).
     """
-    if not TritonConfig.TRITON_ENABLED:
+    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
         return input_.fill_(value)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()
@@ -106,7 +106,7 @@ def triton_add(
     """
     A faster triton implementation of tensor addition (`torch.Tensor.add()`).
     """
-    if not TritonConfig.TRITON_ENABLED:
+    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
         return torch.add(input_, other, out=out)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()

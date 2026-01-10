@@ -187,7 +187,7 @@ def triton_normalization_forward(
     n_cols = weight.numel()
 
     output = torch.empty_like(input_, dtype=weight.dtype)
-    inv_var = torch.empty(n_rows, dtype=torch.float32, device="cuda")
+    inv_var = torch.empty(n_rows, dtype=torch.float32, device=input_.device)
 
     block_size = triton.next_power_of_2(n_cols)
     assert block_size * input_.element_size() <= TritonConfig.MAX_BLOCK_SIZE_BYTES

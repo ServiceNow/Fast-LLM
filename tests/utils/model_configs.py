@@ -8,6 +8,7 @@ import re
 import typing
 
 import pytest
+import torch
 import transformers
 
 from fast_llm.config import set_nested_dict_value
@@ -97,6 +98,7 @@ class ModelTestingConfig:
     auto_model_class: type["transformers.models.auto.auto_factory._BaseAutoModelClass"] = (
         transformers.AutoModelForCausalLM
     )
+    requires_cuda: bool = False
 
     def __post_init__(self):
         _, config, _, _ = self.get_dataset(config_only=True)
@@ -259,10 +261,11 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "reproducible_init": True,
                 "timeout": 20,
                 "backend": "nccl",
+                "use_cuda": torch.cuda.is_available(),
             },
         },
         "batch": {"batch_size": 8, "sequence_length": 512},
-        "data": {},
+        "data": {"sampling": {"gpu": torch.cuda.is_available()}},
         "optimizer": {"learning_rate": {"base": 0.0001}},
     },
     megatron_args=[
@@ -698,6 +701,7 @@ _update_and_add_testing_config(
     compare_factor=2.0,
     # Micro-sequence split not supported.
     skip_tests=("sdp", "ms"),
+    requires_cuda=True,
 )
 
 _update_and_add_testing_config(
@@ -792,6 +796,7 @@ _update_and_add_testing_config(
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
     skip_tests=("sdp", "ms", TP_NO_STP),
+    requires_cuda=True,
 )
 
 _update_and_add_testing_config(
@@ -914,6 +919,7 @@ _update_and_add_testing_config(
     # Pipeline-parallel gives a different mixer selection.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
     skip_tests=("sdp", "ms", "pp", TP_NO_STP),
+    requires_cuda=True,
 )
 
 
@@ -957,6 +963,7 @@ _update_and_add_testing_config(
     # Micro-sequence split and sequence-first not supported for Mamba.
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
     skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
+    requires_cuda=True,
 )
 
 
@@ -996,6 +1003,7 @@ _update_and_add_testing_config(
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
     skip_tests=("sdp", "ms", TP_NO_STP),
+    requires_cuda=True,
 )
 
 
@@ -1013,6 +1021,8 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
         model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]
+        if model_config.requires_cuda and not torch.cuda.is_available():
+            item.add_marker(pytest.mark.skip(reason=f"Cuda not available."))
         for group in groups:
             action = model_config.groups[group]
             if action == ModelTestingGroupAction.main:

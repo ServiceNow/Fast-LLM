@@ -7,7 +7,6 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.utils import Assert
 from tests.utils.model_configs import ModelTestingGroup
-from tests.utils.utils import requires_cuda
 
 
 def _get_model(config_dict: dict, model_type: str = "gpt") -> FastLLMModel:
@@ -18,7 +17,6 @@ def _get_model(config_dict: dict, model_type: str = "gpt") -> FastLLMModel:
     return model
 
 
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_frozen_weights(model_testing_config):
     model_testing_config.get_dataset()

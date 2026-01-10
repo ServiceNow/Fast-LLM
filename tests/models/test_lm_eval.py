@@ -7,7 +7,6 @@ from tests.utils.dataset import download_santacoder_tokenizer
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import TOKENIZER_PATH
 from tests.utils.model_configs import ModelTestingGroup
-from tests.utils.utils import requires_cuda
 
 # NOTE: These tests only verify that the functionality runs without crashing.
 # NOTE: The tokenizer is from a LLaMA-style model, which may not be suitable for all models,
@@ -55,7 +54,6 @@ def get_lm_eval_config(tokenizer_path, monkeypatch):
 # "gsm8k,xnli_en,wikitext"
 
 
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
     run_test_script_for_all_models(
@@ -76,7 +74,6 @@ def copy_training_output(run_test_script_base_path: pathlib.Path):
     return do_copy_training_output
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_evaluation_last_checkpoint(
@@ -91,7 +88,6 @@ def test_lm_eval_evaluation_last_checkpoint(
     run_test_script_for_all_models(distributed_testing_config=distributed_testing_config, runnable_type="evaluate")
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_evaluation_from_pretrained(
@@ -111,7 +107,6 @@ def test_lm_eval_evaluation_from_pretrained(
 
 
 # TODO: rewrite for a new distributed test function
-# @requires_cuda
 # @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
 # @pytest.mark.model_testing_group(ModelTestingGroup.generate, ModelTestingGroup.distributed)
 # def test_lm_eval_in_training_dp2(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):

@@ -191,3 +191,21 @@ class EventType(str, enum.Enum):
     send = "send"
     recv = "recv"
     pipe_wait_compute = "pipe_wait_compute"
+
+
+class MockStream:
+    stream_id: int = 0
+
+    def wait_stream(self, stream):
+        pass
+
+    def __eq__(self, other):
+        return isinstance(other, MockStream)
+
+
+class MockEvent:
+    def record(self, stream=None):
+        pass
+
+    def wait(self):
+        pass
