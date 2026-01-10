@@ -357,7 +357,6 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
             intermediate_2_ = intermediate_2
         intermediate_2_.backward(grad_intermediate_2)
         grad_intermediate_1 = intermediate_1.grad
-        print("AAAAA", intermediate_2 is None, grad_intermediate_1)
 
     # Layer 2 parameter grad
     del grad_intermediate_2, intermediate_1

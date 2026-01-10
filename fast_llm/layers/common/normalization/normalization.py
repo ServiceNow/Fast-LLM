@@ -183,6 +183,12 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
     def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config, hidden_dim, lr_scale)
         implementation = self._config.implementation
+        print(
+            "IKUEGBNHIUWGBN",
+            implementation,
+            TritonConfig.TRITON_ENABLED,
+            (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered,
+        )
         if implementation == NormalizationImplementation.auto:
             if (
                 _fast_normalization_available
@@ -190,7 +196,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
                 and not self._config.zero_centered
             ):
                 implementation = NormalizationImplementation.fast
-            elif TritonConfig.TRITON_ENABLED or self._config.zero_centered:
+            elif (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered:
                 log_main_rank("Fast layer norm unavailable, using backup triton implementation.")
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
@@ -199,6 +205,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
             else:
                 log_main_rank("Fast and fused layer norm unavailable, using backup pytorch implementation.")
                 implementation = NormalizationImplementation.torch
+        print("BNHTHERDGRG", implementation)
         if self._config.zero_centered:
             assert implementation == NormalizationImplementation.triton
         if implementation == NormalizationImplementation.triton:
@@ -258,8 +265,14 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         super().__init__(config, hidden_dim, lr_scale)
         assert not hidden_dim.is_parallel
         implementation = self._config.implementation
+        print(
+            "IKUEGBNHIUWGBN",
+            implementation,
+            TritonConfig.TRITON_ENABLED,
+            (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered,
+        )
         if implementation == NormalizationImplementation.auto:
-            if TritonConfig.TRITON_ENABLED or self._config.zero_centered:
+            if (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered:
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
                 log_main_rank("Triton RMS norm unavailable, using fused implementation.")
@@ -267,6 +280,7 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
             else:
                 log_main_rank("Fused RMS norm unavailable, using backup implementation.")
                 implementation = NormalizationImplementation.torch
+        print("BNHTHERDGRG", implementation)
         if self._config.zero_centered:
             assert implementation == NormalizationImplementation.triton
         if implementation == NormalizationImplementation.triton:

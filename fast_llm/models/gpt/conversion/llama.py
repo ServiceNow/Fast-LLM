@@ -15,7 +15,6 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
-from fast_llm.layers.attention.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -314,16 +313,12 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.rotary.complex_format:
-            query = convert_rotary_complex_to_real(query[:], self._config.head_size, 0)
         return (query,)
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.rotary.complex_format:
-            query = convert_rotary_real_to_complex(query[:], self._config.head_size, 0)
         return (query,)
 
 
@@ -336,16 +331,12 @@ class KeyValueWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (key_value,) = weight
         key, value = key_value[:].chunk(2)
-        if self._config.rotary.complex_format:
-            key = convert_rotary_complex_to_real(key, self._config.head_size, 0)
         return key, value
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         key, value = weight
-        if self._config.rotary.complex_format:
-            key = convert_rotary_real_to_complex(key[:], self._config.head_size, 0)
         key_value = torch.cat([key[:], value[:]])
         return (key_value,)
 

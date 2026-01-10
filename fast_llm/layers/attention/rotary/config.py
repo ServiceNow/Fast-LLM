@@ -58,6 +58,13 @@ class DefaultRotaryConfig(RotaryConfig):
         hint=FieldHint.architecture,
     )
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "complex_format" in default:
+            Assert.is_(default["complex_format"], False)
+            del default["complex_format"]
+        return super()._from_dict(default, strict=strict)
+
     def _get_configurable_class(self) -> "type[DefaultRotary]":
         from fast_llm.layers.attention.rotary.rotary import DefaultRotary
 

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class ConvertConfig(RunnableConfig):
     input: CheckpointLoadConfig = Field()
     output: CheckpointSaveConfig = Field()
+    use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
     model: type[FastLLMModelConfig] = Field(default=None)
@@ -62,6 +63,7 @@ class ConvertConfig(RunnableConfig):
         logger.info(f"Loading {self.input.format} checkpoint from {self.input.path}...")
         model = model_class.from_pretrained(
             self.input,
+            {("distributed", "use_cuda"): not self.use_cpu},
             mode=StageMode.weights,
             stage_filter=stage_filter,
         )
@@ -94,6 +96,7 @@ class ConvertConfig(RunnableConfig):
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(
                 self.input.to_copy({"model_weights": False}),
+                {("distributed", "use_cuda"): not self.use_cpu},
                 mode=StageMode.off_device,
             )
             stages_per_step = math.ceil(self.layers_per_step / model._config.multi_stage.layers_per_stage)

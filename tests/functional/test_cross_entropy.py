@@ -66,7 +66,6 @@ def _compare_cross_entropy_outputs(
 @pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
 def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_masking, target_format):
     # TODO: Test tensor-parallel implementation.
-    assert TritonConfig.TRITON_ENABLED
     logits, target, loss_mask = _get_cross_entropy_inputs(num_columns, loss_masking, target_format)
     kwargs = {
         "logits": logits,
@@ -86,6 +85,7 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
 
     if not torch.cuda.is_available():
         return
+    assert TritonConfig.TRITON_ENABLED
     if num_columns > 65536:
         with pytest.raises(AssertionError):
             cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
