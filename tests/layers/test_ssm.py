@@ -102,7 +102,9 @@ def test_gdn():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available")
+@pytest.mark.skipif(
+    kda_module.chunk_kda is None or not torch.cuda.is_available(), reason="KDA fused kernels not available"
+)
 def test_kda():
     NUM_HEADS = 4
     HEAD_DIM = 4

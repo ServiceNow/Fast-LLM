@@ -12,7 +12,7 @@ try:
     from amp_C import multi_tensor_scale as _multi_tensor_scale  # noqa
     from apex.multi_tensor_apply import multi_tensor_applier as _multi_tensor_applier  # noqa
 
-    _apex_available = True
+    _apex_available = torch.cuda.is_available()
 except ImportError:
     _apex_available = False
 

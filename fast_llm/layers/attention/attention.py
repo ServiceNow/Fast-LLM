@@ -22,7 +22,7 @@ try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
     from flash_attn.flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
 
-    _flash_available = True
+    _flash_available = torch.cuda.is_available()
 except ImportError:
     _flash_available = False
 

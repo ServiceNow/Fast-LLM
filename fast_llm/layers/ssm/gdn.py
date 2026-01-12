@@ -22,12 +22,12 @@ from fast_llm.utils import div
 logger = logging.getLogger(__name__)
 
 try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
-except ImportError:
-    chunk_gated_delta_rule = None
 
-
-is_fast_path_available = chunk_gated_delta_rule is not None
+    _fast_path_available = torch.cuda.is_available()
+except (ImportError, RuntimeError):
+    _fast_path_available = False
 
 
 def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
@@ -240,7 +240,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         self.chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
 
-        if not is_fast_path_available:
+        if not _fast_path_available:
             logger.warning(
                 "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
             )
