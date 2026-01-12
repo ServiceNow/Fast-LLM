@@ -12,7 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
-from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -263,7 +263,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             if phase != PhaseType.inference:
                 labels_begin = tokens_begin + 1
                 labels_end = tokens_end + self._config.head.max_prediction_distance
-
                 labels = batch.tokens.crop(labels_begin, labels_end).tokens
 
                 if batch.loss_masking_spans is not None:
@@ -272,12 +271,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
                         for begin, end in loss_masking_spans:
                             loss_mask[sample_index, begin:end] = False
-                    if (
-                        self._config.head.distillation_model is not None
-                        or self._config.decoder.block.distillation_model is not None
-                    ):
-                        kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     labels = torch.where(loss_mask, labels, -100)
+
+                if (
+                    self._config.head.requires_loss_masks is not None
+                ):  # loss masks only used for distillation currently
+                    # loss masks contain all three sources of masking: padding, user-defined spans, image placeholders
+                    kwargs[LanguageModelKwargs.loss_mask] = labels >= 0
 
                 kwargs[LanguageModelKwargs.labels] = (
                     labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels

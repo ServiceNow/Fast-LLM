@@ -10,11 +10,10 @@ from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, Para
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
-from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.language_model.kwargs import LanguageModelKwargs, TargetsKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -25,6 +24,28 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
     from fast_llm.layers.language_model.language_model import LanguageModel
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
+
+
+class TargetsKwargs:
+    lm_target = "preprocessed_lm_target"
+    dpo_target = "preprocessed_dpo_target"
+    reference_model_logits = "reference_model_logits"
+    dpo_reference_model_logits = "dpo_reference_model_logits"
+
+
+class LanguageModelKwargs(BlockKwargs):
+    token_ids = "token_ids"
+    position_ids = "position_ids"
+    token_map = "token_map"
+    sample_map = "sample_map"
+    embedding_map = "embedding_map"
+    # TODO: These are generic
+    labels = "labels"
+    phase = "phase"
+    chosen_spans = "chosen_spans"
+    rejected_spans = "rejected_spans"
+    loss_mask = "loss_mask"
+    mask_inputs = "mask_inputs"
 
 
 def _format_name(name: str) -> str:
@@ -609,6 +630,10 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     @property
     def enable_distillation(self) -> bool:
         return ForwardKLLossConfig in self._loss_configs.keys() or ReverseKLLossConfig in self._loss_configs.keys()
+
+    @property
+    def requires_loss_masks(self) -> bool:
+        return self.enable_distillation
 
     @property
     def distillation_model(self) -> str | None:

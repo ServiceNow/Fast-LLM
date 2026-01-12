@@ -10,8 +10,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig
-from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
+from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 

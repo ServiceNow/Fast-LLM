@@ -22,9 +22,9 @@ from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
+    LanguageModelKwargs,
     _format_name,
 )
-from fast_llm.layers.language_model.kwargs import LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
