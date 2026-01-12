@@ -243,7 +243,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         # TODO: Option to update with reduce (needs per-layer grad_norm and update_successful)
         # TODO: Avoid blocking synchronizations: async transfer, turn noop_flag into a real noop flag
         #  (uncomment line in apex).
-        update_successful = self._optimizer.step(metrics)
+        # Pass iteration + 1 as lr_step since the LR schedule should be based on training progress
+        # (completed_steps), not optimizer history (which may differ when loading from checkpoint).
+        update_successful = self._optimizer.step(metrics, lr_step=iteration + 1)
 
         if self._multi_stage.config.multi_stage.debug_tensor_parallel and self._distributed.tensor_group is not None:
             for stage in self._stages_on_device:

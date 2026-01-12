@@ -87,7 +87,7 @@ class Optimizer:
         return grad_norm
 
     @torch.no_grad()
-    def step(self, metrics: dict | None = None) -> bool:
+    def step(self, metrics: dict | None = None, lr_step: int | None = None) -> bool:
         for group in self._param_groups:
             for grad in group.grads:
                 self._grad_scaler.unscale_and_check_nans(grad)
@@ -96,7 +96,10 @@ class Optimizer:
         update_successful = self._grad_scaler.update_successful()
         if update_successful:
             self._optimizer_step += 1
-            lr = self._lr_schedule(self._optimizer_step)
+            # Use lr_step for LR schedule if provided, otherwise fall back to _optimizer_step.
+            # This allows decoupling the LR schedule (based on training progress) from
+            # Adam's bias correction (based on optimizer history).
+            lr = self._lr_schedule(lr_step if lr_step is not None else self._optimizer_step)
             grad_norm = (
                 self._clip_grad_norm().item()
                 if self._config.gradient_norm_clipping > 0.0 or metrics is not None
