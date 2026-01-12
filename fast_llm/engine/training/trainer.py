@@ -518,14 +518,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 metadata = self._multi_stage.load_checkpoint(self._config.pretrained)
 
                 if self._config.pretrained.optimizer_state and metadata is not None:
-                    # Load optimizer step and completed_steps from checkpoint metadata
+                    # Load optimizer state (including step) from checkpoint metadata
                     # to ensure Adam bias correction uses the correct step count.
                     self._optimizer.load(metadata["optimizer"])
-                    self._completed_steps = metadata.get("completed_steps", 0)
                 else:
                     if not self._is_evaluation_only:
                         self._optimizer.reset_state()
-                    self._completed_steps = 0
+                # Always reset completed_steps for pretrained loading so that
+                # LR schedule restarts and training runs for train_iters.
+                self._completed_steps = 0
             else:
                 if self._is_evaluation_only:
                     raise ValueError(
