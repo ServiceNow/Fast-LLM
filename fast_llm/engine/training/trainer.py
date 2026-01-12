@@ -515,7 +515,17 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     f" ({'loading' if self._config.pretrained.optimizer_state else 'resetting'}"
                     f" optimizer state)..."
                 )
-                self._multi_stage.load_checkpoint(self._config.pretrained)
+                metadata = self._multi_stage.load_checkpoint(self._config.pretrained)
+
+                if self._config.pretrained.optimizer_state and metadata is not None:
+                    # Load optimizer step and completed_steps from checkpoint metadata
+                    # to ensure Adam bias correction uses the correct step count.
+                    self._optimizer.load(metadata["optimizer"])
+                    self._completed_steps = metadata.get("completed_steps", 0)
+                else:
+                    if not self._is_evaluation_only:
+                        self._optimizer.reset_state()
+                    self._completed_steps = 0
             else:
                 if self._is_evaluation_only:
                     raise ValueError(
@@ -524,9 +534,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 log_main_rank(f"Initializing training state from scratch...")
                 self._multi_stage.initialize_weights()
 
-            if not self._is_evaluation_only:
-                self._optimizer.reset_state()
-            self._completed_steps = 0
+                if not self._is_evaluation_only:
+                    self._optimizer.reset_state()
+                self._completed_steps = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
             self._load_checkpoint(self._config.training.checkpoint, last_iteration)
@@ -544,7 +554,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
                 reference_model.fast_llm_model.initialize_weights()
 
-        Assert.eq(self._completed_steps, last_iteration or 0)
+        if last_iteration is not None:
+            Assert.eq(self._completed_steps, last_iteration)
         assert self._multi_stage._is_loaded  # noqa
 
     def _save_checkpoint(
