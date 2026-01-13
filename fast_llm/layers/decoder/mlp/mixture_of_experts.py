@@ -13,7 +13,7 @@ from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, auxiliary_z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.decoder.mlp.mlp import MLPBase
@@ -102,7 +102,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
 
         # Apply z_loss if applicable
         if self._config.z_loss_coefficient > 0.0:
-            logits = z_loss(
+            logits = auxiliary_z_loss(
                 logits,
                 self._config.z_loss_coefficient,
                 self.training,

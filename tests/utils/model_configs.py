@@ -246,12 +246,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                     },
                     "num_blocks": 2,
                 },
-                "head": {
-                    "output_weight": init_1,
-                    "losses": {
-                        "lm_loss": {"type": "cross_entropy"},
-                    },
-                },
+                "head": {"output_weight": init_1},
                 "hidden_size": 256,
                 "tied_embedding_weight": True,
             },

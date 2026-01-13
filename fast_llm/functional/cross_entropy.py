@@ -75,7 +75,7 @@ def _fused_softmax(
     return exp_logits / sum_exp_logits
 
 
-# @torch.compile
+@torch.compile
 def _fused_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -85,7 +85,7 @@ def _fused_cross_entropy_forward_backward(
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
     teacher_softmax_temperature: float = 1.0,
-    return_target_entropy: bool = False,
+    return_kl_loss: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -108,14 +108,14 @@ def _fused_cross_entropy_forward_backward(
         loss_mask = target >= 0
         if group is None:
             # Keep values within range for scatter and gather ops to work.
-            target = target * loss_mask
+            target_masked = target * loss_mask
             target_mask = None
         else:
             # Mask the target (fused)
             # TODO: Could mask earlier on cpu or overlap with reduce?
             vocab_start_index = logits.size(-1) * group.rank()
             target_mask = (target >= vocab_start_index) * (target < vocab_start_index + logits.size(-1))
-            target = (target - vocab_start_index) * target_mask
+            target_masked = (target - vocab_start_index) * target_mask
     else:
         # Target should be tensor-parallel already, no further manipulation needed.
         target_mask = None
@@ -128,10 +128,10 @@ def _fused_cross_entropy_forward_backward(
         # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
         if target_format == TargetFormat.labels:
             grad_base = exp_logits.scatter_add(
-                1, target, -sum_exp_logits if target_mask is None else -(target_mask * sum_exp_logits)
+                1, target_masked, -sum_exp_logits if target_mask is None else -(target_mask * sum_exp_logits)
             )
         else:
-            grad_base = exp_logits - sum_exp_logits * target
+            grad_base = exp_logits - sum_exp_logits * target_masked
 
         grad = grad_base.mul((grad_output / logits.size(0)) / sum_exp_logits)
         if logits_scale_factor != 1.0:
@@ -142,13 +142,13 @@ def _fused_cross_entropy_forward_backward(
 
     # loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
     if target_format == TargetFormat.labels:
-        predicted_logits = logits_norm.gather(1, target)
+        predicted_logits = logits_norm.gather(1, target_masked)
         if group is not None:
             predicted_logits = target_mask * predicted_logits
 
             all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
     else:
-        predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
+        predicted_logits = (target_masked * logits_norm).sum(dim=-1, keepdim=True)
     if group is not None and target_format != TargetFormat.labels:
         # this is needed because on each rank we calculate log Z - sum_i t_i * z_i, where z_i is logit.
         # Then we average on line 160: 1/K sum_ranks (log Z - sum_i t_i * z_i)
@@ -162,7 +162,7 @@ def _fused_cross_entropy_forward_backward(
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
-    if return_target_entropy:
+    if return_kl_loss:
         if target_format == TargetFormat.logits:
             teacher_log_prob = target_logits - sum_exp_target_logits.log()
         else:
@@ -173,7 +173,7 @@ def _fused_cross_entropy_forward_backward(
         target_entropy = target_entropy.mean()
         if group is not None:
             all_reduce(target_entropy, op=ReduceOp.SUM, group=group)
-        return loss, grad, target_entropy
+        loss -= target_entropy
 
     return loss, grad
 
@@ -249,10 +249,7 @@ def _reverse_kl_forward_backward(
     target: torch.Tensor,
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
-    target_format: TargetFormat,
     group: ProcessGroup | None = None,
-    logits_scale_factor: float = 1.0,
-    teacher_softmax_temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Reverse KL using PyTorch's native kl_div function.
@@ -264,13 +261,6 @@ def _reverse_kl_forward_backward(
         loss_mask: [BxS] or [B, S] or None
         ...
     """
-    Assert.eq(
-        teacher_softmax_temperature,
-        1,
-        msg="Teacher softmax temperature must be 1 for sequence-tensor-parallel reverse KL",
-    )
-    Assert.eq(logits_scale_factor, 1, msg="Logits scale factor must be 1 for sequence-tensor-parallel reverse KL")
-    Assert.eq(target.shape, logits.shape)
     assert target.dtype.is_floating_point, target.dtype
     if loss_mask is not None:
         Assert.eq(loss_mask.shape, logits.shape[:-1])
@@ -326,7 +316,6 @@ def reverse_kl_forward_backward(
     logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
-    sequence_parallel_logits: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Compute reverse KL divergence: KL(q||p) where q is the predicted distribution (student) and p is the target (teacher).
@@ -349,12 +338,13 @@ def reverse_kl_forward_backward(
         loss: Reverse KL divergence loss
         grad: Gradients w.r.t. logits
     """
-
-    if sequence_parallel_logits:
-        # TODO: see hybrid dev branch where it is implemented
-        raise NotImplementedError("Sequence-parallel reverse KL is not implemented yet, set vocab_parallel true")
-
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+    Assert.eq(
+        teacher_softmax_temperature,
+        1,
+        msg="Teacher softmax temperature must be 1 for reverse KL",
+    )
+    Assert.eq(logits_scale_factor, 1, msg="Logits scale factor must be 1 for reverse KL")
     Assert.eq(target.shape, logits.shape)
     assert target.dtype.is_floating_point, target.dtype
     if loss_mask is not None:
@@ -366,9 +356,6 @@ def reverse_kl_forward_backward(
         target=target,
         loss_mask=loss_mask,
         grad_output=grad_output,
-        logits_scale_factor=logits_scale_factor,
-        target_format=target_format,
-        teacher_softmax_temperature=teacher_softmax_temperature,
         group=group,
     )
     return distillation_loss, distillation_grad
@@ -383,7 +370,6 @@ def forward_kl_forward_backward(
     logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
-    sequence_parallel_logits: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Compute forward KL divergence: KL(p||q) where p is the target distribution (teacher) and q is the predicted (student).
@@ -408,7 +394,11 @@ def forward_kl_forward_backward(
     """
     assert target_format == TargetFormat.logits, "Forward KL only supports logits format"
     Assert.eq(target.shape, logits.shape)
-    distillation_loss, distillation_grad, teacher_entropy = _fused_cross_entropy_forward_backward(
+    assert target.dtype.is_floating_point, target.dtype
+    if loss_mask is not None:
+        Assert.eq(loss_mask.shape, logits.shape[:-1])
+
+    return _fused_cross_entropy_forward_backward(
         logits=logits,
         target=target,
         loss_mask=loss_mask,
@@ -417,8 +407,5 @@ def forward_kl_forward_backward(
         target_format=target_format,
         group=group,
         teacher_softmax_temperature=teacher_softmax_temperature,
-        return_target_entropy=True,
+        return_kl_loss=True,
     )
-    distillation_loss -= teacher_entropy
-
-    return distillation_loss, distillation_grad

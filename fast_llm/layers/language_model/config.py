@@ -81,7 +81,7 @@ class LanguageModelLossConfig(Config):
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
@@ -118,13 +118,13 @@ class LanguageModelLossConfig(Config):
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
         sequence_parallel_logits: bool | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
     ) -> dict[str, "torch.Tensor"]:
         pass
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "cross_entropy"})
-class CrossEntropyLMLossConfig(LanguageModelLossConfig):
+class CrossEntropyLanguageModelLossConfig(LanguageModelLossConfig):
     _name: typing.ClassVar[str] = "CE_loss"
     _abstract: typing.ClassVar[bool] = False
 
@@ -134,10 +134,10 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
         hint=FieldHint.performance,
     )
 
-    teacher_softmax_temperature: float = Field(
+    temperature: float = Field(
         default=1.0,
         hint=FieldHint.optional,
-        desc="Temperature for teacher softmax (used in distillation losses).",
+        desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
     )
 
@@ -147,7 +147,7 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
         sequence_parallel_logits: bool | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
     ) -> dict[str, "torch.Tensor"]:
         if kwargs is None:
             kwargs = {}
@@ -202,19 +202,19 @@ class CrossEntropyLMLossConfig(LanguageModelLossConfig):
             group=group,
             implementation=implementation,
             logits_scale_factor=logits_scale_factor,
-            teacher_softmax_temperature=self.teacher_softmax_temperature,
+            teacher_softmax_temperature=self.temperature,
             target_format=TargetFormat.labels,
         )
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "forward_kl_distillation"})
-class ForwardKLLossConfig(LanguageModelLossConfig):
+class ForwardKLDistillationLossConfig(LanguageModelLossConfig):
     """Forward KL divergence KL(p||q) for distillation (mode-covering)."""
 
     _name: typing.ClassVar[str] = "FwdKL_loss"
     _abstract: typing.ClassVar[bool] = False
 
-    teacher_softmax_temperature: float = Field(
+    temperature: float = Field(
         default=1.0,
         hint=FieldHint.optional,
         desc="Temperature for teacher softmax.",
@@ -231,7 +231,7 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
         sequence_parallel_logits: bool | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
     ) -> dict[str, "torch.Tensor"]:
         if kwargs is None:
             kwargs = {}
@@ -250,7 +250,7 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
@@ -266,13 +266,13 @@ class ForwardKLLossConfig(LanguageModelLossConfig):
             grad_output=grad_output,
             group=group,
             logits_scale_factor=logits_scale_factor,
-            teacher_softmax_temperature=self.teacher_softmax_temperature,
+            teacher_softmax_temperature=self.temperature,
             target_format=TargetFormat.logits,
         )
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "reverse_kl_distillation"})
-class ReverseKLLossConfig(ForwardKLLossConfig):
+class ReverseKLLossConfig(ForwardKLDistillationLossConfig):
     """Reverse KL divergence KL(q||p) for distillation (mode-seeking)."""
 
     _name: typing.ClassVar[str] = "RevKL_loss"
@@ -287,7 +287,7 @@ class ReverseKLLossConfig(ForwardKLLossConfig):
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
@@ -304,7 +304,7 @@ class ReverseKLLossConfig(ForwardKLLossConfig):
             grad_output=grad_output,
             group=group,
             logits_scale_factor=logits_scale_factor,
-            teacher_softmax_temperature=self.teacher_softmax_temperature,
+            teacher_softmax_temperature=self.temperature,
             target_format=TargetFormat.logits,
         )
 
@@ -339,7 +339,7 @@ class DPOLossConfig(LanguageModelLossConfig):
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
         sequence_parallel_logits: bool | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
     ) -> dict[str, "torch.Tensor"]:
         if kwargs is None:
             kwargs = {}
@@ -365,7 +365,7 @@ class DPOLossConfig(LanguageModelLossConfig):
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
@@ -401,7 +401,7 @@ class ZLossConfig(LanguageModelLossConfig):
         prediction_distance: int | None = None,
         prediction_heads: int | None = None,
         sequence_parallel_logits: bool | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
     ) -> dict[str, "torch.Tensor"]:
         return {}
 
@@ -410,16 +410,20 @@ class ZLossConfig(LanguageModelLossConfig):
         logits: "torch.Tensor",
         loss_mask: "torch.Tensor | None",
         grad_output: float | None = None,
-        group: "ProcessGroup" = None,
+        group: "ProcessGroup|None" = None,
         logits_scale_factor: float | None = None,
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        from fast_llm.layers.common.auxiliary_loss import z_loss
+        from fast_llm.layers.common.auxiliary_loss import z_loss_forward_backward
 
-        return z_loss(
+        # TODO: ====== Support loss mask, vocab_parallel ======
+        assert loss_mask is None
+        assert group is None
+
+        return z_loss_forward_backward(
             logits=logits.flatten(0, -2),
-            grad_scale=grad_output,
+            grad_output=grad_output,
             logits_scale_factor=logits_scale_factor,
         )
 
@@ -549,13 +553,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    logit_z_loss: float = Field(
-        default=0.0,
-        desc="Regularize the logits with Z-loss.",
-        doc="We recommend 1e-4 for stability, as used for training PaLM.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
 
     def get_layer(
         self,
@@ -604,14 +601,17 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         with self._set_implicit_default():
             if not self.losses:
                 if "losses" not in self._explicit_fields:
-                    self.losses = {"lm_loss": CrossEntropyLMLossConfig()}
+                    self.losses = {"lm_loss": CrossEntropyLanguageModelLossConfig()}
         super()._validate()
         if DPOLossConfig in self._loss_configs:
-            assert ForwardKLLossConfig not in self._loss_configs.keys()  # currently don't support both
+            assert ForwardKLDistillationLossConfig not in self._loss_configs.keys()  # currently don't support both
             assert ReverseKLLossConfig not in self._loss_configs.keys()  # currently don't support both
-        if ForwardKLLossConfig in self._loss_configs.keys() and ReverseKLLossConfig in self._loss_configs.keys():
+        if (
+            ForwardKLDistillationLossConfig in self._loss_configs.keys()
+            and ReverseKLLossConfig in self._loss_configs.keys()
+        ):
             assert (
-                self._loss_configs[ForwardKLLossConfig].distillation_model
+                self._loss_configs[ForwardKLDistillationLossConfig].distillation_model
                 == self._loss_configs[ReverseKLLossConfig].distillation_model
             ), "Distillation losses must use the same teacher."
 
@@ -629,7 +629,10 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
 
     @property
     def enable_distillation(self) -> bool:
-        return ForwardKLLossConfig in self._loss_configs.keys() or ReverseKLLossConfig in self._loss_configs.keys()
+        return (
+            ForwardKLDistillationLossConfig in self._loss_configs.keys()
+            or ReverseKLLossConfig in self._loss_configs.keys()
+        )
 
     @property
     def requires_loss_masks(self) -> bool:
@@ -637,7 +640,7 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
 
     @property
     def distillation_model(self) -> str | None:
-        for loss_type in [ForwardKLLossConfig, ReverseKLLossConfig]:
+        for loss_type in [ForwardKLDistillationLossConfig, ReverseKLLossConfig]:
             if loss_type in self._loss_configs:
                 return self._loss_configs[loss_type].distillation_model
         return None
