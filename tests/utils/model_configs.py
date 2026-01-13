@@ -12,6 +12,7 @@ import transformers
 
 from fast_llm.config import set_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
@@ -149,15 +150,15 @@ class ModelTestingConfig:
 
     @functools.cached_property
     def distributed_backend(self):
-        return self.config_dict["model"]["distributed"]["backend"]
+        return DistributedBackend(self.config_dict["model"]["distributed"]["backend"])
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
         return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
 
 
-def _update_and_add_testing_config(
-    old_name: str,
-    new_name: str,
+def update_and_add_testing_config(
+    old_name: str | ModelTestingConfig,
+    new_name: str | None,
     *,
     model_type: str | None = None,
     updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -166,7 +167,7 @@ def _update_and_add_testing_config(
     **kwargs,
 ) -> ModelTestingConfig:
 
-    config = MODEL_CONFIGS[old_name]
+    config = old_name if isinstance(old_name, ModelTestingConfig) else MODEL_CONFIGS[old_name]
     config_dict = copy.deepcopy(config.config_dict)
     if updates is not None:
         for keys, update in updates.items():
@@ -178,14 +179,15 @@ def _update_and_add_testing_config(
             megatron_args = config.megatron_args + megatron_args
     new_config = dataclasses.replace(
         config,
-        name=new_name,
+        name=config.name if new_name is None else new_name,
         model_type=config.model_type if model_type is None else model_type,
         groups=groups,
         config_dict=config_dict,
         megatron_args=megatron_args,
         **kwargs,
     )
-    MODEL_CONFIGS[new_name] = new_config
+    if new_name is not None:
+        MODEL_CONFIGS[new_name] = new_config
     return new_config
 
 
@@ -314,7 +316,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests MQA.
     "gpt_2",
     "starcoder",
@@ -333,7 +335,7 @@ _update_and_add_testing_config(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests intermediate between gpt2 and llama, closest converter to gpt2.
     "gpt_2",
     "starcoder_2",
@@ -362,7 +364,7 @@ _update_and_add_testing_config(
 del MODEL_CONFIGS["starcoder_2"].config_dict["model"]["base_model"]["embeddings"]["num_position_embeddings"]
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Main tested model.
     "starcoder_2",
     "llama",
@@ -394,7 +396,7 @@ _update_and_add_testing_config(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests llama3-style rotary embeddings.
     "llama",
     "llama_3",
@@ -414,7 +416,7 @@ _update_and_add_testing_config(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests yarn-style rotary embeddings.
     "llama",
     "llama_yarn",
@@ -434,7 +436,7 @@ _update_and_add_testing_config(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests diffusion llama converter.
     "llama_yarn",
     "diffusion_llama",
@@ -459,7 +461,7 @@ _update_and_add_testing_config(
 _llama_block = MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]["block"]
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "mtp_llama",
@@ -489,7 +491,7 @@ _update_and_add_testing_config(
     skip_tests=(r"ce4", r"ms"),
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests partial linear biases, Qwen2 converter.
     "llama",
     "qwen_2",
@@ -511,7 +513,7 @@ _update_and_add_testing_config(
     },
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests diffusion dream converter.
     "qwen_2",
     "dream",
@@ -533,7 +535,7 @@ _update_and_add_testing_config(
     auto_model_class=transformers.AutoModel,
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests sliding window attention, mistral converter.
     "llama",
     "mistral",
@@ -556,7 +558,7 @@ _update_and_add_testing_config(
 
 _mistral_base_model = MODEL_CONFIGS["mistral"].config_dict["model"]["base_model"]
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests logit distillation.
     "mistral",
     "mistral_distill_logits",
@@ -590,7 +592,8 @@ _update_and_add_testing_config(
     skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
 )
 
-_update_and_add_testing_config(
+
+update_and_add_testing_config(
     "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
@@ -621,7 +624,7 @@ _update_and_add_testing_config(
     skip_tests=("sdp", "ms", "pp", "tp", GRAD_ACC, "fp16"),
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
@@ -649,7 +652,7 @@ _update_and_add_testing_config(
 )
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests hybrid Mamba 2.
     "llama",
     "hybrid_mamba",
@@ -690,7 +693,7 @@ _update_and_add_testing_config(
     skip_tests=("sdp", "ms"),
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests vision multimodal.
     "llama",
     "llava",
@@ -733,7 +736,7 @@ _update_and_add_testing_config(
 )
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests hybrid with attention + gated delta net mixer.
     "llama",
     "apriel2_text_gdn_hybrid",
@@ -784,7 +787,7 @@ _update_and_add_testing_config(
     skip_tests=("sdp", "ms", TP_NO_STP),
 )
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests apriel2 format with pattern decoder mixing all mixer types.
     # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention, gdn.
     "llama",
@@ -907,7 +910,7 @@ _update_and_add_testing_config(
 )
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
     # Uses the same decoder as apriel2_text_all_hybrid but adds vision capabilities.
     "apriel2_text_all_hybrid",
@@ -950,7 +953,7 @@ _update_and_add_testing_config(
 )
 
 
-_update_and_add_testing_config(
+update_and_add_testing_config(
     # Tests hybrid with KDA mixer.
     "llama",
     "hybrid_kda",
@@ -1004,7 +1007,7 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         model_testing_config = item.callspec.params["model_testing_config"]
         model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]
         for group in groups:
-            action = model_config.groups[group]
+            action = model_config.groups.get(group, ModelTestingGroupAction.unimportant)
             if action == ModelTestingGroupAction.main:
                 pass
             elif action == ModelTestingGroupAction.normal and not skip_slow:
