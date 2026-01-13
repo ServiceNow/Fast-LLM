@@ -8,9 +8,9 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
-from fast_llm.layers.ssm import gdn as gdn_module
-from fast_llm.layers.ssm import kda as kda_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
+from fast_llm.layers.ssm.gdn import _causal_conv1d_available
+from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
 
@@ -33,16 +33,11 @@ from tests.utils.utils import get_stage
         ),
         pytest.param(
             GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16),
-            marks=pytest.mark.skipif(
-                not gdn_module._causal_conv1d_available,
-                reason="GDN not available",
-            ),
+            marks=pytest.mark.skipif(not _causal_conv1d_available, reason="GDN not available"),
         ),
         pytest.param(
             KimiDeltaAttentionConfig(heads=4, head_dim=16),
-            marks=pytest.mark.skipif(
-                kda_module.chunk_kda is None or not torch.cuda.is_available(), reason="KDA fused kernels not available"
-            ),
+            marks=pytest.mark.skipif(not _kda_available, reason="KDA not available"),
         ),
     ],
 )

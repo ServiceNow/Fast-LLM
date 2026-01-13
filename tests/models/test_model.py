@@ -47,7 +47,6 @@ def test_and_compare_model(
 
     if config.compare is not None:
         compare_results_for_all_models(config)
-    # raise ValueError()
 
 
 def _run_model_distributed(

@@ -8,8 +8,8 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
-from fast_llm.layers.ssm import kda as kda_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
+from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba, KimiDeltaAttention
 from tests.utils.utils import get_stage
@@ -102,9 +102,7 @@ def test_gdn():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    kda_module.chunk_kda is None or not torch.cuda.is_available(), reason="KDA fused kernels not available"
-)
+@pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")
 def test_kda():
     NUM_HEADS = 4
     HEAD_DIM = 4
