@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import EntropyLossImplementation, TargetFormat, TritonConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -128,8 +128,8 @@ class CrossEntropyLanguageModelLossConfig(LanguageModelLossConfig):
     _name: typing.ClassVar[str] = "CE_loss"
     _abstract: typing.ClassVar[bool] = False
 
-    implementation: CrossEntropyImpl = Field(
-        default=CrossEntropyImpl.auto,
+    implementation: EntropyLossImplementation = Field(
+        default=EntropyLossImplementation.auto,
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
@@ -182,19 +182,19 @@ class CrossEntropyLanguageModelLossConfig(LanguageModelLossConfig):
         vocab_parallel: bool = False,
         kwargs: dict | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
+        from fast_llm.functional.cross_entropy import entropy_loss_forward_backward
 
         target = kwargs.get(TargetsKwargs.lm_target)
         implementation = self.implementation
-        if implementation == CrossEntropyImpl.auto:
+        if implementation == EntropyLossImplementation.auto:
             if vocab_parallel:
-                implementation = CrossEntropyImpl.fused
+                implementation = EntropyLossImplementation.fused
             elif TritonConfig.TRITON_ENABLED:
-                implementation = CrossEntropyImpl.triton
+                implementation = EntropyLossImplementation.triton
             else:
-                implementation = CrossEntropyImpl.fused
+                implementation = EntropyLossImplementation.fused
 
-        return cross_entropy_forward_backward(
+        return entropy_loss_forward_backward(
             logits=logits.flatten(0, -2),
             target=target,
             loss_mask=None,  # Labels are already masked

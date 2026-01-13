@@ -93,11 +93,17 @@ _ACTIVATION_HF_NAMES_INV["gelu"] = ActivationType.gelu
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 
 
-class CrossEntropyImpl(str, enum.Enum):
+class EntropyLossImplementation(enum.StrEnum):
     auto = "auto"
     torch = "torch"
     fused = "fused"
     triton = "triton"
+
+
+class EntropyLossType(enum.StrEnum):
+    cross_entropy = "cross_entropy"
+    forward_kl = "forward_kl"
+    reverse_kl = "reverse_kl"
 
 
 class TargetFormat(enum.StrEnum):
