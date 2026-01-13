@@ -9,11 +9,11 @@ import torch.utils.data
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
+from fast_llm.data.data_loader import SampledDatasetIterator
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.monitor import DatasetMonitor
-from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.run import log_main_rank
