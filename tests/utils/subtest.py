@@ -190,6 +190,8 @@ def report_subtest(request: pytest.FixtureRequest):
     do_capture = request.config.getoption("distributed_capture")
 
     def do_report_subtest(path: pathlib.Path, world_size: int) -> None:
+        if torch.cuda.device_count() < world_size:
+            pytest.skip(f"Not enough GPUs to run dependency: {torch.cuda.device_count()} < {world_size}")
         success = check_subtest_success(path)
         if not do_capture:
             logger.warning("Distributed capture is disabled. See distributed test for run output.")

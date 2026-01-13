@@ -61,7 +61,6 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
             else:
                 raise
 
-        processed = 0
         while True:
             # XREADGROUP reads from the consumer group
             # COUNT: max number of messages to fetch at once
@@ -81,11 +80,6 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
                 for stream_key, msgs in messages:
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for msg_id, msg_data in msgs:
-                        processed += 1
-                        # TODO: or do it after processing all received messaged then count > 1?
-                        if processed % self._config.acknowledge_interval == 0:
-                            client.hset(f"{REDIS_DATA_STREAM}:ack", str(self._rank), msg_id)
-
                         yield self._read_document(json.loads(msg_data[REDIS_FIELD.encode()]))
 
     def _read_document(self, data: dict) -> LanguageModelSample:

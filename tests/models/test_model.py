@@ -99,8 +99,6 @@ def test_model_distributed(
     config = DISTRIBUTED_TESTING_CONFIGS[config_name]
     if model_testing_config.should_skip(config):
         pytest.skip(f"Configuration not supported.")
-    if torch.cuda.device_count() < config.num_gpus:
-        pytest.skip(f"Not enough GPUs: {torch.cuda.device_count()} < {config.num_gpus}")
     report_subtest(run_test_script_base_path / config.name, config.num_gpus)
     if config.compare is not None:
         if not check_subtest_success(run_test_script_base_path / config.compare):

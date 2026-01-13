@@ -340,12 +340,6 @@ class StreamingDatasetConfig[SampleType: LanguageModelSample](RedisConfig, Sampl
 
     _abstract = False
 
-    acknowledge_interval: int = Field(
-        default=10,
-        desc="Number of messages after which the consumer acknowledges received IDs back to the Redis hash.",
-        hint=FieldHint.core,
-    )
-
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
         from fast_llm.data.dataset.streaming import RedisStreamingDataset
 

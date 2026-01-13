@@ -25,7 +25,7 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             logger.info(f"Waiting for weights broadcast rendezvous at {init_method} ...")
             # TODO: Create a custom process group instead.
             self._process_group = torch.distributed.init_process_group(
-                backend="nccl",
+                backend=str(self._config.broadcast.backend),
                 init_method=init_method,
                 world_size=config.broadcast.external_world_size + 1,
                 rank=0,
