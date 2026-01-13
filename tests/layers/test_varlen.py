@@ -34,7 +34,7 @@ from tests.utils.utils import get_stage
         pytest.param(
             GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16),
             marks=pytest.mark.skipif(
-                gdn_module.chunk_gated_delta_rule is None or not torch.cuda.is_available(),
+                not gdn_module._fla_available,
                 reason="GDN fused kernels not available",
             ),
         ),

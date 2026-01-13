@@ -23,11 +23,18 @@ logger = logging.getLogger(__name__)
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
+
+    _causal_conv1d_available = torch.cuda.is_available()
+except (ImportError, RuntimeError):
+    _causal_conv1d_available = False
+
+
+try:
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 
-    _fast_path_available = torch.cuda.is_available()
+    _fla_available = torch.cuda.is_available()
 except (ImportError, RuntimeError):
-    _fast_path_available = False
+    _fla_available = False
 
 
 def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
@@ -238,12 +245,16 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
         )
 
-        self.chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
-
-        if not _fast_path_available:
+        if _fla_available:
+            self.chunk_gated_delta_rule = chunk_gated_delta_rule
+        else:
             logger.warning(
-                "Fast paths for GatedDeltaNet are not available. Please ensure that 'causal_conv1d' and 'fla' are properly installed."
+                "Fast implementation for GatedDeltaNet is not available. Please ensure that 'fla' is properly installed."
             )
+            self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
+
+        if not _causal_conv1d_available:
+            raise RuntimeError("Gated delta net requires `causal_conv1d`.")
 
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
         """
