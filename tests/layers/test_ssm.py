@@ -19,11 +19,6 @@ except ImportError:
     Apriel2GatedDeltaNet = None
     Apriel2Mamba = None
 
-try:
-    from fast_llm_external_models.apriel_hybrid_ssm.modeling_apriel_hybrid_ssm import KimiDeltaAttention
-except ImportError:
-    KimiDeltaAttention = None
-
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
 
