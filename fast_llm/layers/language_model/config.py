@@ -202,7 +202,7 @@ class CrossEntropyLanguageModelLossConfig(LanguageModelLossConfig):
             group=group,
             implementation=implementation,
             logits_scale_factor=logits_scale_factor,
-            teacher_softmax_temperature=self.temperature,
+            temperature=self.temperature,
             target_format=TargetFormat.labels,
         )
 

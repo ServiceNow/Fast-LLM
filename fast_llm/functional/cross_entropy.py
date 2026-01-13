@@ -229,6 +229,7 @@ def _fused_entropy_loss_forward_backward(
         per_sample_loss, grad = _fused_cross_entropy_base_from_labels(
             logits,
             target,
+            loss_mask,
             grad_output,
             logits_scale_factor,
             group,
@@ -285,7 +286,7 @@ def entropy_loss_forward_backward(
     group: ProcessGroup | None = None,
     implementation: EntropyLossImplementation = EntropyLossImplementation.fused,
     logits_scale_factor: float = 1.0,
-    teacher_softmax_temperature: float = 1.0,
+    temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -315,7 +316,7 @@ def entropy_loss_forward_backward(
             target_format,
             entropy_loss_type,
             group,
-            teacher_softmax_temperature,
+            temperature,
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
@@ -326,5 +327,5 @@ def entropy_loss_forward_backward(
             logits_scale_factor,
             target_format,
             entropy_loss_type,
-            teacher_softmax_temperature=teacher_softmax_temperature,
+            temperature=temperature,
         )

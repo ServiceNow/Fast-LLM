@@ -14,10 +14,11 @@ from tests.utils.utils import requires_cuda
 
 
 def _get_cross_entropy_inputs(
-    num_columns: int, loss_masking: bool, target_format: TargetFormat, device="cuda"
+    num_columns: int, loss_masking: bool, target_format: TargetFormat
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # We want something moderately close to the target for the test to be meaningful
-    logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device=device) / 3
+    logits_var = torch.randn(256, num_columns, dtype=torch.float32, device=device) / 3
     loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device=device) if loss_masking else None
     if target_format == TargetFormat.labels:
         target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device=device)
@@ -26,7 +27,7 @@ def _get_cross_entropy_inputs(
             logits = torch.where(loss_mask.unsqueeze(-1), logits, -100)
             loss_mask = None
     else:
-        target = torch.randn(256, num_columns, dtype=torch.bfloat16, device=device)
+        target = torch.randn(256, num_columns, dtype=torch.float32, device=device)
         logits = target + logits_var
         if target_format == TargetFormat.probabilities:
             target = torch.softmax(target, -1)
@@ -49,7 +50,6 @@ def _compare_entropy_loss_outputs(
         assert ref_grad is None
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking"),
@@ -68,9 +68,10 @@ def _compare_entropy_loss_outputs(
 @pytest.mark.parametrize(
     "entropy_loss_type", (EntropyLossType.cross_entropy, EntropyLossType.forward_kl, EntropyLossType.reverse_kl)
 )
-def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type):
+def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type):
+    if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
+        pytest.skip(reason="rNot implemented")
     # TODO: Test tensor-parallel implementation.
-    assert TritonConfig.TRITON_ENABLED
     logits, target, loss_mask = _get_cross_entropy_inputs(num_columns, loss_masking, target_format)
     kwargs = {
         "logits": logits,
@@ -89,10 +90,10 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
     threshold = 2e-5 if logits_scale_factor == 1.0 else 1e-2
     _compare_entropy_loss_outputs(out_fused, out_torch, grad_output is not None, grad_fused, grad_torch, threshold)
 
-    if entropy_loss_type != EntropyLossType.cross_entropy:
+    if entropy_loss_type != EntropyLossType.cross_entropy or not torch.cuda.is_available():
         # Triton implementation only supports cross-entropy.
         return
-
+    assert TritonConfig.TRITON_ENABLED
     if num_columns > 65536:
         with pytest.raises(AssertionError):
             entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.triton)
