@@ -119,6 +119,7 @@ def _fused_cross_entropy_forward_backward(
     else:
         # Target should be tensor-parallel already, no further manipulation needed.
         target_mask = None
+        target_masked = target
         if loss_mask is not None:
             loss_mask = loss_mask.unsqueeze(-1)
 
@@ -392,7 +393,6 @@ def forward_kl_forward_backward(
         loss: Forward KL divergence loss
         grad: Gradients w.r.t. logits
     """
-    assert target_format == TargetFormat.logits, "Forward KL only supports logits format"
     Assert.eq(target.shape, logits.shape)
     assert target.dtype.is_floating_point, target.dtype
     if loss_mask is not None:
