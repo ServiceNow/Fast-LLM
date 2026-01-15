@@ -17,7 +17,7 @@ from torch import nn
 from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 
-from vllm.attention.backends.abstract import AttentionMetadata
+from vllm.v1.attention.backend import AttentionMetadata
 from vllm.attention.layer import Attention
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import (
@@ -39,12 +39,18 @@ from vllm.model_executor.layers.fla.ops import (
     chunk_gated_delta_rule,
     fused_recurrent_gated_delta_rule,
 )
+from vllm.model_executor.models.qwen3_next import (
+    fused_gdn_gating as qwen3_fused_gdn_gating,
+)
 from vllm.model_executor.layers.fla.ops.kda import (
     FusedRMSNormGated,
     chunk_kda,
     fused_kda_gate,
     fused_recurrent_kda,
 )
+
+# Import to register kda_attention custom op
+import vllm.model_executor.layers.kda  # noqa: F401
 from vllm.model_executor.layers.layernorm import RMSNorm, RMSNormGated
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -54,7 +60,9 @@ from vllm.model_executor.layers.linear import (
     RowParallelLinear,
 )
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
-from vllm.model_executor.layers.mamba.abstract import MambaBase
+from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+from vllm.v1.attention.backend import AttentionBackend
+from vllm.v1.attention.selector import get_mamba_attn_backend
 from vllm.model_executor.layers.mamba.mamba_mixer import MambaMixer
 from vllm.model_executor.layers.mamba.mamba_mixer2 import mamba_v2_sharded_weight_loader
 from vllm.model_executor.layers.mamba.mamba_utils import (
@@ -75,7 +83,7 @@ from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader,
     sharded_weight_loader,
 )
-from vllm.model_executor.models.interfaces import HasInnerState, IsHybrid, SupportsPP
+from vllm.model_executor.models.interfaces import HasInnerState, SupportsPP
 from vllm.model_executor.models.utils import (
     AutoWeightsLoader,
     WeightsMapper,
@@ -91,6 +99,396 @@ from vllm.sequence import IntermediateTensors
 from vllm.triton_utils import tl, triton
 from vllm.utils.torch_utils import direct_register_custom_op
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
+from vllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheSpec,
+    MambaSpec,
+    SlidingWindowSpec,
+)
+from vllm.logger import init_logger
+
+apriel2_logger = init_logger(__name__)
+
+
+# =============================================================================
+# KV Cache Spec Computation
+# =============================================================================
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+# Valid mamba_type values for MambaSpec
+MambaType = Literal["gdn_attention", "kda_attention", "mamba"]
+
+
+def _get_dtype_size(dtype: torch.dtype) -> int:
+    """Get size in bytes for a torch dtype."""
+    if isinstance(dtype, str):
+        # Handle string dtype names (e.g., "auto", "bfloat16")
+        if dtype == "auto":
+            dtype = torch.bfloat16  # Default to bfloat16
+        else:
+            dtype = getattr(torch, dtype, torch.bfloat16)
+    return torch.tensor([], dtype=dtype).element_size()
+
+
+@dataclass
+class AttentionBlockParams:
+    """Parameters for an attention block's KV cache."""
+    num_kv_heads: int
+    head_size: int
+    window_size: int | None
+    dtype: torch.dtype
+
+    @property
+    def page_size_per_token(self) -> int:
+        """Bytes per token for K + V."""
+        return 2 * self.num_kv_heads * self.head_size * _get_dtype_size(self.dtype)
+
+
+@dataclass
+class MambaBlockParams:
+    """Parameters for a mamba-like block's state cache."""
+    shapes: tuple
+    dtypes: tuple
+    mamba_type: MambaType
+
+    @property
+    def natural_page_size(self) -> int:
+        """Natural page size based on state shapes."""
+        return sum(
+            _get_dtype_size(dtype) * math.prod(shape)
+            for shape, dtype in zip(self.shapes, self.dtypes)
+        )
+
+
+BlockParams = AttentionBlockParams | MambaBlockParams
+
+
+def get_block_params(
+    blocks_config: dict[str, dict],
+    vllm_config: VllmConfig,
+) -> dict[str, BlockParams]:
+    """Parse block configs and compute cache parameters ONCE.
+
+    This is the single source of truth for shapes, dtypes, and page sizes.
+    Downstream functions use these precomputed params.
+
+    Args:
+        blocks_config: Dict mapping block names to their configs.
+        vllm_config: The vLLM config for cache/parallel settings.
+
+    Returns:
+        Dict mapping block names to their BlockParams.
+    """
+    cache_config = vllm_config.cache_config
+    parallel_config = vllm_config.parallel_config
+    model_dtype = vllm_config.model_config.dtype
+    tp_size = parallel_config.tensor_parallel_size
+
+    params: dict[str, BlockParams] = {}
+
+    for block_name, block_config in blocks_config.items():
+        mixer_config = block_config.get("mixer", {})
+        mixer_type = mixer_config.get("type", "attention")
+
+        if mixer_type == "attention":
+            # cache_dtype can be "auto" or None, fall back to model dtype
+            cache_dtype = cache_config.cache_dtype
+            if cache_dtype is None or cache_dtype == "auto":
+                kv_cache_dtype = model_dtype
+            elif isinstance(cache_dtype, str):
+                kv_cache_dtype = getattr(torch, cache_dtype, model_dtype)
+            else:
+                kv_cache_dtype = cache_dtype
+
+            params[block_name] = AttentionBlockParams(
+                num_kv_heads=mixer_config["head_groups"],
+                head_size=mixer_config["head_size"],
+                window_size=mixer_config.get("window_size"),
+                dtype=kv_cache_dtype,
+            )
+
+        elif mixer_type == "gdn":
+            shapes = MambaStateShapeCalculator.gated_delta_net_state_shape(
+                tp_world_size=tp_size,
+                num_k_heads=mixer_config["key_heads"],
+                num_v_heads=mixer_config["value_heads"],
+                head_k_dim=mixer_config["key_head_dim"],
+                head_v_dim=mixer_config["value_head_dim"],
+                conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
+                num_spec=0,
+            )
+            dtypes = MambaStateDtypeCalculator.gated_delta_net_state_dtype(
+                model_dtype,
+                cache_config.mamba_cache_dtype,
+            )
+            params[block_name] = MambaBlockParams(
+                shapes=shapes,
+                dtypes=dtypes,
+                mamba_type="gdn_attention",
+            )
+
+        elif mixer_type == "mamba":
+            d_state = mixer_config["state_size"]
+            d_conv = mixer_config["d_conv"]
+            d_inner = mixer_config.get("d_inner")
+            if d_inner is None:
+                expand = mixer_config.get("expand")
+                if expand is None:
+                    raise ValueError(
+                        f"Block '{block_name}': mamba mixer must specify 'd_inner' or 'expand'"
+                    )
+                raise ValueError(
+                    f"Block '{block_name}': mamba mixer must specify 'd_inner' explicitly"
+                )
+            shapes = MambaStateShapeCalculator.mamba1_state_shape(
+                tp_world_size=tp_size,
+                intermediate_size=d_inner,
+                state_size=d_state,
+                conv_kernel=d_conv,
+            )
+            dtypes = MambaStateDtypeCalculator.mamba1_state_dtype(
+                model_dtype,
+                cache_config.mamba_cache_dtype,
+                cache_config.mamba_ssm_cache_dtype,
+            )
+            params[block_name] = MambaBlockParams(
+                shapes=shapes,
+                dtypes=dtypes,
+                mamba_type="mamba",
+            )
+
+        elif mixer_type == "kda":
+            shapes = MambaStateShapeCalculator.kda_state_shape(
+                tp_world_size=tp_size,
+                num_heads=mixer_config["heads"],
+                head_dim=mixer_config["head_dim"],
+                conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
+            )
+            dtypes = MambaStateDtypeCalculator.kda_state_dtype(
+                model_dtype,
+                cache_config.mamba_cache_dtype,
+            )
+            params[block_name] = MambaBlockParams(
+                shapes=shapes,
+                dtypes=dtypes,
+                mamba_type="kda_attention",
+            )
+
+        else:
+            raise ValueError(f"Block '{block_name}': unknown mixer type '{mixer_type}'")
+
+    return params
+
+
+def get_block_page_sizes(
+    block_params: dict[str, BlockParams],
+) -> tuple[int | None, dict[str, int]]:
+    """Extract page sizes from precomputed block params.
+
+    Args:
+        block_params: Dict mapping block names to their BlockParams.
+
+    Returns:
+        Tuple of:
+        - attn_page_per_token: Bytes per token for attention (None if no attention).
+        - mamba_page_sizes: Dict mapping mamba block names to natural page sizes.
+    """
+    attn_page_per_token: int | None = None
+    mamba_page_sizes: dict[str, int] = {}
+
+    for block_name, params in block_params.items():
+        if isinstance(params, AttentionBlockParams):
+            # All attention blocks should have same head config
+            attn_page_per_token = params.page_size_per_token
+        elif isinstance(params, MambaBlockParams):
+            mamba_page_sizes[block_name] = params.natural_page_size
+
+    return attn_page_per_token, mamba_page_sizes
+
+
+def unify_block_page_sizes(
+    attn_page_per_token: int | None,
+    mamba_page_sizes: dict[str, int],
+    default_block_size: int = 16,
+    alignment: int = 16,
+) -> tuple[int, int]:
+    """Compute unified (block_size, page_size) for all block types.
+
+    The unified page_size must work for both attention (which scales with
+    block_size) and mamba-like blocks (fixed state sizes). We achieve this by:
+    1. Finding max mamba page size
+    2. Computing block_size so attention page >= max mamba page
+    3. Padding mamba pages to match attention page
+
+    Args:
+        attn_page_per_token: Bytes per token for attention (None if no attention).
+        mamba_page_sizes: Dict of mamba-like block names to natural page sizes.
+        default_block_size: Minimum block size for attention.
+        alignment: Block size alignment (FlashAttention needs 16).
+
+    Returns:
+        Tuple of (block_size, unified_page_size).
+    """
+    # Pure attention model
+    if not mamba_page_sizes:
+        block_size = max(default_block_size, alignment)
+        if attn_page_per_token is None:
+            return block_size, 0
+        return block_size, block_size * attn_page_per_token
+
+    # Pure mamba model
+    if attn_page_per_token is None:
+        max_mamba_page = max(mamba_page_sizes.values())
+        return default_block_size, max_mamba_page
+
+    # Hybrid model: need to align attention and mamba page sizes
+    max_mamba_page = max(mamba_page_sizes.values())
+
+    # Compute minimum block_size so attention page >= max mamba page
+    # attn_page = block_size * attn_page_per_token >= max_mamba_page
+    min_block_size = -(-max_mamba_page // attn_page_per_token)  # ceiling division
+
+    # Align to kernel requirements
+    aligned_block_size = alignment * -(-min_block_size // alignment)
+
+    # Use larger of default and computed
+    block_size = max(default_block_size, aligned_block_size)
+
+    # Unified page size (attention page, mamba will be padded to match)
+    unified_page_size = block_size * attn_page_per_token
+
+    apriel2_logger.info(
+        "Page size unification: max_mamba=%d, attn_per_token=%d, "
+        "block_size=%d, unified_page=%d",
+        max_mamba_page, attn_page_per_token, block_size, unified_page_size
+    )
+
+    return block_size, unified_page_size
+
+
+def get_block_specs(
+    block_params: dict[str, BlockParams],
+    vllm_config: VllmConfig,
+    block_size: int,
+    page_size_padded: int,
+) -> dict[str, KVCacheSpec]:
+    """Create KVCacheSpecs from precomputed block params with unified sizes.
+
+    Args:
+        block_params: Dict mapping block names to their BlockParams.
+        vllm_config: The vLLM config for mamba_block_size fallback.
+        block_size: Unified block size for attention specs.
+        page_size_padded: Unified page size for mamba specs.
+
+    Returns:
+        Dict mapping block names to their KVCacheSpec.
+    """
+    cache_config = vllm_config.cache_config
+    mamba_block_size = cache_config.mamba_block_size or vllm_config.model_config.max_model_len
+
+    specs: dict[str, KVCacheSpec] = {}
+
+    for block_name, params in block_params.items():
+        if isinstance(params, AttentionBlockParams):
+            if params.window_size is not None:
+                specs[block_name] = SlidingWindowSpec(
+                    block_size=block_size,
+                    num_kv_heads=params.num_kv_heads,
+                    head_size=params.head_size,
+                    dtype=params.dtype,
+                    sliding_window=params.window_size,
+                )
+            else:
+                specs[block_name] = FullAttentionSpec(
+                    block_size=block_size,
+                    num_kv_heads=params.num_kv_heads,
+                    head_size=params.head_size,
+                    dtype=params.dtype,
+                )
+
+        elif isinstance(params, MambaBlockParams):
+            specs[block_name] = MambaSpec(
+                block_size=mamba_block_size,
+                shapes=params.shapes,
+                dtypes=params.dtypes,
+                page_size_padded=page_size_padded,
+                mamba_type=params.mamba_type,
+            )
+
+    return specs
+
+
+def get_blocks_config(decoder_config: dict) -> dict[str, dict]:
+    """Extract the blocks config dict from a decoder config.
+
+    Handles both 'fixed' (single block) and 'pattern' (multiple blocks) modes.
+
+    Args:
+        decoder_config: The decoder config dict from model config.
+
+    Returns:
+        Dict mapping block names to their configs.
+    """
+    seq_type = decoder_config.get("type", "fixed")
+
+    if seq_type == "fixed":
+        # Single block type - synthesize a name
+        block_config = decoder_config.get("block", {})
+        return {"block": block_config}
+    elif seq_type == "pattern":
+        return decoder_config.get("blocks", {})
+    else:
+        return {}
+
+
+def get_unified_page_size_for_config(
+    config: PretrainedConfig,
+    vllm_config: VllmConfig,
+) -> tuple[int, int]:
+    """Compute unified (block_size, page_size) for the model config.
+
+    This is used by layer-level get_kv_cache_spec() methods to ensure
+    all layers return specs with matching page_size_bytes, even when
+    vLLM iterates over layers individually (e.g., TransformersForCausalLM).
+
+    Args:
+        config: The HuggingFace model config.
+        vllm_config: The vLLM config.
+
+    Returns:
+        Tuple of (block_size, unified_page_size).
+    """
+    decoder_config = getattr(config, "decoder", {}) or {}
+    blocks_config = get_blocks_config(decoder_config)
+    block_params = get_block_params(blocks_config, vllm_config)
+    attn_page_per_token, mamba_page_sizes = get_block_page_sizes(block_params)
+    return unify_block_page_sizes(attn_page_per_token, mamba_page_sizes)
+
+
+def get_block_name_for_layer(decoder_config: dict, layer_idx: int) -> str:
+    """Get the block name that a specific layer uses.
+
+    Args:
+        decoder_config: The decoder config dict.
+        layer_idx: The layer index.
+
+    Returns:
+        The block name for this layer.
+    """
+    seq_type = decoder_config.get("type", "fixed")
+
+    if seq_type == "fixed":
+        return "block"
+    elif seq_type == "pattern":
+        pattern = decoder_config.get("pattern", [])
+        if not pattern:
+            raise ValueError("Pattern decoder type requires non-empty 'pattern' list")
+        return pattern[layer_idx % len(pattern)]
+    else:
+        raise ValueError(f"Unknown decoder type: {seq_type}")
 
 
 class Apriel2Config(PretrainedConfig):
@@ -215,6 +613,20 @@ class Apriel2MLP(nn.Module):
         x, _ = self.down_proj(x)
         return x
 
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        loaded = set()
+        for name, weight in weights:
+            if name == "gate_proj.weight":
+                self.gate_up_proj.weight_loader(self.gate_up_proj.weight, weight, 0)
+                loaded.add("gate_up_proj.weight")
+            elif name == "up_proj.weight":
+                self.gate_up_proj.weight_loader(self.gate_up_proj.weight, weight, 1)
+                loaded.add("gate_up_proj.weight")
+            elif name == "down_proj.weight":
+                self.down_proj.weight_loader(self.down_proj.weight, weight)
+                loaded.add("down_proj.weight")
+        return loaded
+
 
 class Apriel2Attention(nn.Module):
     """Apriel2 attention layer with rotary embeddings and GQA support."""
@@ -233,12 +645,10 @@ class Apriel2Attention(nn.Module):
         self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
 
-        # Extract from mixer config or use defaults from main config
-        self.total_num_heads = mixer_config.get("heads", config.num_attention_heads)
-        self.total_num_kv_heads = mixer_config.get(
-            "head_groups", config.num_key_value_heads
-        )
-        self.head_dim = mixer_config.get("head_size", config.head_dim)
+        # Extract from mixer config (required)
+        self.total_num_heads = mixer_config["heads"]
+        self.total_num_kv_heads = mixer_config["head_groups"]
+        self.head_dim = mixer_config["head_size"]
 
         tp_size = get_tensor_model_parallel_world_size()
         assert self.total_num_heads % tp_size == 0
@@ -288,16 +698,13 @@ class Apriel2Attention(nn.Module):
 
         # Rotary embeddings
         rotary_config = mixer_config.get("rotary", {})
-        rope_theta = rotary_config.get("theta", config.rope_theta)
-        max_pos = config.embeddings.get(
-            "max_position_embeddings", config.max_position_embeddings
-        )
+        rope_theta = rotary_config["theta"]
+        max_pos = config.embeddings["max_position_embeddings"]
 
         self.rotary_emb = get_rope(
             self.head_dim,
             max_position=max_pos,
-            base=rope_theta,
-            rope_scaling=config.rope_scaling,
+            rope_parameters={"base": rope_theta},
         )
 
         # Sliding window support
@@ -326,6 +733,35 @@ class Apriel2Attention(nn.Module):
         output, _ = self.o_proj(attn_output)
         return output
 
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        loaded = set()
+        for name, weight in weights:
+            if name == "q_proj.weight":
+                self.qkv_proj.weight_loader(self.qkv_proj.weight, weight, "q")
+                loaded.add("qkv_proj.weight")
+            elif name == "k_proj.weight":
+                self.qkv_proj.weight_loader(self.qkv_proj.weight, weight, "k")
+                loaded.add("qkv_proj.weight")
+            elif name == "v_proj.weight":
+                self.qkv_proj.weight_loader(self.qkv_proj.weight, weight, "v")
+                loaded.add("qkv_proj.weight")
+            elif name == "q_proj.bias":
+                self.qkv_proj.weight_loader(self.qkv_proj.bias, weight, "q")
+                loaded.add("qkv_proj.bias")
+            elif name == "k_proj.bias":
+                self.qkv_proj.weight_loader(self.qkv_proj.bias, weight, "k")
+                loaded.add("qkv_proj.bias")
+            elif name == "v_proj.bias":
+                self.qkv_proj.weight_loader(self.qkv_proj.bias, weight, "v")
+                loaded.add("qkv_proj.bias")
+            elif name == "o_proj.weight":
+                self.o_proj.weight_loader(self.o_proj.weight, weight)
+                loaded.add("o_proj.weight")
+            elif name == "o_proj.bias":
+                self.o_proj.weight_loader(self.o_proj.bias, weight)
+                loaded.add("o_proj.bias")
+        return loaded
+
 
 class Apriel2MambaMixer(nn.Module):
     """Apriel2 Mamba mixer layer wrapping vLLM's MambaMixer."""
@@ -343,11 +779,15 @@ class Apriel2MambaMixer(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
 
-        # Extract mamba params from config
-        d_state = mixer_config.get("state_size", 16)
-        d_conv = mixer_config.get("d_conv", 4)
-        expand = mixer_config.get("expand", 2)
-        d_inner = mixer_config.get("d_inner", int(expand * config.hidden_size))
+        # Extract mamba params from config - architecture values required
+        d_state = mixer_config["state_size"]
+        d_conv = mixer_config["d_conv"]
+        expand = mixer_config.get("expand", None)
+        d_inner = mixer_config.get("d_inner", None)
+        if d_inner is None:
+            if expand is None:
+                raise ValueError("mixer_config must specify either 'd_inner' or 'expand'")
+            d_inner = int(expand * config.hidden_size)
         dt_rank = mixer_config.get("dt_rank", "auto")
         if dt_rank == "auto":
             dt_rank = math.ceil(config.hidden_size / 16)
@@ -364,7 +804,7 @@ class Apriel2MambaMixer(nn.Module):
             use_conv_bias=conv_bias,
             use_bias=bias,
             use_rms_norm=False,
-            activation=config.hidden_act,
+            activation=mixer_config.get("activation", "silu"),
             model_config=model_config,
             cache_config=cache_config,
             prefix=prefix,
@@ -432,25 +872,30 @@ def fused_gdn_gating_kernel(
     g_ptr,
     beta_ptr,
     num_heads: tl.constexpr,
+    total_elements: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    SOFTPLUS_THRESHOLD: tl.constexpr,
 ):
     """Fused kernel for GDN gating computation."""
     pid = tl.program_id(0)
     offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offset < num_heads
+    mask = offset < total_elements
 
-    A_log = tl.load(A_log_ptr + offset % num_heads, mask=mask)
-    dt_bias = tl.load(dt_bias_ptr + offset % num_heads, mask=mask)
+    # Load and convert to fp32 for math operations (exp/log require fp32/fp64)
+    A_log = tl.load(A_log_ptr + offset % num_heads, mask=mask).to(tl.float32)
+    dt_bias = tl.load(dt_bias_ptr + offset % num_heads, mask=mask).to(tl.float32)
     a = tl.load(a_ptr + offset, mask=mask).to(tl.float32)
     b = tl.load(b_ptr + offset, mask=mask).to(tl.float32)
 
     # g = -exp(A_log) * softplus(a + dt_bias)
+    # Use numerically stable softplus: for large x, softplus(x) ≈ x
     A = tl.exp(A_log)
-    softplus_val = tl.log(1.0 + tl.exp(a + dt_bias))
+    x = a + dt_bias
+    softplus_val = tl.where(x <= SOFTPLUS_THRESHOLD, tl.log(1.0 + tl.exp(x)), x)
     g = -A * softplus_val
 
     # beta = sigmoid(b)
-    beta = 1.0 / (1.0 + tl.exp(-b))
+    beta = tl.sigmoid(b)
 
     tl.store(g_ptr + offset, g, mask=mask)
     tl.store(beta_ptr + offset, beta, mask=mask)
@@ -461,15 +906,15 @@ def fused_gdn_gating(
     a: torch.Tensor,
     b: torch.Tensor,
     dt_bias: torch.Tensor,
+    softplus_threshold: float = 20.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute GDN gating: g = -exp(A_log) * softplus(a + dt_bias), beta = sigmoid(b)"""
     batch_size = a.shape[0]
     num_heads = a.shape[-1]
 
-    g = torch.empty_like(a)
+    g = torch.empty_like(a, dtype=torch.float32)
     beta = torch.empty_like(b)
 
-    # Use triton kernel for efficiency
     total_elements = batch_size * num_heads
     BLOCK_SIZE = 256
     grid = ((total_elements + BLOCK_SIZE - 1) // BLOCK_SIZE,)
@@ -482,7 +927,9 @@ def fused_gdn_gating(
         g.view(-1),
         beta.view(-1),
         num_heads,
+        total_elements,
         BLOCK_SIZE,
+        softplus_threshold,
     )
 
     g = g.unsqueeze(0)  # Add batch dim for chunk_gated_delta_rule
@@ -491,11 +938,16 @@ def fused_gdn_gating(
     return g, beta
 
 
-class Apriel2GatedDeltaNet(nn.Module, MambaBase):
+class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
     """Gated Delta Net mixer for Apriel2 using vLLM infrastructure.
 
-    Follows the same pattern as Qwen3NextGatedDeltaNet.
+    Inherits from AttentionLayerBase directly (not MambaBase) to avoid
+    the global mamba_page_size_padded assumption that breaks heterogeneous
+    block models like Apriel2.
     """
+
+    # State cache set by vLLM's bind_kv_cache
+    kv_cache: tuple[torch.Tensor, ...]
 
     @property
     def mamba_type(self) -> str:
@@ -519,6 +971,33 @@ class Apriel2GatedDeltaNet(nn.Module, MambaBase):
             self.num_spec,
         )
 
+    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        """Return cache spec with unified page size for hybrid models.
+
+        The unified page size ensures all layers (attention, mamba, GDN, KDA)
+        have matching page_size_bytes, which is required by vLLM's KV cache
+        management.
+        """
+        config = vllm_config.model_config.hf_config
+        _, unified_page_size = get_unified_page_size_for_config(config, vllm_config)
+
+        block_size = (
+            vllm_config.cache_config.mamba_block_size
+            or vllm_config.model_config.max_model_len
+        )
+        return MambaSpec(
+            shapes=self.get_state_shape(),
+            dtypes=self.get_state_dtype(),
+            block_size=block_size,
+            page_size_padded=unified_page_size,
+            mamba_type=self.mamba_type,
+            num_speculative_blocks=self.num_spec,
+        )
+
+    def get_attn_backend(self) -> type[AttentionBackend]:
+        """Get the attention backend for GDN."""
+        return get_mamba_attn_backend(self.mamba_type)
+
     def __init__(
         self,
         config: Apriel2Config,
@@ -535,15 +1014,16 @@ class Apriel2GatedDeltaNet(nn.Module, MambaBase):
         self.tp_rank = get_tensor_model_parallel_rank()
         self.hidden_size = config.hidden_size
 
-        # Config params - support Fast-LLM naming
-        self.num_v_heads = mixer_config.get("value_heads", 32)
-        self.num_k_heads = mixer_config.get("key_heads", 8)
-        self.head_k_dim = mixer_config.get("key_head_dim", 64)
-        self.head_v_dim = mixer_config.get("value_head_dim", 64)
-        conv_config = mixer_config.get("convolution_layer", {})
-        self.conv_kernel_size = conv_config.get("kernel_size", 4)
-        self.layer_norm_epsilon = mixer_config.get("norm_eps", config.rms_norm_eps)
-        self.activation = conv_config.get("activation", config.hidden_act)
+        # Config params - required architecture values
+        self.num_v_heads = mixer_config["value_heads"]
+        self.num_k_heads = mixer_config["key_heads"]
+        self.head_k_dim = mixer_config["key_head_dim"]
+        self.head_v_dim = mixer_config["value_head_dim"]
+        conv_config = mixer_config["convolution_layer"]
+        self.conv_kernel_size = conv_config["kernel_size"]
+        # Internal defaults for implementation details
+        self.layer_norm_epsilon = mixer_config.get("norm_eps", 1e-6)
+        self.activation = conv_config.get("activation", "silu")
         self.act = ACT2FN[self.activation]
 
         self.layer_idx = layer_idx
@@ -813,7 +1293,8 @@ class Apriel2GatedDeltaNet(nn.Module, MambaBase):
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
 
-        g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
+        # TODO: swap back to our fused_gdn_gating after testing
+        g, beta = qwen3_fused_gdn_gating(self.A_log, a, b, self.dt_bias)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
@@ -848,16 +1329,48 @@ class Apriel2GatedDeltaNet(nn.Module, MambaBase):
 
         core_attn_out[:num_actual_tokens] = core_out.squeeze(0)[:num_actual_tokens]
 
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        # Checkpoint uses "convolution", model uses "conv1d"
+        loaded = set()
+        for name, weight in weights:
+            if name == "convolution.weight":
+                self.conv1d.weight_loader(self.conv1d.weight, weight)
+                loaded.add("conv1d.weight")
+            elif name == "in_proj_qkvz.weight":
+                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, weight)
+                loaded.add("in_proj_qkvz.weight")
+            elif name == "in_proj_ba.weight":
+                self.in_proj_ba.weight_loader(self.in_proj_ba.weight, weight)
+                loaded.add("in_proj_ba.weight")
+            elif name == "out_proj.weight":
+                self.out_proj.weight_loader(self.out_proj.weight, weight)
+                loaded.add("out_proj.weight")
+            elif name == "norm.weight":
+                self.norm.weight.data.copy_(weight)
+                loaded.add("norm.weight")
+            elif name == "A_log":
+                self.A_log.data.copy_(weight)
+                loaded.add("A_log")
+            elif name == "dt_bias":
+                self.dt_bias.data.copy_(weight)
+                loaded.add("dt_bias")
+        return loaded
 
-class Apriel2KDAMixer(nn.Module, MambaBase):
+
+class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
     """Kimi Delta Attention mixer for Apriel2 using vLLM's KDA infrastructure.
 
-    This implements the KDA (Kimi Delta Attention) mixer following the same
-    patterns as vLLM's KimiDeltaAttention and uses the fla ops for kernels.
+    Inherits from AttentionLayerBase directly (not MambaBase) to avoid
+    the global mamba_page_size_padded assumption that breaks heterogeneous
+    block models like Apriel2.
     """
+
+    # State cache set by vLLM's bind_kv_cache
+    kv_cache: tuple[torch.Tensor, ...]
 
     @property
     def mamba_type(self) -> str:
+        # Use "gdn_attention" to match vLLM's KDA backend registration
         return "gdn_attention"
 
     def get_state_dtype(
@@ -876,6 +1389,32 @@ class Apriel2KDAMixer(nn.Module, MambaBase):
             self.tp_size, self.num_heads, self.head_dim, conv_kernel_size=self.conv_size
         )
 
+    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        """Return cache spec with unified page size for hybrid models.
+
+        The unified page size ensures all layers (attention, mamba, GDN, KDA)
+        have matching page_size_bytes, which is required by vLLM's KV cache
+        management.
+        """
+        config = vllm_config.model_config.hf_config
+        _, unified_page_size = get_unified_page_size_for_config(config, vllm_config)
+
+        block_size = (
+            vllm_config.cache_config.mamba_block_size
+            or vllm_config.model_config.max_model_len
+        )
+        return MambaSpec(
+            shapes=self.get_state_shape(),
+            dtypes=self.get_state_dtype(),
+            block_size=block_size,
+            page_size_padded=unified_page_size,
+            mamba_type=self.mamba_type,
+        )
+
+    def get_attn_backend(self) -> type[AttentionBackend]:
+        """Get the attention backend for KDA."""
+        return get_mamba_attn_backend(self.mamba_type)
+
     def __init__(
         self,
         config: Apriel2Config,
@@ -893,13 +1432,14 @@ class Apriel2KDAMixer(nn.Module, MambaBase):
         self.model_config = model_config
         self.cache_config = cache_config
 
-        # Extract KDA config params
-        self.num_heads = mixer_config.get("heads", 32)
-        self.head_dim = mixer_config.get("head_dim", 64)
-        conv_config = mixer_config.get("convolution_layer", {})
-        self.conv_size = conv_config.get("kernel_size", 4)
+        # Extract KDA config params - architecture values required
+        self.num_heads = mixer_config["heads"]
+        self.head_dim = mixer_config["head_dim"]
+        conv_config = mixer_config["convolution_layer"]
+        self.conv_size = conv_config["kernel_size"]
+        # Internal defaults for implementation details
         norm_config = mixer_config.get("normalization", {})
-        rms_norm_eps = norm_config.get("epsilon", config.rms_norm_eps)
+        rms_norm_eps = norm_config.get("epsilon", 1e-6)
 
         self.layer_idx = layer_idx
         self.prefix = prefix
@@ -985,10 +1525,11 @@ class Apriel2KDAMixer(nn.Module, MambaBase):
         self.k_conv1d.weight.data = self.k_conv1d.weight.data.unsqueeze(1)
         self.v_conv1d.weight.data = self.v_conv1d.weight.data.unsqueeze(1)
 
+        # Store A_log as 1D to match checkpoint format - fused_kda_gate accepts [H] or [1,1,H,1]
         self.A_log = nn.Parameter(
-            torch.empty(1, 1, self.local_num_heads, 1, dtype=torch.float32)
+            torch.empty(self.local_num_heads, dtype=torch.float32)
         )
-        set_weight_attrs(self.A_log, {"weight_loader": sharded_weight_loader(2)})
+        set_weight_attrs(self.A_log, {"weight_loader": sharded_weight_loader(0)})
 
         self.g_a_proj = ReplicatedLinear(
             self.hidden_size,
@@ -1024,7 +1565,6 @@ class Apriel2KDAMixer(nn.Module, MambaBase):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        positions: torch.Tensor,
         output: torch.Tensor,
     ) -> None:
         num_tokens = hidden_states.size(0)
@@ -1205,6 +1745,58 @@ class Apriel2KDAMixer(nn.Module, MambaBase):
             )
         core_attn_out[0, :num_actual_tokens] = core_attn_out_non_spec[0, :num_actual_tokens]
 
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        # Checkpoint to model name translations:
+        # beta_proj → b_proj, q_conv → q_conv1d, k_conv → k_conv1d, v_conv → v_conv1d, norm → o_norm
+        loaded = set()
+        for name, weight in weights:
+            if name == "beta_proj.weight":
+                self.b_proj.weight_loader(self.b_proj.weight, weight)
+                loaded.add("b_proj.weight")
+            elif name == "q_conv.weight":
+                self.q_conv1d.weight_loader(self.q_conv1d.weight, weight)
+                loaded.add("q_conv1d.weight")
+            elif name == "k_conv.weight":
+                self.k_conv1d.weight_loader(self.k_conv1d.weight, weight)
+                loaded.add("k_conv1d.weight")
+            elif name == "v_conv.weight":
+                self.v_conv1d.weight_loader(self.v_conv1d.weight, weight)
+                loaded.add("v_conv1d.weight")
+            elif name == "norm.weight":
+                self.o_norm.weight.data.copy_(weight)
+                loaded.add("o_norm.weight")
+            elif name == "q_proj.weight":
+                self.q_proj.weight_loader(self.q_proj.weight, weight)
+                loaded.add("q_proj.weight")
+            elif name == "k_proj.weight":
+                self.k_proj.weight_loader(self.k_proj.weight, weight)
+                loaded.add("k_proj.weight")
+            elif name == "v_proj.weight":
+                self.v_proj.weight_loader(self.v_proj.weight, weight)
+                loaded.add("v_proj.weight")
+            elif name == "o_proj.weight":
+                self.o_proj.weight_loader(self.o_proj.weight, weight)
+                loaded.add("o_proj.weight")
+            elif name == "f_a_proj.weight":
+                self.f_a_proj.weight_loader(self.f_a_proj.weight, weight)
+                loaded.add("f_a_proj.weight")
+            elif name == "f_b_proj.weight":
+                self.f_b_proj.weight_loader(self.f_b_proj.weight, weight)
+                loaded.add("f_b_proj.weight")
+            elif name == "g_a_proj.weight":
+                self.g_a_proj.weight_loader(self.g_a_proj.weight, weight)
+                loaded.add("g_a_proj.weight")
+            elif name == "g_b_proj.weight":
+                self.g_b_proj.weight_loader(self.g_b_proj.weight, weight)
+                loaded.add("g_b_proj.weight")
+            elif name == "A_log":
+                self.A_log.data.copy_(weight)
+                loaded.add("A_log")
+            elif name == "dt_bias":
+                self.dt_bias.data.copy_(weight)
+                loaded.add("dt_bias")
+        return loaded
+
 
 class Apriel2AttentionDecoderLayer(nn.Module):
     """Attention-based decoder layer for Apriel2."""
@@ -1223,31 +1815,34 @@ class Apriel2AttentionDecoderLayer(nn.Module):
 
         mixer_config = block_config.get("mixer", {})
         mlp_config = block_config.get("mlp", {})
+        norm_config = block_config.get("normalization", {})
 
-        self.self_attn = Apriel2Attention(
+        self.mixer = Apriel2Attention(
             config=config,
             mixer_config=mixer_config,
             layer_idx=layer_idx,
             cache_config=cache_config,
             quant_config=quant_config,
-            prefix=f"{prefix}.self_attn",
+            prefix=f"{prefix}.mixer",
         )
 
-        intermediate_size = mlp_config.get("intermediate_size", config.intermediate_size)
+        intermediate_size = mlp_config["intermediate_size"]
         mlp_bias = mlp_config.get("add_linear_biases", False)
+        hidden_act = mlp_config.get("activation", "silu")
+        rms_norm_eps = norm_config["epsilon"]
 
         self.mlp = Apriel2MLP(
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
-            hidden_act=config.hidden_act,
+            hidden_act=hidden_act,
             quant_config=quant_config,
             bias=mlp_bias,
             prefix=f"{prefix}.mlp",
         )
 
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=rms_norm_eps
         )
 
     def forward(
@@ -1262,7 +1857,7 @@ class Apriel2AttentionDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        hidden_states = self.self_attn(positions=positions, hidden_states=hidden_states)
+        hidden_states = self.mixer(positions=positions, hidden_states=hidden_states)
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
@@ -1286,6 +1881,7 @@ class Apriel2MambaDecoderLayer(nn.Module):
 
         mixer_config = block_config.get("mixer", {})
         mlp_config = block_config.get("mlp", {})
+        norm_config = block_config.get("normalization", {})
 
         self.mixer = Apriel2MambaMixer(
             config=config,
@@ -1297,21 +1893,23 @@ class Apriel2MambaDecoderLayer(nn.Module):
             prefix=f"{prefix}.mixer",
         )
 
-        intermediate_size = mlp_config.get("intermediate_size", config.intermediate_size)
+        intermediate_size = mlp_config["intermediate_size"]
         mlp_bias = mlp_config.get("add_linear_biases", False)
+        hidden_act = mlp_config.get("activation", "silu")
+        rms_norm_eps = norm_config["epsilon"]
 
         self.mlp = Apriel2MLP(
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
-            hidden_act=config.hidden_act,
+            hidden_act=hidden_act,
             quant_config=quant_config,
             bias=mlp_bias,
             prefix=f"{prefix}.mlp",
         )
 
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=rms_norm_eps
         )
 
     def forward(
@@ -1352,6 +1950,7 @@ class Apriel2GDNDecoderLayer(nn.Module):
 
         mixer_config = block_config.get("mixer", {})
         mlp_config = block_config.get("mlp", {})
+        norm_config = block_config.get("normalization", {})
 
         self.mixer = Apriel2GatedDeltaNet(
             config=config,
@@ -1364,21 +1963,23 @@ class Apriel2GDNDecoderLayer(nn.Module):
             prefix=f"{prefix}.mixer",
         )
 
-        intermediate_size = mlp_config.get("intermediate_size", config.intermediate_size)
+        intermediate_size = mlp_config["intermediate_size"]
         mlp_bias = mlp_config.get("add_linear_biases", False)
+        hidden_act = mlp_config.get("activation", "silu")
+        rms_norm_eps = norm_config["epsilon"]
 
         self.mlp = Apriel2MLP(
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
-            hidden_act=config.hidden_act,
+            hidden_act=hidden_act,
             quant_config=quant_config,
             bias=mlp_bias,
             prefix=f"{prefix}.mlp",
         )
 
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=rms_norm_eps
         )
 
     def forward(
@@ -1418,6 +2019,7 @@ class Apriel2KDADecoderLayer(nn.Module):
 
         mixer_config = block_config.get("mixer", {})
         mlp_config = block_config.get("mlp", {})
+        norm_config = block_config.get("normalization", {})
 
         self.mixer = Apriel2KDAMixer(
             config=config,
@@ -1429,21 +2031,23 @@ class Apriel2KDADecoderLayer(nn.Module):
             prefix=f"{prefix}.mixer",
         )
 
-        intermediate_size = mlp_config.get("intermediate_size", config.intermediate_size)
+        intermediate_size = mlp_config["intermediate_size"]
         mlp_bias = mlp_config.get("add_linear_biases", False)
+        hidden_act = mlp_config.get("activation", "silu")
+        rms_norm_eps = norm_config["epsilon"]
 
         self.mlp = Apriel2MLP(
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
-            hidden_act=config.hidden_act,
+            hidden_act=hidden_act,
             quant_config=quant_config,
             bias=mlp_bias,
             prefix=f"{prefix}.mlp",
         )
 
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=rms_norm_eps
         )
 
     def forward(
@@ -1521,8 +2125,8 @@ class Apriel2Model(nn.Module):
         else:
             self.embed_tokens = None
 
-        def get_layer(layer_prefix: str):
-            layer_idx = int(layer_prefix.rsplit(".", 1)[1])
+        def get_layer(*, prefix: str):
+            layer_idx = int(prefix.rsplit(".", 1)[1])
             mixer_type, block_config = get_block_config_for_layer(config, layer_idx)
             layer_class = ALL_DECODER_LAYER_TYPES.get(mixer_type)
 
@@ -1536,7 +2140,7 @@ class Apriel2Model(nn.Module):
                     block_config=block_config,
                     cache_config=cache_config,
                     quant_config=quant_config,
-                    prefix=layer_prefix,
+                    prefix=prefix,
                 )
             elif mixer_type == "mamba":
                 return layer_class(
@@ -1546,7 +2150,7 @@ class Apriel2Model(nn.Module):
                     model_config=model_config,
                     cache_config=cache_config,
                     quant_config=quant_config,
-                    prefix=layer_prefix,
+                    prefix=prefix,
                 )
             elif mixer_type == "gdn":
                 return layer_class(
@@ -1557,7 +2161,7 @@ class Apriel2Model(nn.Module):
                     cache_config=cache_config,
                     quant_config=quant_config,
                     speculative_config=vllm_config.speculative_config,
-                    prefix=layer_prefix,
+                    prefix=prefix,
                 )
             else:  # kda
                 return layer_class(
@@ -1567,10 +2171,10 @@ class Apriel2Model(nn.Module):
                     model_config=model_config,
                     cache_config=cache_config,
                     quant_config=quant_config,
-                    prefix=layer_prefix,
+                    prefix=prefix,
                 )
 
-        num_layers = config.decoder.get("num_blocks", config.num_hidden_layers)
+        num_layers = config.decoder["num_blocks"]
         self.start_layer, self.end_layer, self.layers = make_layers(
             num_layers,
             get_layer,
@@ -1578,7 +2182,8 @@ class Apriel2Model(nn.Module):
         )
 
         if get_pp_group().is_last_rank:
-            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            head_norm_eps = config.head["normalization"]["epsilon"]
+            self.norm = RMSNorm(config.hidden_size, eps=head_norm_eps)
         else:
             self.norm = None
 
@@ -1629,58 +2234,8 @@ class Apriel2Model(nn.Module):
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        stacked_params_mapping = [
-            # (param_name, shard_name, shard_id)
-            (".qkv_proj", ".q_proj", "q"),
-            (".qkv_proj", ".k_proj", "k"),
-            (".qkv_proj", ".v_proj", "v"),
-            (".gate_up_proj", ".gate_proj", 0),
-            (".gate_up_proj", ".up_proj", 1),
-        ]
 
-        params_dict = dict(self.named_parameters())
-        loaded_params: set[str] = set()
-
-        for name, loaded_weight in weights:
-            if "rotary_emb.inv_freq" in name:
-                continue
-            if "rotary_emb.cos_cached" in name or "rotary_emb.sin_cached" in name:
-                continue
-
-            # Handle A_log -> A conversion for mamba
-            if "A_log" in name:
-                name = name.replace("A_log", "A")
-
-            for param_name, weight_name, shard_id in stacked_params_mapping:
-                if weight_name not in name:
-                    continue
-                name = name.replace(weight_name, param_name)
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                if is_pp_missing_parameter(name, self):
-                    continue
-                param = params_dict[name]
-                weight_loader = param.weight_loader
-                weight_loader(param, loaded_weight, shard_id)
-                break
-            else:
-                if name.endswith(".bias") and name not in params_dict:
-                    continue
-                if is_pp_missing_parameter(name, self):
-                    continue
-                if name not in params_dict:
-                    continue
-                param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
-
-            loaded_params.add(name)
-
-        return loaded_params
-
-
-class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP, IsHybrid):
+class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
     """Apriel2 model for causal language modeling.
 
     Supports hybrid architectures with attention, mamba, GDN, and KDA mixers.
@@ -1688,20 +2243,16 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP, IsHybrid):
 
     hf_to_vllm_mapper = WeightsMapper(
         orig_to_new_substr={
-            ".self_attn.": ".",
-            ".A_log": ".A",
             "model.decoder.blocks.": "model.layers.",
         },
     )
 
-    packed_modules_mapping = {
-        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
-        "gate_up_proj": ["gate_proj", "up_proj"],
-    }
-
     # For hybrid models
     has_inner_state = True
-    is_hybrid = True
+    # Don't use is_hybrid=True - it triggers HybridAttentionMambaModelConfig
+    # which assumes all mamba-like layers have the same shape.
+    # Apriel2 has heterogeneous blocks, each with its own get_kv_cache_spec().
+    is_hybrid = False
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -1754,58 +2305,63 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP, IsHybrid):
         return logits
 
     @classmethod
-    def get_mamba_state_dtype_from_config(
+    def get_kv_cache_spec(
         cls,
         vllm_config: VllmConfig,
-    ) -> tuple[torch.dtype, torch.dtype]:
-        return MambaStateDtypeCalculator.mamba1_state_dtype(
-            vllm_config.model_config.dtype,
-            vllm_config.cache_config.mamba_cache_dtype,
-            vllm_config.cache_config.mamba_ssm_cache_dtype,
-        )
+    ) -> dict[str, KVCacheSpec]:
+        """Get KV cache specs for each layer.
 
-    @classmethod
-    def get_mamba_state_shape_from_config(
-        cls,
-        vllm_config: VllmConfig,
-    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        This returns a dict mapping layer names (e.g., "model.layers.0.mixer")
+        to their cache specs. Layers using the same block type share the same
+        spec (by equality), allowing vLLM to group them efficiently.
+
+        The flow:
+        1. get_block_params: parse configs, compute shapes/dtypes ONCE
+        2. get_block_page_sizes: extract page sizes from params
+        3. unify_block_page_sizes: find unified (block_size, page_size)
+        4. get_block_specs: create specs from params with unified sizes
+        5. map blocks to layers
+        """
         config = vllm_config.model_config.hf_config
-        parallel_config = vllm_config.parallel_config
-
-        # Get mamba config from decoder
         decoder_config = getattr(config, "decoder", {}) or {}
-        mamba_config = {}
 
-        # Find first mamba block config
-        seq_type = decoder_config.get("type", "fixed")
-        if seq_type == "fixed":
-            block_config = decoder_config.get("block", {})
-            if block_config.get("mixer", {}).get("type") == "mamba":
-                mamba_config = block_config.get("mixer", {})
-        elif seq_type == "pattern":
-            blocks_config = decoder_config.get("blocks", {})
-            for block_config in blocks_config.values():
-                if block_config.get("mixer", {}).get("type") == "mamba":
-                    mamba_config = block_config.get("mixer", {})
-                    break
+        # Get all unique block configs
+        blocks_config = get_blocks_config(decoder_config)
 
-        d_state = mamba_config.get("state_size", 16)
-        d_conv = mamba_config.get("d_conv", 4)
-        expand = mamba_config.get("expand", 2)
-        d_inner = mamba_config.get("d_inner", int(expand * config.hidden_size))
+        # Step 1: Parse configs and compute shapes/dtypes once
+        block_params = get_block_params(blocks_config, vllm_config)
 
-        return MambaStateShapeCalculator.mamba1_state_shape(
-            tp_world_size=parallel_config.tensor_parallel_size,
-            intermediate_size=d_inner,
-            state_size=d_state,
-            conv_kernel=d_conv,
+        # Step 2: Extract page sizes from params
+        attn_page_per_token, mamba_page_sizes = get_block_page_sizes(block_params)
+
+        # Step 3: Compute unified sizes
+        block_size, unified_page_size = unify_block_page_sizes(
+            attn_page_per_token, mamba_page_sizes
         )
 
-    def copy_inputs_before_cuda_graphs(self, input_buffers, **kwargs):
-        return self.mamba_cache.copy_inputs_before_cuda_graphs(input_buffers, **kwargs)
+        # Step 4: Create specs from params with unified sizes
+        block_specs = get_block_specs(
+            block_params, vllm_config, block_size, unified_page_size
+        )
 
-    def get_seqlen_agnostic_capture_inputs(self, batch_size: int):
-        return self.mamba_cache.get_seqlen_agnostic_capture_inputs(batch_size)
+        # Step 5: Map blocks to layers
+        num_layers = decoder_config.get("num_blocks", config.num_hidden_layers)
+        layer_specs: dict[str, KVCacheSpec] = {}
+
+        for layer_idx in range(num_layers):
+            block_name = get_block_name_for_layer(decoder_config, layer_idx)
+            block_config = blocks_config.get(block_name, {})
+            mixer_type = block_config.get("mixer", {}).get("type", "attention")
+
+            # Attention layers use self_attn, others use mixer
+            if mixer_type == "attention":
+                layer_name = f"model.layers.{layer_idx}.self_attn.attn"
+            else:
+                layer_name = f"model.layers.{layer_idx}.mixer"
+
+            layer_specs[layer_name] = block_specs[block_name]
+
+        return layer_specs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(
