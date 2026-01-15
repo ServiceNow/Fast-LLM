@@ -167,7 +167,7 @@ class Assert:
         )
 
     @staticmethod
-    def all_equal(x, *args):
+    def all_equal(x, *args, msg=None):
         import torch
 
         # Make it work for lists and numpy arrays.
@@ -181,7 +181,9 @@ class Assert:
                 index = None if x.numel() == 1 else torch.where(neq)  # noqa
                 raise AssertionError(
                     f"Tensors have {index[0].numel()} different entries out of "
-                    f"{x.numel()}: {x[index]} != {arg[index]} at index {torch.stack(index, -1)}"
+                    f"{x.numel()}: {x[index]} != {arg[index]} at index {torch.stack(index, -1)}" + ""
+                    if msg is None
+                    else f"| {msg}"
                 )
 
     @staticmethod
