@@ -51,3 +51,11 @@ class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
     @property
     def name(self) -> str:
         return self._dataset.name
+
+    @property
+    def requires_broadcast(self) -> bool:
+        """
+        Some dataset schemes load the dataset on a batch-data-parallel group leaders,
+        then broadcast to the other devices.
+        """
+        return self._dataset.requires_broadcast

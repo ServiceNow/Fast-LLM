@@ -8,8 +8,8 @@ import torch.utils.data
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.data.data_loader import DistributedDataLoaderWrapper, SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.data_loader import SampledDatasetIterator
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
@@ -116,20 +116,23 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
-        return iter(
-            torch.utils.data.DataLoader(
-                self._datasets[dataset_name],  # noqa
-                batch_sampler=SampledDatasetIterator(
-                    total_samples=len(self._datasets[dataset_name]),
-                    begin_index=consumed_samples,
-                    micro_batch_size=batch_config.micro_batch_size,
-                    data_rank=self._distributed.config.batch_data_rank,
-                    data_parallel=self._distributed.config.batch_data_parallel,
-                ),
-                num_workers=num_workers,
-                prefetch_factor=prefetch_factor,
-                pin_memory=True,
-                collate_fn=LanguageModelBatch.from_samples,
-                multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
-            )
+        data_loader = torch.utils.data.DataLoader(
+            self._datasets[dataset_name],  # noqa
+            batch_sampler=SampledDatasetIterator(
+                total_samples=len(self._datasets[dataset_name]),
+                begin_index=consumed_samples,
+                micro_batch_size=batch_config.micro_batch_size,
+                data_rank=self._distributed.config.batch_data_rank,
+                data_parallel=self._distributed.config.batch_data_parallel,
+            ),
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor,
+            pin_memory=True,
+            collate_fn=LanguageModelBatch.from_samples,
+            multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
         )
+
+        if self._datasets[dataset_name].requires_broadcast:
+            data_loader = DistributedDataLoaderWrapper(data_loader, self.distributed.model_and_sequence_data_group)
+
+        return iter(data_loader)
