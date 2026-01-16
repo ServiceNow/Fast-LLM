@@ -7,7 +7,7 @@ import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
@@ -164,7 +164,7 @@ class LMHeadTestConfig:
             label_loss = torch.nn.functional.cross_entropy(
                 logits.flatten(0, -2), labels.flatten(), reduction="none"
             ).mean()
-            losses["label_loss"] = label_loss.detach()
+            losses["label"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
@@ -176,7 +176,7 @@ class LMHeadTestConfig:
             if LanguageModelKwargs.loss_mask in kwargs:
                 distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask].flatten()
             distillation_loss = distillation_loss.mean()
-            losses["distillation_loss"] = distillation_loss.detach()
+            losses["distillation"] = distillation_loss.detach()
             total_loss = total_loss + float(self.distillation_loss) * distillation_loss
 
         if self.z_loss is not False:
@@ -188,11 +188,22 @@ class LMHeadTestConfig:
             total_loss = total_loss + float(self.z_loss) * z_loss
 
         total_loss.backward()
+
+        if len(losses) > 1:
+            losses[LM_HEAD_LOSS_NAME] = total_loss.detach()
+        else:
+            losses = {LM_HEAD_LOSS_NAME: total_loss.detach()}
+
+        if head._prediction_distance > 0:
+            losses = {f"{name}_{head._prediction_distance}": loss for name, loss in losses.items()}
+
         return total_loss.detach(), input_.grad, logit_weight.grad, normalization_weight.grad, losses
 
 
 _lm_head_test_configs = (
     # TODO: Test DPO loss.
+    # TODO: Add more configs
+    # TODO: Add distributed test
     LMHeadTestConfig("default"),
     LMHeadTestConfig("bfloat16", compute_dtype=DataType.bfloat16),
     LMHeadTestConfig("full_precision_residual", full_precision_residual=True),
@@ -274,22 +285,6 @@ def test_lm_head(test_config):
         else:
             logit_weight = head.output_weights
 
-        # lm_head_loss_name = f"lm_head_loss_{prediction_distance}" if prediction_distance > 0 else "lm_head_loss"
-        # expected_loss_keys = {lm_head_loss_name}
-
-        ## Get expected loss names from the loss configs
-        # for loss_name, loss_config in head._config.losses.items():
-        #    formatted_name = loss_config.get_formatted_name(loss_name, prediction_distance)
-        #    expected_loss_keys.add(formatted_name)
-
-        # if ref_z_loss is not None:
-        #     expected_loss_keys.add(f"z_loss_{prediction_distance}" if prediction_distance > 0 else "z_loss")
-
-        # Assert.eq(
-        #    {loss_definition.name: loss_definition.count for loss_definition in head.get_loss_definitions()},
-        #    {loss_key: 1 for loss_key in expected_loss_keys},
-        # )
-        # losses = {key: [] for key in expected_loss_keys}
         losses = collections.defaultdict(list)
         output, context = stage.forward(head_input, kwargs, losses)
         print(losses)
@@ -299,13 +294,13 @@ def test_lm_head(test_config):
             1e-5 if distributed.config.compute_dtype == DataType.float32 else 1e-4
         ) * test_config.logits_scale_factor
 
-        # Assert.eq(losses.keys(), expected_loss_keys)
-        # Assert.eq(len(losses[lm_head_loss_name]), 1)
-        # if ref_z_loss is not None:
-        #     Assert.eq(len(losses["z_loss"]), 1)
-        #     Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
+        Assert.eq(losses.keys(), ref_losses.keys())
+        for name, loss in losses.items():
+            assert len(loss) == 1, name
+        losses = {name: loss[0] for name, loss in losses.items()}
 
-        Assert.rms_close_relative(losses[head._total_head_loss_name][0], ref_total_loss, threshold, min_threshold)
+        for name, loss in losses.items():
+            Assert.rms_close_relative(loss, ref_losses[name], threshold, min_threshold, msg=name)
 
         if head._is_last_head:
             # Assert.all_equal(output, losses[lm_head_loss_name][0])

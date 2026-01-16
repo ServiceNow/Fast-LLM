@@ -29,10 +29,6 @@ class LanguageModelLossConfig(Config):
     def get_name(self, prediction_distance: int = 0) -> str:
         return self._name if prediction_distance == 0 else f"{self._name}_{prediction_distance}"
 
-    @property
-    def _name(self) -> str:
-        raise NotImplementedError()
-
     def get_loss(
         self,
         logits: "torch.Tensor",
@@ -53,7 +49,6 @@ class LanguageModelLossConfig(Config):
 
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
 class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
-    _name: typing.ClassVar[str] = "CE_loss"
     _abstract: typing.ClassVar[bool] = False
 
     loss_type: EntropyLossType = Field(
@@ -136,7 +131,6 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
 
 @config_class(dynamic_type={LanguageModelLossConfig: "distillation"})
 class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
-    _name: typing.ClassVar[str] = "FwdKL_loss"
     _abstract: typing.ClassVar[bool] = False
 
     loss_type: EntropyLossType = Field(
@@ -215,7 +209,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
 class LanguageModelDPOLossConfig(LanguageModelLossConfig):
     """Direct Preference Optimization (DPO) loss for alignment."""
 
-    _name: typing.ClassVar[str] = "DPO_loss"
     _abstract: typing.ClassVar[bool] = False
 
     beta: float = Field(
@@ -283,7 +276,6 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
 class LanguageModelZLossConfig(LanguageModelLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
-    _name: typing.ClassVar[str] = "Z_loss"
     _abstract: typing.ClassVar[bool] = False
 
     def get_loss(

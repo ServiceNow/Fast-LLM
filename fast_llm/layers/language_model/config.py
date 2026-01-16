@@ -1,5 +1,4 @@
 import abc
-import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -36,8 +35,7 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     mask_inputs = "mask_inputs"
 
 
-def _format_name(name: str) -> str:
-    return name.replace("_", " ")
+LM_HEAD_LOSS_NAME = "lm_head_loss"
 
 
 @config_class()
@@ -202,10 +200,7 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
                 if "losses" not in self._explicit_fields:
                     self.losses = {"lm_loss": LanguageModelLabelEntropyLossConfig()}
         super()._validate()
-
-    @functools.cached_property
-    def _loss_configs(self) -> dict[type, LanguageModelLossConfig]:
-        return {loss.__class__: loss for loss in self.losses.values()}
+        assert LM_HEAD_LOSS_NAME not in self.losses
 
     @property
     def max_prediction_distance(self) -> int:

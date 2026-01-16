@@ -14,7 +14,6 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
-from fast_llm.layers.language_model.head import _format_name
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -287,7 +286,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             loss_definitions.append(
                 LossDef(
                     name=self._activation_distillation_loss_name,
-                    formatted_name=_format_name(self._activation_distillation_loss_name),
+                    formatted_name=self._activation_distillation_loss_name,
                     count=count,
                 )
             )

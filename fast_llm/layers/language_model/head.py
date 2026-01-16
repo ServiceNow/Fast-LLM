@@ -1,5 +1,4 @@
 import abc
-import functools
 import logging
 import typing
 
@@ -20,11 +19,11 @@ from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
+    LM_HEAD_LOSS_NAME,
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
-    _format_name,
 )
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
@@ -96,10 +95,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-
-        self._formatted_loss_names = {}
-        for registered_loss_name, loss_config in self._config.losses.items():
-            self._formatted_loss_names[registered_loss_name] = loss_config.get_name(self._prediction_distance)
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (loss)
@@ -227,7 +222,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             all_reduce(loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
 
         if losses is not None:
-            losses[self._total_head_loss_name].append(loss)
+            losses[self.get_full_loss_name(LM_HEAD_LOSS_NAME)].append(loss)
             if len(self._config.losses) > 1:
                 for name, loss_ in losses_.items():
                     if self._config.cross_entropy_splits != 1:
@@ -235,7 +230,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     if self._sequence_parallel_logits:
                         # TODO: Async
                         all_reduce(loss_, op=ReduceOp.AVG, group=self._parallel_dim.group)
-                    losses[self.config.losses[name].get_name(self._prediction_distance)].append(loss_)
+                    losses[name].append(loss_)
 
         return loss, input_grad
 
@@ -304,31 +299,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         return losses, output_parallel_linear_backward(grad, context) if self.training else None
 
-    @functools.cached_property
-    def _total_head_loss_name(self) -> str:
-        """
-        Combined total scaled loss used for training.
-        """
-        name = "lm_head_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return [
-            LossDef(
-                name=self._total_head_loss_name, formatted_name=_format_name(self._total_head_loss_name), count=count
-            ),
+            LossDef(name=(name := self.get_full_loss_name(LM_HEAD_LOSS_NAME)), formatted_name=name, count=count),
             *(
                 LossDef(
-                    name=loss_config.get_name(self._prediction_distance),
-                    formatted_name=_format_name(loss_config.get_name(self._prediction_distance)),
+                    name=(name_ := self.get_full_loss_name(name)),
+                    formatted_name=name_,
                     count=count,
                     dtype=DataType.float32,
                 )
-                for loss_config in self._config.losses.values()
+                for name, loss_config in self._config.losses.values()
             ),
         ]
+
+    def get_full_loss_name(self, name) -> str:
+        if self._prediction_distance > 0:
+            name = f"{name}_{self._prediction_distance}"
+        return name
 
     @property
     def heads(self):
