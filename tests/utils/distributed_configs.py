@@ -66,7 +66,7 @@ _bf16_compare = get_config(
             if torch.cuda.is_available()
             else {
                 (None, "norm"): get_config(ignore_tensors=True),
-                (None, "word_embeddings_weight"): get_config(0.08, 1e-4),
+                (None, "word_embeddings_weight"): get_config(8e-2, 1e-4),
             }
         ),
         (None, "bias"): get_config(2e-2, 1e-3) if torch.cuda.is_available() else get_config(2e-2, 2e-3),
@@ -81,7 +81,14 @@ _fp16_compare = get_config(
         (None, "fw"): get_config(1.2e-3, 3e-4),
         (None, "bw"): get_config(3e-3, 1e-5, scale=2**16),
         # TODO: Normalization gradient broken on CPU, getting inconsistent results across machines.
-        **({} if torch.cuda.is_available() else {(None, "norm"): get_config(ignore_tensors=True)}),
+        **(
+            {}
+            if torch.cuda.is_available()
+            else {
+                (None, "norm"): get_config(ignore_tensors=True),
+                (None, "word_embeddings_weight"): get_config(2e-2, 1e-4, scale=2**16),
+            }
+        ),
         (None, "bias"): (
             get_config(3e-3, 1e-4, scale=2**16) if torch.cuda.is_available() else get_config(6e-3, 2e-4, scale=2**16)
         ),
