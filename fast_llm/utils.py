@@ -423,6 +423,15 @@ def get_and_reset_memory_usage_mib(
     global _global_max_allocated, _global_max_reserved
     import torch
 
+    if not torch.cuda.is_available():
+        return {
+            "reserved": 0.0,
+            "allocated": 0.0,
+            "max_reserved": 0.0,
+            "max_allocated": 0.0,
+            "global_max_reserved": 0.0,
+        }
+
     if clear_cache:
         # Free memory for more accurate reporting, and to reduce OOM risk with lots of workers.
         # Cublas workspace can unnecessarily keep 100s of MBs of reserved memory.

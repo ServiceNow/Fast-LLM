@@ -227,6 +227,11 @@ class DistributedConfig(Config):
         hint=FieldHint.optional,
         valid=check_field(Assert.gt, 0),
     )
+    use_cuda: bool = Field(
+        default=True,
+        desc="Enable CUDA device.",
+        hint=FieldHint.expert,
+    )
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
     # TODO: Rename to compute_dtype (not just for training), move elsewhere
     compute_dtype: DataType = Field(

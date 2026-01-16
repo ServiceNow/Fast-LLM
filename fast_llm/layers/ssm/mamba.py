@@ -21,14 +21,10 @@ from fast_llm.utils import div
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
-    _mamba_available = True
-    sig = inspect.signature(selective_scan_fn)
+    _mamba_available = torch.cuda.is_available()
     # for training with packing install https://github.com/jxiw/varlen_mamba
     # see https://github.com/jxiw/M1/blob/main/HYBRID_PACK.md
-    if "position_indices" in sig.parameters:
-        _mamba_varlen_available = True
-    else:
-        _mamba_varlen_available = False
+    _mamba_varlen_available = "position_indices" in inspect.signature(selective_scan_fn).parameters
 
 except (ImportError, RuntimeError):
     _mamba_available = False

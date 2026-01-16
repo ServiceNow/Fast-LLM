@@ -11,7 +11,6 @@ from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from tests.utils.model_configs import ModelTestingGroup
-from tests.utils.utils import requires_cuda
 
 
 def _prepare_data(tokenizer, use_batch_size2: bool):
@@ -206,7 +205,6 @@ def _test_generate(
 
 
 @pytest.mark.extra_slow
-@requires_cuda
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
     [
@@ -238,7 +236,6 @@ def test_generate(
     )
 
 
-@pytest.mark.slow
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_export_for_generate(run_test_script_for_all_models, model_testing_config):
     # Not really testing, anything, but handles dependencies more easily than a fixture.
@@ -254,7 +251,6 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
 
 
 @pytest.mark.slow
-@requires_cuda
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
@@ -307,7 +303,6 @@ def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
     )
 
 
-@requires_cuda
 @pytest.mark.extra_slow
 def test_generate_from_model(
     model_path,
@@ -315,7 +310,6 @@ def test_generate_from_model(
     _test_generate_from_model(model_path, AutoTokenizer.from_pretrained(model_path), LlamaCheckpointFormat)
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
@@ -356,7 +350,6 @@ def _test_forward_return_hidden_states(
 
 
 @pytest.mark.extra_slow
-@requires_cuda
 def test_forward_return_hidden_states(model_path):
     _test_forward_return_hidden_states(
         model_path, LlamaCheckpointFormat, AutoTokenizer.from_pretrained(model_path).vocab_size
@@ -364,7 +357,6 @@ def test_forward_return_hidden_states(model_path):
 
 
 @pytest.mark.slow
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 def test_small_forward_return_hidden_states(model_testing_config, run_test_script_base_path):

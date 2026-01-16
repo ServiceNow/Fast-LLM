@@ -1,6 +1,5 @@
 import typing
 
-from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
 from fast_llm.utils import Assert, div
@@ -84,12 +83,10 @@ def _init_attention_megatron(
         generator,
     )
     if "dense" in meta.tensor_name:
-        kv_dim = 1
         tensor_ = dense_tensor_
     else:
         # Keep the original random state for key_value and dense.
         generator.set_state(state)
-        kv_dim = 0
         if "query" in meta.tensor_name:
             # We want to generate the same tensor for key_value.
             tensor_ = qkv_tensor_[:, :heads_per_group]
@@ -98,12 +95,6 @@ def _init_attention_megatron(
         else:
             raise NotImplementedError(meta.tensor_name)
 
-    if isinstance(config.mixer.rotary, DefaultRotaryConfig) and config.mixer.rotary.complex_format:
-        from fast_llm.layers.attention.rotary.config import convert_rotary_real_to_complex
-
-        # Megatron uses (2, head_size/2) for the complex split; we use (head_size/2, 2).
-        # TODO: Avoid unnecessarily changing the value and dense tensors.
-        tensor_ = convert_rotary_real_to_complex(tensor_.view_as(meta), config.mixer.head_size, kv_dim)
     return tensor_
 
 
