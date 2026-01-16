@@ -166,7 +166,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 self._config.local_world_size,
                 self._config.timeout,
                 self._config.use_cuda,
-                self._config.backend,
+                backend=self._config.backend,
             )
         else:
             self._pool = _default_pool
