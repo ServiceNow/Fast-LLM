@@ -1,0 +1,47 @@
+# Example: Prune homogeneous supernet to heterogeneous network (Step 2 of 2)
+#
+# This is the second step of a two-surgery workflow. Run after step 1.
+#
+# Step 1: Convert fixed -> pattern and set main_mixer_name per block type
+# Step 2: Unwrap stochastic to non-stochastic (this file)
+#
+# What this surgery does:
+# -----------------------
+# For each block type, unwrap the stochastic mixer to a non-stochastic mixer.
+# The weights come from the main_mixer_name set in step 1:
+#   - attn_block: main=attention -> unwrap to attention
+#   - gdn_block: main=gdn -> unwrap to gdn
+#   - kda_block: main=kda -> unwrap to kda
+#   - swa_block: main=sliding_window -> unwrap to sliding_window
+#
+# Usage (chained):
+#   python convert.py supernet_checkpoint output/ \
+#       -s examples/prune_supernet_step1.yaml \
+#       -s examples/prune_supernet_step2.yaml
+
+decoder:
+  blocks:
+    attn_block:
+      mixer:
+        type: attention
+        init: transfer
+
+    gdn_block:
+      mixer:
+        type: gdn
+        init: transfer
+        convolution_layer:
+          kernel_size: 4
+
+    kda_block:
+      mixer:
+        type: kda
+        init: transfer
+        convolution_layer:
+          kernel_size: 4
+
+    swa_block:
+      mixer:
+        type: attention
+        init: transfer
+        window_size: 4096
