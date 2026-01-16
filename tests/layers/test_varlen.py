@@ -8,16 +8,15 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
-from fast_llm.layers.ssm import gdn as gdn_module
-from fast_llm.layers.ssm import kda as kda_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
+from fast_llm.layers.ssm.gdn import _causal_conv1d_available
+from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage, requires_cuda
+from tests.utils.utils import get_stage
 
 
 # TODO: include mamba varlen
 @pytest.mark.slow
-@requires_cuda
 @pytest.mark.parametrize(
     "config",
     [
@@ -34,13 +33,11 @@ from tests.utils.utils import get_stage, requires_cuda
         ),
         pytest.param(
             GatedDeltaNetConfig(value_heads=4, key_heads=2, key_head_dim=16, value_head_dim=16),
-            marks=pytest.mark.skipif(
-                gdn_module.chunk_gated_delta_rule is None, reason="GDN fused kernels not available"
-            ),
+            marks=pytest.mark.skipif(not _causal_conv1d_available, reason="GDN not available"),
         ),
         pytest.param(
             KimiDeltaAttentionConfig(heads=4, head_dim=16),
-            marks=pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available"),
+            marks=pytest.mark.skipif(not _kda_available, reason="KDA not available"),
         ),
     ],
 )
@@ -50,7 +47,9 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     """
     hidden_size = 32
     hidden_dim = TensorDim("hidden", hidden_size)
-    distributed = Distributed(distributed_config := DistributedConfig(compute_dtype=DataType.float16))
+    distributed = Distributed(
+        distributed_config := DistributedConfig(compute_dtype=DataType.float16, use_cuda=torch.cuda.is_available())
+    )
     mixer = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
     stage = get_stage([mixer], distributed)
 
@@ -71,11 +70,15 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
         BlockKwargs.device: distributed.device,
         BlockKwargs.sequence_first: False,
         BlockKwargs.hidden_dims: (hidden_dim,),
+    }
+
+    kwargs_packed = {
+        **kwargs,
+        BlockKwargs.sequence_lengths: sequence_lengths,
+        BlockKwargs.sequence_length: seq_len,
         BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
         BlockKwargs.sequence_k_dim: TensorDim("", seq_len),
     }
-
-    kwargs_packed = {**kwargs, BlockKwargs.sequence_lengths: sequence_lengths}
     mixer.preprocess(kwargs_packed)
 
     out_packed, context = stage.forward(hidden_states, kwargs_packed)
@@ -89,7 +92,14 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     out_refs = []
     for i in range(batch_size):
         for seq in torch.split(hidden_states[i], sequence_lengths[i], dim=0):
-            kwargs_seq = {**kwargs, BlockKwargs.sequence_lengths: [[len(seq)]]}
+            seq_len_ = len(seq)
+            kwargs_seq = {
+                **kwargs,
+                BlockKwargs.sequence_lengths: [[seq_len_]],
+                BlockKwargs.sequence_length: seq_len_,
+                BlockKwargs.sequence_q_dim: TensorDim("", seq_len_),
+                BlockKwargs.sequence_k_dim: TensorDim("", seq_len_),
+            }
             mixer.preprocess(kwargs_seq)
             out, context = stage.forward(seq.unsqueeze(0), kwargs_seq)
             stage.backward(torch.ones_like(out), context)

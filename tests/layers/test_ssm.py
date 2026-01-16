@@ -1,5 +1,6 @@
 import pytest
 import torch
+import transformers
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
@@ -7,17 +8,11 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
-from fast_llm.layers.ssm import kda as kda_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
+from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba, KimiDeltaAttention
-from tests.utils.utils import get_stage, requires_cuda
-
-try:
-    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba
-except ImportError:
-    Apriel2GatedDeltaNet = None
-    Apriel2Mamba = None
+from tests.utils.utils import get_stage
 
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
@@ -26,7 +21,9 @@ SEQ_LEN = 65
 def _compare_mixers(
     fast_llm_config: MixerConfig, hf_layer: torch.nn.Module, param_map: dict[str, str], threshold=1e-5
 ):
-    distributed = Distributed(distributed_config := DistributedConfig(compute_dtype=DataType.bfloat16))
+    distributed = Distributed(
+        distributed_config := DistributedConfig(compute_dtype=DataType.bfloat16, use_cuda=torch.cuda.is_available())
+    )
     fast_llm_layer = fast_llm_config.get_layer(
         distributed_config,
         TensorDim("", HIDDEN_SIZE),
@@ -77,10 +74,9 @@ def _compare_mixers(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(Apriel2GatedDeltaNet is None, reason="Apriel GDN deps missing")
-@requires_cuda
+# Arguments ('seq_idx',) not implemented for torch implementation of 1d convolution.
+@pytest.mark.skipif(not transformers.utils.import_utils.is_causal_conv1d_available(), reason="GDN deps missing")
 def test_gdn():
-    device = torch.device("cuda")
     dtype = torch.bfloat16
 
     NUM_V_HEADS = 4
@@ -98,7 +94,7 @@ def test_gdn():
 
     hf_layer = (
         Apriel2GatedDeltaNet(HIDDEN_SIZE, {**config_common, "norm_eps": 1e-5}, layer_idx=0, dtype=dtype)
-        .to(device=device, dtype=dtype)
+        .to(device="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype)
         .eval()
     )
     fast_llm_config = GatedDeltaNetConfig.from_dict(config_common, {"normalization": {"epsilon": 1e-5}})
@@ -106,8 +102,7 @@ def test_gdn():
 
 
 @pytest.mark.slow
-@requires_cuda
-@pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available")
+@pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")
 def test_kda():
     NUM_HEADS = 4
     HEAD_DIM = 4
@@ -128,10 +123,9 @@ def test_kda():
 
 
 @pytest.mark.slow
-@requires_cuda
 @pytest.mark.parametrize("add_linear_biases", [True, False])
 @pytest.mark.parametrize("repeat_kv_before_conv", [True, False])
-@pytest.mark.skipif(Apriel2Mamba is None, reason="Apriel2 Mamba not available")
+@pytest.mark.skipif(not transformers.utils.import_utils.is_mamba_ssm_available(), reason="Mamba not available")
 def test_mamba(add_linear_biases, repeat_kv_before_conv):
     D_INNER = 128
     D_XB = 64

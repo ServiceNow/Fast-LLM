@@ -273,7 +273,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                             loss_mask[sample_index, begin:end] = False
                     labels = torch.where(loss_mask, labels, -100)
 
-                if self._config.head.distillation_model is not None:  # loss masks only used for distillation currently
+                if self._config.head.get_distillation_models():  # loss masks only used for distillation currently
                     # loss masks contain all three sources of masking: padding, user-defined spans, image placeholders
                     kwargs[LanguageModelKwargs.loss_mask] = labels >= 0
 

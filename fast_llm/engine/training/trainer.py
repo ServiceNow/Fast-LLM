@@ -358,7 +358,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # TODO: Synchronization is probably unnecessary.
         safe_barrier(self._distributed.world_group, "train begin")
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         start_time = time.perf_counter()
         last_time = start_time
         start_iteration = self._completed_steps

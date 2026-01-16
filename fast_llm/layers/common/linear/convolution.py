@@ -7,7 +7,7 @@ from fast_llm.tensor import ParameterMeta, TensorMeta
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
-    _causal_conv1d_available = True
+    _causal_conv1d_available = torch.cuda.is_available()
 except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 

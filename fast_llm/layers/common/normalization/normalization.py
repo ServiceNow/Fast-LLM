@@ -22,14 +22,14 @@ from fast_llm.utils import Assert
 try:
     import fused_layer_norm_cuda  # noqa
 
-    _fused_normalization_available = True
+    _fused_normalization_available = torch.cuda.is_available()
 except ImportError:
     _fused_normalization_available = False
 
 try:
     import fast_layer_norm  # noqa
 
-    _fast_normalization_available = True
+    _fast_normalization_available = torch.cuda.is_available()
 except ImportError:
     _fast_normalization_available = False
 
@@ -190,7 +190,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
                 and not self._config.zero_centered
             ):
                 implementation = NormalizationImplementation.fast
-            elif TritonConfig.TRITON_ENABLED or self._config.zero_centered:
+            elif (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered:
                 log_main_rank("Fast layer norm unavailable, using backup triton implementation.")
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
@@ -259,7 +259,7 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         assert not hidden_dim.is_parallel
         implementation = self._config.implementation
         if implementation == NormalizationImplementation.auto:
-            if TritonConfig.TRITON_ENABLED or self._config.zero_centered:
+            if (TritonConfig.TRITON_ENABLED and torch.cuda.is_available()) or self._config.zero_centered:
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
                 log_main_rank("Triton RMS norm unavailable, using fused implementation.")

@@ -92,7 +92,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._vocab_parallel:
                     self._cross_entropy_impl = CrossEntropyImpl.fused
-                elif TritonConfig.TRITON_ENABLED:
+                elif TritonConfig.TRITON_ENABLED and torch.cuda.is_available():
                     self._cross_entropy_impl = CrossEntropyImpl.triton
                 else:
                     self._cross_entropy_impl = CrossEntropyImpl.fused

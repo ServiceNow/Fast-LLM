@@ -22,7 +22,7 @@ try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
     from flash_attn.flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
 
-    _flash_available = True
+    _flash_available = torch.cuda.is_available()
 except ImportError:
     _flash_available = False
 
@@ -222,7 +222,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         attn_weights = torch.dropout(attn_weights, self._config.dropout, self.training)
         attn_output = torch.bmm(
-            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
+            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk).to(value.dtype), value
         )
 
         if self._local_head_groups == 1:

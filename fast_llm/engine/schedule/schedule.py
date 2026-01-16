@@ -281,7 +281,7 @@ class Schedule(abc.ABC):
             for step in device_steps:
                 buffer_index = weight_buffer_indices[step.stage]
                 if buffer_contents.get(buffer_index) != step.stage:
-                    if self._schedule_config.data_overlap:
+                    if self._schedule_config.data_overlap and self._distributed_config.use_cuda:
                         step.restore_step = device_steps[buffer_last_used.get(buffer_index, -1) + 1]
                         step.restore_event = torch.cuda.Event()
                     else:
@@ -378,7 +378,7 @@ class Schedule(abc.ABC):
                     launch_step.recv_launch.append(recv_step)
                     send_step.send_to = launch_step
                     recv_step.recv_step = launch_step
-                    if self._schedule_config.pipeline_overlap:
+                    if self._schedule_config.pipeline_overlap and self._distributed_config.use_cuda:
                         recv_step.recv_event = torch.cuda.Event()
 
     def _validate_send_recv_steps(self) -> None:
@@ -449,7 +449,7 @@ class Schedule(abc.ABC):
             raise RuntimeError(f"Cannot find valid timeline for {self}, \nStatuses:{msg}")
 
     def _setup_throttle_steps(self) -> None:
-        if not self._schedule_config.throttle_cpu:
+        if not self._schedule_config.throttle_cpu or not self._distributed_config.use_cuda:
             return
         for device_steps in self._device_steps:
             for i, step in enumerate(device_steps):

@@ -19,9 +19,10 @@ from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
 from fast_llm.layers.attention.rotary.rotary import (
-    apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,
+    rotary_embeddings_complex,
+    rotary_embeddings_real,
 )
 from fast_llm.utils import Assert, rms_diff
 from tests.utils.utils import requires_cuda
@@ -81,30 +82,32 @@ def test_triton_add():
 )
 def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
-
-    y1 = apply_rotary_embeddings(
-        x,
-        DefaultRotaryConfig(triton=False)
+    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.float32, device="cuda")
+    frequencies = (
+        DefaultRotaryConfig()
         .get_layer(TensorDim("", head_size))
         ._get_frequencies(
             sequence_length,
             head_size,
             device="cuda",
-        ),
+        )
     )
 
-    y2 = convert_rotary_real_to_complex(
-        triton_rotary_(
-            convert_rotary_complex_to_real(x, head_size, 3),
-            DefaultRotaryConfig(triton=True)
-            .get_layer(TensorDim("", head_size))
-            ._get_frequencies(sequence_length, head_size, device="cuda"),
+    y_real = rotary_embeddings_real(x, frequencies)
+
+    y_complex = convert_rotary_complex_to_real(
+        rotary_embeddings_complex(
+            convert_rotary_real_to_complex(x, head_size, 3),
+            torch.view_as_complex(convert_rotary_real_to_complex(frequencies, head_size, 3).unflatten(-1, (-1, 2))),
         ),
         head_size,
         3,
     )
-    Assert.rms_close(y1, y2, 1e-3)
+
+    y_triton = triton_rotary_(x, frequencies)
+
+    Assert.rms_close(y_real, y_complex, 1e-4)
+    Assert.rms_close(y_real, y_triton, 1e-4)
 
 
 @requires_cuda
