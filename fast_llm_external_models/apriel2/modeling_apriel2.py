@@ -1590,8 +1590,8 @@ class KimiDeltaAttention(nn.Module):
                 v=v,
                 g=g,
                 beta=beta,
-                initial_state=None,
-                output_final_state=False,
+                initial_state=recurrent_state,
+                output_final_state=past_key_values is not None,
                 use_qk_l2norm_in_kernel=True,
             )
         else:

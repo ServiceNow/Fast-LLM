@@ -979,6 +979,95 @@ class TestKDAEquivalence:
             msg=f"Apriel2 KDA vs FLA KDA (batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
         )
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    @pytest.mark.parametrize("prefill_len", [4, 8, 16])
+    def test_chunked_vs_recurrent(
+        self,
+        kda_config,
+        seed,
+        prefill_len,
+    ):
+        """Verify KDA recurrent mode (fused_recurrent_kda) matches chunked mode (chunk_kda).
+
+        This tests the inference path: after prefilling N tokens with chunked mode,
+        subsequent single-token decodes using recurrent mode should produce the same
+        output as if we had run the full sequence through chunked mode.
+        """
+        from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
+
+        num_heads, head_dim = kda_config
+        hidden_size = num_heads * head_dim
+        batch_size = 2
+        total_len = prefill_len + 4  # Prefill + 4 decode steps
+
+        config_dict = {
+            "type": "kda",
+            "heads": num_heads,
+            "head_dim": head_dim,
+            "convolution_layer": {"kernel_size": 4},
+            "normalization": {"epsilon": 1e-5},
+        }
+
+        # Create model
+        torch.manual_seed(seed)
+        model = KimiDeltaAttention(hidden_size, config_dict, layer_idx=0)
+        model = model.cuda()
+        model.eval()
+
+        # Create input sequence
+        torch.manual_seed(seed + 1)
+        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
+
+        # === Reference: Run full sequence through chunked mode ===
+        # Force chunk mode by using long sequence or setting mode directly
+        model.mode = "chunk"
+        with torch.no_grad():
+            reference_output = model(full_hidden_states)[0]
+
+        # === Test: Prefill + decode ===
+        # Create a simple cache object to hold conv and recurrent states
+        class SimpleCache:
+            def __init__(self):
+                self.conv_states = {0: None}
+                self.recurrent_states = {0: None}
+
+        cache = SimpleCache()
+
+        # Prefill phase - force chunk mode
+        model.mode = "chunk"
+        prefill_input = full_hidden_states[:, :prefill_len, :]
+        with torch.no_grad():
+            prefill_output = model(
+                prefill_input,
+                past_key_values=cache,
+            )[0]
+
+        # Decode phase - one token at a time (will use fused_recurrent since seq_len=1 <= 64)
+        model.mode = "fused_recurrent"  # Ensure recurrent mode for decode
+        decode_outputs = []
+        for i in range(prefill_len, total_len):
+            decode_input = full_hidden_states[:, i : i + 1, :]
+            with torch.no_grad():
+                decode_output = model(
+                    decode_input,
+                    past_key_values=cache,
+                )[0]
+            decode_outputs.append(decode_output)
+
+        # Concatenate prefill + decode outputs
+        test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
+
+        # Use looser tolerance for chunked vs recurrent comparison
+        # (different processing order leads to numerical differences)
+        assert_close(
+            test_output,
+            reference_output,
+            rtol=1e-3,
+            atol=1e-3,
+            msg=f"KDA chunked vs recurrent mode (prefill={prefill_len}, total={total_len})",
+        )
+
 
 # =============================================================================
 # SECTION 3: FAST PATH vs SLOW PATH TESTS
