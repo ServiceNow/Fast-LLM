@@ -811,6 +811,95 @@ class TestGDNEquivalence:
             msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet (batch={batch_size}, seq={seq_len})",
         )
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    @pytest.mark.parametrize("prefill_len", [4, 8, 16])
+    def test_chunked_vs_recurrent(
+        self,
+        gdn_config,
+        seed,
+        prefill_len,
+    ):
+        """Verify GDN recurrent mode (decode) matches chunked mode (prefill).
+
+        This tests the inference path: after prefilling N tokens with chunked mode,
+        subsequent single-token decodes using recurrent mode should produce the same
+        output as if we had run the full sequence through chunked mode.
+        """
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+
+        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
+        hidden_size = 256
+        batch_size = 2
+        total_len = prefill_len + 4  # Prefill + 4 decode steps
+
+        config_dict = {
+            "type": "gdn",
+            "value_heads": value_heads,
+            "key_heads": key_heads,
+            "key_head_dim": key_head_dim,
+            "value_head_dim": value_head_dim,
+            "convolution_layer": {"kernel_size": 4},
+            "norm_eps": 1e-5,
+        }
+
+        # Create model
+        torch.manual_seed(seed)
+        model = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
+        model = model.cuda()
+        model.eval()
+
+        # Create input sequence
+        torch.manual_seed(seed + 1)
+        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
+
+        # === Reference: Run full sequence through chunked mode ===
+        with torch.no_grad():
+            reference_output = model(full_hidden_states)[0]
+
+        # === Test: Prefill + decode ===
+        # Create a simple cache object to hold conv and recurrent states
+        class SimpleCache:
+            def __init__(self):
+                self.conv_states = {0: None}
+                self.recurrent_states = {0: None}
+
+        cache = SimpleCache()
+
+        # Prefill phase
+        prefill_input = full_hidden_states[:, :prefill_len, :]
+        with torch.no_grad():
+            prefill_output = model(
+                prefill_input,
+                past_key_values=cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )[0]
+
+        # Decode phase - one token at a time
+        decode_outputs = []
+        for i in range(prefill_len, total_len):
+            decode_input = full_hidden_states[:, i : i + 1, :]
+            with torch.no_grad():
+                decode_output = model(
+                    decode_input,
+                    past_key_values=cache,
+                    cache_position=torch.tensor([i], device="cuda"),
+                )[0]
+            decode_outputs.append(decode_output)
+
+        # Concatenate prefill + decode outputs
+        test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
+
+        # Use looser tolerance for chunked vs recurrent comparison
+        # (different processing order leads to numerical differences)
+        assert_close(
+            test_output,
+            reference_output,
+            rtol=1e-3,
+            atol=1e-3,
+            msg=f"GDN chunked vs recurrent mode (prefill={prefill_len}, total={total_len})",
+        )
+
 
 # =============================================================================
 # SECTION 2: EQUIVALENCE TESTS - KimiDeltaAttention
