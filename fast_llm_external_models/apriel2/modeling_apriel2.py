@@ -1323,8 +1323,17 @@ class Apriel2GatedDeltaNet(nn.Module):
         """Single-step recurrent update for cached inference.
 
         Input shapes: [batch, seq=1, heads, dim]
-        Need shapes: [batch, heads, dim] for einsum operations
+        State shape: [batch, heads, key_dim, value_dim]
+
+        Implements the delta rule recurrence:
+            1. Decay state: S = S * exp(g)
+            2. Retrieve memory: mem = S @ k
+            3. Compute delta: delta = (v - mem) * beta
+            4. Update state: S = S + k ⊗ delta
+            5. Output: o = S @ q (scaled)
         """
+        input_dtype = query.dtype
+
         # Transpose from [batch, seq, heads, dim] to [batch, heads, seq, dim]
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
@@ -1334,6 +1343,10 @@ class Apriel2GatedDeltaNet(nn.Module):
         query = _l2norm(query, dim=-1, eps=1e-6)
         key = _l2norm(key, dim=-1, eps=1e-6)
 
+        # Apply query scaling (matches chunked mode)
+        scale = 1.0 / (query.shape[-1] ** 0.5)
+        query = query * scale
+
         # Reshape for computation: [batch, heads, 1, dim] -> [batch, heads, dim]
         query = query.squeeze(2)
         key = key.squeeze(2)
@@ -1341,18 +1354,27 @@ class Apriel2GatedDeltaNet(nn.Module):
         g = g.squeeze(1)
         beta = beta.squeeze(1)
 
-        # Update state: S = exp(g) * S + beta * k^T @ v
-        # Keep everything in the same dtype as input (exp() returns float32, need to convert back)
-        input_dtype = query.dtype
+        # 1. Decay state: S = S * exp(g)
         decay = g.exp().to(input_dtype).unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
-        k_outer_v = torch.einsum("bhk,bhv->bhkv", key * beta.unsqueeze(-1), value)
-        state = decay * state + k_outer_v
+        state = state * decay
 
-        # Output: o = q @ S
-        output = torch.einsum("bhk,bhkv->bhv", query, state)
-        output = output.unsqueeze(2)  # [batch, heads, 1, v_dim]
+        # 2. Retrieve memory: mem = S @ k = (S * k.unsqueeze(-1)).sum(dim=-2)
+        # state: [batch, heads, key_dim, value_dim], key: [batch, heads, key_dim]
+        kv_mem = (state * key.unsqueeze(-1)).sum(dim=-2)  # [batch, heads, value_dim]
 
-        # Transpose back to [batch, seq=1, heads, v_dim]
+        # 3. Compute delta: delta = (v - mem) * beta
+        delta = (value - kv_mem) * beta.unsqueeze(-1)  # [batch, heads, value_dim]
+
+        # 4. Update state: S = S + k ⊗ delta
+        # k.unsqueeze(-1): [batch, heads, key_dim, 1]
+        # delta.unsqueeze(-2): [batch, heads, 1, value_dim]
+        state = state + key.unsqueeze(-1) * delta.unsqueeze(-2)
+
+        # 5. Output: o = S @ q = (S * q.unsqueeze(-1)).sum(dim=-2)
+        output = (state * query.unsqueeze(-1)).sum(dim=-2)  # [batch, heads, value_dim]
+        output = output.unsqueeze(2)  # [batch, heads, 1, value_dim]
+
+        # Transpose back to [batch, seq=1, heads, value_dim]
         output = output.transpose(1, 2)
 
         # Ensure state matches output dtype
