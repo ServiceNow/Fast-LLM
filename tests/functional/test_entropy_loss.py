@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
-from fast_llm.functional.cross_entropy import entropy_loss_forward_backward
+from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
 from fast_llm.utils import Assert
 from tests.utils.subtest import DistributedTestContext
 

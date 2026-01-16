@@ -77,7 +77,7 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         sequence_parallel_logits: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        from fast_llm.functional.cross_entropy import entropy_loss_forward_backward
+        from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
 
         labels = kwargs[LanguageModelKwargs.labels]
 
@@ -167,7 +167,7 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         sequence_parallel_logits: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        from fast_llm.functional.cross_entropy import entropy_loss_forward_backward
+        from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
 
         if prediction_distance > 0:
             raise NotImplementedError()
