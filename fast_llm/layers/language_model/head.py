@@ -26,7 +26,6 @@ from fast_llm.layers.language_model.config import (
     LanguageModelKwargs,
     _format_name,
 )
-from fast_llm.layers.language_model.loss.config import LanguageModelDistillationLossConfig, LanguageModelDPOLossConfig
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -69,12 +68,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=lr_scale,
             peft=peft,
         )
-        if prediction_distance > 0 and any(
-            isinstance(loss, (LanguageModelDPOLossConfig, LanguageModelDistillationLossConfig))
-            for loss in self.losses.values()
-        ):
-            raise NotImplementedError("Multi-token prediction not supported with distillation or dpo.")
-
         Assert.in_range(prediction_distance, 0, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
@@ -184,7 +177,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 loss_mask = split_op(loss_mask, self._parallel_dim.group, 0)
 
         if not self.training:
-            logits, _ = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs, True)
+            logits, _ = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs, return_logits=True)
             # TODO: Make a proper way of returning the model output.
             logits = logits.detach()
             if kwargs.get("global_logits"):
@@ -198,7 +191,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits.detach()
             )
             return None, None
-        if self._config.cross_entropy_splits == 1 or self.training:
+        elif self._config.cross_entropy_splits == 1:
             losses_, input_grad = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs)
         else:
             input_grad = torch.empty_like(input_)
@@ -210,23 +203,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 )
                 for tensor in [input_, loss_mask, input_grad]
             ]
-            for i, (partial_input_, loss_mask_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
+            for split_index, (partial_input_, loss_mask_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
                 partial_losses_, grad_ = self._logits_loss_forward_backward_partial(
                     partial_input_,
                     loss_mask_,
                     kwargs,
+                    split_index=split_index,
                 )
                 # TODO: Avoid copy with explicit out argument.
                 input_grad_.copy_(grad_)
-                if i == 0:
+                if split_index == 0:
                     losses_ = partial_losses_
                 else:
                     for name in self._config.losses:
                         losses_[name] += partial_losses_[name]
 
         loss: torch.Tensor = sum(
-            (loss_config.weight * self._loss_coefficient / self._config.cross_entropy_splits) * losses_[name]
-            for name, loss_config in self._config.losses.items()
+            (self.config.losses[name].weight * self._loss_coefficient / self._config.cross_entropy_splits) * loss_
+            for name, loss_ in losses_.items()
         )
         if self._sequence_parallel_logits:
             # TODO: Async
@@ -235,14 +229,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         if losses is not None:
             losses[self._total_head_loss_name].append(loss)
             if len(self._config.losses) > 1:
-                for name, loss_config in self._config.losses.items():
-                    loss_ = losses_[name]
+                for name, loss_ in losses_.items():
                     if self._config.cross_entropy_splits != 1:
                         loss_ /= self._config.cross_entropy_splits
                     if self._sequence_parallel_logits:
                         # TODO: Async
                         all_reduce(loss_, op=ReduceOp.AVG, group=self._parallel_dim.group)
-                    losses[loss_config.get_name(self._prediction_distance)].append(loss_)
+                    losses[self.config.losses[name].get_name(self._prediction_distance)].append(loss_)
 
         return loss, input_grad
 
@@ -251,6 +244,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         input_: torch.Tensor,
         loss_mask: torch.Tensor | None,
         kwargs: dict,
+        split_index: int = 0,
         return_logits: bool = False,
     ) -> tuple[dict[str, torch.Tensor] | torch.Tensor, torch.Tensor | None]:
         group = self._parallel_dim.group if self._vocab_parallel else None
@@ -297,6 +291,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 group=group,
                 logits_scale_factor=self._config.logits_scale_factor,
                 kwargs=kwargs,
+                prediction_distance=self._prediction_distance,
+                prediction_heads=self._prediction_heads,
+                split_index=split_index,
+                num_splits=self._config.cross_entropy_splits,
+                sequence_parallel_logits=self._sequence_parallel_logits,
             )
             losses[loss_name] = loss.detach()
             if grad_ is not None:

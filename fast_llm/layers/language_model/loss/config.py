@@ -83,6 +83,8 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         sequence_parallel_logits: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        import torch
+
         from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
 
         labels = kwargs[LanguageModelLossKwargs.labels]
@@ -204,7 +206,7 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
             implementation=implementation,
             logits_scale_factor=logits_scale_factor,
             temperature=self.temperature,
-            target_format=TargetFormat.labels,
+            target_format=TargetFormat.logits,
             entropy_loss_type=self.loss_type,
         )
 
@@ -301,8 +303,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.layers.common.auxiliary_loss import z_loss_forward_backward
 
-        # TODO: ====== Support loss mask, vocab_parallel ======
-        assert loss_mask is None
+        # TODO: Support vocab_parallel
         assert group is None
 
         return z_loss_forward_backward(

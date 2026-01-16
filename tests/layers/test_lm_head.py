@@ -1,3 +1,4 @@
+import collections
 import dataclasses
 import typing
 
@@ -80,7 +81,7 @@ class LMHeadTestConfig:
                     "hidden_size": HIDDEN_SIZE,
                     "tied_embedding_weight": self.tied_embedding_weight,
                 },
-                "distributed": {"compute_dtype": self.compute_dtype},
+                "distributed": {"compute_dtype": self.compute_dtype, "use_cuda": torch.cuda.is_available()},
             },
         )
 
@@ -97,9 +98,9 @@ class LMHeadTestConfig:
             requires_grad=True,
         )
         label_shape = (
-            (SEQUENCE_LENGTH + self.max_prediction_distance - 1, BATCH_SIZE)
+            (SEQUENCE_LENGTH + self.prediction_heads - 1, BATCH_SIZE)
             if self.sequence_first
-            else (BATCH_SIZE, SEQUENCE_LENGTH + self.max_prediction_distance - 1)
+            else (BATCH_SIZE, SEQUENCE_LENGTH + self.prediction_heads - 1)
         )
         kwargs: dict[str, typing.Any] = {
             AttentionKwargs.sequence_first: self.sequence_first,
@@ -115,12 +116,12 @@ class LMHeadTestConfig:
                 dtype=torch.int64,
                 device=device,
             )
-            if LanguageModelKwargs:
+            if LanguageModelKwargs.loss_mask in kwargs:
                 labels = torch.where(kwargs[LanguageModelKwargs.loss_mask], -100, labels)
             kwargs[LanguageModelKwargs.labels] = labels
 
         if self.distillation_loss is not False:
-            assert self.max_prediction_distance == 1
+            assert self.prediction_heads == 1
             kwargs[f"distillation_logits"] = torch.randn(
                 input_.shape[:-1] + (VOCAB_SIZE,),
                 dtype=input_.dtype,
@@ -152,21 +153,37 @@ class LMHeadTestConfig:
         losses = {}
 
         if self.actual_label_loss is not False:
+            if self.sequence_first:
+                labels = kwargs[LanguageModelKwargs.labels][
+                    head._prediction_distance : head._prediction_distance + logits.size(0)
+                ]
+            else:
+                labels = kwargs[LanguageModelKwargs.labels][
+                    :, head._prediction_distance : head._prediction_distance + logits.size(1)
+                ]
             label_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2), kwargs[LanguageModelKwargs.labels].flatten()
-            )
+                logits.flatten(0, -2), labels.flatten(), reduction="none"
+            ).mean()
             losses["label_loss"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2), torch.softmax(kwargs[f"distillation_logits"].flatten(0, -2), -1)
+                logits.flatten(0, -2),
+                torch.softmax(kwargs[f"distillation_logits"].flatten(0, -2), -1),
+                reduction="none",
             )
+            if LanguageModelKwargs.loss_mask in kwargs:
+                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask].flatten()
+            distillation_loss = distillation_loss.mean()
             losses["distillation_loss"] = distillation_loss.detach()
             total_loss = total_loss + float(self.distillation_loss) * distillation_loss
 
         if self.z_loss is not False:
-            z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2)
+            z_loss = torch.logsumexp(logits, dim=-1) ** 2
+            if LanguageModelKwargs.loss_mask in kwargs:
+                z_loss = z_loss * kwargs[LanguageModelKwargs.loss_mask]
+            z_loss = z_loss.mean()
             losses["z_loss"] = z_loss.detach()
             total_loss = total_loss + float(self.z_loss) * z_loss
 
@@ -187,7 +204,9 @@ _lm_head_test_configs = (
     LMHeadTestConfig("loss_masking", loss_masking=True),
     LMHeadTestConfig("label_loss", label_loss=True),
     LMHeadTestConfig("distillation_loss", distillation_loss=True),
+    LMHeadTestConfig("distillation_loss_masked", distillation_loss=True, loss_masking=True),
     LMHeadTestConfig("z_loss", z_loss=True),
+    LMHeadTestConfig("z_loss_masked", z_loss=True, loss_masking=True),
     LMHeadTestConfig("label_and_distillation_loss", label_loss=True, distillation_loss=True),
     LMHeadTestConfig("label_and_z_loss_weighted", label_loss=True, z_loss=0.5),
     LMHeadTestConfig("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0),
@@ -195,7 +214,13 @@ _lm_head_test_configs = (
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("test_config", _lm_head_test_configs)
+@pytest.mark.parametrize(
+    "test_config",
+    [
+        pytest.param(_lm_head_test_config, id=_lm_head_test_config.name)
+        for _lm_head_test_config in _lm_head_test_configs
+    ],
+)
 def test_lm_head(test_config):
     model_config = test_config.get_config()
     model, distributed = get_base_model(model_config)
@@ -207,7 +232,7 @@ def test_lm_head(test_config):
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.compute_dtype.torch, device=distributed.device
             ).normal_(HIDDEN_SIZE**-0.5)
         )
-        if test_config.tied_embedding_weight or test_config.max_prediction_distance > 1
+        if test_config.tied_embedding_weight or test_config.prediction_heads > 1
         else None
     )
 
@@ -228,7 +253,9 @@ def test_lm_head(test_config):
         )
 
         ref_total_loss, ref_input_grad, ref_logit_weight_grad, ref_normalization_weight_grad, ref_losses = (
-            test_config.get_reference_outputs(head, input_, kwargs, tied_logit_weight)
+            test_config.get_reference_outputs(
+                head, input_, kwargs, tied_logit_weight if prediction_distance > 0 else None
+            )
         )
 
         # Prepare LM head inputs
@@ -263,9 +290,10 @@ def test_lm_head(test_config):
         #    {loss_key: 1 for loss_key in expected_loss_keys},
         # )
         # losses = {key: [] for key in expected_loss_keys}
-        output, context = stage.forward(head_input, kwargs, None)
+        losses = collections.defaultdict(list)
+        output, context = stage.forward(head_input, kwargs, losses)
+        print(losses)
         stage.backward(output_grad, context)
-
         threshold = 1e-5 if distributed.config.compute_dtype == DataType.float32 else 5e-3
         min_threshold = (
             1e-5 if distributed.config.compute_dtype == DataType.float32 else 1e-4
@@ -277,7 +305,7 @@ def test_lm_head(test_config):
         #     Assert.eq(len(losses["z_loss"]), 1)
         #     Assert.rms_close_relative(losses["z_loss"][0], ref_z_loss, threshold, min_threshold)
 
-        Assert.rms_close_relative(output, ref_total_loss, threshold, min_threshold)
+        Assert.rms_close_relative(losses[head._total_head_loss_name][0], ref_total_loss, threshold, min_threshold)
 
         if head._is_last_head:
             # Assert.all_equal(output, losses[lm_head_loss_name][0])
