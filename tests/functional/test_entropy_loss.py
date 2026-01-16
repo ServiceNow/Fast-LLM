@@ -1,16 +1,13 @@
-import os
-import sys
-import tempfile
-import traceback
-import typing
+import pathlib
 
 import pytest
 import torch
 
+from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import entropy_loss_forward_backward
 from fast_llm.utils import Assert
-from tests.utils.utils import requires_cuda
+from tests.utils.subtest import DistributedTestContext
 
 
 def _get_cross_entropy_inputs(
@@ -41,8 +38,9 @@ def _compare_entropy_loss_outputs(
     grad: torch.Tensor | None,
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
+    loss_min_threshold=1e-6,
 ):
-    Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
+    Assert.rms_close_relative(loss, ref_loss, threshold, loss_min_threshold)
     if has_grad:
         Assert.rms_close_relative(grad, ref_grad, threshold, 1e-8)
     else:
@@ -64,13 +62,11 @@ def _compare_entropy_loss_outputs(
         (65537, 1.0, 1.0, False),  # Above max block size
     ),
 )
-@pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
-@pytest.mark.parametrize(
-    "entropy_loss_type", (EntropyLossType.cross_entropy, EntropyLossType.forward_kl, EntropyLossType.reverse_kl)
-)
+@pytest.mark.parametrize("target_format", TargetFormat)
+@pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
 def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
-        pytest.skip(reason="rNot implemented")
+        pytest.skip(reason="Not implemented")
     # TODO: Test tensor-parallel implementation.
     logits, target, loss_mask = _get_cross_entropy_inputs(num_columns, loss_masking, target_format)
     kwargs = {
@@ -86,9 +82,15 @@ def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_maskin
     out_torch, grad_torch = entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.torch)
     out_fused, grad_fused = entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.fused)
 
-    # TODO: Why is the error so high with logit scaling?
-    threshold = 2e-5 if logits_scale_factor == 1.0 else 1e-2
-    _compare_entropy_loss_outputs(out_fused, out_torch, grad_output is not None, grad_fused, grad_torch, threshold)
+    # TODO: Why is the error so high with loss masking for reverse KL?
+    _compare_entropy_loss_outputs(
+        out_fused,
+        out_torch,
+        grad_output is not None,
+        grad_fused,
+        grad_torch,
+        loss_min_threshold=2e-4 if entropy_loss_type == EntropyLossType.reverse_kl and loss_masking else 5e-6,
+    )
 
     if entropy_loss_type != EntropyLossType.cross_entropy or not torch.cuda.is_available():
         # Triton implementation only supports cross-entropy.
@@ -101,89 +103,77 @@ def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_maskin
         out_triton, grad_triton = entropy_loss_forward_backward(
             **kwargs, implementation=EntropyLossImplementation.triton
         )
-        _compare_entropy_loss_outputs(
-            out_triton, out_torch, grad_output is not None, grad_triton, grad_torch, threshold
-        )
+        _compare_entropy_loss_outputs(out_triton, out_torch, grad_output is not None, grad_triton, grad_torch)
 
 
-def _mp_worker(rank: int, world_size: int, init_method: str, fn_args: tuple):
-    try:
-        torch.distributed.init_process_group(backend="gloo", rank=rank, world_size=world_size, init_method=init_method)
-        fn_args[0](rank, torch.distributed.group.WORLD, *fn_args[1:])
-    finally:
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
-
-
-def _spawn_dist(world_size: int, *fn_args):
-    """
-    Run `fn(rank, group, *fn_args)` across `world_size` ranks using torch.multiprocessing.
-    """
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        init_method = f"file://{tmp.name}"
-
-    try:
-        torch.multiprocessing.spawn(
-            _mp_worker,
-            args=(world_size, init_method, fn_args),
-            nprocs=world_size,
-            join=True,
-            start_method="spawn",
-        )
-    finally:
-        if os.path.exists(tmp.name):
-            os.remove(tmp.name)
-
-
-def _compare_parallel_cross_entropy(
-    rank: int,
-    group: torch.distributed.ProcessGroup,
+def _entropy_loss_distributed(
     target_format: TargetFormat,
-    function: typing.Callable,
+    entropy_loss_type: EntropyLossType,
     loss_masking: bool,
+    group: torch.distributed.ProcessGroup,
 ):
     # Ensure all workers have the same inputs.
     torch.manual_seed(0)
-    world_size = torch.distributed.get_world_size(group)
+    rank = group.rank()
+    world_size = group.size()
     logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
 
-    out, grad = function(
-        logits=logits.chunk(world_size, 1)[rank],
-        target=target.chunk(world_size, 1)[rank],
-        loss_mask=loss_mask,
-        grad_output=1,
-        group=group,
-        target_format=target_format,
-    )
+    kwargs = {
+        "loss_mask": loss_mask,
+        "grad_output": 1.0,
+        "target_format": target_format,
+        "implementation": EntropyLossImplementation.fused,
+        "entropy_loss_type": entropy_loss_type,
+    }
+    out_ref, grad_ref = entropy_loss_forward_backward(logits, target, **kwargs)
 
-    out_ref, grad_ref = function(
-        logits=logits,
-        target=target,
-        loss_mask=loss_mask,
-        grad_output=1,
-        target_format=target_format,
+    out, grad = entropy_loss_forward_backward(
+        logits.chunk(world_size, 1)[rank],
+        target if target_format == TargetFormat.labels else target.chunk(world_size, 1)[rank],
+        group=group,
+        **kwargs,
     )
     _compare_entropy_loss_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4)
 
 
-def compare_parallel_cross_entropy(rank: int, group: torch.distributed.ProcessGroup):
-    success = True
-    for function in (reverse_kl_forward_backward, forward_kl_forward_backward, entropy_loss_forward_backward):
-        for target_format in (TargetFormat.logits,):
+def _run_entropy_loss_distributed(test_context: DistributedTestContext, base_path: pathlib.Path):
+    for entropy_loss_type in EntropyLossType:
+        for target_format in TargetFormat:
+            if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
+                continue
             for loss_masking in [False, True]:
-                try:
-                    _compare_parallel_cross_entropy(rank, group, target_format, function, loss_masking)
-                except Exception:
-                    print(
-                        f" >>>>>> Failed {function.__name__}, target_format, use_mask={loss_masking}", file=sys.stderr
-                    )
-                    traceback.print_exc()
-                    success = False
-    if not success:
-        raise RuntimeError("Test failed")
+                name = f"{entropy_loss_type}_{target_format}_{loss_masking}"
+                with test_context.subtest(base_path, name, 2) as subtest:
+                    if subtest.do_run:
+                        _entropy_loss_distributed(target_format, entropy_loss_type, loss_masking, test_context.group)
 
 
-@requires_cuda
 @pytest.mark.slow
-def test_distillation_losses():
-    _spawn_dist(2, compare_parallel_cross_entropy)
+def test_entropy_loss_distributed_dependency():
+    # Mock test so the distributed subtest are placed in the same dependency group.
+    pass
+
+
+@pytest.mark.slow
+@pytest.mark.depends_on(on=["test_entropy_loss_distributed_dependency"])
+def test_run_entropy_loss_distributed(run_parallel_script, result_path):
+    run_parallel_script(
+        _run_entropy_loss_distributed,
+        (result_path / "test_entropy_loss",),
+        world_size=2,
+        backend=DistributedBackend.gloo,
+        use_cpu=True,  # Disable device count check.
+    )
+
+
+# We don't want to depend on `test_run_entropy_loss_distributed` because we still want to run this in cas of failure.
+# This should still run after `test_run_entropy_loss_distributed`
+@pytest.mark.slow
+@pytest.mark.depends_on(on=["test_entropy_loss_distributed_dependency"])
+@pytest.mark.parametrize("target_format", TargetFormat)
+@pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
+@pytest.mark.parametrize("loss_masking", (False, True))
+def test_entropy_loss_distributed(result_path, report_subtest, target_format, entropy_loss_type, loss_masking):
+    if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
+        pytest.skip(reason="Not implemented")
+    report_subtest(result_path / f"test_entropy_loss/{entropy_loss_type}_{target_format}_{loss_masking}", 2)

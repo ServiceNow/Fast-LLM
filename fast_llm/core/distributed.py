@@ -72,10 +72,12 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
         )
 
 
-def safe_barrier(group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None) -> None:
+def safe_barrier(
+    group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None, device: torch.device | None = None
+) -> None:
     if group:
         hashed = hash(value) % 2**32
-        out = allreduce_scalar(hashed, dtype=torch.int64, group=group, timeout=timeout)
+        out = allreduce_scalar(hashed, dtype=torch.int64, group=group, timeout=timeout, device=device)
         if out != hashed * group.size():
             raise RuntimeError(f"Desync detected for barrier {value} ({out}!={hashed*group.size()})")
 
@@ -86,9 +88,10 @@ def allreduce_scalar(
     group: torch.distributed.ProcessGroup | None = None,
     op=ReduceOp.SUM,
     timeout: float | None = None,
+    device: torch.device | None = None,
 ) -> float | int:
     if group:
-        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
+        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device() if device is None else device)
         with set_timeout(group, timeout):
             torch.distributed.all_reduce(value, op=op, group=group)
         return value.item()

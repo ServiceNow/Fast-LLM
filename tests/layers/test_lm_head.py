@@ -7,8 +7,9 @@ from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import EntropyLossImplementation
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs, LanguageModelLossConfig
+from fast_llm.layers.language_model.config import LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
@@ -322,9 +323,7 @@ def test_lm_head(
         )
     )
 
-    sequence_first = config.sequence_first or (
-        head_config.cross_entropy_splits is not None and head_config.cross_entropy_splits > 1
-    )
+    sequence_first = config.sequence_first or head_config.cross_entropy_splits > 1
     input_ = torch.randn(
         (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE) if sequence_first else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE),
         dtype=(

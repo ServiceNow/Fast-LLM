@@ -320,7 +320,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
     ) -> typing.Generator[None, None, None]:
         batch_config = context.schedule.batch_config
-        grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) / batch_config.num_inputs
+        grad_output = (
+            self._optimizer.grad_scale / batch_config.num_inputs if context.schedule.phase.is_training else None
+        )
         for micro_batch in range(batch_config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:

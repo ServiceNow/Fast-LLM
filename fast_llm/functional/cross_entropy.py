@@ -32,11 +32,12 @@ def _torch_entropy_loss_forward_backward(
         else:
             Assert.eq(temperature, 1.0)
 
-        reduction = "mean" if loss_mask is None else "none"
         if entropy_loss_type == EntropyLossType.cross_entropy:
             if target_format == TargetFormat.logits:
                 target = torch.softmax(target, dim=-1)
-            loss = torch.nn.functional.cross_entropy(logits_scaled, target, reduction=reduction)
+            loss = torch.nn.functional.cross_entropy(
+                logits_scaled, target, reduction="mean" if loss_mask is None else "none"
+            )
         else:
             predicted_log_probability = torch.nn.functional.log_softmax(logits_scaled, dim=-1)
             if target_format == TargetFormat.logits:
@@ -44,17 +45,27 @@ def _torch_entropy_loss_forward_backward(
             elif target_format == TargetFormat.probabilities:
                 target_log_probability = target.log()
             else:
-                target_log_probability = torch.nn.functional.one_hot(target, num_classes=logits_scaled.size(-1)).log()
+                target_log_probability = (
+                    torch.nn.functional.one_hot(target, num_classes=logits_scaled.size(-1)).add(1.0e-10).log()
+                )
             if entropy_loss_type == EntropyLossType.forward_kl:
                 loss = torch.nn.functional.kl_div(
-                    predicted_log_probability, target_log_probability, reduction=reduction, log_target=True
+                    predicted_log_probability,
+                    target_log_probability,
+                    reduction="batchmean" if loss_mask is None else "none",
+                    log_target=True,
                 )
             elif entropy_loss_type == EntropyLossType.reverse_kl:
                 loss = torch.nn.functional.kl_div(
-                    target_log_probability, predicted_log_probability, reduction=reduction, log_target=True
+                    target_log_probability,
+                    predicted_log_probability,
+                    reduction="batchmean" if loss_mask is None else "none",
+                    log_target=True,
                 )
             else:
                 raise NotImplementedError(entropy_loss_type)
+            if loss_mask is not None:
+                loss = loss.sum(dim=-1)
 
         if loss_mask is not None:
             loss = (loss * loss_mask).mean()
@@ -95,21 +106,21 @@ def _fused_reverse_kl_base(
     temperature: float = 1.0,
 ):
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
+    predicted_log_probability = logits_norm - sum_exp_logits.log()
+    predicted_probability = exp_logits / sum_exp_logits
 
     if target_format == TargetFormat.logits:
-        target_logits, exp_logits_targets, sum_exp_target_logits = _fused_softmax_base(
+        target_logits_norm, _, sum_exp_target_logits = _fused_softmax_base(
             target, logits_scale_factor / temperature, group
         )
-        target = exp_logits_targets / sum_exp_target_logits
-        target_log_probability = target_logits - sum_exp_target_logits.log()
+        target_log_probability = target_logits_norm - sum_exp_target_logits.log()
     else:
         target_log_probability = torch.log(target)
 
-    predicted_log_probability = logits_norm - sum_exp_logits.log()
     # Compute loss terms: student_probs * log_ratio, then sum over vocab
     # This is equivalent to kl_div(..., log_target=True) but more memory efficient
     log_ratio = predicted_log_probability - target_log_probability
-    per_sample_loss = (predicted_log_probability.exp() * log_ratio).sum(dim=-1)
+    per_sample_loss = (predicted_probability * log_ratio).sum(dim=-1)
     if group is not None:
         all_reduce(per_sample_loss, op=ReduceOp.SUM, group=group)
 
@@ -118,7 +129,8 @@ def _fused_reverse_kl_base(
     else:
         # Gradient: d/d(logits) KL(q||p) = q * (log(q/p) - E_q[log(q/p)])
         # where E_q[log(q/p)] is the expected log ratio under the student distribution
-        grad = (log_ratio - per_sample_loss.unsqueeze(-1)) * target * grad_output
+        grad = (log_ratio - per_sample_loss.unsqueeze(-1)) * predicted_probability * grad_output
+
     return per_sample_loss, grad
 
 
@@ -135,16 +147,18 @@ def _fused_cross_entropy_base(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target_logits, exp_logits_targets, sum_exp_target_logits = _fused_softmax_base(
+        target_logits_norm, exp_logits_targets, sum_exp_target_logits = _fused_softmax_base(
             target, logits_scale_factor / temperature, group
         )
-        target_log_probability = target_logits - sum_exp_target_logits.log()
-    else:
-        target_log_probability = torch.log(target)
+        target = exp_logits_targets / sum_exp_target_logits
 
     # CE loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
     # KL loss = mean(log(sum_exp_logits) - sum(probabilities * (logits - log_probabilities))
     if return_kl_loss:
+        if target_format == TargetFormat.logits:
+            target_log_probability = target_logits_norm - sum_exp_target_logits.log()
+        else:
+            target_log_probability = torch.log(target)
         logits_norm = logits_norm - target_log_probability
     predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
     if group is not None:
@@ -174,20 +188,21 @@ def _fused_cross_entropy_base_from_labels(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     target = target.unsqueeze(-1)
+
     if group is None:
         # Keep values within range for scatter and gather ops to work.
-        target_masked = target * loss_mask
+        target = target * loss_mask.unsqueeze(-1)
         target_mask = None
     else:
         # Mask the target (fused)
         # TODO: Could mask earlier on cpu or overlap with reduce?
         vocab_start_index = logits.size(-1) * group.rank()
         target_mask = (target >= vocab_start_index) * (target < vocab_start_index + logits.size(-1))
-        target_masked = (target - vocab_start_index) * target_mask
+        target = (target - vocab_start_index) * target_mask
 
     # CE loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
     # KL loss is the same because P * log(P) == 0.
-    predicted_logits = logits_norm.gather(1, target_masked)
+    predicted_logits = logits_norm.gather(1, target)
     if group is not None:
         predicted_logits = target_mask * predicted_logits
         all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
@@ -198,7 +213,7 @@ def _fused_cross_entropy_base_from_labels(
     else:
         # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
         grad = exp_logits.scatter_add(
-            1, target_masked, -sum_exp_logits if target_mask is None else -(target_mask * sum_exp_logits)
+            1, target, -sum_exp_logits if target_mask is None else -(target_mask * sum_exp_logits)
         ) * (grad_output / sum_exp_logits)
 
     return per_sample_loss, grad
@@ -259,13 +274,12 @@ def _fused_entropy_loss_forward_backward(
         raise NotImplementedError(entropy_loss_type)
 
     if loss_mask is not None:
-        loss_mask = loss_mask.unsqueeze(-1)
-        per_sample_loss = per_sample_loss * loss_mask
+        per_sample_loss = per_sample_loss * loss_mask.unsqueeze(-1)
     loss = per_sample_loss.mean()
 
     if grad is not None:
         if loss_mask is not None:
-            grad = grad * loss_mask
+            grad = grad * loss_mask.unsqueeze(-1)
         grad = grad.to(logits.dtype)
 
     return loss, grad
