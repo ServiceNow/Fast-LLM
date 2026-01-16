@@ -167,7 +167,7 @@ class LlavaVisionAdapterConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "intermediate_size": config["vision_config"]["hidden_size"],
+            "intermediate_size": config["text_config"]["hidden_size"],
             "add_linear_biases": config["multimodal_projector_bias"],
             "gated": False,
             "activation": ActivationType.from_hf_name(config["projector_hidden_act"]),
@@ -183,8 +183,6 @@ class LlavaVisionAdapterConverter:
         return {
             "projector_hidden_act": config.activation.hf_name,
             "multimodal_projector_bias": config.add_linear_biases,
-            # Not in LlavaConfig, but needed for consistency check in LlavaBaseModelConverter.
-            "projector_intermediate_size": config.intermediate_size,
         }
 
     @classmethod
@@ -243,13 +241,13 @@ class LlavaVisionModelConverter:
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
             *cls.embeddings_converter_class.get_converters(
-                config.embeddings, "vision_encoder.embeddings", "model.vision_tower"
+                config.embeddings, "vision_encoder.embeddings", "vision_tower"
             ),
             *cls.encoder_converter_class.get_converters(
-                config.encoder, "vision_encoder.encoder", "model.vision_tower.transformer.layers"
+                config.encoder, "vision_encoder.encoder", "vision_tower.transformer.layers"
             ),
             *cls.vision_adapter_converter_class.get_converters(
-                config.adapter, "vision_encoder.adapter", "model.multi_modal_projector"
+                config.adapter, "vision_encoder.adapter", "multi_modal_projector"
             ),
         ]
 
@@ -266,11 +264,11 @@ class LlavaHeadConverter(MistralHeadConverter):
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.final_norm",
-                f"model.language_model.norm",
+                f"language_model.model.norm",
             ),
             get_parameter_converter(
                 f"{fast_llm_prefix}.output_weights",
-                "lm_head.weight",
+                "language_model.lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
             ),
         ]
@@ -309,7 +307,6 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
                 "vision_feature_layer": -1,
             },
         )
-        Assert.eq(out.pop("projector_intermediate_size"), out["text_config"]["hidden_size"])
         return out
 
     @classmethod
@@ -317,10 +314,10 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
         return [
             *cls.vision_model_converter_class.get_converters(config.vision_encoder),
             *cls.language_model_converter_class.embeddings_converter_class.get_converters(
-                config.embeddings, "embeddings", "model.language_model"
+                config.embeddings, "embeddings", "language_model.model"
             ),
             *cls.language_model_converter_class.decoder_converter_class.get_converters(
-                config.decoder, "decoder", "model.language_model.layers"
+                config.decoder, "decoder", "language_model.model.layers"
             ),
             *cls.language_model_converter_class.head_converter_class.get_converters(
                 config.head, {"tie_word_embeddings": False}, "head"
