@@ -259,5 +259,5 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self.tp_generator.manual_seed((self._tp_seed + seed_shift) % MAX_SEED)
 
     def __del__(self):
-        if self._local_pool:
+        if getattr(self, "_local_pool", False) and hasattr(self, "_pool"):
             self._pool.shutdown()

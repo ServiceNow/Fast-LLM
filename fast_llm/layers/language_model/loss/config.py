@@ -2,11 +2,17 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
-from fast_llm.layers.language_model.config import LanguageModelKwargs
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     import torch
+
+
+class LanguageModelLossKwargs(BlockKwargs):
+    labels = "labels"
+    chosen_spans = "chosen_spans"
+    rejected_spans = "rejected_spans"
 
 
 @config_class(registry=True)
@@ -79,15 +85,15 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
 
-        labels = kwargs[LanguageModelKwargs.labels]
+        labels = kwargs[LanguageModelLossKwargs.labels]
 
         # MTP: Shift the labels
         if prediction_heads > 1:
-            sequence_q_length = labels.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - prediction_heads
-            if LanguageModelKwargs.sequence_q_dim in kwargs:
-                Assert.eq(sequence_q_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
+            sequence_q_length = labels.size(1 - kwargs[LanguageModelLossKwargs.sequence_first]) + 1 - prediction_heads
+            if LanguageModelLossKwargs.sequence_q_dim in kwargs:
+                Assert.eq(sequence_q_length, kwargs[LanguageModelLossKwargs.sequence_q_dim].size)
             label_slice = slice(prediction_distance, prediction_distance + sequence_q_length)
-            labels = labels[label_slice] if kwargs[LanguageModelKwargs.sequence_first] else labels[:, label_slice]
+            labels = labels[label_slice] if kwargs[LanguageModelLossKwargs.sequence_first] else labels[:, label_slice]
 
         labels = labels.flatten()
 
@@ -249,7 +255,7 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
             logits = logits * logits_scale_factor
 
         reference_model_logits = kwargs[f"{self.reference_model}_logits"].flatten(0, -2)
-        target = kwargs[LanguageModelKwargs.labels]
+        target = kwargs[LanguageModelLossKwargs.labels]
 
         if sequence_parallel_logits:
             from fast_llm.core.ops import split_op
@@ -257,8 +263,8 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
             reference_model_logits = split_op(reference_model_logits, group, 0)
             target = split_op(target, group, 0)
 
-        chosen_spans = kwargs[LanguageModelKwargs.chosen_spans]
-        rejected_spans = kwargs[LanguageModelKwargs.rejected_spans]
+        chosen_spans = kwargs[LanguageModelLossKwargs.chosen_spans]
+        rejected_spans = kwargs[LanguageModelLossKwargs.rejected_spans]
 
         return compute_dpo_loss(
             logits=logits,
