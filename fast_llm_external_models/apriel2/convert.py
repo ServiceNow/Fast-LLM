@@ -15,6 +15,7 @@ This produces: Source -> Apriel2 -> surgery1 -> surgery2 -> surgery3
 
 Supported source formats:
 - llava: Llava/Pixtral models
+- qwen2: Qwen2/Qwen2.5 models
 - apriel2: Apriel2 models (surgery-only mode - no conversion, just apply surgeries)
 """
 
@@ -29,10 +30,7 @@ from typing import Callable
 import yaml
 from tqdm import tqdm
 
-# Allow running as script or module
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
+# Import source-specific converters
 from fast_llm_external_models.apriel2.conversion import (
     DEFAULT_MAX_SHARD_SIZE,
     ExprPlan,
@@ -41,11 +39,16 @@ from fast_llm_external_models.apriel2.conversion import (
     StreamingExecutor,
     compose,
     compose_configs,
-    plan_surgery,
 )
-
-# Import source-specific converters
 from fast_llm_external_models.apriel2.conversion import llava as llava_converter
+from fast_llm_external_models.apriel2.conversion import plan_surgery
+from fast_llm_external_models.apriel2.conversion import qwen2 as qwen2_converter
+from fast_llm_external_models.apriel2.conversion import strip_init_fields
+
+# Allow running as script or module
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,7 @@ def _identity_plan(config: dict) -> ExprPlan:
 # Each entry maps format name to (config_converter, plan_builder)
 SOURCE_FORMATS: dict[str, tuple[Callable[[dict], dict], Callable[[dict], ExprPlan]]] = {
     "llava": (llava_converter.convert_config, llava_converter.plan_llava_to_apriel2),
+    "qwen2": (qwen2_converter.convert_config, qwen2_converter.plan_qwen2_to_apriel2),
     "apriel2": (_identity_config, _identity_plan),
 }
 
@@ -88,8 +92,12 @@ def detect_source_format(config: dict) -> str | None:
     if model_type in ("llava", "pixtral") or "text_config" in config:
         return "llava"
 
+    # Qwen2/Qwen2.5 detection
+    if model_type == "qwen2":
+        return "qwen2"
+
     # Apriel2 detection - check for Apriel2-specific structure
-    if model_type == "apriel2" or "decoder" in config:
+    if model_type in ("apriel2", "apriel2_text") or "decoder" in config:
         return "apriel2"
 
     return None
@@ -142,15 +150,21 @@ def build_plan(
     # Apply surgery chain if requested
     if surgery_configs:
         for i, surgery_config in enumerate(surgery_configs, 1):
-            surgery_plan = plan_surgery(current_config, surgery_config)
-            logger.info(f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets")
+            # S × P → T: compose state with surgery to get transition spec
+            target_config = compose_configs(current_config, surgery_config)
 
-            # Compose: current -> surgery
+            # S × T → Plan: build plan from source state and transition spec
+            surgery_plan = plan_surgery(current_config, target_config)
+            logger.info(
+                f"Built surgery plan [{i}/{len(surgery_configs)}]: {surgery_plan.summary()['num_targets']} targets"
+            )
+
+            # Compose plans
             current_plan = compose(current_plan, surgery_plan)
             logger.info(f"Composed plan [{i}/{len(surgery_configs)}]: {current_plan.summary()['num_targets']} targets")
 
-            # Compose configs: merge surgery spec into current config
-            current_config = compose_configs(current_config, surgery_config)
+            # T → S: strip init for next iteration (init is consumed by plan_surgery)
+            current_config = strip_init_fields(target_config)
 
     return current_plan, current_config
 
@@ -211,9 +225,7 @@ def convert(
         executor = StreamingExecutor(full_plan, loader)
 
         with ShardedSafetensorWriter(output_dir, max_shard_size=max_shard_size) as writer:
-            for target_key, tensor in tqdm(
-                executor.execute(seed), desc="Converting", total=len(full_plan)
-            ):
+            for target_key, tensor in tqdm(executor.execute(seed), desc="Converting", total=len(full_plan)):
                 writer.add(target_key, tensor)
 
     return final_config
@@ -282,9 +294,7 @@ def resolve_input(input_path: str) -> Path:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Convert HuggingFace checkpoint to Apriel2 HF format"
-    )
+    parser = argparse.ArgumentParser(description="Convert HuggingFace checkpoint to Apriel2 HF format")
     parser.add_argument(
         "input",
         type=str,
@@ -384,8 +394,7 @@ def main():
     safetensor_files = sorted(input_dir.glob("*.safetensors"))
     if not safetensor_files:
         raise ValueError(
-            f"No safetensor files found in {input_dir}. "
-            "Plan-based conversion requires safetensor files."
+            f"No safetensor files found in {input_dir}. " "Plan-based conversion requires safetensor files."
         )
 
     # Convert using plan-based approach with streaming sharded output
@@ -400,11 +409,11 @@ def main():
         show_plan=args.show_plan or args.verbose,
     )
 
-    # Save config
+    # Save config (build_plan returns S which has no init, but strip defensively)
     output_config_file = args.output_dir / "config.json"
     logger.info(f"Saving config to {output_config_file}")
     with open(output_config_file, "w") as f:
-        json.dump(apriel2_config, f, indent=2)
+        json.dump(strip_init_fields(apriel2_config), f, indent=2)
 
     # Copy tokenizer files
     copy_tokenizer_files(input_dir, args.output_dir)

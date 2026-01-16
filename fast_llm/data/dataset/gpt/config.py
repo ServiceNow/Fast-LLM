@@ -64,7 +64,11 @@ class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDataset
 
     def _load_config(self) -> SampledDatasetConfig[SampleType]:
         assert self.path.is_file(), f"File {self.path} does not exist."
-        return SampledDatasetConfig[SampleType].from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
+        config = yaml.safe_load(self.path.open("r"))
+        if config.keys() == {"config", "metadata"}:
+            # Newer format with metadata
+            config = config["config"]
+        return SampledDatasetConfig[SampleType].from_dict(self._convert_paths(config))
 
     def _convert_paths(self, config):
         # Recursively convert paths relative to `self.path.parent` to make them relative to cwd.

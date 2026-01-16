@@ -10,7 +10,7 @@ from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm import kda as kda_module
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.utils import Assert
-from fast_llm_external_models.apriel_hybrid_ssm.configuration_apriel_hybrid_ssm import AprielHybridSSMConfig
+from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba, KimiDeltaAttention
 from tests.utils.utils import get_stage, requires_cuda
 
 try:
@@ -18,11 +18,6 @@ try:
 except ImportError:
     Apriel2GatedDeltaNet = None
     Apriel2Mamba = None
-
-try:
-    from fast_llm_external_models.apriel_hybrid_ssm.modeling_apriel_hybrid_ssm import KimiDeltaAttention
-except ImportError:
-    KimiDeltaAttention = None
 
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
@@ -112,39 +107,24 @@ def test_gdn():
 
 @pytest.mark.slow
 @requires_cuda
-@pytest.mark.skipif(KimiDeltaAttention is None or AprielHybridSSMConfig is None, reason="Apriel KDA deps missing")
 @pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available")
 def test_kda():
     NUM_HEADS = 4
     HEAD_DIM = 4
     KERNEL_SIZE = 4
 
-    hf_config = AprielHybridSSMConfig(
-        hidden_size=HIDDEN_SIZE,
-        num_attention_heads=NUM_HEADS,
-        num_hidden_layers=1,
-        rms_norm_eps=1e-6,
-    )
-    hf_config.short_conv_kernel_size = KERNEL_SIZE
-    hf_config.head_dim = HEAD_DIM
-    hf_config.num_heads = NUM_HEADS
-    hf_layer = KimiDeltaAttention(hf_config, layer_idx=0)
-
-    fast_llm_config = KimiDeltaAttentionConfig(
-        heads=NUM_HEADS,
-        head_dim=HEAD_DIM,
-        convolution_layer={"kernel_size": KERNEL_SIZE, "activation": "silu"},
-        normalization={"epsilon": 1e-6, "activation": "sigmoid"},
-    )
-
-    param_map = {
-        "q_conv.weight": "q_conv1d.weight",
-        "k_conv.weight": "k_conv1d.weight",
-        "v_conv.weight": "v_conv1d.weight",
-        "beta_proj.weight": "b_proj.weight",
-        "norm.weight": "o_norm.weight",
+    kda_config = {
+        "heads": NUM_HEADS,
+        "head_dim": HEAD_DIM,
+        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
+        "normalization": {"epsilon": 1e-5, "activation": "sigmoid"},
     }
-    _compare_mixers(fast_llm_config, hf_layer, param_map)
+
+    hf_layer = KimiDeltaAttention(HIDDEN_SIZE, kda_config, layer_idx=0)
+
+    fast_llm_config = KimiDeltaAttentionConfig.from_dict(kda_config, {})
+
+    _compare_mixers(fast_llm_config, hf_layer, {})
 
 
 @pytest.mark.slow

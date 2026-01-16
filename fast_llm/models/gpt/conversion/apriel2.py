@@ -39,8 +39,20 @@ class Apriel2AttentionConverter:
             "head_groups": config["head_groups"],
             "head_size": config["head_size"],
             "rotary": rotary,
-            "add_linear_biases": config["add_linear_biases"],
         }
+        # Per-layer bias configuration mirroring Fast-LLM structure
+        # If per-layer configs exist, use them; otherwise fall back to add_linear_biases
+        if "query_layer" in config:
+            result["query_layer"] = config["query_layer"]
+        if "key_layer" in config:
+            result["key_layer"] = config["key_layer"]
+        if "value_layer" in config:
+            result["value_layer"] = config["value_layer"]
+        if "dense_layer" in config:
+            result["dense_layer"] = config["dense_layer"]
+        # add_linear_biases serves as default for layers without explicit config
+        if "add_linear_biases" in config:
+            result["add_linear_biases"] = config["add_linear_biases"]
         if "window_size" in config:
             result["window_size"] = config["window_size"]
         return result
@@ -58,18 +70,37 @@ class Apriel2AttentionConverter:
         else:
             raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
 
-        return {
+        result = {
             "type": "attention",
             "heads": config.heads,
             "head_groups": config.head_groups,
             "head_size": config.head_size,
-            "add_linear_biases": config.add_linear_biases,
             "rotary": {
                 "type": rotary_type,
                 "theta": config.rotary.theta,
             },
             "window_size": config.window_size,
         }
+        # Export per-layer bias configuration
+        # Only include if explicitly set (not None)
+        if config.query_layer.bias.enabled is not None:
+            result["query_layer"] = {"bias": {"enabled": config.query_layer.bias.enabled}}
+        if config.key_layer.bias.enabled is not None:
+            result["key_layer"] = {"bias": {"enabled": config.key_layer.bias.enabled}}
+        if config.value_layer.bias.enabled is not None:
+            result["value_layer"] = {"bias": {"enabled": config.value_layer.bias.enabled}}
+        if config.dense_layer.bias.enabled is not None:
+            result["dense_layer"] = {"bias": {"enabled": config.dense_layer.bias.enabled}}
+        # add_linear_biases as fallback default
+        result["add_linear_biases"] = config.add_linear_biases
+        return result
+
+    @classmethod
+    def _get_effective_bias(cls, layer_config, default: bool) -> bool:
+        """Get effective bias setting: use layer-specific if set, else default."""
+        if layer_config.bias.enabled is not None:
+            return layer_config.bias.enabled
+        return default
 
     @classmethod
     def get_converters(
@@ -79,11 +110,20 @@ class Apriel2AttentionConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
+        # Determine effective bias for each projection
+        q_bias = cls._get_effective_bias(config.query_layer, config.add_linear_biases)
+        k_bias = cls._get_effective_bias(config.key_layer, config.add_linear_biases)
+        v_bias = cls._get_effective_bias(config.value_layer, config.add_linear_biases)
+        o_bias = cls._get_effective_bias(config.dense_layer, config.add_linear_biases)
+        # For key_value, both k and v must have same bias setting
+        # (they're combined in Fast-LLM's key_value layer)
+        kv_bias = k_bias and v_bias
+
         return [
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.query",
                 f"{hf_prefix}.q_proj",
-                config.add_linear_biases,
+                q_bias,
                 QueryWeightConverter,
                 config,
                 drop_on_export=drop_on_export,
@@ -91,7 +131,7 @@ class Apriel2AttentionConverter:
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.key_value",
                 (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                config.add_linear_biases,
+                kv_bias,
                 KeyValueWeightConverter,
                 config,
                 drop_on_export=drop_on_export,
@@ -99,7 +139,7 @@ class Apriel2AttentionConverter:
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.dense",
                 f"{hf_prefix}.o_proj",
-                config.add_linear_biases,
+                o_bias,
                 drop_on_export=drop_on_export,
             ),
         ]
@@ -524,6 +564,12 @@ class Apriel2BlockConverter:
             "gated": mlp_config["gated"],
             "add_linear_biases": mlp_config["add_linear_biases"],
         }
+        # Import per-layer MLP bias settings (layer_1, layer_2)
+        for layer_name in ("layer_1", "layer_2"):
+            if layer_name in mlp_config:
+                layer_cfg = mlp_config[layer_name]
+                if "bias" in layer_cfg:
+                    mlp[layer_name] = {"bias": layer_cfg["bias"]}
 
         normalization = block_config["normalization"]
 
@@ -578,6 +624,11 @@ class Apriel2BlockConverter:
             "gated": config.mlp.gated,
             "add_linear_biases": config.mlp.add_linear_biases,
         }
+        # Export per-layer MLP bias settings (layer_1, layer_2)
+        if config.mlp.layer_1.bias.enabled is not None:
+            mlp["layer_1"] = {"bias": {"enabled": config.mlp.layer_1.bias.enabled}}
+        if config.mlp.layer_2.bias.enabled is not None:
+            mlp["layer_2"] = {"bias": {"enabled": config.mlp.layer_2.bias.enabled}}
 
         normalization = {"type": norm_type_str, "epsilon": config.normalization.epsilon}
 
@@ -624,24 +675,56 @@ class Apriel2BlockConverter:
             )
         )
 
-        converters.extend(
-            [
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_1",
-                    (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                    config.mlp.add_linear_biases,
-                    SplitWeightConverter,
-                    drop_on_export=drop_on_export,
-                ),
-                *get_weight_and_bias_converters(
-                    f"{fast_llm_prefix}.mlp.layer_2",
-                    f"{hf_prefix}.mlp.down_proj",
-                    config.mlp.add_linear_biases,
-                    MLPLayer2Converter,
-                    drop_on_export=drop_on_export,
-                ),
-            ]
-        )
+        # Per-layer MLP bias: use layer-specific setting if set, else default
+        def get_mlp_layer_bias(layer_config, default: bool) -> bool:
+            if layer_config.bias.enabled is not None:
+                return layer_config.bias.enabled
+            return default
+
+        layer_1_bias = get_mlp_layer_bias(config.mlp.layer_1, config.mlp.add_linear_biases)
+        layer_2_bias = get_mlp_layer_bias(config.mlp.layer_2, config.mlp.add_linear_biases)
+
+        if config.mlp.gated:
+            # Gated MLP: gate_proj + up_proj -> layer_1 (split), down_proj -> layer_2
+            converters.extend(
+                [
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_1",
+                        (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                        layer_1_bias,
+                        SplitWeightConverter,
+                        drop_on_export=drop_on_export,
+                    ),
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_2",
+                        f"{hf_prefix}.mlp.down_proj",
+                        layer_2_bias,
+                        MLPLayer2Converter,
+                        drop_on_export=drop_on_export,
+                    ),
+                ]
+            )
+        else:
+            # Non-gated MLP: up_proj -> layer_1, down_proj -> layer_2
+            # Note: layer_2 still needs MLPLayer2Converter for the transpose
+            converters.extend(
+                [
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_1",
+                        f"{hf_prefix}.mlp.up_proj",
+                        layer_1_bias,
+                        WeightConverter,
+                        drop_on_export=drop_on_export,
+                    ),
+                    *get_weight_and_bias_converters(
+                        f"{fast_llm_prefix}.mlp.layer_2",
+                        f"{hf_prefix}.mlp.down_proj",
+                        layer_2_bias,
+                        MLPLayer2Converter,
+                        drop_on_export=drop_on_export,
+                    ),
+                ]
+            )
 
         converters.extend(
             [

@@ -227,7 +227,8 @@ def distributed_log_softmax(
     return logits_norm - sum_exp_logits.log()  # log_softmax
 
 
-def _torch_reverse_kl_forward_backward(
+@torch.compile
+def _reverse_kl_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
     loss_mask: torch.Tensor | None,
@@ -259,38 +260,44 @@ def _torch_reverse_kl_forward_backward(
     if loss_mask is not None:
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
-    # Compute log probabilities
     teacher_log_probs = distributed_log_softmax(target.float(), group=group)
-    # batch_size = logits.shape[0]
-    with torch.enable_grad():
-        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
-        student_log_probs = distributed_log_softmax(logits_, group=group)
+    log_ratio = distributed_log_softmax(logits, group=group)
 
-        # Reverse KL: input=teacher_log_probs, target=student_probs
-        loss_terms = torch.nn.functional.kl_div(
-            teacher_log_probs,  # input = log(p)
-            student_log_probs,  # target = log(q)
-            reduction="none",
-            log_target=True,
-        ).sum(dim=-1)
-        if loss_mask is not None:
-            # loss mask is the same on all ranks for TP over vocab.
-            valid = loss_mask.to(loss_terms.dtype)
-            loss_terms = loss_terms * valid
-            valid_tokens = torch.tensor(valid.sum(), device=loss_terms.device, dtype=loss_terms.dtype)
-        else:
-            valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
-        loss = loss_terms.sum()  # sums over batch and seq. len.
+    student_probs = log_ratio.exp()
+    log_ratio = log_ratio - teacher_log_probs  # In-place: log_ratio = student_log_probs - teacher_log_probs
+    del teacher_log_probs
+    # Compute loss terms: student_probs * log_ratio, then sum over vocab
+    # This is equivalent to kl_div(..., log_target=True) but more memory efficient
+    loss_terms = (student_probs * log_ratio).sum(dim=-1)
 
+    if loss_mask is not None:
+        # loss mask is the same on all ranks for TP over vocab.
+        valid = loss_mask.to(loss_terms.dtype)
+        loss_terms = loss_terms * valid
+    valid_tokens = torch.prod(torch.tensor(loss_terms.shape, device=loss_terms.device, dtype=loss_terms.dtype))
+    loss = loss_terms.sum()  # sums over batch and seq. len.
+
+    if group is not None:
+        all_reduce(loss, op=ReduceOp.SUM, group=group)
+    loss /= valid_tokens
+
+    if grad_output is not None:
+        # Gradient: d/d(logits) KL(q||p) = q * (log(q/p) - E_q[log(q/p)])
+        # where E_q[log(q/p)] is the expected log ratio under the student distribution
+        expected = torch.sum(student_probs * log_ratio, dim=-1, keepdim=True)
         if group is not None:
-            all_reduce(loss, op=ReduceOp.SUM, group=group)
-        loss /= valid_tokens
+            all_reduce(expected, op=ReduceOp.SUM, group=group)
+        log_ratio = log_ratio - expected
+        log_ratio = log_ratio * student_probs
+        del student_probs  # Free after use
 
-        if grad_output is not None:
-            loss.backward(torch.full_like(loss, grad_output))
-            grad = logits_.grad.to(logits.dtype)
-        else:
-            grad = None
+        if loss_mask is not None:
+            log_ratio = log_ratio * loss_mask.to(logits.dtype).unsqueeze(-1)
+
+        log_ratio = log_ratio * (grad_output / valid_tokens)
+        grad = log_ratio.to(logits.dtype)
+    else:
+        grad = None
 
     return loss.detach_(), grad
 
@@ -339,7 +346,7 @@ def reverse_kl_forward_backward(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # TODO: implement fused?
-    distillation_loss, distillation_grad = _torch_reverse_kl_forward_backward(
+    distillation_loss, distillation_grad = _reverse_kl_forward_backward(
         logits=logits,
         target=target,
         loss_mask=loss_mask,

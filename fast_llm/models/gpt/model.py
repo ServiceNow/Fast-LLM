@@ -217,12 +217,37 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             pasts = presents
             presents = None if i == len(preprocessed_meta) - 1 else []
 
+            # Create activation mask for activation distillation
+            # This mask should:
+            # - Be 0 on padding tokens (added at the end when documents aren't truncated)
+            # - Be 1 on image placeholder tokens (token value -100 but not padding)
+            # - Be 1 on all other valid tokens (ignores loss-masking-spans)
+            #
+            # Note: Padding is added as a separate document with all tokens = -100
+            # We detect padding by checking if all tokens in a document segment are -100
+            activation_mask = torch.ones_like(cropped_tokens.tokens, dtype=torch.bool)
+
+            for sample_index, sample_lengths in enumerate(cropped_tokens.lengths):
+                # Iterate through documents in this sample
+                pos = 0
+                for doc_length in sample_lengths:
+                    # Check if this document is padding (all tokens are -100)
+                    doc_tokens = cropped_tokens.tokens[sample_index, pos : pos + doc_length]
+                    is_padding_doc = torch.all(doc_tokens == -100).item()
+
+                    if is_padding_doc:
+                        # This is a padding document, mask it out
+                        activation_mask[sample_index, pos : pos + doc_length] = False
+
+                    pos += doc_length
+
             kwargs: dict[str, typing.Any] = {
                 **kwargs_meta,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 BlockKwargs.iteration: iteration,
                 AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                BlockKwargs.activation_mask: activation_mask,
                 AttentionKwargs.device: self._distributed.device,
                 BlockKwargs.hidden_states: {},
                 **reference_logits[i],
@@ -238,7 +263,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             if phase != PhaseType.inference:
                 labels_begin = tokens_begin + 1
                 labels_end = tokens_end + self._config.head.max_prediction_distance
-
                 labels = batch.tokens.crop(labels_begin, labels_end).tokens
 
                 if batch.loss_masking_spans is not None:
@@ -247,13 +271,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     for sample_index, loss_masking_spans in enumerate(loss_masking_spans.ranges):
                         for begin, end in loss_masking_spans:
                             loss_mask[sample_index, begin:end] = False
-                    if self._config.output_layer.distillation_model is not None:
-                        kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     labels = torch.where(loss_mask, labels, -100)
+
+                if self._config.head.distillation_model is not None:  # loss masks only used for distillation currently
+                    # loss masks contain all three sources of masking: padding, user-defined spans, image placeholders
+                    kwargs[LanguageModelKwargs.loss_mask] = labels >= 0
 
                 kwargs[LanguageModelKwargs.labels] = (
                     labels.transpose(0, 1) if kwargs[AttentionKwargs.sequence_first] else labels
                 ).contiguous()
+                if LanguageModelKwargs.loss_mask in kwargs and kwargs[AttentionKwargs.sequence_first]:
+                    kwargs[LanguageModelKwargs.loss_mask] = (
+                        kwargs[LanguageModelKwargs.loss_mask].transpose(0, 1).contiguous()
+                    )
 
                 if batch.chosen_spans is not None:
                     kwargs[LanguageModelKwargs.chosen_spans] = batch.chosen_spans.crop(labels_begin, labels_end).ranges

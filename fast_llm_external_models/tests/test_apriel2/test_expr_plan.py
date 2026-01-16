@@ -1,15 +1,13 @@
 """Tests for the expression-based plan system."""
 
 import json
+
 import pytest
 import torch
-
-from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 from fast_llm_external_models.apriel2.conversion import (
     Concat,
     EvalKwargs,
-    Expr,
     ExprAdapter,
     ExprPlan,
     Init,
@@ -18,10 +16,9 @@ from fast_llm_external_models.apriel2.conversion import (
     Slice,
     StreamingExecutor,
     W,
-    compose,
     execute,
-    fuse,
     full_slice,
+    fuse,
     make_slice,
     plan_dil_attention_to_gdn,
     plan_kil_attention_to_kda,
@@ -31,6 +28,7 @@ from fast_llm_external_models.apriel2.conversion import (
     slice_spec,
     substitute,
 )
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 
 def make_eval_kwargs(
@@ -219,10 +217,13 @@ class TestSubstitute:
     def test_substitute_complex(self):
         """Substitute handles complex nested expressions."""
         # Concat of Slice(Ref) and Init
-        expr = Concat(exprs=(
-            Slice(expr=Ref(key=W("a")), slices=((0, 5, None),)),
-            Init(shape=(5,), init_type="zeros"),
-        ), dim=0)
+        expr = Concat(
+            exprs=(
+                Slice(expr=Ref(key=W("a")), slices=((0, 5, None),)),
+                Init(shape=(5,), init_type="zeros"),
+            ),
+            dim=0,
+        )
         bindings = {W("a"): Ref(key=W("source"))}
         result = substitute(expr, bindings)
 
@@ -238,7 +239,13 @@ class TestFuse:
     def test_fuse_flatten_concat(self):
         """Fuse flattens nested Concat with same dim."""
         inner = Concat(exprs=(Ref(key=W("a")), Ref(key=W("b"))), dim=0)
-        outer = Concat(exprs=(inner, Ref(key=W("c")),), dim=0)
+        outer = Concat(
+            exprs=(
+                inner,
+                Ref(key=W("c")),
+            ),
+            dim=0,
+        )
         result = fuse(outer)
 
         assert isinstance(result, Concat)
@@ -250,7 +257,13 @@ class TestFuse:
     def test_fuse_no_flatten_different_dim(self):
         """Fuse doesn't flatten Concat with different dim."""
         inner = Concat(exprs=(Ref(key=W("a")), Ref(key=W("b"))), dim=1)
-        outer = Concat(exprs=(inner, Ref(key=W("c")),), dim=0)
+        outer = Concat(
+            exprs=(
+                inner,
+                Ref(key=W("c")),
+            ),
+            dim=0,
+        )
         result = fuse(outer)
 
         assert isinstance(result, Concat)
@@ -340,28 +353,34 @@ class TestExprPlan:
 
     def test_plan_define_and_access(self):
         """Plan stores and retrieves expressions."""
-        plan = ExprPlan(mappings={
-            W("target"): Ref(key=W("source")),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("target"): Ref(key=W("source")),
+            }
+        )
         assert W("target") in plan
         assert isinstance(plan[W("target")], Ref)
 
     def test_plan_source_keys(self):
         """Plan identifies all source references."""
-        plan = ExprPlan(mappings={
-            W("a"): Ref(key=W("x")),
-            W("b"): Concat(exprs=(Ref(key=W("y")), Ref(key=W("z"))), dim=0),
-            W("c"): Init(shape=(10,), init_type="zeros"),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("a"): Ref(key=W("x")),
+                W("b"): Concat(exprs=(Ref(key=W("y")), Ref(key=W("z"))), dim=0),
+                W("c"): Init(shape=(10,), init_type="zeros"),
+            }
+        )
 
         assert plan.source_keys() == {W("x"), W("y"), W("z")}
 
     def test_plan_target_keys(self):
         """Plan identifies all target keys."""
-        plan = ExprPlan(mappings={
-            W("a"): Ref(key=W("x")),
-            W("b"): Ref(key=W("y")),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("a"): Ref(key=W("x")),
+                W("b"): Ref(key=W("y")),
+            }
+        )
 
         assert plan.target_keys() == {W("a"), W("b")}
 
@@ -386,9 +405,17 @@ class TestExprPlan:
     def test_plan_fuse(self):
         """Plan fuse applies optimizations."""
         inner = Concat(exprs=(Ref(key=W("a")), Ref(key=W("b"))), dim=0)
-        plan = ExprPlan(mappings={
-            W("out"): Concat(exprs=(inner, Ref(key=W("c")),), dim=0),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("out"): Concat(
+                    exprs=(
+                        inner,
+                        Ref(key=W("c")),
+                    ),
+                    dim=0,
+                ),
+            }
+        )
 
         fused = plan.fuse()
         assert isinstance(fused[W("out")], Concat)
@@ -532,9 +559,11 @@ class TestStreamingExecution:
 
     def test_execute_simple(self):
         """Execute simple plan."""
-        plan = ExprPlan(mappings={
-            W("out"): Ref(key=W("in")),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("out"): Ref(key=W("in")),
+            }
+        )
 
         sources = {W("in"): torch.tensor([1.0, 2.0, 3.0])}
         result = execute(plan, sources, seed=42)
@@ -544,9 +573,11 @@ class TestStreamingExecution:
 
     def test_execute_concat(self):
         """Execute plan with Concat."""
-        plan = ExprPlan(mappings={
-            W("combined"): Concat(exprs=(Ref(key=W("a")), Ref(key=W("b"))), dim=0),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("combined"): Concat(exprs=(Ref(key=W("a")), Ref(key=W("b"))), dim=0),
+            }
+        )
 
         sources = {
             W("a"): torch.ones(2, 3),
@@ -559,14 +590,19 @@ class TestStreamingExecution:
     def test_execute_mil_like(self):
         """Execute MIL-like Concat of Slices and Init."""
         # Simulated MIL: in_proj = [z, x, B, C]
-        plan = ExprPlan(mappings={
-            W("in_proj"): Concat(exprs=(
-                Init(shape=(4, 8), init_type="zeros"),  # z
-                Slice(expr=Ref(key=W("v")), slices=((0, 2, None), (None, None, None))),  # x
-                Slice(expr=Ref(key=W("k")), slices=((0, 2, None), (None, None, None))),  # B
-                Slice(expr=Ref(key=W("q")), slices=((0, 4, None), (None, None, None))),  # C
-            ), dim=0),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("in_proj"): Concat(
+                    exprs=(
+                        Init(shape=(4, 8), init_type="zeros"),  # z
+                        Slice(expr=Ref(key=W("v")), slices=((0, 2, None), (None, None, None))),  # x
+                        Slice(expr=Ref(key=W("k")), slices=((0, 2, None), (None, None, None))),  # B
+                        Slice(expr=Ref(key=W("q")), slices=((0, 4, None), (None, None, None))),  # C
+                    ),
+                    dim=0,
+                ),
+            }
+        )
 
         sources = {
             W("q"): torch.ones(4, 8),
@@ -583,11 +619,13 @@ class TestStreamingExecution:
 
     def test_streaming_execution(self):
         """Streaming executor processes all targets."""
-        plan = ExprPlan(mappings={
-            W("out1"): Ref(key=W("shared")),
-            W("out2"): Ref(key=W("shared")),
-            W("out3"): Ref(key=W("unique")),
-        })
+        plan = ExprPlan(
+            mappings={
+                W("out1"): Ref(key=W("shared")),
+                W("out2"): Ref(key=W("shared")),
+                W("out3"): Ref(key=W("unique")),
+            }
+        )
 
         load_calls = []
 
@@ -858,25 +896,23 @@ class TestPlanBuilders:
 
         key_dim = 64
         value_dim = 64
-        head_k_dim = 16
-        head_v_dim = 16
         conv_dim = 2 * key_dim + value_dim  # 192
 
         # Create attention weights with per-head distinctive values
         # Q: each head gets value (head_idx + 1)
         q_weight = torch.zeros(64, 64)
         for h in range(4):
-            q_weight[h*16:(h+1)*16, :] = float(h + 1)
+            q_weight[h * 16 : (h + 1) * 16, :] = float(h + 1)
 
         # K: each head gets value (head_idx + 1) * 10
         k_weight = torch.zeros(64, 64)
         for h in range(4):
-            k_weight[h*16:(h+1)*16, :] = float((h + 1) * 10)
+            k_weight[h * 16 : (h + 1) * 16, :] = float((h + 1) * 10)
 
         # V: each head gets value (head_idx + 1) * 100
         v_weight = torch.zeros(64, 64)
         for h in range(4):
-            v_weight[h*16:(h+1)*16, :] = float((h + 1) * 100)
+            v_weight[h * 16 : (h + 1) * 16, :] = float((h + 1) * 100)
 
         sources = {
             W("attn.q_proj.weight"): q_weight,
@@ -894,30 +930,23 @@ class TestPlanBuilders:
 
         # Q_all (rows 0-63): heads 0,1,2,3 concatenated
         for h in range(4):
-            assert torch.allclose(
-                in_proj_qkvz[h*16:(h+1)*16],
-                torch.full((16, 64), float(h + 1))
-            )
+            assert torch.allclose(in_proj_qkvz[h * 16 : (h + 1) * 16], torch.full((16, 64), float(h + 1)))
 
         # K_all (rows 64-127): heads 0,1,2,3 concatenated
         for h in range(4):
             assert torch.allclose(
-                in_proj_qkvz[key_dim + h*16:key_dim + (h+1)*16],
-                torch.full((16, 64), float((h + 1) * 10))
+                in_proj_qkvz[key_dim + h * 16 : key_dim + (h + 1) * 16], torch.full((16, 64), float((h + 1) * 10))
             )
 
         # V_all (rows 128-191): heads 0,1,2,3 concatenated
         for h in range(4):
             assert torch.allclose(
-                in_proj_qkvz[2*key_dim + h*16:2*key_dim + (h+1)*16],
-                torch.full((16, 64), float((h + 1) * 100))
+                in_proj_qkvz[2 * key_dim + h * 16 : 2 * key_dim + (h + 1) * 16],
+                torch.full((16, 64), float((h + 1) * 100)),
             )
 
         # Z_all (rows 192-255): zeros
-        assert torch.allclose(
-            in_proj_qkvz[2*key_dim + value_dim:],
-            torch.zeros(value_dim, 64)
-        )
+        assert torch.allclose(in_proj_qkvz[2 * key_dim + value_dim :], torch.zeros(value_dim, 64))
 
         # in_proj_ba should be zeros
         in_proj_ba = result[W("in_proj_ba.weight")]
@@ -971,17 +1000,17 @@ class TestPlanBuilders:
         # Q: 4 heads, each with value (head_idx + 1)
         q_weight = torch.zeros(64, 64)
         for h in range(4):
-            q_weight[h*16:(h+1)*16, :] = float(h + 1)
+            q_weight[h * 16 : (h + 1) * 16, :] = float(h + 1)
 
         # K: 2 kv_heads, each with value (head_idx + 1) * 10
         k_weight = torch.zeros(32, 64)
         for h in range(2):
-            k_weight[h*16:(h+1)*16, :] = float((h + 1) * 10)
+            k_weight[h * 16 : (h + 1) * 16, :] = float((h + 1) * 10)
 
         # V: 2 kv_heads, each with value (head_idx + 1) * 100
         v_weight = torch.zeros(32, 64)
         for h in range(2):
-            v_weight[h*16:(h+1)*16, :] = float((h + 1) * 100)
+            v_weight[h * 16 : (h + 1) * 16, :] = float((h + 1) * 100)
 
         sources = {
             W("attn.q_proj.weight"): q_weight,
@@ -1007,22 +1036,22 @@ class TestPlanBuilders:
 
         # K_all (rows 32-63): k_heads 0,1 (maps to source K heads 0,1 via modulo)
         # k_head 0 → source K head 0 (value 10)
-        assert torch.allclose(in_proj_qkvz[key_dim:key_dim+16], torch.full((16, 64), 10.0))
+        assert torch.allclose(in_proj_qkvz[key_dim : key_dim + 16], torch.full((16, 64), 10.0))
         # k_head 1 → source K head 1 (value 20)
-        assert torch.allclose(in_proj_qkvz[key_dim+16:key_dim+32], torch.full((16, 64), 20.0))
+        assert torch.allclose(in_proj_qkvz[key_dim + 16 : key_dim + 32], torch.full((16, 64), 20.0))
 
         # V_all (rows 64-127): 4 v_heads, tiled from 2 source KV heads via modulo
         # v_head 0 → src_v_head 0 (value 100)
-        assert torch.allclose(in_proj_qkvz[2*key_dim:2*key_dim+16], torch.full((16, 64), 100.0))
+        assert torch.allclose(in_proj_qkvz[2 * key_dim : 2 * key_dim + 16], torch.full((16, 64), 100.0))
         # v_head 1 → src_v_head 1 (value 200)
-        assert torch.allclose(in_proj_qkvz[2*key_dim+16:2*key_dim+32], torch.full((16, 64), 200.0))
+        assert torch.allclose(in_proj_qkvz[2 * key_dim + 16 : 2 * key_dim + 32], torch.full((16, 64), 200.0))
         # v_head 2 → src_v_head 0 (value 100, tiled)
-        assert torch.allclose(in_proj_qkvz[2*key_dim+32:2*key_dim+48], torch.full((16, 64), 100.0))
+        assert torch.allclose(in_proj_qkvz[2 * key_dim + 32 : 2 * key_dim + 48], torch.full((16, 64), 100.0))
         # v_head 3 → src_v_head 1 (value 200, tiled)
-        assert torch.allclose(in_proj_qkvz[2*key_dim+48:2*key_dim+64], torch.full((16, 64), 200.0))
+        assert torch.allclose(in_proj_qkvz[2 * key_dim + 48 : 2 * key_dim + 64], torch.full((16, 64), 200.0))
 
         # Z_all (rows 128-191): zeros
-        assert torch.allclose(in_proj_qkvz[2*key_dim+value_dim:], torch.zeros(value_dim, 64))
+        assert torch.allclose(in_proj_qkvz[2 * key_dim + value_dim :], torch.zeros(value_dim, 64))
 
     def test_plan_kil_attention_to_kda(self):
         """AIK plan produces correct structure for attention → KDA conversion."""
@@ -1188,6 +1217,7 @@ class TestFullPipeline:
 
         # Build surgery plan (need intermediate config)
         from fast_llm_external_models.apriel2.conversion.llava import convert_config
+
         intermediate_config = convert_config(llava_pixtral_config)
         target_config = apriel2_config_stochastic.to_dict()
         surgery_plan = plan_surgery(intermediate_config, target_config)
@@ -1210,6 +1240,7 @@ class TestFullPipeline:
         """
         import json
         from pathlib import Path
+
         from safetensors.torch import load_file
 
         # Load config
@@ -1448,10 +1479,9 @@ class TestEndToEndConversion:
         the conversion produced correct keys and shapes.
         """
         import json
-        from pathlib import Path
 
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
-        from fast_llm_external_models.apriel2.convert import build_plan, convert
+        from fast_llm_external_models.apriel2.convert import convert
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForConditionalGeneration
 
         # Load LLaVA config
@@ -1477,11 +1507,11 @@ class TestEndToEndConversion:
                 "type": "pattern",
                 "num_blocks": 5,
                 "pattern": [
-                    "attn",        # 0: attention → attention (passthrough)
-                    "mamba",       # 1: attention → mamba (MIL)
-                    "gdn",         # 2: attention → gated_delta_net (DIL)
-                    "stoch_am",    # 3: attention → stochastic(attention + mamba)
-                    "stoch_sg",    # 4: attention → stochastic(swa + gdn)
+                    "attn",  # 0: attention → attention (passthrough)
+                    "mamba",  # 1: attention → mamba (MIL)
+                    "gdn",  # 2: attention → gated_delta_net (DIL)
+                    "stoch_am",  # 3: attention → stochastic(attention + mamba)
+                    "stoch_sg",  # 4: attention → stochastic(swa + gdn)
                 ],
                 "blocks": {
                     # Pure attention (passthrough from source)
@@ -1609,7 +1639,8 @@ class TestEndToEndConversion:
                             "type": "attention",
                             "heads": llava_config["vision_config"]["num_attention_heads"],
                             "head_groups": llava_config["vision_config"]["num_attention_heads"],
-                            "head_size": llava_config["vision_config"]["hidden_size"] // llava_config["vision_config"]["num_attention_heads"],
+                            "head_size": llava_config["vision_config"]["hidden_size"]
+                            // llava_config["vision_config"]["num_attention_heads"],
                             "add_linear_biases": False,
                             "causal": False,
                             "rotary": {
@@ -1688,7 +1719,6 @@ class TestEndToEndConversion:
         This test validates the plan WITHOUT executing it, by comparing
         plan target keys against what the model expects.
         """
-        import json
 
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
         from fast_llm_external_models.apriel2.convert import build_plan
@@ -1703,7 +1733,7 @@ class TestEndToEndConversion:
         expected_keys = set(model.state_dict().keys())
 
         # Get plan target keys
-        plan_target_keys = set(str(k) for k in plan.target_keys())
+        plan_target_keys = {str(k) for k in plan.target_keys()}
 
         # Compare
         missing_from_plan = expected_keys - plan_target_keys
@@ -1711,3 +1741,214 @@ class TestEndToEndConversion:
 
         assert not missing_from_plan, f"Plan missing keys that model expects: {sorted(missing_from_plan)}"
         assert not extra_in_plan, f"Plan has extra keys model doesn't expect: {sorted(extra_in_plan)}"
+
+
+class TestBiasPlanGeneration:
+    """Test that surgery plans correctly handle per-layer bias configurations.
+
+    These tests verify that plan_surgery correctly includes/excludes bias
+    weight mappings based on the per-layer bias settings:
+    - query_layer.bias.enabled, key_layer.bias.enabled, etc. for attention
+    - layer_1.bias.enabled, layer_2.bias.enabled for MLP
+    """
+
+    @pytest.fixture
+    def source_config_with_bias(self):
+        """Source config with Qwen-style bias (QKV enabled, O disabled)."""
+        return {
+            "model_type": "apriel2",
+            "hidden_size": 256,
+            "vocab_size": 1000,
+            "decoder": {
+                "type": "fixed",
+                "num_blocks": 2,
+                "block": {
+                    "mixer": {
+                        "type": "attention",
+                        "heads": 8,
+                        "head_groups": 4,
+                        "head_size": 32,
+                        "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                        # Qwen-style: QKV bias enabled, O bias disabled
+                        "query_layer": {"bias": {"enabled": True}},
+                        "key_layer": {"bias": {"enabled": True}},
+                        "value_layer": {"bias": {"enabled": True}},
+                        "dense_layer": {"bias": {"enabled": False}},
+                    },
+                    "mlp": {
+                        "type": "mlp",
+                        "intermediate_size": 512,
+                        "gated": False,
+                        # Per-layer MLP bias: layer_1 enabled, layer_2 disabled
+                        "layer_1": {"bias": {"enabled": True}},
+                        "layer_2": {"bias": {"enabled": False}},
+                    },
+                    "normalization": {"type": "rms_norm", "epsilon": 1e-5},
+                },
+            },
+        }
+
+    def test_plan_includes_enabled_attention_biases(self, source_config_with_bias):
+        """Surgery plan includes bias mappings for enabled attention biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have q_proj.bias, k_proj.bias, v_proj.bias mappings
+        q_bias = [m for m in mapping_strs if "q_proj.bias" in m]
+        k_bias = [m for m in mapping_strs if "k_proj.bias" in m]
+        v_bias = [m for m in mapping_strs if "v_proj.bias" in m]
+
+        assert len(q_bias) > 0, "Should have q_proj.bias mappings"
+        assert len(k_bias) > 0, "Should have k_proj.bias mappings"
+        assert len(v_bias) > 0, "Should have v_proj.bias mappings"
+
+    def test_plan_excludes_disabled_attention_biases(self, source_config_with_bias):
+        """Surgery plan excludes bias mappings for disabled attention biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should NOT have o_proj.bias mappings (disabled)
+        o_bias = [m for m in mapping_strs if "o_proj.bias" in m]
+        assert len(o_bias) == 0, f"Should not have o_proj.bias mappings, found: {o_bias}"
+
+    def test_plan_includes_enabled_mlp_biases(self, source_config_with_bias):
+        """Surgery plan includes bias mappings for enabled MLP biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should have up_proj.bias (layer_1) mappings
+        up_bias = [m for m in mapping_strs if "up_proj.bias" in m]
+        assert len(up_bias) > 0, "Should have up_proj.bias mappings"
+
+    def test_plan_excludes_disabled_mlp_biases(self, source_config_with_bias):
+        """Surgery plan excludes bias mappings for disabled MLP biases."""
+        from fast_llm_external_models.apriel2.conversion.config import compose_configs
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        target_config = compose_configs(
+            source_config_with_bias,
+            {
+                "decoder": {
+                    "block": {
+                        "mixer": {
+                            "type": "stochastic",
+                            "main_mixer_name": "attention",
+                            "mixers": {
+                                "attention": {"init": "transfer"},
+                            },
+                        },
+                        "mlp": {"init": "transfer"},
+                    },
+                },
+            },
+        )
+
+        plan = plan_surgery(source_config_with_bias, target_config)
+        mapping_strs = [str(k) for k in plan.mappings.keys()]
+
+        # Should NOT have down_proj.bias (layer_2) mappings
+        down_bias = [m for m in mapping_strs if "down_proj.bias" in m]
+        assert len(down_bias) == 0, f"Should not have down_proj.bias mappings, found: {down_bias}"
+
+    def test_plan_random_init_creates_init_expressions_for_bias(self, source_config_with_bias):
+        """Random init creates Init expressions for bias weights."""
+        from fast_llm_external_models.apriel2.conversion.converters import plan_surgery
+
+        # Surgery spec - pass directly to plan_surgery (NOT composed, to preserve init)
+        surgery = {
+            "decoder": {
+                "block": {
+                    "mixer": {
+                        "type": "stochastic",
+                        "main_mixer_name": "attention",
+                        "mixers": {
+                            "attention": {"init": "transfer"},
+                            "new_attention": {
+                                "type": "attention",
+                                "init": "random",  # This triggers random init
+                                "heads": 8,
+                                "head_groups": 4,
+                                "head_size": 32,
+                                "rotary": {"type": "mistral_1d", "theta": 10000.0},
+                                "add_linear_biases": True,  # All biases enabled
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        # Pass surgery spec directly - init fields are preserved
+        plan = plan_surgery(source_config_with_bias, surgery)
+
+        # Check that new_attention biases use Init expressions
+        new_mixer_bias_keys = [k for k in plan.mappings.keys() if "new_attention" in str(k) and "bias" in str(k)]
+
+        assert len(new_mixer_bias_keys) > 0, "Should have bias mappings for new_attention"
+
+        for key in new_mixer_bias_keys:
+            expr = plan.mappings[key]
+            assert isinstance(expr, Init), f"{key} should be Init, got {type(expr)}"
