@@ -148,12 +148,15 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 },
                 "num_blocks": 12,
             },
+            "head": {"losses": {"lm_loss": {"type": "cross_entropy"}}},
             "hidden_size": 512,
             "tied_embedding_weight": False,
             "peft": {"freeze_others": False},
         }
     else:
         expected_config["base_model"] = base_model_update
+        # added by default
+        expected_config["base_model"]["head"] = {"losses": {"lm_loss": {"type": "cross_entropy"}}}
 
     check_equal_nested(_trim_type(serialized_config), _trim_type(expected_config))
 

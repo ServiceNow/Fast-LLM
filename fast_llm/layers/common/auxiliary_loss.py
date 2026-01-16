@@ -3,9 +3,9 @@ import torch
 
 class AuxiliaryLoss(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, scores: torch.Tensor, aux_loss: torch.Tensor, grad: float) -> torch.Tensor:  # noqa
+    def forward(ctx, input_: torch.Tensor, aux_loss: torch.Tensor, grad: float) -> torch.Tensor:  # noqa
         ctx.grad = torch.full_like(aux_loss, grad)
-        return scores
+        return input_
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
@@ -14,12 +14,12 @@ class AuxiliaryLoss(torch.autograd.Function):
 
 @torch.compile
 def calculate_z_loss(logits: torch.Tensor, logits_scale_factor: float = 1.0) -> torch.Tensor:
-    if logits_scale_factor != 1.0:
-        logits *= logits_scale_factor
-    return torch.mean(torch.logsumexp(logits, dim=-1) ** 2)
+    return torch.mean(
+        torch.logsumexp(logits if logits_scale_factor == 1.0 else logits * logits_scale_factor, dim=-1) ** 2
+    )
 
 
-def z_loss(
+def auxiliary_z_loss(
     logits: torch.Tensor,
     z_loss_factor: float,
     training: bool,
@@ -36,3 +36,30 @@ def z_loss(
             logits = AuxiliaryLoss.apply(logits, loss, z_loss_factor * grad_scale)
 
     return logits
+
+
+def z_loss_forward_backward(
+    logits: torch.Tensor,
+    grad_output: float | None = None,
+    logits_scale_factor: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Compute z-loss and its gradient.
+
+    Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
+
+    Returns:
+        loss: The z-loss value (unscaled)
+        grad: The gradient w.r.t. logits (scaled by grad_scale), or None if grad_scale is None
+    """
+
+    with torch.set_grad_enabled(grad_output is not None):
+        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        loss = calculate_z_loss(logits, logits_scale_factor)
+        if grad_output is None:
+            grad = None
+        else:
+            loss.backward(torch.full_like(loss, grad_output))
+            grad = logits_.grad.detach().to(logits.dtype)
+
+    return loss, grad
