@@ -128,11 +128,8 @@ def kda_config(request):
 @pytest.fixture(
     params=[
         "precise",
-        # "fast" mode (bf16/sdpa) is intentionally skipped:
-        # - These are correctness tests, not performance benchmarks
-        # - bf16 has ~3 decimal digits precision, masking real bugs
-        # - Small tensor sizes make GPU overhead dominate anyway
-        pytest.param("fast", marks=pytest.mark.skip(reason="Correctness tests use fp32")),
+        # "fast" mode (bf16/sdpa) - enabled for testing
+        "fast",
     ]
 )
 def test_mode(request):
@@ -196,6 +193,10 @@ def assert_close(
         atol: Absolute tolerance
         msg: Context message for failure
     """
+    # Cast to same dtype for comparison (fp32 for precision)
+    if actual.dtype != expected.dtype:
+        actual = actual.float()
+        expected = expected.float()
     if not torch.allclose(actual, expected, rtol=rtol, atol=atol):
         diff = (actual - expected).abs()
         max_diff = diff.max().item()
@@ -755,6 +756,7 @@ class TestGDNEquivalence:
         prefill2_len,
         seed,
         tolerance,
+        test_dtype,
     ):
         """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet output.
 
@@ -806,8 +808,8 @@ class TestGDNEquivalence:
 
         # Create models with same weights
         torch.manual_seed(seed)
-        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).cuda()
-        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).cuda()
+        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
         # Transfer weights using conversion plan
         plan = plan_qwen3next_gdn_to_apriel2(
@@ -827,7 +829,7 @@ class TestGDNEquivalence:
 
         # Create full input sequence
         torch.manual_seed(seed + 1)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda")
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda", dtype=test_dtype)
 
         # Create caches
         qwen_cache = Qwen3NextDynamicCache(qwen3_config)
@@ -939,6 +941,7 @@ class TestGDNEquivalence:
         decode_steps,
         seed,
         tolerance,
+        test_dtype,
     ):
         """Verify GDN recurrent mode (decode) matches chunked mode (prefill).
 
@@ -965,12 +968,12 @@ class TestGDNEquivalence:
 
         # Create model
         torch.manual_seed(seed)
-        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).cuda()
+        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
         model.eval()
 
         # Create input sequence
         torch.manual_seed(seed + 1)
-        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
+        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda", dtype=test_dtype)
 
         # === Reference: Run full sequence through chunked mode ===
         with torch.no_grad():
@@ -1042,6 +1045,7 @@ class TestKDAEquivalence:
         prefill2_len,
         seed,
         tolerance,
+        test_dtype,
     ):
         """Verify Apriel2 KimiDeltaAttention matches FLA KimiDeltaAttention output.
 
@@ -1079,12 +1083,12 @@ class TestKDAEquivalence:
             conv_bias=False,
             norm_eps=1e-5,
             layer_idx=0,
-        ).cuda()
+        ).to(device="cuda", dtype=test_dtype)
         # FLA has g_proj.1 bias=True but Apriel2/upstream Kimi doesn't - zero it out
         fla_kda.g_proj[1].bias.data.zero_()
 
         # Create Apriel2 KDA
-        apriel_kda = Apriel2_KDA(hidden_size, mixer_config, layer_idx=0).cuda()
+        apriel_kda = Apriel2_KDA(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
         # Transfer weights using conversion plan
         plan = plan_fla_kda_to_apriel2()
@@ -1099,7 +1103,7 @@ class TestKDAEquivalence:
 
         # Create full input sequence
         torch.manual_seed(seed + 1)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda")
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda", dtype=test_dtype)
 
         # Create caches
         fla_cache = FLACache()
@@ -1231,6 +1235,7 @@ class TestKDAEquivalence:
         decode_steps,
         seed,
         tolerance,
+        test_dtype,
     ):
         """Verify KDA recurrent mode (fused_recurrent_kda) matches chunked mode (chunk_kda).
 
@@ -1256,12 +1261,12 @@ class TestKDAEquivalence:
 
         # Create model
         torch.manual_seed(seed)
-        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0).cuda()
+        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
         model.eval()
 
         # Create input sequence
         torch.manual_seed(seed + 1)
-        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
+        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda", dtype=test_dtype)
 
         # === Reference: Run full sequence through chunked mode ===
         model.mode = "chunk"
