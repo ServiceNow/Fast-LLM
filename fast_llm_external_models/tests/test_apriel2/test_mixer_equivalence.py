@@ -53,15 +53,21 @@ def seq_len(request):
     return request.param
 
 
-@pytest.fixture(params=[False, True])
-def use_cache(request):
-    """Whether to test with cache (multi-phase) or without (single forward pass)."""
+@pytest.fixture(params=[4, 32, 64])
+def prefill_len(request):
+    """Length of initial prefill phase in cache tests."""
     return request.param
 
 
 @pytest.fixture(params=[4])
 def decode_steps(request):
-    """Number of decode steps for cache tests. Single value to limit test explosion."""
+    """Number of decode steps in cache tests. Single value to limit test explosion."""
+    return request.param
+
+
+@pytest.fixture(params=[4, 16])
+def prefill2_len(request):
+    """Length of second prefill phase in cache tests."""
     return request.param
 
 
@@ -463,7 +469,7 @@ class TestDeterminism:
         hidden_size = 256
         batch_size, seq_len = 2, 32
 
-        config_dict = {
+        mixer_config = {
             "type": "gdn",
             "value_heads": value_heads,
             "key_heads": key_heads,
@@ -474,7 +480,7 @@ class TestDeterminism:
         }
 
         torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
+        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
@@ -495,7 +501,7 @@ class TestDeterminism:
         hidden_size = num_heads * head_dim
         batch_size, seq_len = 2, 32
 
-        config_dict = {
+        mixer_config = {
             "type": "kda",
             "heads": num_heads,
             "head_dim": head_dim,
@@ -504,7 +510,7 @@ class TestDeterminism:
         }
 
         torch.manual_seed(42)
-        model = KimiDeltaAttention(hidden_size, config_dict, layer_idx=0)
+        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
@@ -737,47 +743,24 @@ class TestAttentionEquivalence:
 class TestGDNEquivalence:
     """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet."""
 
-    @pytest.fixture
-    def qwen3_config(self, hidden_size, gdn_config):
-        """Create Qwen3NextConfig for GDN testing."""
-        from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
-        return Qwen3NextConfig(
-            hidden_size=hidden_size,
-            linear_num_value_heads=value_heads,
-            linear_num_key_heads=key_heads,
-            linear_key_head_dim=key_head_dim,
-            linear_value_head_dim=value_head_dim,
-            linear_conv_kernel_dim=4,
-            rms_norm_eps=1e-5,
-            max_position_embeddings=4096,
-            num_attention_heads=8,
-            num_key_value_heads=2,
-            head_dim=64,
-            torch_dtype=torch.get_default_dtype(),
-        )
-
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
     @pytest.mark.parametrize("seed", [42, 123, 456])
     def test_vs_qwen3next(
         self,
-        qwen3_config,
         gdn_config,
         hidden_size,
         batch_size,
-        seq_len,
-        seed,
-        use_cache,
+        prefill_len,
         decode_steps,
+        prefill2_len,
+        seed,
         tolerance,
     ):
         """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet output.
 
-        When use_cache=False: Single forward pass on full sequence.
-        When use_cache=True: Three-phase test (prefill → decode → prefill) on same total length.
+        Three-phase test (prefill → decode → prefill) verifies cache handling.
 
-        Note: Phase 3 with cache diverges because Qwen3Next has a bug where chunk mode
+        Note: Phase 3 diverges because Qwen3Next has a bug where chunk mode
         always uses initial_state=None, ignoring cached recurrent state.
         """
         from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
@@ -791,29 +774,25 @@ class TestGDNEquivalence:
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
+        seq_len = prefill_len + decode_steps + prefill2_len
 
-        # Skip cache tests when seq_len is too small for 3 phases
-        if use_cache and seq_len < decode_steps + 2:
-            pytest.skip(f"seq_len={seq_len} too small for cache test with decode_steps={decode_steps}")
-
-        # For cache mode, create config with layer_types (required by Qwen3NextDynamicCache)
-        if use_cache:
-            qwen3_config = Qwen3NextConfig(
-                hidden_size=hidden_size,
-                linear_num_value_heads=value_heads,
-                linear_num_key_heads=key_heads,
-                linear_key_head_dim=key_head_dim,
-                linear_value_head_dim=value_head_dim,
-                linear_conv_kernel_dim=4,
-                rms_norm_eps=1e-5,
-                max_position_embeddings=4096,
-                num_attention_heads=8,
-                num_key_value_heads=2,
-                head_dim=64,
-                torch_dtype=torch.get_default_dtype(),
-                num_hidden_layers=1,
-                layer_types=["linear_attention"],
-            )
+        # Create config with layer_types (required by Qwen3NextDynamicCache)
+        qwen3_config = Qwen3NextConfig(
+            hidden_size=hidden_size,
+            linear_num_value_heads=value_heads,
+            linear_num_key_heads=key_heads,
+            linear_key_head_dim=key_head_dim,
+            linear_value_head_dim=value_head_dim,
+            linear_conv_kernel_dim=4,
+            rms_norm_eps=1e-5,
+            max_position_embeddings=4096,
+            num_attention_heads=8,
+            num_key_value_heads=2,
+            head_dim=64,
+            torch_dtype=torch.get_default_dtype(),
+            num_hidden_layers=1,
+            layer_types=["linear_attention"],
+        )
 
         mixer_config = {
             "type": "gdn",
@@ -850,134 +829,116 @@ class TestGDNEquivalence:
         torch.manual_seed(seed + 1)
         hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda")
 
-        if not use_cache:
-            # === No cache: single forward pass ===
+        # Create caches
+        qwen_cache = Qwen3NextDynamicCache(qwen3_config)
+
+        apriel_config = Apriel2TextConfig(
+            hidden_size=hidden_size,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {"mixer": mixer_config},
+            },
+        )
+        apriel_cache = Apriel2Cache(apriel_config)
+
+        # ========== PHASE 1: Initial Prefill ==========
+        prefill_input = hidden_states[:, :prefill_len, :]
+
+        with torch.no_grad():
+            qwen_out1 = qwen_gdn(
+                prefill_input,
+                cache_params=qwen_cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )
+            apriel_out1 = apriel_gdn(
+                prefill_input,
+                past_key_values=apriel_cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )[0]
+
+        assert_close(
+            apriel_out1,
+            qwen_out1,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
+        )
+
+        # Compare recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            qwen_cache.recurrent_states[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 1: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 2: Decode (single tokens) ==========
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = hidden_states[:, pos : pos + 1, :]
+
             with torch.no_grad():
-                qwen_out = qwen_gdn(hidden_states)
-                apriel_out = apriel_gdn(hidden_states)[0]
+                qwen_out = qwen_gdn(
+                    decode_input,
+                    cache_params=qwen_cache,
+                    cache_position=torch.tensor([pos], device="cuda"),
+                )
+                apriel_out = apriel_gdn(
+                    decode_input,
+                    past_key_values=apriel_cache,
+                    cache_position=torch.tensor([pos], device="cuda"),
+                )[0]
 
             assert_close(
                 apriel_out,
                 qwen_out,
                 rtol=rtol,
                 atol=atol,
-                msg=f"GDN vs Qwen3Next (batch={batch_size}, seq={seq_len}, cache=False)",
-            )
-        else:
-            # === With cache: three-phase test ===
-            # Split sequence: prefill + decode + prefill2 = seq_len
-            prefill_len = (seq_len - decode_steps) * 2 // 3
-            prefill_len = max(1, prefill_len)  # At least 1 token
-            prefill2_len = seq_len - prefill_len - decode_steps
-            prefill2_len = max(1, prefill2_len)  # At least 1 token
-
-            # Create caches
-            qwen_cache = Qwen3NextDynamicCache(qwen3_config)
-
-            apriel_config = Apriel2TextConfig(
-                hidden_size=hidden_size,
-                decoder={
-                    "type": "fixed",
-                    "num_blocks": 1,
-                    "block": {"mixer": mixer_config},
-                },
-            )
-            apriel_cache = Apriel2Cache(apriel_config)
-
-            # ========== PHASE 1: Initial Prefill ==========
-            prefill_input = hidden_states[:, :prefill_len, :]
-
-            with torch.no_grad():
-                qwen_out1 = qwen_gdn(
-                    prefill_input,
-                    cache_params=qwen_cache,
-                    cache_position=torch.arange(prefill_len, device="cuda"),
-                )
-                apriel_out1 = apriel_gdn(
-                    prefill_input,
-                    past_key_values=apriel_cache,
-                    cache_position=torch.arange(prefill_len, device="cuda"),
-                )[0]
-
-            assert_close(
-                apriel_out1,
-                qwen_out1,
-                rtol=rtol,
-                atol=atol,
-                msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
+                msg=f"Phase 2 (decode step {i}): output mismatch",
             )
 
-            # Compare recurrent states
-            assert_close(
-                apriel_cache.recurrent_states[0],
-                qwen_cache.recurrent_states[0],
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 1: recurrent_state mismatch",
+        # Compare recurrent states after decode
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            qwen_cache.recurrent_states[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 2: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
+        # NOTE: Qwen3Next passes initial_state=None in chunk mode, so outputs diverge.
+        prefill2_start = prefill_len + decode_steps
+        prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
+
+        with torch.no_grad():
+            qwen_out3 = qwen_gdn(
+                prefill2_input,
+                cache_params=qwen_cache,
+                cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
             )
+            apriel_out3 = apriel_gdn(
+                prefill2_input,
+                past_key_values=apriel_cache,
+                cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
+            )[0]
 
-            # ========== PHASE 2: Decode (single tokens) ==========
-            for i in range(decode_steps):
-                pos = prefill_len + i
-                decode_input = hidden_states[:, pos : pos + 1, :]
-
-                with torch.no_grad():
-                    qwen_out = qwen_gdn(
-                        decode_input,
-                        cache_params=qwen_cache,
-                        cache_position=torch.tensor([pos], device="cuda"),
-                    )
-                    apriel_out = apriel_gdn(
-                        decode_input,
-                        past_key_values=apriel_cache,
-                        cache_position=torch.tensor([pos], device="cuda"),
-                    )[0]
-
-                assert_close(
-                    apriel_out,
-                    qwen_out,
-                    rtol=rtol,
-                    atol=atol,
-                    msg=f"Phase 2 (decode step {i}): output mismatch",
-                )
-
-            # Compare recurrent states after decode
-            assert_close(
-                apriel_cache.recurrent_states[0],
-                qwen_cache.recurrent_states[0],
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 2: recurrent_state mismatch",
-            )
-
-            # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
-            # NOTE: Qwen3Next passes initial_state=None in chunk mode, so outputs diverge.
-            prefill2_start = prefill_len + decode_steps
-            prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
-
-            with torch.no_grad():
-                qwen_out3 = qwen_gdn(
-                    prefill2_input,
-                    cache_params=qwen_cache,
-                    cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
-                )
-                apriel_out3 = apriel_gdn(
-                    prefill2_input,
-                    past_key_values=apriel_cache,
-                    cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
-                )[0]
-
-            # Phase 3 diverges due to Qwen3Next bug - just verify we can run it
-            _ = (qwen_out3, apriel_out3)  # Outputs computed but not compared
+        # Phase 3 diverges due to Qwen3Next bug - just verify we can run it
+        _ = (qwen_out3, apriel_out3)  # Outputs computed but not compared
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
     @pytest.mark.parametrize("seed", [42, 123, 456])
-    @pytest.mark.parametrize("prefill_len", [4, 8, 16])
     def test_chunked_vs_recurrent(
         self,
         gdn_config,
-        seed,
+        hidden_size,
+        batch_size,
         prefill_len,
+        decode_steps,
+        seed,
+        tolerance,
     ):
         """Verify GDN recurrent mode (decode) matches chunked mode (prefill).
 
@@ -985,14 +946,14 @@ class TestGDNEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
+        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
-        hidden_size = 256
-        batch_size = 2
-        total_len = prefill_len + 4  # Prefill + 4 decode steps
+        total_len = prefill_len + decode_steps
 
-        config_dict = {
+        mixer_config = {
             "type": "gdn",
             "value_heads": value_heads,
             "key_heads": key_heads,
@@ -1004,8 +965,7 @@ class TestGDNEquivalence:
 
         # Create model
         torch.manual_seed(seed)
-        model = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
-        model = model.cuda()
+        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).cuda()
         model.eval()
 
         # Create input sequence
@@ -1017,13 +977,15 @@ class TestGDNEquivalence:
             reference_output = model(full_hidden_states)[0]
 
         # === Test: Prefill + decode ===
-        # Create a simple cache object to hold conv and recurrent states
-        class SimpleCache:
-            def __init__(self):
-                self.conv_states = {0: None}
-                self.recurrent_states = {0: None}
-
-        cache = SimpleCache()
+        apriel_config = Apriel2TextConfig(
+            hidden_size=hidden_size,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {"mixer": mixer_config},
+            },
+        )
+        cache = Apriel2Cache(apriel_config)
 
         # Prefill phase
         prefill_input = full_hidden_states[:, :prefill_len, :]
@@ -1036,13 +998,14 @@ class TestGDNEquivalence:
 
         # Decode phase - one token at a time
         decode_outputs = []
-        for i in range(prefill_len, total_len):
-            decode_input = full_hidden_states[:, i : i + 1, :]
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = full_hidden_states[:, pos : pos + 1, :]
             with torch.no_grad():
                 decode_output = model(
                     decode_input,
                     past_key_values=cache,
-                    cache_position=torch.tensor([i], device="cuda"),
+                    cache_position=torch.tensor([pos], device="cuda"),
                 )[0]
             decode_outputs.append(decode_output)
 
@@ -1050,13 +1013,14 @@ class TestGDNEquivalence:
         test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
 
         # Use looser tolerance for chunked vs recurrent comparison
-        # (different processing order leads to numerical differences)
+        # (different numerical accumulation order leads to larger differences)
+        rtol, atol = tolerance
         assert_close(
             test_output,
             reference_output,
-            rtol=1e-3,
-            atol=1e-3,
-            msg=f"GDN chunked vs recurrent mode (prefill={prefill_len}, total={total_len})",
+            rtol=rtol * 5,
+            atol=atol * 5,
+            msg=f"GDN chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
         )
 
 # =============================================================================
@@ -1073,16 +1037,15 @@ class TestKDAEquivalence:
         self,
         kda_config,
         batch_size,
-        seq_len,
-        seed,
-        use_cache,
+        prefill_len,
         decode_steps,
+        prefill2_len,
+        seed,
         tolerance,
     ):
         """Verify Apriel2 KimiDeltaAttention matches FLA KimiDeltaAttention output.
 
-        When use_cache=False: Single forward pass on full sequence.
-        When use_cache=True: Three-phase test (prefill → decode → prefill) on same total length.
+        Three-phase test (prefill → decode → prefill) verifies cache handling.
 
         Unlike GDN (where Qwen3Next has a bug), FLA KDA correctly passes initial_state
         in chunk mode, so all three phases should match.
@@ -1096,10 +1059,7 @@ class TestKDAEquivalence:
 
         num_heads, head_dim = kda_config
         hidden_size = num_heads * head_dim
-
-        # Skip cache tests when seq_len is too small for 3 phases
-        if use_cache and seq_len < decode_steps + 2:
-            pytest.skip(f"seq_len={seq_len} too small for cache test with decode_steps={decode_steps}")
+        seq_len = prefill_len + decode_steps + prefill2_len
 
         mixer_config = {
             "type": "kda",
@@ -1141,156 +1101,136 @@ class TestKDAEquivalence:
         torch.manual_seed(seed + 1)
         hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda")
 
-        if not use_cache:
-            # === No cache: single forward pass ===
+        # Create caches
+        fla_cache = FLACache()
+
+        apriel_config = Apriel2TextConfig(
+            hidden_size=hidden_size,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {"mixer": mixer_config},
+            },
+        )
+        apriel_cache = Apriel2Cache(apriel_config)
+
+        # Force chunk mode for prefill
+        fla_kda.mode = "chunk"
+        apriel_kda.mode = "chunk"
+
+        # ========== PHASE 1: Initial Prefill ==========
+        prefill_input = hidden_states[:, :prefill_len, :]
+
+        with torch.no_grad():
+            fla_out1 = fla_kda(
+                prefill_input,
+                past_key_values=fla_cache,
+                use_cache=True,
+            )[0]
+            apriel_out1 = apriel_kda(
+                prefill_input,
+                past_key_values=apriel_cache,
+            )[0]
+
+        assert_close(
+            apriel_out1,
+            fla_out1,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
+        )
+
+        # Compare recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 1: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 2: Decode (single tokens) ==========
+        fla_kda.mode = "fused_recurrent"
+        apriel_kda.mode = "fused_recurrent"
+
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = hidden_states[:, pos : pos + 1, :]
+
             with torch.no_grad():
-                # use_cache=True ensures FLA initializes conv cache for short sequences
-                fla_out = fla_kda(hidden_states, use_cache=True)[0]
-                apriel_out = apriel_kda(hidden_states)[0]
+                fla_out = fla_kda(
+                    decode_input,
+                    past_key_values=fla_cache,
+                    use_cache=True,
+                )[0]
+                apriel_out = apriel_kda(
+                    decode_input,
+                    past_key_values=apriel_cache,
+                )[0]
 
             assert_close(
                 apriel_out,
                 fla_out,
                 rtol=rtol,
                 atol=atol,
-                msg=f"KDA vs FLA (batch={batch_size}, seq={seq_len}, cache=False)",
-            )
-        else:
-            # === With cache: three-phase test ===
-            # Split sequence: prefill + decode + prefill2 = seq_len
-            prefill_len = (seq_len - decode_steps) * 2 // 3
-            prefill_len = max(1, prefill_len)  # At least 1 token
-            prefill2_len = seq_len - prefill_len - decode_steps
-            prefill2_len = max(1, prefill2_len)  # At least 1 token
-
-            # Create caches
-            fla_cache = FLACache()
-
-            apriel_config = Apriel2TextConfig(
-                hidden_size=hidden_size,
-                decoder={
-                    "type": "fixed",
-                    "num_blocks": 1,
-                    "block": {"mixer": mixer_config},
-                },
-            )
-            apriel_cache = Apriel2Cache(apriel_config)
-
-            # Force chunk mode for prefill
-            fla_kda.mode = "chunk"
-            apriel_kda.mode = "chunk"
-
-            # ========== PHASE 1: Initial Prefill ==========
-            prefill_input = hidden_states[:, :prefill_len, :]
-
-            with torch.no_grad():
-                fla_out1 = fla_kda(
-                    prefill_input,
-                    past_key_values=fla_cache,
-                    use_cache=True,
-                )[0]
-                apriel_out1 = apriel_kda(
-                    prefill_input,
-                    past_key_values=apriel_cache,
-                )[0]
-
-            assert_close(
-                apriel_out1,
-                fla_out1,
-                rtol=rtol,
-                atol=atol,
-                msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
+                msg=f"Phase 2 (decode step {i}): output mismatch",
             )
 
-            # Compare recurrent states
-            assert_close(
-                apriel_cache.recurrent_states[0],
-                fla_cache[0]["recurrent_state"],
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 1: recurrent_state mismatch",
-            )
+        # Compare recurrent states after decode
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 2: recurrent_state mismatch",
+        )
 
-            # ========== PHASE 2: Decode (single tokens) ==========
-            fla_kda.mode = "fused_recurrent"
-            apriel_kda.mode = "fused_recurrent"
+        # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
+        # FLA KDA correctly uses initial_state in chunk mode, so this should match
+        fla_kda.mode = "chunk"
+        apriel_kda.mode = "chunk"
 
-            for i in range(decode_steps):
-                pos = prefill_len + i
-                decode_input = hidden_states[:, pos : pos + 1, :]
+        prefill2_start = prefill_len + decode_steps
+        prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
 
-                with torch.no_grad():
-                    fla_out = fla_kda(
-                        decode_input,
-                        past_key_values=fla_cache,
-                        use_cache=True,
-                    )[0]
-                    apriel_out = apriel_kda(
-                        decode_input,
-                        past_key_values=apriel_cache,
-                    )[0]
+        with torch.no_grad():
+            fla_out3 = fla_kda(
+                prefill2_input,
+                past_key_values=fla_cache,
+                use_cache=True,
+            )[0]
+            apriel_out3 = apriel_kda(
+                prefill2_input,
+                past_key_values=apriel_cache,
+            )[0]
 
-                assert_close(
-                    apriel_out,
-                    fla_out,
-                    rtol=rtol,
-                    atol=atol,
-                    msg=f"Phase 2 (decode step {i}): output mismatch",
-                )
+        assert_close(
+            apriel_out3,
+            fla_out3,
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 3 (decode→prefill): output mismatch",
+        )
 
-            # Compare recurrent states after decode
-            assert_close(
-                apriel_cache.recurrent_states[0],
-                fla_cache[0]["recurrent_state"],
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 2: recurrent_state mismatch",
-            )
-
-            # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
-            # FLA KDA correctly uses initial_state in chunk mode, so this should match
-            fla_kda.mode = "chunk"
-            apriel_kda.mode = "chunk"
-
-            prefill2_start = prefill_len + decode_steps
-            prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
-
-            with torch.no_grad():
-                fla_out3 = fla_kda(
-                    prefill2_input,
-                    past_key_values=fla_cache,
-                    use_cache=True,
-                )[0]
-                apriel_out3 = apriel_kda(
-                    prefill2_input,
-                    past_key_values=apriel_cache,
-                )[0]
-
-            assert_close(
-                apriel_out3,
-                fla_out3,
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 3 (decode→prefill): output mismatch",
-            )
-
-            # Compare final recurrent states
-            assert_close(
-                apriel_cache.recurrent_states[0],
-                fla_cache[0]["recurrent_state"],
-                rtol=rtol,
-                atol=atol,
-                msg="Phase 3: recurrent_state mismatch",
-            )
+        # Compare final recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 3: recurrent_state mismatch",
+        )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
     @pytest.mark.parametrize("seed", [42, 123, 456])
-    @pytest.mark.parametrize("prefill_len", [4, 8, 16])
     def test_chunked_vs_recurrent(
         self,
         kda_config,
-        seed,
+        batch_size,
         prefill_len,
+        decode_steps,
+        seed,
+        tolerance,
     ):
         """Verify KDA recurrent mode (fused_recurrent_kda) matches chunked mode (chunk_kda).
 
@@ -1298,14 +1238,15 @@ class TestKDAEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
+        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
 
         num_heads, head_dim = kda_config
         hidden_size = num_heads * head_dim
-        batch_size = 2
-        total_len = prefill_len + 4  # Prefill + 4 decode steps
+        total_len = prefill_len + decode_steps
 
-        config_dict = {
+        mixer_config = {
             "type": "kda",
             "heads": num_heads,
             "head_dim": head_dim,
@@ -1315,8 +1256,7 @@ class TestKDAEquivalence:
 
         # Create model
         torch.manual_seed(seed)
-        model = KimiDeltaAttention(hidden_size, config_dict, layer_idx=0)
-        model = model.cuda()
+        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0).cuda()
         model.eval()
 
         # Create input sequence
@@ -1324,19 +1264,20 @@ class TestKDAEquivalence:
         full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
 
         # === Reference: Run full sequence through chunked mode ===
-        # Force chunk mode by using long sequence or setting mode directly
         model.mode = "chunk"
         with torch.no_grad():
             reference_output = model(full_hidden_states)[0]
 
         # === Test: Prefill + decode ===
-        # Create a simple cache object to hold conv and recurrent states
-        class SimpleCache:
-            def __init__(self):
-                self.conv_states = {0: None}
-                self.recurrent_states = {0: None}
-
-        cache = SimpleCache()
+        apriel_config = Apriel2TextConfig(
+            hidden_size=hidden_size,
+            decoder={
+                "type": "fixed",
+                "num_blocks": 1,
+                "block": {"mixer": mixer_config},
+            },
+        )
+        cache = Apriel2Cache(apriel_config)
 
         # Prefill phase - force chunk mode
         model.mode = "chunk"
@@ -1347,11 +1288,12 @@ class TestKDAEquivalence:
                 past_key_values=cache,
             )[0]
 
-        # Decode phase - one token at a time (will use fused_recurrent since seq_len=1 <= 64)
-        model.mode = "fused_recurrent"  # Ensure recurrent mode for decode
+        # Decode phase - one token at a time
+        model.mode = "fused_recurrent"
         decode_outputs = []
-        for i in range(prefill_len, total_len):
-            decode_input = full_hidden_states[:, i : i + 1, :]
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = full_hidden_states[:, pos : pos + 1, :]
             with torch.no_grad():
                 decode_output = model(
                     decode_input,
@@ -1363,12 +1305,13 @@ class TestKDAEquivalence:
         test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
 
         # Use looser tolerance for chunked vs recurrent comparison
-        # (different processing order leads to numerical differences)
+        # (different numerical accumulation order leads to larger differences)
+        rtol, atol = tolerance
         assert_close(
             test_output,
             reference_output,
-            rtol=1e-3,
-            atol=1e-3,
-            msg=f"KDA chunked vs recurrent mode (prefill={prefill_len}, total={total_len})",
+            rtol=rtol * 5,
+            atol=atol * 5,
+            msg=f"KDA chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
         )
 

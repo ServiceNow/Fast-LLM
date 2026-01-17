@@ -1299,9 +1299,7 @@ class KimiDeltaAttention(nn.Module):
         **kwargs,
     ):
         batch_size, seq_len, _ = hidden_states.shape
-        mode = "fused_recurrent" if seq_len <= 64 else self.mode
-        if self.training:
-            mode = "chunk"
+        mode = "fused_recurrent" if (seq_len <= 64 and not self.training) else self.mode
 
         # Get cache states if available
         conv_state_q, conv_state_k, conv_state_v = None, None, None
