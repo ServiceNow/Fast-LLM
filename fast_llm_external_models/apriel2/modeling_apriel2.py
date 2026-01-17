@@ -1094,7 +1094,7 @@ class Apriel2GatedDeltaNet(nn.Module):
                 value,
                 g=g,
                 beta=beta_gate,
-                initial_state=None,
+                initial_state=recurrent_state,
                 output_final_state=past_key_values is not None,
                 use_qk_l2norm_in_kernel=True,
             )
