@@ -769,7 +769,7 @@ class TestGDNEquivalence:
             Qwen3NextGatedDeltaNet,
         )
 
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
@@ -946,7 +946,7 @@ class TestGDNEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
@@ -1053,7 +1053,7 @@ class TestKDAEquivalence:
         from fla.layers.kda import KimiDeltaAttention as FLA_KDA
         from fla.models.utils import Cache as FLACache
 
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention as Apriel2_KDA
 
@@ -1238,7 +1238,7 @@ class TestKDAEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
         from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
 
