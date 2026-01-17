@@ -120,6 +120,41 @@ def kda_config(request):
     return request.param
 
 
+@pytest.fixture
+def gdn_mixer_config(gdn_config):
+    """GDN mixer config dict derived from gdn_config tuple."""
+    value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
+    return {
+        "type": "gdn",
+        "value_heads": value_heads,
+        "key_heads": key_heads,
+        "key_head_dim": key_head_dim,
+        "value_head_dim": value_head_dim,
+        "convolution_layer": {"kernel_size": 4},
+        "norm_eps": 1e-5,
+    }
+
+
+@pytest.fixture
+def kda_mixer_config(kda_config):
+    """KDA mixer config dict derived from kda_config tuple."""
+    num_heads, head_dim = kda_config
+    return {
+        "type": "kda",
+        "heads": num_heads,
+        "head_dim": head_dim,
+        "convolution_layer": {"kernel_size": 4},
+        "normalization": {"epsilon": 1e-5},
+    }
+
+
+@pytest.fixture
+def kda_hidden_size(kda_config):
+    """Hidden size for KDA (constrained: num_heads * head_dim)."""
+    num_heads, head_dim = kda_config
+    return num_heads * head_dim
+
+
 # =============================================================================
 # Test Mode Configuration
 # =============================================================================
@@ -228,6 +263,20 @@ def assert_deterministic(out1: torch.Tensor, out2: torch.Tensor, mixer_name: str
             f"  {num_diff} elements differ (of {diff.numel()} total)\n"
             f"  Max difference: {max_diff:.6e}"
         )
+
+
+def make_apriel2_config(hidden_size: int, mixer_config: dict):
+    """Create minimal Apriel2TextConfig for single-layer mixer testing."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
+
+    return Apriel2TextConfig(
+        hidden_size=hidden_size,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 1,
+            "block": {"mixer": mixer_config},
+        },
+    )
 
 
 def extract_module_weights(module: nn.Module) -> dict[W, torch.Tensor]:
@@ -462,26 +511,15 @@ class TestDeterminism:
         assert_deterministic(out1, out2, "Apriel2Attention")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
-    def test_gdn_determinism(self, gdn_config):
+    def test_gdn_determinism(self, gdn_mixer_config):
         """Verify Apriel2GatedDeltaNet produces identical output on repeated calls."""
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
         hidden_size = 256
         batch_size, seq_len = 2, 32
 
-        mixer_config = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
-
         torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
@@ -494,28 +532,18 @@ class TestDeterminism:
         assert_deterministic(out1, out2, "Apriel2GatedDeltaNet")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
-    def test_kda_determinism(self, kda_config):
+    def test_kda_determinism(self, kda_mixer_config, kda_hidden_size):
         """Verify Apriel2 KimiDeltaAttention produces identical output on repeated calls."""
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
 
-        num_heads, head_dim = kda_config
-        hidden_size = num_heads * head_dim
         batch_size, seq_len = 2, 32
 
-        mixer_config = {
-            "type": "kda",
-            "heads": num_heads,
-            "head_dim": head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "normalization": {"epsilon": 1e-5},
-        }
-
         torch.manual_seed(42)
-        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0)
+        model = KimiDeltaAttention(kda_hidden_size, kda_mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        hidden_states = torch.randn(batch_size, seq_len, kda_hidden_size)
 
         with torch.no_grad():
             out1 = model(hidden_states)[0]
@@ -749,6 +777,7 @@ class TestGDNEquivalence:
     def test_vs_qwen3next(
         self,
         gdn_config,
+        gdn_mixer_config,
         hidden_size,
         batch_size,
         prefill_len,
@@ -771,9 +800,7 @@ class TestGDNEquivalence:
             Qwen3NextGatedDeltaNet,
         )
 
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
         seq_len = prefill_len + decode_steps + prefill2_len
@@ -796,20 +823,10 @@ class TestGDNEquivalence:
             layer_types=["linear_attention"],
         )
 
-        mixer_config = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
-
         # Create models with same weights
         torch.manual_seed(seed)
         qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
-        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
         # Transfer weights using conversion plan
         plan = plan_qwen3next_gdn_to_apriel2(
@@ -833,16 +850,7 @@ class TestGDNEquivalence:
 
         # Create caches
         qwen_cache = Qwen3NextDynamicCache(qwen3_config)
-
-        apriel_config = Apriel2TextConfig(
-            hidden_size=hidden_size,
-            decoder={
-                "type": "fixed",
-                "num_blocks": 1,
-                "block": {"mixer": mixer_config},
-            },
-        )
-        apriel_cache = Apriel2Cache(apriel_config)
+        apriel_cache = Apriel2Cache(make_apriel2_config(hidden_size, gdn_mixer_config))
 
         # ========== PHASE 1: Initial Prefill ==========
         prefill_input = hidden_states[:, :prefill_len, :]
@@ -934,7 +942,7 @@ class TestGDNEquivalence:
     @pytest.mark.parametrize("seed", [42, 123, 456])
     def test_chunked_vs_recurrent(
         self,
-        gdn_config,
+        gdn_mixer_config,
         hidden_size,
         batch_size,
         prefill_len,
@@ -949,26 +957,13 @@ class TestGDNEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
 
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
         total_len = prefill_len + decode_steps
-
-        mixer_config = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
 
         # Create model
         torch.manual_seed(seed)
-        model = Apriel2GatedDeltaNet(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
         model.eval()
 
         # Create input sequence
@@ -980,15 +975,7 @@ class TestGDNEquivalence:
             reference_output = model(full_hidden_states)[0]
 
         # === Test: Prefill + decode ===
-        apriel_config = Apriel2TextConfig(
-            hidden_size=hidden_size,
-            decoder={
-                "type": "fixed",
-                "num_blocks": 1,
-                "block": {"mixer": mixer_config},
-            },
-        )
-        cache = Apriel2Cache(apriel_config)
+        cache = Apriel2Cache(make_apriel2_config(hidden_size, gdn_mixer_config))
 
         # Prefill phase
         prefill_input = full_hidden_states[:, :prefill_len, :]
@@ -1039,6 +1026,8 @@ class TestKDAEquivalence:
     def test_vs_fla(
         self,
         kda_config,
+        kda_mixer_config,
+        kda_hidden_size,
         batch_size,
         prefill_len,
         decode_steps,
@@ -1057,26 +1046,18 @@ class TestKDAEquivalence:
         from fla.layers.kda import KimiDeltaAttention as FLA_KDA
         from fla.models.utils import Cache as FLACache
 
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
-        from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention as Apriel2_KDA
+        from fast_llm_external_models.apriel2.modeling_apriel2 import (
+            Apriel2Cache,
+            KimiDeltaAttention as Apriel2_KDA,
+        )
 
         num_heads, head_dim = kda_config
-        hidden_size = num_heads * head_dim
         seq_len = prefill_len + decode_steps + prefill2_len
-
-        mixer_config = {
-            "type": "kda",
-            "heads": num_heads,
-            "head_dim": head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "normalization": {"epsilon": 1e-5},
-        }
 
         # Create FLA KDA with same weights
         torch.manual_seed(seed)
         fla_kda = FLA_KDA(
-            hidden_size=hidden_size,
+            hidden_size=kda_hidden_size,
             num_heads=num_heads,
             head_dim=head_dim,
             conv_size=4,
@@ -1088,7 +1069,7 @@ class TestKDAEquivalence:
         fla_kda.g_proj[1].bias.data.zero_()
 
         # Create Apriel2 KDA
-        apriel_kda = Apriel2_KDA(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        apriel_kda = Apriel2_KDA(kda_hidden_size, kda_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
         # Transfer weights using conversion plan
         plan = plan_fla_kda_to_apriel2()
@@ -1103,20 +1084,11 @@ class TestKDAEquivalence:
 
         # Create full input sequence
         torch.manual_seed(seed + 1)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda", dtype=test_dtype)
+        hidden_states = torch.randn(batch_size, seq_len, kda_hidden_size, device="cuda", dtype=test_dtype)
 
         # Create caches
         fla_cache = FLACache()
-
-        apriel_config = Apriel2TextConfig(
-            hidden_size=hidden_size,
-            decoder={
-                "type": "fixed",
-                "num_blocks": 1,
-                "block": {"mixer": mixer_config},
-            },
-        )
-        apriel_cache = Apriel2Cache(apriel_config)
+        apriel_cache = Apriel2Cache(make_apriel2_config(kda_hidden_size, kda_mixer_config))
 
         # Force chunk mode for prefill
         fla_kda.mode = "chunk"
@@ -1229,7 +1201,8 @@ class TestKDAEquivalence:
     @pytest.mark.parametrize("seed", [42, 123, 456])
     def test_chunked_vs_recurrent(
         self,
-        kda_config,
+        kda_mixer_config,
+        kda_hidden_size,
         batch_size,
         prefill_len,
         decode_steps,
@@ -1243,30 +1216,18 @@ class TestKDAEquivalence:
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
         """
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
-        from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, KimiDeltaAttention
 
-        num_heads, head_dim = kda_config
-        hidden_size = num_heads * head_dim
         total_len = prefill_len + decode_steps
-
-        mixer_config = {
-            "type": "kda",
-            "heads": num_heads,
-            "head_dim": head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "normalization": {"epsilon": 1e-5},
-        }
 
         # Create model
         torch.manual_seed(seed)
-        model = KimiDeltaAttention(hidden_size, mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        model = KimiDeltaAttention(kda_hidden_size, kda_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
         model.eval()
 
         # Create input sequence
         torch.manual_seed(seed + 1)
-        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda", dtype=test_dtype)
+        full_hidden_states = torch.randn(batch_size, total_len, kda_hidden_size, device="cuda", dtype=test_dtype)
 
         # === Reference: Run full sequence through chunked mode ===
         model.mode = "chunk"
@@ -1274,15 +1235,7 @@ class TestKDAEquivalence:
             reference_output = model(full_hidden_states)[0]
 
         # === Test: Prefill + decode ===
-        apriel_config = Apriel2TextConfig(
-            hidden_size=hidden_size,
-            decoder={
-                "type": "fixed",
-                "num_blocks": 1,
-                "block": {"mixer": mixer_config},
-            },
-        )
-        cache = Apriel2Cache(apriel_config)
+        cache = Apriel2Cache(make_apriel2_config(kda_hidden_size, kda_mixer_config))
 
         # Prefill phase - force chunk mode
         model.mode = "chunk"
