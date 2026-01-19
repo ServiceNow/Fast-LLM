@@ -367,7 +367,8 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
 
-        token_count = token_start_array[token_start_cumsum_index]
+        # Convert to Python int to avoid numpy unsigned integer overflow in subsequent arithmetic
+        token_count = int(token_start_array[token_start_cumsum_index])
 
         documents: list[SampleType] = []
         while token_count < token_end:
