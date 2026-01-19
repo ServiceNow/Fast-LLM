@@ -149,6 +149,8 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
         hint=FieldHint.architecture,
     )
+    # TODO: Option to chose whether to split in batch or sequence dimension?
+    #   (Currently split merged batch and sequence, depends on `sequence_first`)
     cross_entropy_splits: int = Field(
         default=1,
         desc="Split the logit and cross-entropy computation into this many fragment, to reduce memory usage.",

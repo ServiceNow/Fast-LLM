@@ -152,7 +152,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             # Transformers expect normalized outputs for the last transformer layer,
             # so we add the norm output to the hidden states.
             self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
-        loss, ln_output_grad = self._logits_loss_forward_backward(ln_output.detach().flatten(0, -2), kwargs, losses)
+        loss, ln_output_grad = self._logits_loss_forward_backward(ln_output.detach(), kwargs, losses)
         if ln_output_grad is None:
             return loss, None
         else:
@@ -165,14 +165,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-        if loss_mask is not None:
-            loss_mask = loss_mask.flatten()
-            if self._sequence_parallel_logits:
-                loss_mask = split_op(loss_mask, self._parallel_dim.group, 0)
 
         if not self.training:
-            logits, _ = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs, return_logits=True)
+            logits, _ = self._logits_loss_forward_backward_partial(input_, None, kwargs, return_logits=True)
             # TODO: Make a proper way of returning the model output.
             logits = logits.detach()
             if kwargs.get("global_logits"):
@@ -186,7 +181,16 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits.detach()
             )
             return None, None
-        elif self._config.cross_entropy_splits == 1:
+
+        input_ = input_.flatten(0, -2)
+        loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
+        sequence_dim = 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+        if loss_mask is not None:
+            if self._sequence_parallel_logits:
+                loss_mask = split_op(loss_mask, self._parallel_dim.group, sequence_dim)
+            loss_mask = loss_mask.flatten()
+
+        if self._config.cross_entropy_splits == 1:
             losses_, input_grad = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs)
         else:
             input_grad = torch.empty_like(input_)
@@ -309,7 +313,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                     dtype=DataType.float32,
                 )
-                for name, loss_config in self._config.losses.values()
+                for name, loss_config in self._config.losses.items()
             ),
         ]
 
