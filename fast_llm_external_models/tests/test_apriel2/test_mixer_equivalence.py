@@ -981,7 +981,7 @@ class TestKDAEquivalence:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
     @pytest.mark.parametrize("seed", [42, 123, 456])
-    @pytest.mark.parametrize("prefill_len", [4, 8, 16])
+    @pytest.mark.parametrize("prefill_len", [65, 80, 128])  # Must be > 64 to trigger chunk mode
     def test_chunked_vs_recurrent(
         self,
         kda_config,
@@ -993,6 +993,10 @@ class TestKDAEquivalence:
         This tests the inference path: after prefilling N tokens with chunked mode,
         subsequent single-token decodes using recurrent mode should produce the same
         output as if we had run the full sequence through chunked mode.
+
+        Note: KDA uses fused_recurrent for seq_len <= 64, chunk for seq_len > 64.
+        We use prefill_len > 64 to ensure prefill uses chunk mode, then decode
+        (seq_len=1) uses fused_recurrent mode.
         """
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
 
@@ -1020,8 +1024,7 @@ class TestKDAEquivalence:
         full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda")
 
         # === Reference: Run full sequence through chunked mode ===
-        # Force chunk mode by using long sequence or setting mode directly
-        model.mode = "chunk"
+        # total_len > 64, so this will use chunk mode automatically
         with torch.no_grad():
             reference_output = model(full_hidden_states)[0]
 
@@ -1034,8 +1037,7 @@ class TestKDAEquivalence:
 
         cache = SimpleCache()
 
-        # Prefill phase - force chunk mode
-        model.mode = "chunk"
+        # Prefill phase - prefill_len > 64, so this uses chunk mode automatically
         prefill_input = full_hidden_states[:, :prefill_len, :]
         with torch.no_grad():
             prefill_output = model(
@@ -1043,8 +1045,7 @@ class TestKDAEquivalence:
                 past_key_values=cache,
             )[0]
 
-        # Decode phase - one token at a time (will use fused_recurrent since seq_len=1 <= 64)
-        model.mode = "fused_recurrent"  # Ensure recurrent mode for decode
+        # Decode phase - seq_len=1 <= 64, so this uses fused_recurrent mode automatically
         decode_outputs = []
         for i in range(prefill_len, total_len):
             decode_input = full_hidden_states[:, i : i + 1, :]
