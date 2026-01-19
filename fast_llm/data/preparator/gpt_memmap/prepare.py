@@ -42,7 +42,7 @@ from fast_llm.data.sample.language_model import LanguageModelSample, LanguageMod
 from fast_llm.data.sample.patch import PatchSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
-from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
+from fast_llm.engine.config_utils.data_type import DataType, get_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import normalize_probabilities, padded_cumsum
 
@@ -143,7 +143,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
-            get_unsigned_integer_type(self._tokenizer.vocab_size)
+            get_integer_type(self._tokenizer.vocab_size)
             if self._config.dataset.data_type is None
             else self._config.dataset.data_type
         )

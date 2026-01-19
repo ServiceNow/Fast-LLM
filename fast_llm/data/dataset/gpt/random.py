@@ -6,7 +6,7 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.token import TokenSample
-from fast_llm.engine.config_utils.data_type import get_unsigned_integer_type
+from fast_llm.engine.config_utils.data_type import get_integer_type
 
 
 class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[SampleType]):
@@ -21,7 +21,7 @@ class GPTRandomSampledDataset[SampleType: LanguageModelSample](SampledDataset[Sa
         assert not sampling.preprocessing.use_image_patches
         self._vocab_size = sampling.preprocessing.vocab_size
 
-        self._dtype = get_unsigned_integer_type(self._vocab_size).torch
+        self._dtype = get_integer_type(self._vocab_size).torch
 
     def __len__(self) -> int:
         return self._parameters.num_samples

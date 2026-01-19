@@ -12,7 +12,7 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.sample.abstract import Sample
-from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
+from fast_llm.engine.config_utils.data_type import DataType, get_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
 
@@ -211,7 +211,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             )
 
         # Use the smallest possible data type to save memory and disk usage.
-        document_shuffling_dtype = get_unsigned_integer_type(documents_per_epoch).torch
+        document_shuffling_dtype = get_integer_type(documents_per_epoch).torch
         # Shuffle the dataset (documents)
         # This generates a document shuffling index `all_document_index`, the unshuffled part is trivial
         #   so we only evaluate and store the shuffled part `document_shuffling`.
@@ -222,7 +222,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 torch.randperm(
                     shuffled_documents,
                     generator=generator,
-                    dtype=get_unsigned_integer_type(shuffled_documents).torch,
+                    dtype=get_integer_type(shuffled_documents).torch,
                     device=self._device,
                 )
                 .remainder_(documents_per_epoch)
@@ -259,7 +259,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 document_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
-                dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
+                dtype=get_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled)
         else:
@@ -282,7 +282,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 ],
                 offset=self._unshuffled_tokens,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
-                dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
+                dtype=get_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
             self._token_cumsum_shuffled.save(token_cumsum_shuffled)
             self._document_shuffling.save(
