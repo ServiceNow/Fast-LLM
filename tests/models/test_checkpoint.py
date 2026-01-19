@@ -383,8 +383,6 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         print(name)
         output = model(test_input, **kwargs)
         # TODO: Make a generic comparison util.
-        print("AAA", output_ref.logits.shape)
-        print("BBB", output.logits.shape)
         CompareConfig().compare_tensors(
             {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},
             {"samples": output.logits, "shape": output.logits.shape, "step": 0},
