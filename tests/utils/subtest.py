@@ -28,13 +28,13 @@ class DistributedTestContext:
         timeout: float = 20.0,
         init_method: str = "env://",
         backend: DistributedBackend = DistributedBackend.nccl,
-        use_cpu: bool = False,
+        use_cuda: bool = False,
     ) -> None:
         self._do_capture = do_capture
         self._timeout = timeout
         self._init_method = init_method
         self._backend = backend
-        self._use_cpu = use_cpu
+        self._use_cuda = use_cuda
 
     def __enter__(self):
         if self._do_capture:
@@ -43,7 +43,7 @@ class DistributedTestContext:
             )
 
         self._pool = ProcessGroupPool(
-            timeout=self._timeout, init_method=self._init_method, backend=self._backend, use_cpu=self._use_cpu
+            timeout=self._timeout, init_method=self._init_method, backend=self._backend, use_cuda=self._use_cuda
         ).__enter__()
         self._rank = self._pool.rank
         self._world_size = self._pool.world_size
@@ -90,7 +90,7 @@ class DistributedTestContext:
             self._path = base_path / name
             self._name = name
             self._num_gpus = num_gpus
-            self._skip = self._test_context._world_size < self._num_gpus and not self._test_context._use_cpu
+            self._skip = self._test_context._world_size < self._num_gpus and not self._test_context._use_cuda
             self._do_run = self._test_context._rank < num_gpus and not self._skip
             self._do_capture = self._test_context._do_capture and self._do_run
             self._success = False
@@ -245,14 +245,14 @@ def parallel_worker(
     init_method: str,
     backend: DistributedBackend,
     do_capture: bool,
-    use_cpu: bool,
+    use_cuda: bool,
     fn: typing.Callable,
     fn_args: typing.Sequence[typing.Any],
 ):
     DistributedConfig.default_rank = rank
     DistributedConfig.default_world_size = world_size
     DistributedConfig.default_local_world_size = world_size
-    with DistributedTestContext(do_capture, 60, init_method, backend, use_cpu) as test_context:
+    with DistributedTestContext(do_capture, 60, init_method, backend, use_cuda) as test_context:
         fn(test_context, *fn_args)
 
 
@@ -264,7 +264,7 @@ def do_run_parallel_script(
     world_size: int,
     timeout: float = 240,
     backend: DistributedBackend = DistributedBackend.nccl,
-    use_cpu: bool = False,  # Use CPU device in process group pool. May be used to disable device count check
+    use_cuda: bool = True,  # Use CPU device in process group pool. May be used to disable device count check
 ):
     if "PYTHONHASHSEED" not in os.environ:
         os.environ["PYTHONHASHSEED"] = "0"
@@ -274,7 +274,7 @@ def do_run_parallel_script(
         )
     torch.multiprocessing.spawn(
         parallel_worker,
-        args=(world_size, f"tcp://localhost:{port}", backend, do_capture, use_cpu, fn, fn_args),
+        args=(world_size, f"tcp://localhost:{port}", backend, do_capture, use_cuda, fn, fn_args),
         nprocs=world_size,
         join=False,
     ).join(timeout, grace_period=5)

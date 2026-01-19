@@ -208,6 +208,9 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     def max_prediction_distance(self) -> int:
         return 1
 
+    def get_reference_models(self) -> set[str]:
+        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}
+
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
 class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
@@ -292,3 +295,6 @@ class LanguageModelConfig(BlockConfig):
         from fast_llm.layers.language_model.language_model import LanguageModel
 
         return LanguageModel
+
+    def get_reference_models(self) -> set[str]:
+        return self.decoder.get_reference_models() | self.head.get_reference_models()

@@ -227,7 +227,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         if losses is not None:
             losses[self.get_full_loss_name(LM_HEAD_LOSS_NAME)].append(loss)
-            if len(self._config.losses) > 1:
+            if len(self._config.losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._config.losses.values()):
                 for name, loss_ in losses_.items():
                     if self._config.cross_entropy_splits != 1:
                         loss_ /= self._config.cross_entropy_splits
@@ -246,12 +246,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         split_index: int = 0,
         return_logits: bool = False,
     ) -> tuple[dict[str, torch.Tensor] | torch.Tensor, torch.Tensor | None]:
-        group = self._parallel_dim.group if self._vocab_parallel else None
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=self.output_weights,
             bias=None,
-            group=group,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
 
@@ -287,7 +286,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 logits,
                 loss_mask,
                 grad_output=None if grad_output == 0.0 else grad_output,
-                group=group,
+                group=self._parallel_dim.group,
                 logits_scale_factor=self._config.logits_scale_factor,
                 kwargs=kwargs,
                 prediction_distance=self._prediction_distance,
@@ -295,6 +294,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 split_index=split_index,
                 num_splits=self._config.cross_entropy_splits,
                 sequence_parallel_logits=self._sequence_parallel_logits,
+                vocab_parallel=self._vocab_parallel,
             )
             losses[loss_name] = loss.detach()
             if grad_ is not None:

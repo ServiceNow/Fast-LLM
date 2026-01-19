@@ -84,7 +84,7 @@ def _fused_softmax_base(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     logits = logits.float()
     if logits_scale_factor != 1.0:
-        logits *= logits_scale_factor
+        logits = logits * logits_scale_factor
     logits_max = torch.max(logits, dim=dim, keepdim=True)[0]
     if group is not None:
         all_reduce(logits_max, op=ReduceOp.MAX, group=group)
@@ -285,7 +285,7 @@ def _fused_entropy_loss_forward_backward(
     return loss, grad
 
 
-_CROSS_ENTROPY_IMPLEMENTATIONS = {
+_ENTROPY_LOSS_IMPLEMENTATIONS = {
     EntropyLossImplementation.torch: _torch_entropy_loss_forward_backward,
     EntropyLossImplementation.fused: _fused_entropy_loss_forward_backward,
     EntropyLossImplementation.triton: triton_cross_entropy_forward_backward,
@@ -333,7 +333,7 @@ def entropy_loss_forward_backward(
             temperature,
         )
     else:
-        return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
+        return _ENTROPY_LOSS_IMPLEMENTATIONS[implementation](
             logits,
             target,
             loss_mask,

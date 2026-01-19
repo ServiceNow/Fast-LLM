@@ -42,9 +42,13 @@ class LanguageModelLossConfig(Config):
         split_index: int = 0,
         num_splits: int = 1,
         sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         raise NotImplementedError()
+
+    def get_reference_models(self) -> set[str]:
+        return set()
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
@@ -76,6 +80,7 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         split_index: int = 0,
         num_splits: int = 1,
         sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         import torch
@@ -109,7 +114,7 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
             if (
                 TritonConfig.TRITON_ENABLED
                 and torch.cuda.is_available()
-                and group is None
+                and (group is None or not vocab_parallel)
                 and self.loss_type == EntropyLossType.cross_entropy
             ):
                 implementation = EntropyLossImplementation.triton
@@ -121,7 +126,7 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
             labels,
             None,  # Labels are already masked
             grad_output=grad_output,
-            group=group,
+            group=group if vocab_parallel else None,
             implementation=implementation,
             logits_scale_factor=logits_scale_factor,
             target_format=TargetFormat.labels,
@@ -144,6 +149,7 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         hint=FieldHint.performance,
     )
     reference_model: str = Field(
+        default="teacher",
         desc="Name of the reference model for knowledge distillation.",
         hint=FieldHint.feature,
     )
@@ -167,6 +173,7 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         split_index: int = 0,
         num_splits: int = 1,
         sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
@@ -196,13 +203,16 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
             reference_model_logits,
             loss_mask,
             grad_output=grad_output,
-            group=group,
+            group=group if vocab_parallel else None,
             implementation=implementation,
             logits_scale_factor=logits_scale_factor,
             temperature=self.temperature,
             target_format=TargetFormat.logits,
             entropy_loss_type=self.loss_type,
         )
+
+    def get_reference_models(self) -> set[str]:
+        return {self.reference_model}
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "dpo"})
@@ -236,6 +246,7 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
         split_index: int = 0,
         num_splits: int = 1,
         sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.functional.dpo import compute_dpo_loss
@@ -243,6 +254,8 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
         if num_splits > 1:
             raise NotImplementedError()
         if prediction_distance > 0:
+            raise NotImplementedError()
+        if vocab_parallel and group is not None:
             raise NotImplementedError()
 
         if logits_scale_factor != 1.0:
@@ -271,6 +284,9 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
             grad_output=grad_output,
         )
 
+    def get_reference_models(self) -> set[str]:
+        return {self.reference_model}
+
 
 @config_class(dynamic_type={LanguageModelLossConfig: "z_loss"})
 class LanguageModelZLossConfig(LanguageModelLossConfig):
@@ -291,12 +307,14 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         split_index: int = 0,
         num_splits: int = 1,
         sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
         kwargs: dict[str, typing.Any],
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         from fast_llm.layers.common.auxiliary_loss import z_loss_forward_backward
 
         # TODO: Support vocab_parallel
-        assert group is None
+        if vocab_parallel and group is not None:
+            raise NotImplementedError()
 
         return z_loss_forward_backward(
             logits,

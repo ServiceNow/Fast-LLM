@@ -162,7 +162,7 @@ def test_run_entropy_loss_distributed(run_parallel_script, result_path):
         (result_path / "test_entropy_loss",),
         world_size=2,
         backend=DistributedBackend.gloo,
-        use_cpu=True,  # Disable device count check.
+        use_cuda=False,  # Disable device count check.
     )
 
 

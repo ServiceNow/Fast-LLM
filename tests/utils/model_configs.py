@@ -564,12 +564,8 @@ update_and_add_testing_config(
     "mistral",
     "mistral_distill_logits",
     updates={
-        ("model", "base_model", "head", "distillation_model"): "teacher",
         ("model", "base_model", "head", "losses"): {
-            "distillation_loss": {
-                "type": "reverse_kl_distillation",
-                "factor": 1.0,
-            },
+            "distillation": {"type": "distillation", "loss_type": "reverse_kl", "reference_model": "teacher"},
         },
         ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
@@ -598,9 +594,9 @@ update_and_add_testing_config(
     "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
-        ("model", "base_model", "head", "losses", "distillation_loss", "factor"): 0.001,
+        ("model", "base_model", "head", "losses", "distillation", "weight"): 0.001,
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
-        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
+        ("model", "base_model", "decoder", "block", "distillation_loss_weight"): 0.1,
         ("reference_models"): {
             "teacher": {
                 "model": {"base_model": copy.deepcopy(_mistral_base_model)},

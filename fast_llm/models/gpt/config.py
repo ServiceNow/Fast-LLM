@@ -11,7 +11,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.language_model.config import LanguageModelConfig, MultiTokenPredictionConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.conversion.config import (
     Apriel2TextCheckpointFormat,
     AprielHybridSSMCheckpointFormat,
@@ -159,29 +159,14 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.batch.sequence_length)
 
         # TODO: Avoid digging inside the model.
-        head = self.model.base_model.head
-        if isinstance(head, MultiTokenPredictionConfig):
-            prediction_heads = head.prediction_heads
-            head = head.head
-        else:
-            prediction_heads = 1
-
-        expected_names = head.get_distillation_models() | self.model.base_model.decoder.get_distillation_models()
-        Assert.eq(self.reference_models.keys(), expected_names)
+        Assert.eq(self.reference_models.keys(), self.model.base_model.get_reference_models())
 
         for reference_model in self.reference_models.values():
-            reference_head = reference_model.model.base_model.head
-            if isinstance(reference_head, MultiTokenPredictionConfig):
-                reference_prediction_heads = reference_head.prediction_heads
-                reference_head = reference_head.heads
-            else:
-                reference_prediction_heads = 1
-            Assert.geq(reference_prediction_heads, prediction_heads)
-
-            Assert.none(reference_head.distillation_model)
-            Assert.none(reference_head.dpo_reference_model)
-            # TODO: Support more LM head features.
-            Assert.none(reference_head.cross_entropy_splits)
+            Assert.geq(
+                reference_model.model.base_model.head.max_prediction_distance,
+                self.model.base_model.head.max_prediction_distance,
+            )
+            Assert.empty(reference_model.model.base_model.get_reference_models())
             Assert.eq(
                 reference_model.model.base_model.embeddings.vocab_parallel,
                 self.model.base_model.embeddings.vocab_parallel,
