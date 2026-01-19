@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from itertools import islice
 
 import torch
+import triton
 from einops import rearrange
 from torch import nn
 from transformers import PretrainedConfig
@@ -704,7 +705,7 @@ class Apriel2Attention(nn.Module):
         self.rotary_emb = get_rope(
             self.head_dim,
             max_position=max_pos,
-            rope_parameters={"base": rope_theta},
+            rope_parameters={"rope_theta": rope_theta},
         )
 
         # Sliding window support
@@ -1293,8 +1294,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
 
-        # TODO: swap back to our fused_gdn_gating after testing
-        g, beta = qwen3_fused_gdn_gating(self.A_log, a, b, self.dt_bias)
+        # TODO: Expand K heads to V heads if grouped query attention
+        # if self.value_heads_per_key > 1:
+        #     query = query.repeat_interleave(self.value_heads_per_key, dim=2)
+        #     key = key.repeat_interleave(self.value_heads_per_key, dim=2)
+
+        g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:

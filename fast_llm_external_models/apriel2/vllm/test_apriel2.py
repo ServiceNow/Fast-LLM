@@ -173,15 +173,18 @@ def test_coherence_transformers(model_paths: list[str], prompts: list[str], max_
     return results
 
 
-def compare_logits(model_path: str, prompt: str, max_tokens: int = 1):
+def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16"):
     """Compare logits between vLLM and Transformers."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     setup_transformers()
 
+    torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+
     print(f"\n{'='*70}")
     print(f"Model: {model_path}")
     print(f"Prompt: {prompt!r}")
+    print(f"Dtype: {dtype}")
     print(f"{'='*70}\n")
 
     # Tokenize
@@ -191,12 +194,14 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1):
     print(f"Token IDs: {input_ids[0].tolist()}")
 
     # --- vLLM ---
-    print("\n--- vLLM ---")
+    print(f"\n--- vLLM ({dtype}) ---")
     llm = LLM(
         model=model_path,
         trust_remote_code=True,
         gpu_memory_utilization=0.4,
         max_model_len=2048,
+        dtype=dtype,
+        # enforce_eager=True,  # Disable torch.compile and CUDA graphs for debugging
     )
 
     sampling_params = SamplingParams(
@@ -234,12 +239,15 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1):
     torch.cuda.empty_cache()
 
     # --- Transformers ---
-    print("\n--- Transformers ---")
+    # Use flash_attention_2 to match vLLM's attention backend (bf16 only)
+    attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
+    print(f"\n--- Transformers ({dtype}, {attn_impl}) ---")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch_dtype,
         device_map="cuda",
         trust_remote_code=True,
+        attn_implementation=attn_impl,
     )
     model.eval()
 
@@ -349,7 +357,7 @@ def cmd_coherence(args):
 def cmd_logits(args):
     """Run logits comparison test."""
     for model_path in args.model_paths:
-        compare_logits(model_path, args.prompt, args.max_tokens)
+        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype)
 
 
 def cmd_all(args):
@@ -378,6 +386,7 @@ def main():
     p_logits.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
     p_logits.add_argument("--prompt", default="The capital of France is", help="Input prompt")
     p_logits.add_argument("--max-tokens", type=int, default=1, help="Max tokens to generate")
+    p_logits.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
     p_logits.set_defaults(func=cmd_logits)
 
     # All tests
