@@ -12,6 +12,16 @@ from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionCo
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage, requires_cuda
 
+try:
+    from fast_llm_external_models.apriel2.modeling_apriel2 import (
+        Apriel2GatedDeltaNet,
+        Apriel2Mamba,
+        KimiDeltaAttention,
+    )
+except ImportError:
+    Apriel2GatedDeltaNet = None
+    Apriel2Mamba = None
+
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
 
@@ -70,10 +80,9 @@ def _compare_mixers(
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(Apriel2GatedDeltaNet is None, reason="Apriel GDN deps missing")
 @requires_cuda
 def test_gdn():
-    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
-
     device = torch.device("cuda")
     dtype = torch.bfloat16
 
@@ -103,8 +112,6 @@ def test_gdn():
 @requires_cuda
 @pytest.mark.skipif(kda_module.chunk_kda is None, reason="KDA fused kernels not available")
 def test_kda():
-    from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
-
     NUM_HEADS = 4
     HEAD_DIM = 4
     KERNEL_SIZE = 4
@@ -127,9 +134,8 @@ def test_kda():
 @requires_cuda
 @pytest.mark.parametrize("add_linear_biases", [True, False])
 @pytest.mark.parametrize("repeat_kv_before_conv", [True, False])
+@pytest.mark.skipif(Apriel2Mamba is None, reason="Apriel2 Mamba not available")
 def test_mamba(add_linear_biases, repeat_kv_before_conv):
-    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Mamba
-
     D_INNER = 128
     D_XB = 64
     D_STATE = 16
