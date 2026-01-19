@@ -142,7 +142,7 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
         begin_ = self._size_cumsums[index].item()
         # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
         # Convert begin and end to int to avoid numpy dtype overflow when adding to begin_
-        return TokenSample(self._tokens[begin_ + int(begin) : begin_ + int(end)].to(torch.int64), [end - begin])
+        return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
 
     def get_document_sizes(self) -> torch.Tensor:
         return self._size_cumsums[1:] - self._size_cumsums[:-1]
