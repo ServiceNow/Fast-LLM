@@ -17,6 +17,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.llama.modeling_llama import eager_attention_forward
 from transformers.models.mistral.modeling_mistral import MistralMLP, MistralRMSNorm, apply_rotary_pos_emb
 from transformers.processing_utils import Unpack
+from transformers.cache_utils import Cache
 from transformers.utils import logging
 from transformers.utils.import_utils import (
     is_causal_conv1d_available,
@@ -24,14 +25,14 @@ from transformers.utils.import_utils import (
     is_torch_flex_attn_available,
 )
 
-from .cache import Apriel2Cache
 from .configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 
 # GDN implementation - matches Fast-LLM's gdn.py exactly
 try:
-    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 except ImportError:
     chunk_gated_delta_rule = None
+    fused_recurrent_gated_delta_rule = None
 
 try:
     from fla.modules.fused_norm_gate import rms_norm_gated
@@ -56,11 +57,417 @@ else:
 
 logger = logging.get_logger(__name__)
 
-if not is_fast_path_available:
-    logger.warning(
-        "Mamba fast path not available. Requires CUDA, mamba_ssm, and causal_conv1d packages. "
-        "Falling back to PyTorch implementation (slower, CPU-compatible)."
-    )
+
+# =============================================================================
+# Cache Classes
+# =============================================================================
+
+
+class _AttentionCache:
+    __slots__ = ["key", "value", "window", "cumulative_length"]
+
+    def __init__(self, window=None):
+        self.key = None
+        self.value = None
+        self.window = window
+        self.cumulative_length = 0
+
+    def update(self, key, value):
+        new_tokens = key.shape[-2]
+        self.cumulative_length += new_tokens
+
+        if self.key is None:
+            if self.window and key.shape[-2] > self.window:
+                self.key = key[..., -self.window :, :].contiguous()
+                self.value = value[..., -self.window :, :].contiguous()
+            else:
+                self.key = key.contiguous()
+                self.value = value.contiguous()
+        else:
+            if self.window:
+                self.key = self._window(self.key, key)
+                self.value = self._window(self.value, value)
+            else:
+                self.key = torch.cat([self.key, key], -2)
+                self.value = torch.cat([self.value, value], -2)
+        return self.key, self.value
+
+    def _window(self, cache, new):
+        if cache.shape[-2] == self.window and new.shape[-2] == 1:
+            cache = cache.roll(-1, -2)
+            cache[..., -1:, :] = new
+            return cache
+        return torch.cat([cache, new], -2)[..., -self.window :, :].contiguous()
+
+    def reset(self):
+        self.key = None
+        self.value = None
+        self.cumulative_length = 0
+
+    def reorder(self, beam_idx):
+        if self.key is not None:
+            self.key = self.key.index_select(0, beam_idx.to(self.key.device))
+            self.value = self.value.index_select(0, beam_idx.to(self.value.device))
+
+    def crop(self, max_length):
+        if self.key is not None:
+            self.key = self.key[..., :max_length, :]
+            self.value = self.value[..., :max_length, :]
+            self.cumulative_length = self.key.shape[-2]
+
+    def batch_repeat(self, repeats):
+        if self.key is not None:
+            self.key = self.key.repeat_interleave(repeats, dim=0)
+            self.value = self.value.repeat_interleave(repeats, dim=0)
+
+    def batch_select(self, indices):
+        if self.key is not None:
+            self.key = self.key.index_select(0, indices.to(self.key.device))
+            self.value = self.value.index_select(0, indices.to(self.value.device))
+
+    @property
+    def is_initialized(self):
+        return self.key is not None
+
+    @property
+    def batch_size(self):
+        return self.key.shape[0] if self.key is not None else None
+
+
+class _SSMCache:
+    __slots__ = ["conv", "recurrent"]
+
+    def __init__(self):
+        self.conv = None
+        self.recurrent = None
+
+    def reset(self):
+        self.conv = None
+        self.recurrent = None
+
+    def reorder(self, beam_idx):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.index_select(0, beam_idx.to(c.device)) for c in self.conv)
+            else:
+                self.conv = self.conv.index_select(0, beam_idx.to(self.conv.device))
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.index_select(0, beam_idx.to(self.recurrent.device))
+
+    def crop(self, max_length):
+        pass  # SSM caches don't have sequence dimension to crop
+
+    def batch_repeat(self, repeats):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.repeat_interleave(repeats, dim=0) for c in self.conv)
+            else:
+                self.conv = self.conv.repeat_interleave(repeats, dim=0)
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.repeat_interleave(repeats, dim=0)
+
+    def batch_select(self, indices):
+        if self.conv is not None:
+            if isinstance(self.conv, tuple):
+                self.conv = tuple(c.index_select(0, indices.to(c.device)) for c in self.conv)
+            else:
+                self.conv = self.conv.index_select(0, indices.to(self.conv.device))
+        if self.recurrent is not None:
+            self.recurrent = self.recurrent.index_select(0, indices.to(self.recurrent.device))
+
+    @property
+    def is_initialized(self):
+        return self.conv is not None
+
+    @property
+    def batch_size(self):
+        if self.conv is None:
+            return None
+        if isinstance(self.conv, tuple):
+            return self.conv[0].shape[0]
+        return self.conv.shape[0]
+
+
+class _DummyCacheLayer:
+    pass
+
+
+class Apriel2Cache(Cache):
+
+    def __init__(self, config):
+        super().__init__(layer_class_to_replicate=_DummyCacheLayer)
+        self.config = config
+        n = config.decoder["num_blocks"]
+        self.layers = []
+        self.mixer_types = []
+        self.active_mixers = [None] * n
+
+        for i in range(n):
+            block = config.get_block_config(i)
+            mixer = block.get("mixer", {})
+            mtype = mixer.get("type", "attention")
+
+            if mtype == "stochastic":
+                sub = {}
+                main = mixer.get("main_mixer_name")
+                for name, cfg in mixer.get("mixers", {}).items():
+                    if cfg.get("type") == "attention":
+                        sub[name] = _AttentionCache(cfg.get("window_size"))
+                    else:
+                        sub[name] = _SSMCache()
+                self.layers.append(sub)
+                self.mixer_types.append(mixer["mixers"][main].get("type") if main else "attention")
+            elif mtype == "attention":
+                self.layers.append(_AttentionCache(mixer.get("window_size")))
+                self.mixer_types.append("attention")
+            else:
+                self.layers.append(_SSMCache())
+                self.mixer_types.append(mtype)
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        layer = self.layers[layer_idx]
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[layer_idx]
+            if mixer is None:
+                raise RuntimeError(f"Stochastic layer {layer_idx} needs active_mixer set")
+            return layer[mixer].update(key_states, value_states)
+        return layer.update(key_states, value_states)
+
+    def set_active_mixer(self, layer_idx, mixer_name):
+        self.active_mixers[layer_idx] = mixer_name
+
+    def get_seq_length(self, layer_idx=0):
+        """Returns the cumulative sequence length of tokens seen by the cache.
+
+        For sliding window caches, this returns the total tokens seen (not just cached).
+        This matches HuggingFace's DynamicSlidingWindowLayer behavior.
+        """
+        layer = self.layers[layer_idx]
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[layer_idx]
+            if mixer and isinstance(layer[mixer], _AttentionCache):
+                return layer[mixer].cumulative_length
+            return 0
+        if isinstance(layer, _AttentionCache):
+            return layer.cumulative_length
+        return 0
+
+    def get_max_cache_shape(self, layer_idx=0):
+        layer = self.layers[layer_idx]
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[layer_idx]
+            if mixer and isinstance(layer[mixer], _AttentionCache):
+                return layer[mixer].window
+        elif isinstance(layer, _AttentionCache):
+            return layer.window
+        return None
+
+    def get_mask_sizes(self, cache_position, layer_idx):
+        """Return the length and offset of the cache, used to generate the attention mask.
+
+        For standard (non-sliding) attention:
+            kv_offset = 0 (KV[0] corresponds to sequence position 0)
+            kv_length = cumulative_length + query_length
+
+        For sliding window attention:
+            kv_offset = max(cumulative_length - window + 1, 0)
+            kv_length = min(cumulative_length, window - 1) + query_length
+
+        For SSM/linear layers:
+            kv_offset = 0, kv_length = query_length (no KV cache to attend to)
+        """
+        query_length = cache_position.shape[0]
+        layer = self.layers[layer_idx]
+
+        # Handle stochastic layers by getting the active mixer's cache
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[layer_idx]
+            if mixer is None:
+                # No active mixer set, return defaults
+                return query_length, 0
+            cache = layer[mixer]
+        else:
+            cache = layer
+
+        # SSM layers don't have KV cache for attention mask purposes
+        if isinstance(cache, _SSMCache):
+            return query_length, 0
+
+        # Attention cache - check if sliding window
+        if isinstance(cache, _AttentionCache):
+            cumulative = cache.cumulative_length
+            window = cache.window
+
+            if window is not None:
+                # Sliding window attention
+                kv_offset = max(cumulative - window + 1, 0)
+                if cumulative >= window:
+                    kv_length = window - 1 + query_length
+                else:
+                    kv_length = cumulative + query_length
+            else:
+                # Full attention
+                kv_offset = 0
+                kv_length = cumulative + query_length
+
+            return kv_length, kv_offset
+
+        # Fallback
+        return query_length, 0
+
+    @property
+    def has_previous_state(self):
+        return any(isinstance(cache, _SSMCache) and cache.conv is not None for cache in self._iter_caches())
+
+    @property
+    def key_cache(self):
+        return _LayerListAccessor(self, "key")
+
+    @property
+    def value_cache(self):
+        return _LayerListAccessor(self, "value")
+
+    @property
+    def conv_states(self):
+        return _LayerListAccessor(self, "conv")
+
+    @property
+    def recurrent_states(self):
+        return _LayerListAccessor(self, "recurrent")
+
+    def _iter_caches(self):
+        """Iterate over all leaf cache objects (flattening stochastic layer dicts)."""
+        for layer in self.layers:
+            if isinstance(layer, dict):
+                yield from layer.values()
+            else:
+                yield layer
+
+    def reorder_cache(self, beam_idx):
+        for cache in self._iter_caches():
+            cache.reorder(beam_idx)
+
+    def reset(self):
+        for cache in self._iter_caches():
+            cache.reset()
+
+    def crop(self, max_length):
+        for cache in self._iter_caches():
+            cache.crop(max_length)
+
+    def batch_repeat_interleave(self, repeats):
+        for cache in self._iter_caches():
+            cache.batch_repeat(repeats)
+
+    def batch_select_indices(self, indices):
+        for cache in self._iter_caches():
+            cache.batch_select(indices)
+
+    @property
+    def is_compileable(self):
+        return False
+
+    @property
+    def is_initialized(self):
+        return any(cache.is_initialized for cache in self._iter_caches())
+
+    @property
+    def is_sliding(self):
+        result = []
+        for layer in self.layers:
+            if isinstance(layer, dict):
+                has_sliding = any(
+                    isinstance(cache, _AttentionCache) and cache.window is not None for cache in layer.values()
+                )
+                result.append(has_sliding)
+            elif isinstance(layer, _AttentionCache):
+                result.append(layer.window is not None)
+            else:
+                result.append(False)
+        return result
+
+    @property
+    def max_batch_size(self):
+        for cache in self._iter_caches():
+            bs = cache.batch_size
+            if bs is not None:
+                return bs
+        return None
+
+    @property
+    def max_cache_len(self):
+        windows = [
+            cache.window
+            for cache in self._iter_caches()
+            if isinstance(cache, _AttentionCache) and cache.window is not None
+        ]
+        return min(windows) if windows else None
+
+    def __len__(self):
+        return len(self.layers)
+
+    def __getitem__(self, idx):
+        layer = self.layers[idx]
+        if isinstance(layer, dict):
+            mixer = self.active_mixers[idx]
+            if mixer and isinstance(layer[mixer], _AttentionCache):
+                c = layer[mixer]
+                if c.key is not None:
+                    return c.key, c.value
+        elif isinstance(layer, _AttentionCache):
+            if layer.key is not None:
+                return layer.key, layer.value
+
+        for i, l in enumerate(self.layers):
+            if isinstance(l, _AttentionCache) and l.key is not None:
+                return torch.empty((0,), device=l.key.device, dtype=l.key.dtype), torch.empty(
+                    (0,), device=l.key.device, dtype=l.key.dtype
+                )
+            elif isinstance(l, dict):
+                for c in l.values():
+                    if isinstance(c, _AttentionCache) and c.key is not None:
+                        return torch.empty((0,), device=c.key.device, dtype=c.key.dtype), torch.empty(
+                            (0,), device=c.key.device, dtype=c.key.dtype
+                        )
+        return torch.empty((0,)), torch.empty((0,))
+
+
+class _LayerListAccessor:
+    __slots__ = ["cache", "attr"]
+
+    def __init__(self, cache, attr):
+        self.cache = cache
+        self.attr = attr
+
+    def __getitem__(self, idx):
+        layer = self.cache.layers[idx]
+        if isinstance(layer, dict):
+            mixer = self.cache.active_mixers[idx]
+            if mixer is None:
+                raise RuntimeError(
+                    f"Stochastic layer {idx} requires set_active_mixer() to be called before accessing cache. "
+                    f"Available mixers: {list(layer.keys())}"
+                )
+            return getattr(layer[mixer], self.attr)
+        return getattr(layer, self.attr, None)
+
+    def __setitem__(self, idx, value):
+        layer = self.cache.layers[idx]
+        if isinstance(layer, dict):
+            mixer = self.cache.active_mixers[idx]
+            if mixer is None:
+                raise RuntimeError(
+                    f"Stochastic layer {idx} requires set_active_mixer() to be called before accessing cache. "
+                    f"Available mixers: {list(layer.keys())}"
+                )
+            setattr(layer[mixer], self.attr, value)
+        elif hasattr(layer, self.attr):
+            setattr(layer, self.attr, value)
+
+
+# =============================================================================
+# TypedDict Classes
+# =============================================================================
 
 
 class BlockSequenceKwargs(TypedDict, total=False):
@@ -78,74 +485,19 @@ class PreprocessingOutput(TypedDict, total=False):
     attention_mask: Optional[torch.Tensor]
 
 
-@torch.compile
-def torch_causal_conv1d_fn(x, weight, bias=None, activation="silu"):
-    assert activation == "silu", f"Only silu activation is supported, got {activation}"
-
-    seqlen = x.shape[-1]
-    kernel_size = weight.shape[-1]
-
-    # Causal padding and depthwise conv
-    x = F.pad(x, (kernel_size - 1, 0))
-    x = F.conv1d(x, weight.unsqueeze(1), bias=bias, groups=x.shape[1])
-    x = x[..., :seqlen]
-
-    return F.silu(x)
 
 
-@torch.compile
-def torch_causal_conv1d_update(x, conv_state, weight, bias=None, activation="silu"):
-    """
-    Single-step causal convolution update.
+# Require fast path CUDA kernels - no silent fallback to unoptimized code paths
+if not is_fast_path_available:
+    raise ImportError(
+        "CausalConv1d and Mamba require CUDA kernels from causal_conv1d and mamba_ssm. "
+        "Install with: pip install causal-conv1d mamba-ssm"
+    )
 
-    Args:
-        x: New input [batch, dim]
-        conv_state: Previous state [batch, dim, kernel_size-1], updated in-place
-        weight: Convolution kernel [dim, kernel_size]
-        bias: Optional bias [dim]
-        activation: Activation function name
-
-    Returns:
-        Output [batch, dim]
-    """
-    assert activation == "silu", f"Only silu activation is supported, got {activation}"
-
-    dtype = x.dtype
-    # Concatenate state with new input to get full kernel_size window
-    # conv_state: [batch, dim, kernel_size-1], x: [batch, dim] -> full: [batch, dim, kernel_size]
-    full_state = torch.cat([conv_state, x.unsqueeze(-1)], dim=-1)
-
-    # Convolve: sum over last dimension
-    out = torch.sum(full_state * weight.unsqueeze(0), dim=-1)
-    if bias is not None:
-        out = out + bias
-
-    # Update state in-place: shift left and add new value
-    conv_state.copy_(full_state[:, :, 1:])
-
-    return F.silu(out).to(dtype=dtype)
-
-
-def torch_selective_scan_fn(
-    u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=True, return_last_state=False
-):
-    raise NotImplementedError("torch_selective_scan_fn not yet implemented. Install mamba_ssm for CUDA kernels.")
-
-
-def torch_selective_state_update(state, x, dt, A, B, C, D=None, z=None, dt_bias=None, dt_softplus=True):
-    raise NotImplementedError("torch_selective_state_update not yet implemented. Install mamba_ssm for CUDA kernels.")
-
-
-if is_fast_path_available:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
-    from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
-else:
-    _causal_conv1d_fn = None
-    _causal_conv1d_update = None
-    selective_scan_fn = torch_selective_scan_fn
-    selective_state_update = torch_selective_state_update
+from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
+from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
+from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 
 
 class CausalConv1d(nn.Conv1d):
@@ -158,7 +510,8 @@ class CausalConv1d(nn.Conv1d):
     Supports:
     - Prefill mode: process full sequence, optionally return final state for caching
     - Decode mode: single-token update using cached conv state
-    - CUDA fast path (causal_conv1d library) with automatic CPU/fallback support
+
+    Requires causal_conv1d library for CUDA kernels (no PyTorch fallback).
     """
 
     def __init__(
@@ -185,10 +538,6 @@ class CausalConv1d(nn.Conv1d):
         """Weight in [dim, kernel_size] format for causal_conv1d functions."""
         return self.weight.squeeze(1)
 
-    def _use_fast_path(self, x: torch.Tensor) -> bool:
-        """Check if we can use CUDA fast path."""
-        return _causal_conv1d_fn is not None and x.device.type == "cuda"
-
     def forward(
         self,
         x: torch.Tensor,
@@ -210,76 +559,61 @@ class CausalConv1d(nn.Conv1d):
             If return_final_state is True: (output, final_state) tuple
         """
         batch_size, dim, seq_len = x.shape
+        state_len = self.kernel_size[0] - 1
 
+        # Edge case: seq_len==1 with return_final_state
         # CUDA kernel limitation: return_final_states requires channel-last layout,
-        # which is impossible to achieve when seq_len==1. Fall back to PyTorch.
-        use_fast_path = self._use_fast_path(x) and not (return_final_state and seq_len == 1)
-
-        if use_fast_path:
-            # CUDA fast path
-            if return_final_state:
-                # causal_conv1d requires channel-last layout for returning final states.
-                # Channel-last means: stride(1)==1 AND stride(2)==dim (channels are contiguous).
-                # For shape [batch, dim, seq], standard contiguous is (dim*seq, seq, 1).
-                # Channel-last is (dim*seq, 1, dim) - achieved via transpose+contiguous+transpose.
-                if x.stride(1) != 1 or x.stride(2) < dim:
-                    x = x.transpose(1, 2).contiguous().transpose(1, 2)
-                # Allocate final state buffer with correct memory layout
-                # causal_conv1d requires final_states.stride(1) == 1
-                final_state = x.new_zeros(batch_size, self.kernel_size[0] - 1, dim).transpose(1, 2)
-            else:
-                final_state = None
-
-            out = _causal_conv1d_fn(
-                x,
+        # which is impossible when seq_len==1. Handle via update() with zero-init state.
+        if return_final_state and seq_len == 1:
+            # Initialize zero state if none provided, with channel-last layout for CUDA kernel
+            if conv_state is None:
+                # Create channel-last state: stride(1) == 1
+                conv_state = x.new_zeros(batch_size, state_len, dim).transpose(1, 2)
+            # Use update() which handles single tokens efficiently
+            out = _causal_conv1d_update(
+                x.squeeze(2),  # [batch, dim, 1] -> [batch, dim]
+                conv_state,
                 self._weight,
                 bias=self.bias,
-                initial_states=conv_state,
-                return_final_states=return_final_state,
-                final_states_out=final_state,
                 activation=self._activation,
             )
+            return out.unsqueeze(2), conv_state  # [batch, dim, 1], updated state
 
-            if return_final_state:
-                if isinstance(out, tuple):
-                    out, final_state = out
-                # Return a contiguous copy (still in channel-last layout) so callers can modify it in-place
-                # final_state has shape [batch, dim, state_len] with channel-last strides
-                # We need to preserve the channel-last layout for subsequent CUDA kernel calls
-                if final_state.stride(1) != 1:
-                    # Already contiguous in channel-last
-                    pass
-                else:
-                    # Make a copy that's safe to modify in-place
-                    final_state = final_state.clone()
-                return out, final_state
-            return out
+        # Standard CUDA path
+        if return_final_state:
+            # causal_conv1d requires channel-last layout for returning final states.
+            # Channel-last means: stride(1)==1 AND stride(2)==dim (channels are contiguous).
+            # For shape [batch, dim, seq], standard contiguous is (dim*seq, seq, 1).
+            # Channel-last is (dim*seq, 1, dim) - achieved via transpose+contiguous+transpose.
+            if x.stride(1) != 1 or x.stride(2) < dim:
+                x = x.transpose(1, 2).contiguous().transpose(1, 2)
+            # Allocate final state buffer with correct memory layout
+            # causal_conv1d requires final_states.stride(1) == 1
+            final_state = x.new_zeros(batch_size, state_len, dim).transpose(1, 2)
         else:
-            # PyTorch fallback
-            state_len = self.kernel_size[0] - 1
+            final_state = None
 
-            if conv_state is not None:
-                # Prepend state to input for proper convolution with history
-                x_with_state = torch.cat([conv_state, x], dim=-1)
-                out_with_state = torch_causal_conv1d_fn(
-                    x_with_state, self._weight, bias=self.bias, activation=self._activation
-                )
-                # Only keep outputs for the new input positions (not the state positions)
-                out = out_with_state[:, :, state_len:]
-            else:
-                out = torch_causal_conv1d_fn(x, self._weight, bias=self.bias, activation=self._activation)
+        out = _causal_conv1d_fn(
+            x,
+            self._weight,
+            bias=self.bias,
+            initial_states=conv_state,
+            return_final_states=return_final_state,
+            final_states_out=final_state,
+            activation=self._activation,
+        )
 
-            if return_final_state:
-                # Final state: last kernel_size-1 positions of input (with state if provided)
-                if conv_state is not None:
-                    combined = torch.cat([conv_state, x], dim=-1)
-                    final_state = combined[:, :, -state_len:].clone()
-                elif seq_len < state_len:
-                    final_state = F.pad(x, (state_len - seq_len, 0))
-                else:
-                    final_state = x[:, :, -state_len:].clone()
-                return out, final_state
-            return out
+        if return_final_state:
+            if isinstance(out, tuple):
+                out, final_state = out
+            # final_state has shape [batch, dim, state_len] with channel-last strides
+            # Ensure it's safe for in-place updates by subsequent CUDA kernel calls
+            assert final_state is not None
+            if final_state.stride(1) == 1:
+                # Make a copy that's safe to modify in-place
+                final_state = final_state.clone()
+            return out, final_state
+        return out
 
     def update(
         self,
@@ -296,22 +630,13 @@ class CausalConv1d(nn.Conv1d):
         Returns:
             Output tensor [batch, dim]
         """
-        if self._use_fast_path(x):
-            return _causal_conv1d_update(
-                x,
-                conv_state,
-                self._weight,
-                bias=self.bias,
-                activation=self._activation,
-            )
-        else:
-            return torch_causal_conv1d_update(
-                x,
-                conv_state,
-                self._weight,
-                bias=self.bias,
-                activation=self._activation,
-            )
+        return _causal_conv1d_update(
+            x,
+            conv_state,
+            self._weight,
+            bias=self.bias,
+            activation=self._activation,
+        )
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -958,93 +1283,10 @@ def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
     return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
 
 
-def torch_chunk_gated_delta_rule(
-    query,
-    key,
-    value,
-    g,
-    beta,
-    chunk_size=64,
-    initial_state=None,
-    output_final_state=False,
-    use_qk_l2norm_in_kernel=False,
-):
-    """Pure PyTorch fallback for chunk_gated_delta_rule - matches Fast-LLM's gdn.py."""
-    initial_dtype = query.dtype
-    if use_qk_l2norm_in_kernel:
-        query = _l2norm(query, dim=-1, eps=1e-6)
-        key = _l2norm(key, dim=-1, eps=1e-6)
-    query, key, value, beta, g = (
-        x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
-    )
-
-    batch_size, num_heads, sequence_length, k_head_dim = key.shape
-    v_head_dim = value.shape[-1]
-    pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
-    query = F.pad(query, (0, 0, 0, pad_size))
-    key = F.pad(key, (0, 0, 0, pad_size))
-    value = F.pad(value, (0, 0, 0, pad_size))
-    beta = F.pad(beta, (0, pad_size))
-    g = F.pad(g, (0, pad_size))
-    total_sequence_length = sequence_length + pad_size
-    scale = 1 / (query.shape[-1] ** 0.5)
-    query = query * scale
-
-    v_beta = value * beta.unsqueeze(-1)
-    k_beta = key * beta.unsqueeze(-1)
-    # reshape to chunks
-    query, key, value, k_beta, v_beta = (
-        x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)
-    )
-    g = g.reshape(g.shape[0], g.shape[1], -1, chunk_size)
-    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
-
-    # chunk decay
-    g = g.cumsum(dim=-1)
-    decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
-    attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    for i in range(1, chunk_size):
-        row = attn[..., i, :i].clone()
-        sub = attn[..., :i, :i].clone()
-        attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
-    attn = attn + torch.eye(chunk_size, dtype=attn.dtype, device=attn.device)
-    value = attn @ v_beta
-    k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
-    last_recurrent_state = (
-        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
-        if initial_state is None
-        else initial_state.to(value)
-    )
-    core_attn_out = torch.zeros_like(value)
-    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
-
-    # for each chunk
-    for i in range(0, total_sequence_length // chunk_size):
-        q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
-        attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
-        v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
-        v_new = v_i - v_prime
-        attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-        core_attn_out[:, :, i] = attn_inter + attn @ v_new
-        last_recurrent_state = (
-            last_recurrent_state * g[:, :, i, -1, None, None].exp()
-            + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
-        )
-
-    if not output_final_state:
-        last_recurrent_state = None
-    elif last_recurrent_state is not None:
-        last_recurrent_state = last_recurrent_state.to(initial_dtype)
-    core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
-    core_attn_out = core_attn_out[:, :, :sequence_length]
-    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
-    return core_attn_out, last_recurrent_state
-
-
 class GatedRMSNormalization(nn.Module):
     """
     Gated RMS normalization layer matching Fast-LLM's implementation.
-    Uses fla.modules.fused_norm_gate.rms_norm_gated when available.
+    Uses fla.modules.fused_norm_gate.rms_norm_gated (required).
 
     Args:
         hidden_size: Size of the hidden dimension
@@ -1054,18 +1296,16 @@ class GatedRMSNormalization(nn.Module):
 
     def __init__(self, hidden_size: int, eps: float = 1e-5, activation: str = "silu"):
         super().__init__()
+        if rms_norm_gated is None:
+            raise ImportError(
+                "GatedRMSNormalization requires rms_norm_gated from fla library. "
+                "Install with: pip install fla-core"
+            )
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
         self.activation = activation
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        # Use PyTorch fallback on CPU since fla requires CUDA
-        if rms_norm_gated is not None and input_.device.type != "cpu":
-            return self._forward_fla(input_, gate)
-        else:
-            return self._forward_local(input_, gate)
-
-    def _forward_fla(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         return rms_norm_gated(
             input_,
             gate,
@@ -1077,19 +1317,6 @@ class GatedRMSNormalization(nn.Module):
             prenorm=False,
             residual_in_fp32=False,
         )
-
-    def _forward_local(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        """Pure PyTorch fallback for gated RMS normalization."""
-        input_dtype = input_.dtype
-        hidden_states = input_.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
-        hidden_states = self.weight * hidden_states.to(input_dtype)
-        # Apply gating with configured activation
-        if self.activation == "sigmoid":
-            return hidden_states * torch.sigmoid(gate)
-        else:  # silu
-            return hidden_states * F.silu(gate)
 
 
 class Apriel2GatedDeltaNet(nn.Module):
@@ -1156,13 +1383,11 @@ class Apriel2GatedDeltaNet(nn.Module):
         # Normalization layer - named 'norm' with 'weight' param to match Fast-LLM
         self.norm = GatedRMSNormalization(self.value_head_dim, eps=self.norm_eps)
 
-        # Select kernel implementation - fla if available, else torch fallback
-        self._chunk_gated_delta_rule = chunk_gated_delta_rule or torch_chunk_gated_delta_rule
-
-        if chunk_gated_delta_rule is None:
-            logger.warning(
-                "GatedDeltaNet fast path not available. Install fla library for optimized kernels. "
-                "Falling back to PyTorch implementation."
+        # Require FLA kernels - no silent fallback to unoptimized code paths
+        if chunk_gated_delta_rule is None or fused_recurrent_gated_delta_rule is None:
+            raise ImportError(
+                "GatedDeltaNet requires the fla library for optimized kernels. "
+                "Install with: pip install fla-core"
             )
 
     def _fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
@@ -1272,15 +1497,10 @@ class Apriel2GatedDeltaNet(nn.Module):
             query = query.repeat_interleave(self.value_heads_per_key, dim=2)
             key = key.repeat_interleave(self.value_heads_per_key, dim=2)
 
-        # Run gated delta rule
-        # Use PyTorch fallback on CPU since fla requires CUDA
-        chunk_fn = self._chunk_gated_delta_rule
-        if query.device.type == "cpu" and chunk_gated_delta_rule is not None:
-            chunk_fn = torch_chunk_gated_delta_rule
-
+        # Run gated delta rule (FLA kernels required)
         if not use_precomputed_states:
             # Chunked mode for prefill
-            output, last_recurrent_state = chunk_fn(
+            output, last_recurrent_state = chunk_gated_delta_rule(
                 query,
                 key,
                 value,
@@ -1295,11 +1515,15 @@ class Apriel2GatedDeltaNet(nn.Module):
                 last_recurrent_state = last_recurrent_state.to(hidden_states.dtype)
         else:
             # Recurrent mode for single token decode
-            # Convert recurrent_state to match hidden_states dtype if needed
-            if recurrent_state is not None and recurrent_state.dtype != hidden_states.dtype:
-                recurrent_state = recurrent_state.to(hidden_states.dtype)
-            output, last_recurrent_state = self._recurrent_gated_delta_rule(
-                query, key, value, g, beta_gate, recurrent_state
+            output, last_recurrent_state = fused_recurrent_gated_delta_rule(
+                query,
+                key,
+                value,
+                g=g,
+                beta=beta_gate,
+                initial_state=recurrent_state,
+                output_final_state=past_key_values is not None,
+                use_qk_l2norm_in_kernel=True,
             )
 
         # Update recurrent state in cache
@@ -1318,69 +1542,6 @@ class Apriel2GatedDeltaNet(nn.Module):
         output = self.out_proj(output)
 
         return (output,)
-
-    def _recurrent_gated_delta_rule(self, query, key, value, g, beta, state):
-        """Single-step recurrent update for cached inference.
-
-        Input shapes: [batch, seq=1, heads, dim]
-        State shape: [batch, heads, key_dim, value_dim]
-
-        Implements the delta rule recurrence:
-            1. Decay state: S = S * exp(g)
-            2. Retrieve memory: mem = S @ k
-            3. Compute delta: delta = (v - mem) * beta
-            4. Update state: S = S + k ⊗ delta
-            5. Output: o = S @ q (scaled)
-        """
-        input_dtype = query.dtype
-
-        # Transpose from [batch, seq, heads, dim] to [batch, heads, seq, dim]
-        query = query.transpose(1, 2)
-        key = key.transpose(1, 2)
-        value = value.transpose(1, 2)
-
-        # L2 normalize query and key
-        query = _l2norm(query, dim=-1, eps=1e-6)
-        key = _l2norm(key, dim=-1, eps=1e-6)
-
-        # Apply query scaling (matches chunked mode)
-        scale = 1.0 / (query.shape[-1] ** 0.5)
-        query = query * scale
-
-        # Reshape for computation: [batch, heads, 1, dim] -> [batch, heads, dim]
-        query = query.squeeze(2)
-        key = key.squeeze(2)
-        value = value.squeeze(2)
-        g = g.squeeze(1)
-        beta = beta.squeeze(1)
-
-        # 1. Decay state: S = S * exp(g)
-        decay = g.exp().to(input_dtype).unsqueeze(-1).unsqueeze(-1)  # [batch, heads, 1, 1]
-        state = state * decay
-
-        # 2. Retrieve memory: mem = S @ k = (S * k.unsqueeze(-1)).sum(dim=-2)
-        # state: [batch, heads, key_dim, value_dim], key: [batch, heads, key_dim]
-        kv_mem = (state * key.unsqueeze(-1)).sum(dim=-2)  # [batch, heads, value_dim]
-
-        # 3. Compute delta: delta = (v - mem) * beta
-        delta = (value - kv_mem) * beta.unsqueeze(-1)  # [batch, heads, value_dim]
-
-        # 4. Update state: S = S + k ⊗ delta
-        # k.unsqueeze(-1): [batch, heads, key_dim, 1]
-        # delta.unsqueeze(-2): [batch, heads, 1, value_dim]
-        state = state + key.unsqueeze(-1) * delta.unsqueeze(-2)
-
-        # 5. Output: o = S @ q = (S * q.unsqueeze(-1)).sum(dim=-2)
-        output = (state * query.unsqueeze(-1)).sum(dim=-2)  # [batch, heads, value_dim]
-        output = output.unsqueeze(2)  # [batch, heads, 1, value_dim]
-
-        # Transpose back to [batch, seq=1, heads, value_dim]
-        output = output.transpose(1, 2)
-
-        # Ensure state matches output dtype
-        state = state.to(output.dtype)
-
-        return output, state
 
     @classmethod
     def setup(
@@ -1416,7 +1577,7 @@ class KimiDeltaAttention(nn.Module):
     - norm - gated RMS normalization
 
     Uses fla.ops.kda.chunk_kda and fused_recurrent_kda kernels.
-    Uses CausalConv1d for convolutions (CUDA fast path with PyTorch fallback).
+    Uses CausalConv1d for convolutions (requires causal_conv1d CUDA kernels).
     """
 
     def __init__(
@@ -1550,9 +1711,7 @@ class KimiDeltaAttention(nn.Module):
         **kwargs,
     ):
         batch_size, seq_len, _ = hidden_states.shape
-        mode = "fused_recurrent" if seq_len <= 64 else self.mode
-        if self.training:
-            mode = "chunk"
+        mode = "fused_recurrent" if (seq_len <= 64 and not self.training) else self.mode
 
         # Get cache states if available
         conv_state_q, conv_state_k, conv_state_v = None, None, None
@@ -1570,10 +1729,9 @@ class KimiDeltaAttention(nn.Module):
         k, conv_state_k = self._apply_conv(self.k_proj(hidden_states), self.k_conv, conv_state_k, use_cache)
         v, conv_state_v = self._apply_conv(self.v_proj(hidden_states), self.v_conv, conv_state_v, use_cache)
 
-        # Gate kernel computation
+        # Gate kernel computation (raw g, gate applied inside kernel for chunk mode)
         g = self.f_b_proj(self.f_a_proj(hidden_states))
         g = rearrange(g, "... (h d) -> ... h d", d=self.head_dim)
-        g = fused_kda_gate(g, self.A_log.float(), dt_bias=self.dt_bias)
 
         # Beta gating
         beta = self.beta_proj(hidden_states).float().sigmoid()
@@ -1584,17 +1742,23 @@ class KimiDeltaAttention(nn.Module):
 
         # Run KDA kernel
         if mode == "chunk":
+            # For chunk mode: gate computed inside kernel (matches FLA reference)
             o, recurrent_state = chunk_kda(
                 q=q,
                 k=k,
                 v=v,
                 g=g,
                 beta=beta,
+                A_log=self.A_log,
+                dt_bias=self.dt_bias,
                 initial_state=recurrent_state,
                 output_final_state=past_key_values is not None,
                 use_qk_l2norm_in_kernel=True,
+                use_gate_in_kernel=True,
             )
         else:
+            # For fused_recurrent mode: pre-compute gate (matches FLA reference)
+            g = fused_kda_gate(g, self.A_log.float(), dt_bias=self.dt_bias)
             o, recurrent_state = fused_recurrent_kda(
                 q=q,
                 k=k,
