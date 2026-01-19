@@ -2,7 +2,7 @@
 
 import torch
 
-from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache, _SSMCache
+from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, _AttentionCache, _SSMCache
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
 
 
