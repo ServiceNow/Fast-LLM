@@ -325,7 +325,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "dpo"})
-class LanguageModelPolicyLossConfig(LanguageModelLossConfig):
+class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
     _abstract: typing.ClassVar[bool] = False
 
@@ -361,21 +361,26 @@ class LanguageModelPolicyLossConfig(LanguageModelLossConfig):
             # TODO: Make more efficient.
             logits = logits * logits_scale_factor
 
-        # Log probabilities.
-        logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-        target_logprobs = torch.gather(logprobs, dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        with torch.set_grad_enabled(grad_output is not None):
+            logits_ = logits.detach().requires_grad_(grad_output is not None)
 
-        # Policy loss
-        # TODO: advantages or rewards?
-        log_ratio_old = torch.exp(target_logprobs - old_logprobs)
-        loss = torch.min(
-            log_ratio_old * advantage,
-            torch.clamp(log_ratio_old, 1 - self.epsilon_low, 1 + self.epsilon_high) * advantage,
-        )
+            # Log probabilities.
+            logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+            target_logprobs = torch.gather(logprobs, dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        # TODO: tokens_weights = 1/batch_size ?
-        # TODO: Reduce loss?
-        loss = loss / batch_size  # 1 x (BxL) x 1
+            # Policy loss
+            log_ratio_old = torch.exp(target_logprobs - old_logprobs)
+            loss = torch.min(
+                log_ratio_old * advantage,
+                torch.clamp(log_ratio_old, 1 - self.epsilon_low, 1 + self.epsilon_high) * advantage,
+            ).mean()
+
+            if grad_output is None:
+                grad = None
+            else:
+                loss.backward(torch.full_like(loss, grad_output))
+                grad = logits_.grad.detach().to(logits.dtype)
+        return loss, grad
 
 
 def _interpolate(begin: float, end: float, ratio: float) -> float:
