@@ -17,11 +17,10 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
-        grad_output: float | None = None,
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         return loss_forward_backward(
-            grad_output,
+            self._get_grad_output(kwargs),
             z_loss,
             logits,
             self._logits_scale_factor,

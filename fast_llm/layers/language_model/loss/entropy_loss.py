@@ -34,14 +34,13 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
-        grad_output: float | None = None,
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         return entropy_loss_forward_backward(
             logits,
             self._get_labels(kwargs, split_index),
             None,  # Labels are already masked
-            grad_output=grad_output,
+            grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             implementation=self._implementation,
             logits_scale_factor=self._logits_scale_factor,
@@ -79,14 +78,13 @@ class LanguageModelLabelDistillationLoss[ConfigType: LanguageModelLabelEntropyLo
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
-        grad_output: float | None = None,
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         return entropy_loss_forward_backward(
             logits,
             self._get_reference_model_logits(self._config.reference_model, kwargs, split_index),
             self._get_loss_mask(kwargs, split_index),
-            grad_output=grad_output,
+            grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             implementation=self._implementation,
             logits_scale_factor=self._logits_scale_factor,

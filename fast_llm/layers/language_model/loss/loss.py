@@ -17,6 +17,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         config: ConfigType,
         distributed_config: DistributedConfig,
         *,
+        name: str,
         prediction_distance: int = 0,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
@@ -28,6 +29,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         Assert.in_range(prediction_distance, 0, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
+        self._name = name
         self._num_splits = num_splits
         self._logits_scale_factor = logits_scale_factor
         self._weight = weight * self._config.weight
@@ -40,10 +42,17 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
-        grad_output: float | None = None,
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def weight(self) -> float:
+        return self._weight
 
     def _prepare_target(
         self,
@@ -72,6 +81,17 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
             target = target.chunk(self._num_splits)[split_index]
 
         return target
+
+    def _get_grad_output(self, kwargs: dict[str, typing.Any]) -> float | None:
+        grad_output = kwargs.get(LanguageModelKwargs.grad_output)
+        if grad_output is not None:
+            grad_output = (
+                grad_output
+                * self._weight
+                / (self._parallel_dim.size if self._sequence_parallel else 1)
+                / self._num_splits
+            )
+        return grad_output
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(

@@ -7,7 +7,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    import torch
+    pass
 
     from fast_llm.layers.language_model.loss.dpo import LanguageModelDPOLoss
     from fast_llm.layers.language_model.loss.entropy_loss import (
@@ -41,7 +41,7 @@ class LanguageModelLossConfig(Config):
     def get_layer(
         self,
         distributed_config: DistributedConfig,
-        *,
+        name: str,
         prediction_distance: int = 0,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
@@ -52,6 +52,7 @@ class LanguageModelLossConfig(Config):
         return self.loss_class(
             self,
             distributed_config,
+            name=name,
             prediction_distance=prediction_distance,
             prediction_heads=prediction_heads,
             vocab_parallel=vocab_parallel,
@@ -62,24 +63,6 @@ class LanguageModelLossConfig(Config):
 
     @property
     def loss_class(self) -> "type[LanguageModelLoss]":
-        raise NotImplementedError()
-
-    def get_loss(
-        self,
-        logits: "torch.Tensor",
-        loss_mask: "torch.Tensor | None",
-        grad_output: float | None = None,
-        *,
-        group: "torch.distributed.ProcessGroup|None" = None,
-        logits_scale_factor: float = 1.0,
-        prediction_distance: int = 0,
-        prediction_heads: int = 1,
-        split_index: int = 0,
-        num_splits: int = 1,
-        sequence_parallel: bool = False,
-        vocab_parallel: bool = False,
-        kwargs: dict[str, typing.Any],
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         raise NotImplementedError()
 
     def get_reference_models(self) -> set[str]:

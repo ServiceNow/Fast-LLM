@@ -22,7 +22,6 @@ class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModel
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
-        grad_output: float | None = None,
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
 
@@ -30,7 +29,7 @@ class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModel
             raise NotImplementedError()
 
         return loss_forward_backward(
-            grad_output,
+            self._get_grad_output(kwargs),
             dpo_loss,
             logits,
             self._get_labels(kwargs, split_index),
