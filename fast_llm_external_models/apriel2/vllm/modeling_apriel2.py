@@ -922,11 +922,11 @@ def fused_gdn_gating(
 
     fused_gdn_gating_kernel[grid](
         A_log,
-        a.view(-1),
-        b.view(-1),
+        a.reshape(-1),
+        b.reshape(-1),
         dt_bias,
-        g.view(-1),
-        beta.view(-1),
+        g.reshape(-1),
+        beta.reshape(-1),
         num_heads,
         total_elements,
         BLOCK_SIZE,
@@ -1130,43 +1130,35 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         mixed_qkvz: torch.Tensor,
         mixed_ba: torch.Tensor,
     ):
-        """Derives query, key, value, z, b, a tensors from projections."""
-        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-            self.num_k_heads // self.tp_size,
-            (
-                self.head_k_dim
-                + self.head_k_dim
-                + (self.head_v_dim + self.head_v_dim)
-                * self.num_v_heads
-                // self.num_k_heads
-            ),
+        """Derives query, key, value, z, b, a tensors from projections.
+
+        Uses flat layout matching Fast-LLM and transformers reference:
+        - QKVZ: [Q_all | K_all | V_all | Z_all]
+        - BA: [b_all | a_all]
+        """
+        num_tokens = mixed_qkvz.size(0)
+
+        # Split QKVZ using flat layout (matching Fast-LLM/transformers reference)
+        qkvz_sizes = (
+            self.key_dim // self.tp_size,   # Q: key_heads * key_head_dim
+            self.key_dim // self.tp_size,   # K: key_heads * key_head_dim
+            self.value_dim // self.tp_size, # V: value_heads * value_head_dim
+            self.value_dim // self.tp_size, # Z: value_heads * value_head_dim
         )
-        new_tensor_shape_ba = mixed_qkvz.size()[:-1] + (
-            self.num_k_heads // self.tp_size,
-            2 * self.num_v_heads // self.num_k_heads,
+        query, key, value, z = torch.split(mixed_qkvz, qkvz_sizes, dim=-1)
+
+        # Reshape to head format: [tokens, heads, head_dim]
+        query = query.reshape(num_tokens, self.num_k_heads // self.tp_size, self.head_k_dim)
+        key = key.reshape(num_tokens, self.num_k_heads // self.tp_size, self.head_k_dim)
+        value = value.reshape(num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim)
+        z = z.reshape(num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim)
+
+        # Split BA using flat layout: [b_all | a_all]
+        ba_sizes = (
+            self.num_v_heads // self.tp_size,  # b (beta)
+            self.num_v_heads // self.tp_size,  # a (alpha)
         )
-
-        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-
-        split_arg_list_qkvz = [
-            self.head_k_dim,
-            self.head_k_dim,
-            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
-            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
-        ]
-        split_arg_list_ba = [
-            self.num_v_heads // self.num_k_heads,
-            self.num_v_heads // self.num_k_heads,
-        ]
-
-        (query, key, value, z) = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=2)
-        (b, a) = torch.split(mixed_ba, split_arg_list_ba, dim=2)
-
-        value = value.reshape(value.size(0), -1, self.head_v_dim)
-        z = z.reshape(z.size(0), -1, self.head_v_dim)
-        b = b.reshape(b.size(0), self.num_v_heads // self.tp_size)
-        a = a.reshape(a.size(0), self.num_v_heads // self.tp_size)
+        b, a = torch.split(mixed_ba, ba_sizes, dim=-1)
 
         return query, key, value, z, b, a
 
@@ -1203,9 +1195,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         query, key, value, z, b, a = self.fix_query_key_value_ordering(
             projected_states_qkvz, projected_states_ba
         )
-        query, key, value = map(
-            lambda x: rearrange(x, "l p d -> l (p d)"), (query, key, value)
-        )
+        # Flatten heads: [tokens, heads, head_dim] -> [tokens, heads * head_dim]
+        query = query.reshape(query.size(0), -1)
+        key = key.reshape(key.size(0), -1)
+        value = value.reshape(value.size(0), -1)
         mixed_qkv = torch.cat((query, key, value), dim=-1)
 
         # Part 2: Core Attention (Custom Op)
@@ -1294,10 +1287,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
 
-        # TODO: Expand K heads to V heads if grouped query attention
-        # if self.value_heads_per_key > 1:
-        #     query = query.repeat_interleave(self.value_heads_per_key, dim=2)
-        #     key = key.repeat_interleave(self.value_heads_per_key, dim=2)
+        # Expand K heads to V heads for grouped query attention
+        # (matches Fast-LLM and transformers reference implementations)
+        if self.value_heads_per_key > 1:
+            query = query.repeat_interleave(self.value_heads_per_key, dim=2)
+            key = key.repeat_interleave(self.value_heads_per_key, dim=2)
 
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
 
@@ -1445,6 +1439,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         # Internal defaults for implementation details
         norm_config = mixer_config.get("normalization", {})
         rms_norm_eps = norm_config.get("epsilon", 1e-6)
+        norm_activation = norm_config.get("activation", "silu")
 
         self.layer_idx = layer_idx
         self.prefix = prefix
@@ -1551,7 +1546,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             prefix=f"{prefix}.g_b_proj",
         )
         self.o_norm = FusedRMSNormGated(
-            self.head_dim, eps=rms_norm_eps, activation="sigmoid"
+            self.head_dim, eps=rms_norm_eps, activation=norm_activation
         )
         self.o_proj = RowParallelLinear(
             projection_size,
