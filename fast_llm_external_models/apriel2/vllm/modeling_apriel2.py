@@ -1183,6 +1183,21 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
     _debug_enabled = False  # Set to True for small batches in forward()
     _debug_layer = False  # num_tokens <= 10
+    _debug_state = True  # Debug recurrent state
+
+    def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
+        """Debug recurrent state with statistics."""
+        if not self._debug_state or state is None:
+            return
+        # Only print for first GDN layer (layer 1 in every-2nd config)
+        if "layers.1." not in self.prefix:
+            return
+        flat = state.flatten()
+        first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+        print(f"[vLLM-GDN {self.prefix}] {name} (seq_len={seq_len}): shape={state.shape}, "
+              f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
+              f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
+              f"first8=[{first8}]")
 
     def _debug_tensor(self, name: str, t: torch.Tensor):
         if not self._debug_enabled:
@@ -1412,9 +1427,20 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             )
             self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
             self._debug_tensor("last_state", last_state)
+            # Debug prefill state - get seq_len from query_start_loc
+            if non_spec_query_start_loc is not None and len(non_spec_query_start_loc) >= 2:
+                prefill_seq_len = int(non_spec_query_start_loc[1] - non_spec_query_start_loc[0])
+            else:
+                prefill_seq_len = num_actual_tokens
+            self._debug_state_stats("PREFILL out_state", last_state, prefill_seq_len)
             ssm_state[non_spec_state_indices_tensor] = last_state.to(ssm_state.dtype)
         else:
             self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
+            # For decode, access the correct slot using state indices
+            if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
+                slot_idx = int(non_spec_state_indices_tensor[0])
+                actual_state = ssm_state[slot_idx:slot_idx+1]
+                self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1428,6 +1454,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 use_qk_l2norm_in_kernel=True,
             )
             self._debug_tensor("core_out (from fused_recurrent)", core_out)
+            if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
+                actual_state = ssm_state[slot_idx:slot_idx+1]
+                self._debug_state_stats("DECODE out_state", actual_state, num_actual_tokens)
 
         core_attn_out[:num_actual_tokens] = core_out.squeeze(0)[:num_actual_tokens]
         self._debug_tensor("core_attn_out (final output)", core_attn_out)

@@ -511,14 +511,6 @@ class PreprocessingOutput(TypedDict, total=False):
     attention_mask: Optional[torch.Tensor]
 
 
-# Require CUDA kernels - no silent fallback to unoptimized code paths
-if causal_conv1d_fn is None or selective_scan_fn is None:
-    raise ImportError(
-        "CausalConv1d and Mamba require CUDA kernels from causal_conv1d and mamba_ssm. "
-        "Install with: pip install causal-conv1d mamba-ssm"
-    )
-
-
 class CausalConv1d(nn.Conv1d):
     """
     Causal 1D convolution that pads only on the left side.
@@ -1466,6 +1458,7 @@ class Apriel2GatedDeltaNet(nn.Module):
 
     _debug_enabled = False  # Set to True for debugging
     _debug_layer = False  # num_tokens <= 10
+    _debug_state = True  # Debug recurrent state
 
     def _debug_tensor(self, name: str, t: torch.Tensor):
         if not self._debug_enabled:
@@ -1483,6 +1476,22 @@ class Apriel2GatedDeltaNet(nn.Module):
         if not self._debug_enabled:
             return
         print(f"[TF-GDN layer={self.layer_idx}] {msg}")
+
+    def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
+        """Debug recurrent state with statistics."""
+        if not self._debug_state or state is None:
+            return
+        # Print layer_idx once to debug, then filter
+        print(f"[TF-GDN DEBUG] layer_idx={self.layer_idx}")
+        # Only print for first GDN layer to reduce output (layer 1 in every-2nd config)
+        if self.layer_idx != 1:
+            return
+        flat = state.flatten()
+        first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+        print(f"[TF-GDN L{self.layer_idx}] {name} (seq_len={seq_len}): shape={state.shape}, "
+              f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
+              f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
+              f"first8=[{first8}]")
 
     def _fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
         """
@@ -1637,9 +1646,11 @@ class Apriel2GatedDeltaNet(nn.Module):
             # Ensure state is in same dtype as hidden_states (fla kernel may return float32)
             if last_recurrent_state is not None:
                 last_recurrent_state = last_recurrent_state.to(hidden_states.dtype)
+            self._debug_state_stats("PREFILL out_state", last_recurrent_state, seq_len)
         else:
             # Recurrent mode for single token decode
             self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
+            self._debug_state_stats("DECODE in_state", recurrent_state, seq_len)
             # vLLM and FLA have different signatures:
             # - vLLM: inplace_final_state (default True, set False to avoid ssm_state_indices requirement)
             # - FLA: output_final_state
@@ -1665,6 +1676,7 @@ class Apriel2GatedDeltaNet(nn.Module):
                     output_final_state=past_key_values is not None,
                     use_qk_l2norm_in_kernel=True,
                 )
+            self._debug_state_stats("DECODE out_state", last_recurrent_state, seq_len)
 
         self._debug_tensor("output (after FLA)", output)
 
