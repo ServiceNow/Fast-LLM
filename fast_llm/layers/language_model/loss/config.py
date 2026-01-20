@@ -331,26 +331,6 @@ class LanguageModelPolicyLossConfig(LanguageModelLossConfig):
 
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
-    clamp_log_ratio_ref_new_value: float = Field(
-        default=10,
-        desc="Clamp the log ratio ref new value",
-    )
-    kl_coef: float = Field(
-        default=0.1,
-        desc="KL penalty coefficient with reference policy",
-    )
-    final_kl_coef: float = Field(
-        default=0.1,
-        desc="Final KL penalty coefficient value",
-    )
-    entropy_bonus: float = Field(
-        default=0.0,
-        desc="Entropy bonus coefficient",
-    )
-    final_entropy_bonus: float = Field(
-        default=0.0,
-        desc="Final entropy bonus value",
-    )
 
     def get_loss(
         self,
