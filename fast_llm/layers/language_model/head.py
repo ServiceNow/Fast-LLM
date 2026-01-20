@@ -12,11 +12,10 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
+from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LM_HEAD_LOSS_NAME,
@@ -293,7 +292,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 prediction_heads=self._prediction_heads,
                 split_index=split_index,
                 num_splits=self._config.cross_entropy_splits,
-                sequence_parallel_logits=self._sequence_parallel_logits,
+                sequence_parallel=self._sequence_parallel_logits,
                 vocab_parallel=self._vocab_parallel,
             )
             losses[loss_name] = loss.detach()

@@ -96,6 +96,7 @@ def _fused_softmax_base(
     return logits_norm, exp_logits, sum_exp_logits
 
 
+@torch.compile
 def _fused_reverse_kl_base(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -134,6 +135,7 @@ def _fused_reverse_kl_base(
     return per_sample_loss, grad
 
 
+@torch.compile
 def _fused_cross_entropy_base(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -177,6 +179,7 @@ def _fused_cross_entropy_base(
     return per_sample_loss, grad
 
 
+@torch.compile
 def _fused_cross_entropy_base_from_labels(
     logits: torch.Tensor,
     target: torch.Tensor,
