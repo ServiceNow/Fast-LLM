@@ -381,50 +381,21 @@ class LanguageModelPolicyLossConfig(LanguageModelLossConfig):
             # TODO: Make more efficient.
             logits = logits * logits_scale_factor
 
-        # get shifted values and compute ratios
-        # labels = batch.input_ids[:, 1:]
-        # rewards = batch.rewards[:, 1:]
-        # ref_logprobs = batch.ref_logprobs[:, 1:]
-        # old_logprobs = batch.old_logprobs[:, 1:]
-        # group_tokens = batch.group_tokens[:, 1:]
-        # overflow = batch.overflow[:, 1:]
-        # advantages = batch.advantages[:, 1:]
-
         # Log probabilities.
         logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-        new_logprobs = torch.gather(logprobs, dim=2, index=labels.unsqueeze(2)).squeeze(2)
-
-        # Entropy loss term
-        entropy = -(logprobs.exp() * logprobs).sum(dim=-1)
-
-        # KL loss term (Schulman approx)
-        log_ratio_ref_clamped = torch.clamp(
-            new_logprobs - ref_logprobs,
-            min=-self.clamp_log_ratio_ref_new_value,
-            max=self.clamp_log_ratio_ref_new_value,
-        )
-        approx_kl = torch.exp(log_ratio_ref_clamped) + log_ratio_ref_clamped - 1
+        target_logprobs = torch.gather(logprobs, dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         # Policy loss
-        log_ratio_old = torch.exp(new_logprobs - old_logprobs)
-        if policy == "ppo":
-            # TODO: Advantages can be negative? Otherwise same as reinforce except for epsilon_low?
-            policy_loss = torch.min(
-                log_ratio_old * rewards,
-                torch.clamp(log_ratio_old, 1 - self.epsilon_low, 1 + self.epsilon_high) * rewards,
-            )
-        elif policy == "reinforce":
-            policy_loss = new_logprobs * rewards * torch.clamp(log_ratio_old, 0, 1 + self.epsilon_high)
-        else:
-            raise NotImplementedError(policy)
-
-        # Total weighted loss
-        entropy_weight = _interpolate(self.entropy_bonus, self.final_entropy_bonus, current_step / max_step)
-        kl_weight = _interpolate(self.kl_coef, self.final_kl_coef, current_step / max_step)
-        loss = policy_loss - kl_weight * approx_kl + entropy_weight * entropy  # 1 x (BxL) x 1
+        # TODO: advantages or rewards?
+        log_ratio_old = torch.exp(target_logprobs - old_logprobs)
+        loss = torch.min(
+            log_ratio_old * advantage,
+            torch.clamp(log_ratio_old, 1 - self.epsilon_low, 1 + self.epsilon_high) * advantage,
+        )
 
         # TODO: tokens_weights = 1/batch_size ?
-        loss = loss * tokens_weights  # 1 x (BxL) x 1
+        # TODO: Reduce loss?
+        loss = loss / batch_size  # 1 x (BxL) x 1
 
 
 def _interpolate(begin: float, end: float, ratio: float) -> float:
