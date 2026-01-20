@@ -23,7 +23,17 @@ import sys
 from pathlib import Path
 
 import torch
+import triton
+
+# Set a triton allocator to avoid "no allocator was set" errors
+def _triton_allocator(size, align, stream):
+    return torch.empty(size, dtype=torch.int8, device='cuda').data_ptr()
+
+triton.set_allocator(_triton_allocator)
+
 from vllm import LLM, ModelRegistry, SamplingParams
+from vllm.config import CompilationConfig
+from vllm.config.compilation import CompilationMode
 from vllm.transformers_utils.model_arch_config_convertor import (
     MODEL_ARCH_CONFIG_CONVERTORS,
     ModelArchConfigConvertorBase,
@@ -173,35 +183,48 @@ def test_coherence_transformers(model_paths: list[str], prompts: list[str], max_
     return results
 
 
-def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16"):
+def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16", no_compile: bool = False, revision: str | None = None, debug_gdn: bool = False):
     """Compare logits between vLLM and Transformers."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     setup_transformers()
 
+    # Enable GDN debug if requested
+    if debug_gdn:
+        # vLLM GDN class
+        from fast_llm_external_models.apriel2.vllm.modeling_apriel2 import Apriel2GatedDeltaNet as VLLMGatedDeltaNet
+        VLLMGatedDeltaNet._debug_global_enable = True
+        print("GDN debug mode enabled for vLLM")
+
     torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
 
     print(f"\n{'='*70}")
     print(f"Model: {model_path}")
+    print(f"Revision: {revision}")
     print(f"Prompt: {prompt!r}")
     print(f"Dtype: {dtype}")
+    print(f"No compile: {no_compile}")
+    print(f"Debug GDN: {debug_gdn}")
     print(f"{'='*70}\n")
 
     # Tokenize
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, revision=revision, trust_remote_code=True)
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
     print(f"Input tokens: {input_ids.shape[1]}")
     print(f"Token IDs: {input_ids[0].tolist()}")
 
     # --- vLLM ---
-    print(f"\n--- vLLM ({dtype}) ---")
+    compile_label = "no-compile" if no_compile else "compiled"
+    print(f"\n--- vLLM ({dtype}, {compile_label}) ---")
+    compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
     llm = LLM(
         model=model_path,
+        revision=revision,
         trust_remote_code=True,
         gpu_memory_utilization=0.4,
         max_model_len=2048,
         dtype=dtype,
-        # enforce_eager=True,  # Disable torch.compile and CUDA graphs for debugging
+        compilation_config=compilation_config,
     )
 
     sampling_params = SamplingParams(
@@ -244,12 +267,20 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
     print(f"\n--- Transformers ({dtype}, {attn_impl}) ---")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
+        revision=revision,
         torch_dtype=torch_dtype,
         device_map="cuda",
         trust_remote_code=True,
         attn_implementation=attn_impl,
     )
     model.eval()
+
+    # Enable debug on transformers GDN layers if requested
+    if debug_gdn:
+        for name, module in model.named_modules():
+            if module.__class__.__name__ == "Apriel2GatedDeltaNet":
+                module._debug_enabled = True  # Enable at instance level (TF doesn't have warmup filtering)
+                print(f"Enabled debug on {name}")
 
     with torch.no_grad():
         tf_outputs = model(input_ids.to("cuda"))
@@ -317,6 +348,227 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
     return match, vllm_text, tf_next_token
 
 
+def compare_comprehensive(
+    model_path: str,
+    prompt_sizes: list[int],
+    decode_lengths: list[int],
+    batch_sizes: list[int],
+    dtype: str = "bfloat16",
+    no_compile: bool = True,
+    revision: str | None = None,
+):
+    """Compare vLLM and Transformers across various configurations.
+
+    Returns a list of result dicts with keys:
+        prompt_size, decode_length, batch_size, avg_diff, max_diff, all_match
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    setup_transformers()
+
+    torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path, revision=revision, trust_remote_code=True)
+
+    # Generate prompts of different sizes using a base text
+    base_text = (
+        "The study of artificial intelligence has evolved significantly over the past decades. "
+        "Machine learning, a subset of AI, focuses on developing algorithms that can learn from data. "
+        "Deep learning, in turn, uses neural networks with many layers to model complex patterns. "
+        "Natural language processing enables computers to understand and generate human language. "
+        "Computer vision allows machines to interpret and analyze visual information from the world. "
+        "Reinforcement learning trains agents to make decisions by rewarding desired behaviors. "
+        "The field continues to advance rapidly, with new breakthroughs occurring frequently. "
+        "Applications range from autonomous vehicles to medical diagnosis and beyond. "
+        "Ethical considerations around AI development have become increasingly important. "
+        "Researchers work to ensure AI systems are fair, transparent, and beneficial to society. "
+    )
+
+    # Repeat base text to get enough tokens
+    long_text = (base_text * 20)[:8000]  # Plenty of text
+
+    def get_prompt_with_tokens(target_tokens: int) -> str:
+        """Get a prompt with approximately target_tokens tokens."""
+        # Binary search for right length
+        low, high = 1, len(long_text)
+        while low < high:
+            mid = (low + high) // 2
+            test_prompt = long_text[:mid]
+            num_tokens = len(tokenizer.encode(test_prompt))
+            if num_tokens < target_tokens:
+                low = mid + 1
+            else:
+                high = mid
+        return long_text[:low]
+
+    results = []
+
+    # Load vLLM once
+    print(f"\n{'='*70}")
+    print(f"Loading vLLM model: {model_path}")
+    print(f"{'='*70}")
+
+    compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
+    llm = LLM(
+        model=model_path,
+        revision=revision,
+        trust_remote_code=True,
+        gpu_memory_utilization=0.4,
+        max_model_len=2048,
+        dtype=dtype,
+        compilation_config=compilation_config,
+    )
+
+    # Load Transformers once
+    print(f"\nLoading Transformers model...")
+    attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
+    tf_model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        revision=revision,
+        torch_dtype=torch_dtype,
+        device_map="cuda",
+        trust_remote_code=True,
+        attn_implementation=attn_impl,
+    )
+    tf_model.eval()
+
+    print(f"\n{'='*70}")
+    print(f"Running comparisons...")
+    print(f"{'='*70}\n")
+
+    # Header
+    print(f"{'Prompt':<8} {'Decode':<8} {'Batch':<8} {'Avg Diff':<12} {'Max Diff':<12} {'Match':<8}")
+    print("-" * 60)
+
+    for prompt_size in prompt_sizes:
+        prompt = get_prompt_with_tokens(prompt_size)
+        actual_tokens = len(tokenizer.encode(prompt))
+
+        for decode_length in decode_lengths:
+            for batch_size in batch_sizes:
+                # Create batch of prompts
+                prompts = [prompt] * batch_size
+
+                # vLLM inference
+                sampling_params = SamplingParams(
+                    max_tokens=decode_length,
+                    temperature=0,
+                    logprobs=20,
+                )
+                vllm_outputs = llm.generate(prompts, sampling_params)
+
+                # Transformers inference
+                input_ids = tokenizer(prompts, return_tensors="pt", padding=True).input_ids.to("cuda")
+
+                with torch.no_grad():
+                    if decode_length == 1:
+                        # Just get logits for next token prediction
+                        tf_outputs = tf_model(input_ids)
+                        tf_logits = tf_outputs.logits
+                    else:
+                        # Generate multiple tokens
+                        tf_output_ids = tf_model.generate(
+                            input_ids,
+                            max_new_tokens=decode_length,
+                            do_sample=False,
+                            pad_token_id=tokenizer.eos_token_id,
+                            return_dict_in_generate=True,
+                            output_logits=True,
+                        )
+                        # Stack logits from generation steps
+                        tf_logits = torch.stack(tf_output_ids.logits, dim=1)
+
+                # Compare logprobs for each position and batch element
+                all_diffs = []
+                all_match = True
+
+                for b in range(batch_size):
+                    vllm_out = vllm_outputs[b]
+                    vllm_logprobs_list = vllm_out.outputs[0].logprobs or []
+                    vllm_token_ids = vllm_out.outputs[0].token_ids
+
+                    for pos in range(min(decode_length, len(vllm_logprobs_list))):
+                        vllm_logprobs = vllm_logprobs_list[pos]
+
+                        if decode_length == 1:
+                            # For prefill, use last position
+                            tf_pos_logits = tf_logits[b, -1, :]
+                        else:
+                            # For generation, use corresponding position
+                            tf_pos_logits = tf_logits[b, pos, :]
+
+                        tf_pos_logprobs = torch.log_softmax(tf_pos_logits.float(), dim=-1)
+
+                        # Get TF's predicted token
+                        tf_pred_token = tf_pos_logprobs.argmax().item()
+                        vllm_pred_token = vllm_token_ids[pos] if pos < len(vllm_token_ids) else None
+
+                        if vllm_pred_token != tf_pred_token:
+                            all_match = False
+
+                        # Compare logprobs for common tokens
+                        for tid, lp_info in vllm_logprobs.items():
+                            if tid < len(tf_pos_logprobs):
+                                vllm_lp = lp_info.logprob
+                                tf_lp = tf_pos_logprobs[tid].item()
+                                diff = abs(vllm_lp - tf_lp)
+                                all_diffs.append(diff)
+
+                avg_diff = sum(all_diffs) / len(all_diffs) if all_diffs else 0
+                max_diff = max(all_diffs) if all_diffs else 0
+                match_str = "YES" if all_match else "NO"
+
+                result = {
+                    "prompt_size": actual_tokens,
+                    "decode_length": decode_length,
+                    "batch_size": batch_size,
+                    "avg_diff": avg_diff,
+                    "max_diff": max_diff,
+                    "all_match": all_match,
+                }
+                results.append(result)
+
+                print(f"{actual_tokens:<8} {decode_length:<8} {batch_size:<8} {avg_diff:<12.6f} {max_diff:<12.6f} {match_str:<8}")
+
+    # Cleanup
+    del llm
+    del tf_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # Summary
+    print(f"\n{'='*60}")
+    print("SUMMARY")
+    print(f"{'='*60}")
+    all_avg = sum(r["avg_diff"] for r in results) / len(results)
+    all_max = max(r["max_diff"] for r in results)
+    all_matched = all(r["all_match"] for r in results)
+    print(f"Overall average diff: {all_avg:.6f}")
+    print(f"Overall max diff: {all_max:.6f}")
+    print(f"All predictions match: {'YES' if all_matched else 'NO'}")
+
+    return results
+
+
+def cmd_compare(args):
+    """Run comprehensive comparison across configurations."""
+    prompt_sizes = [int(x) for x in args.prompt_sizes.split(",")]
+    decode_lengths = [int(x) for x in args.decode_lengths.split(",")]
+    batch_sizes = [int(x) for x in args.batch_sizes.split(",")]
+
+    for model_path in args.model_paths:
+        compare_comprehensive(
+            model_path,
+            prompt_sizes=prompt_sizes,
+            decode_lengths=decode_lengths,
+            batch_sizes=batch_sizes,
+            dtype=args.dtype,
+            no_compile=args.no_compile,
+            revision=getattr(args, 'revision', None),
+        )
+
+
 def cmd_coherence(args):
     """Run coherence test."""
     prompts = [
@@ -356,8 +608,10 @@ def cmd_coherence(args):
 
 def cmd_logits(args):
     """Run logits comparison test."""
+    revision = getattr(args, 'revision', None)
+    debug_gdn = getattr(args, 'debug_gdn', False)
     for model_path in args.model_paths:
-        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype)
+        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype, args.no_compile, revision, debug_gdn)
 
 
 def cmd_all(args):
@@ -387,7 +641,21 @@ def main():
     p_logits.add_argument("--prompt", default="The capital of France is", help="Input prompt")
     p_logits.add_argument("--max-tokens", type=int, default=1, help="Max tokens to generate")
     p_logits.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
+    p_logits.add_argument("--no-compile", action="store_true", help="Disable torch.compile")
+    p_logits.add_argument("--revision", default=None, help="Model revision")
+    p_logits.add_argument("--debug-gdn", action="store_true", help="Enable GDN debug output")
     p_logits.set_defaults(func=cmd_logits)
+
+    # Comprehensive comparison
+    p_compare = subparsers.add_parser("compare", help="Compare across prompt sizes, decode lengths, and batch sizes")
+    p_compare.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
+    p_compare.add_argument("--prompt-sizes", default="5,50,200", help="Comma-separated prompt sizes in tokens")
+    p_compare.add_argument("--decode-lengths", default="1,5,10", help="Comma-separated decode lengths")
+    p_compare.add_argument("--batch-sizes", default="1,2,4", help="Comma-separated batch sizes")
+    p_compare.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
+    p_compare.add_argument("--no-compile", action="store_true", default=True, help="Disable torch.compile (default: True)")
+    p_compare.add_argument("--revision", default=None, help="Model revision")
+    p_compare.set_defaults(func=cmd_compare)
 
     # All tests
     p_all = subparsers.add_parser("all", help="Run all tests")
