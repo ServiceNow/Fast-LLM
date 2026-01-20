@@ -171,9 +171,10 @@ def _set_triton_dtype_map() -> None:
     _TRITON_DTYPE_MAP_INV = {y: x for x, y in _TRITON_DTYPE_MAP.items() if y is not None}
 
 
-def get_integer_type(max_size: int) -> DataType:
-    if max_size < 2**7:
-        return DataType.int8
+def get_unsigned_integer_type(max_size: int) -> DataType:
+    # TODO: Use uint types (recently added for torch, not enough methods supported yet)
+    if max_size < 2**8:
+        return DataType.uint8
     elif max_size < 2**15:
         return DataType.int16
     elif max_size < 2**31:
