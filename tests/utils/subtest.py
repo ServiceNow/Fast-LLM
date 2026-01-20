@@ -28,7 +28,7 @@ class DistributedTestContext:
         timeout: float = 20.0,
         init_method: str = "env://",
         backend: DistributedBackend = DistributedBackend.nccl,
-        use_cuda: bool = False,
+        use_cuda: bool = True,
     ) -> None:
         self._do_capture = do_capture
         self._timeout = timeout
@@ -90,7 +90,7 @@ class DistributedTestContext:
             self._path = base_path / name
             self._name = name
             self._num_gpus = num_gpus
-            self._skip = self._test_context._world_size < self._num_gpus and not self._test_context._use_cuda
+            self._skip = self._test_context._world_size < self._num_gpus and self._test_context._use_cuda
             self._do_run = self._test_context._rank < num_gpus and not self._skip
             self._do_capture = self._test_context._do_capture and self._do_run
             self._success = False
