@@ -1,5 +1,4 @@
 import typing
-from email import policy
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
