@@ -1,4 +1,5 @@
 import typing
+from email import policy
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
@@ -322,3 +323,110 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
             loss_mask,
             logits_scale_factor,
         )
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "dpo"})
+class LanguageModelPolicyLossConfig(LanguageModelLossConfig):
+
+    _abstract: typing.ClassVar[bool] = False
+
+    epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
+    epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
+    clamp_log_ratio_ref_new_value: float = Field(
+        default=10,
+        desc="Clamp the log ratio ref new value",
+    )
+    kl_coef: float = Field(
+        default=0.1,
+        desc="KL penalty coefficient with reference policy",
+    )
+    final_kl_coef: float = Field(
+        default=0.1,
+        desc="Final KL penalty coefficient value",
+    )
+    entropy_bonus: float = Field(
+        default=0.0,
+        desc="Entropy bonus coefficient",
+    )
+    final_entropy_bonus: float = Field(
+        default=0.0,
+        desc="Final entropy bonus value",
+    )
+
+    def get_loss(
+        self,
+        logits: "torch.Tensor",
+        loss_mask: "torch.Tensor | None",
+        grad_output: float | None = None,
+        *,
+        group: "torch.distributed.ProcessGroup|None" = None,
+        logits_scale_factor: float = 1.0,
+        prediction_distance: int = 0,
+        prediction_heads: int = 1,
+        split_index: int = 0,
+        num_splits: int = 1,
+        sequence_parallel_logits: bool = False,
+        vocab_parallel: bool = False,
+        kwargs: dict[str, typing.Any],
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        pass
+
+        if num_splits > 1:
+            raise NotImplementedError()
+        if prediction_distance > 0:
+            raise NotImplementedError()
+        if vocab_parallel and group is not None:
+            raise NotImplementedError()
+
+        if logits_scale_factor != 1.0:
+            # TODO: Make more efficient.
+            logits = logits * logits_scale_factor
+
+        # get shifted values and compute ratios
+        # labels = batch.input_ids[:, 1:]
+        # rewards = batch.rewards[:, 1:]
+        # ref_logprobs = batch.ref_logprobs[:, 1:]
+        # old_logprobs = batch.old_logprobs[:, 1:]
+        # group_tokens = batch.group_tokens[:, 1:]
+        # overflow = batch.overflow[:, 1:]
+        # advantages = batch.advantages[:, 1:]
+
+        # Log probabilities.
+        logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+        new_logprobs = torch.gather(logprobs, dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        # Entropy loss term
+        entropy = -(logprobs.exp() * logprobs).sum(dim=-1)
+
+        # KL loss term (Schulman approx)
+        log_ratio_ref_clamped = torch.clamp(
+            new_logprobs - ref_logprobs,
+            min=-self.clamp_log_ratio_ref_new_value,
+            max=self.clamp_log_ratio_ref_new_value,
+        )
+        approx_kl = torch.exp(log_ratio_ref_clamped) + log_ratio_ref_clamped - 1
+
+        # Policy loss
+        log_ratio_old = torch.exp(new_logprobs - old_logprobs)
+        if policy == "ppo":
+            # TODO: Advantages can be negative? Otherwise same as reinforce except for epsilon_low?
+            policy_loss = torch.min(
+                log_ratio_old * rewards,
+                torch.clamp(log_ratio_old, 1 - self.epsilon_low, 1 + self.epsilon_high) * rewards,
+            )
+        elif policy == "reinforce":
+            policy_loss = new_logprobs * rewards * torch.clamp(log_ratio_old, 0, 1 + self.epsilon_high)
+        else:
+            raise NotImplementedError(policy)
+
+        # Total weighted loss
+        entropy_weight = _interpolate(self.entropy_bonus, self.final_entropy_bonus, current_step / max_step)
+        kl_weight = _interpolate(self.kl_coef, self.final_kl_coef, current_step / max_step)
+        loss = policy_loss - kl_weight * approx_kl + entropy_weight * entropy  # 1 x (BxL) x 1
+
+        # TODO: tokens_weights = 1/batch_size ?
+        loss = loss * tokens_weights  # 1 x (BxL) x 1
+
+
+def _interpolate(begin: float, end: float, ratio: float) -> float:
+    return begin + (end - begin) * ratio
