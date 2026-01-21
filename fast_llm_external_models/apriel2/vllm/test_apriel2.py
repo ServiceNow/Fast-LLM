@@ -505,6 +505,13 @@ def compare_comprehensive(
                         vllm_pred_token = vllm_token_ids[pos] if pos < len(vllm_token_ids) else None
 
                         if vllm_pred_token != tf_pred_token:
+                            if all_match:  # First mismatch
+                                vllm_lp_for_tok = vllm_logprobs.get(vllm_pred_token, None)
+                                vllm_lp_val = vllm_lp_for_tok.logprob if vllm_lp_for_tok else "N/A"
+                                tf_lp_vllm_tok = tf_pos_logprobs[vllm_pred_token].item() if vllm_pred_token and vllm_pred_token < len(tf_pos_logprobs) else "N/A"
+                                tf_lp_tf_tok = tf_pos_logprobs[tf_pred_token].item()
+                                print(f"  FIRST MISMATCH at pos {pos}: vLLM tok={vllm_pred_token} (lp={vllm_lp_val}), TF tok={tf_pred_token} (lp={tf_lp_tf_tok:.4f})")
+                                print(f"    TF logprob for vLLM's token: {tf_lp_vllm_tok}")
                             all_match = False
 
                         # Compare logprobs for common tokens

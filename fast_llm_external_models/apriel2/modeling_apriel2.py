@@ -1458,7 +1458,8 @@ class Apriel2GatedDeltaNet(nn.Module):
 
     _debug_enabled = False  # Set to True for debugging
     _debug_layer = False  # num_tokens <= 10
-    _debug_state = True  # Debug recurrent state
+    _debug_state = False  # Debug recurrent state
+    _debug_output = False  # Debug output hidden states during decode
 
     def _debug_tensor(self, name: str, t: torch.Tensor):
         if not self._debug_enabled:
@@ -1466,11 +1467,14 @@ class Apriel2GatedDeltaNet(nn.Module):
         if t is None:
             print(f"[TF-GDN layer={self.layer_idx}] {name}: None")
             return
-        flat = t.flatten()[:8]
-        vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
-        print(f"[TF-GDN layer={self.layer_idx}] {name}: shape={t.shape}, dtype={t.dtype}, "
-              f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
-              f"first8=[{vals}]")
+        try:
+            flat = t.flatten()[:8]
+            vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
+            print(f"[TF-GDN layer={self.layer_idx}] {name}: shape={t.shape}, dtype={t.dtype}, "
+                  f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
+                  f"first8=[{vals}]")
+        except Exception as e:
+            print(f"[TF-GDN layer={self.layer_idx}] {name}: ERROR accessing tensor: {e}")
 
     def _debug_print(self, msg: str):
         if not self._debug_enabled:
@@ -1481,17 +1485,15 @@ class Apriel2GatedDeltaNet(nn.Module):
         """Debug recurrent state with statistics."""
         if not self._debug_state or state is None:
             return
-        # Print layer_idx once to debug, then filter
-        print(f"[TF-GDN DEBUG] layer_idx={self.layer_idx}")
-        # Only print for first GDN layer to reduce output (layer 1 in every-2nd config)
-        if self.layer_idx != 1:
-            return
-        flat = state.flatten()
-        first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
-        print(f"[TF-GDN L{self.layer_idx}] {name} (seq_len={seq_len}): shape={state.shape}, "
-              f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
-              f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
-              f"first8=[{first8}]")
+        try:
+            flat = state.flatten()
+            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+            print(f"[TF-GDN L{self.layer_idx}] {name} (seq_len={seq_len}): shape={state.shape}, "
+                  f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
+                  f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
+                  f"first8=[{first8}]")
+        except Exception as e:
+            print(f"[TF-GDN L{self.layer_idx}] {name}: ERROR accessing state: {e}")
 
     def _fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
         """
@@ -1576,6 +1578,7 @@ class Apriel2GatedDeltaNet(nn.Module):
         value_flat = value.reshape(batch_size, seq_len, -1)
         mixed_qkv = torch.cat([query_flat, key_flat, value_flat], dim=-1)
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, conv_dim, seq]
+        mixed_qkv_before_conv = mixed_qkv  # Save for debug
         self._debug_tensor("mixed_qkv (before conv)", mixed_qkv)
         self._debug_tensor("conv_weight", self.convolution.weight)
         self._debug_tensor("conv_bias", self.convolution.bias)
@@ -1633,6 +1636,17 @@ class Apriel2GatedDeltaNet(nn.Module):
         if not use_precomputed_states:
             # Chunked mode for prefill
             self._debug_print("Using chunk_gated_delta_rule (prefill)")
+            # Debug PREFILL INPUTS before kernel call
+            if self._debug_state:
+                print(f"[TF-GDN L{self.layer_idx}] PREFILL INPUTS:")
+                print(f"  hidden_states: shape={hidden_states.shape}, first8={hidden_states.flatten()[:8].tolist()}")
+                print(f"  mixed_qkv_before_conv: shape={mixed_qkv_before_conv.shape}, first8={mixed_qkv_before_conv.flatten()[:8].tolist()}")
+                print(f"  q: shape={query.shape}, first8={query.flatten()[:8].tolist()}")
+                print(f"  k: shape={key.shape}, first8={key.flatten()[:8].tolist()}")
+                print(f"  v: shape={value.shape}, first8={value.flatten()[:8].tolist()}")
+                print(f"  g: shape={g.shape}, first8={g.flatten()[:8].tolist()}")
+                print(f"  beta: shape={beta_gate.shape}, first8={beta_gate.flatten()[:8].tolist()}")
+                print(f"  initial_state: {recurrent_state}")
             output, last_recurrent_state = chunk_gated_delta_rule(
                 query,
                 key,
@@ -1651,6 +1665,9 @@ class Apriel2GatedDeltaNet(nn.Module):
             # Recurrent mode for single token decode
             self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
             self._debug_state_stats("DECODE in_state", recurrent_state, seq_len)
+            # Debug decode inputs
+            if self._debug_state:
+                print(f"[TF-GDN L{self.layer_idx}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta_gate.flatten()[:4].tolist()}")
             # vLLM and FLA have different signatures:
             # - vLLM: inplace_final_state (default True, set False to avoid ssm_state_indices requirement)
             # - FLA: output_final_state
@@ -1718,6 +1735,13 @@ class Apriel2GatedDeltaNet(nn.Module):
             last_token = output[0, -1, :8]
             vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
             print(f"[TF-GDN layer={self.layer_idx}] output (last token): last_token_first8=[{vals}]")
+        # Debug output hidden states during decode
+        # Get decode step from cache
+        decode_step = past_key_values.get_seq_length() if past_key_values is not None else 0
+        if self._debug_output and use_precomputed_states and output.dim() == 3:
+            flat = output.flatten()
+            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+            print(f"[TF-GDN L{self.layer_idx}] STEP={decode_step} OUTPUT hs: mean={output.float().mean().item():.6f}, std={output.float().std().item():.6f}, first8=[{first8}]")
         self._debug_print("===== FORWARD END =====")
 
         return (output,)

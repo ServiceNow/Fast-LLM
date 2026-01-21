@@ -1184,13 +1184,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
     _debug_enabled = False  # Set to True for small batches in forward()
     _debug_layer = False  # num_tokens <= 10
     _debug_state = True  # Debug recurrent state
+    _debug_output = True  # Debug output hidden states during decode
 
     def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
         """Debug recurrent state with statistics."""
         if not self._debug_state or state is None:
-            return
-        # Only print for first GDN layer (layer 1 in every-2nd config)
-        if "layers.1." not in self.prefix:
             return
         flat = state.flatten()
         first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
@@ -1226,6 +1224,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         # Debug disabled by default - set to True for debugging
         self._debug_enabled = False  # num_tokens <= 10
+        self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
         self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
         self._debug_tensor("hidden_states", hidden_states)
 
@@ -1300,6 +1299,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             last_token = output[num_tokens-1, :8]
             vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
             print(f"[GDN {self.prefix}] output (last token): last_token_first8=[{vals}]")
+        # Debug output hidden states during decode (num_tokens == 1)
+        if self._debug_output and num_tokens == 1:
+            flat = output[:num_tokens].flatten()
+            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+            print(f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]")
         self._debug_print("===== FORWARD END =====")
 
     def _forward_core(
@@ -1413,6 +1417,18 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             initial_state = ssm_state[non_spec_state_indices_tensor].contiguous()
             initial_state[~has_initial_state, ...] = 0
             self._debug_tensor("initial_state", initial_state)
+            # Debug PREFILL INPUTS before kernel call
+            if self._debug_state:
+                print(f"[vLLM-GDN {self.prefix}] PREFILL INPUTS:")
+                print(f"  hidden_states: shape={self._cached_hidden_states.shape}, first8={self._cached_hidden_states.flatten()[:8].tolist()}")
+                print(f"  mixed_qkv (input): shape={mixed_qkv.shape}, first8={mixed_qkv.flatten()[:8].tolist()}")
+                print(f"  q: shape={query.shape}, first8={query.flatten()[:8].tolist()}")
+                print(f"  k: shape={key.shape}, first8={key.flatten()[:8].tolist()}")
+                print(f"  v: shape={value.shape}, first8={value.flatten()[:8].tolist()}")
+                print(f"  g: shape={g.shape}, first8={g.flatten()[:8].tolist()}")
+                print(f"  beta: shape={beta.shape}, first8={beta.flatten()[:8].tolist()}")
+                print(f"  initial_state: {initial_state}")
+                print(f"  cu_seqlens: {non_spec_query_start_loc}")
             core_out, last_state = chunk_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1441,6 +1457,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 slot_idx = int(non_spec_state_indices_tensor[0])
                 actual_state = ssm_state[slot_idx:slot_idx+1]
                 self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
+            # Debug decode inputs
+            if self._debug_state:
+                print(f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}")
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
                 k=key,
