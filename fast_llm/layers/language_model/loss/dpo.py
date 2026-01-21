@@ -54,12 +54,12 @@ def dpo_loss(
         # TODO: Make more efficient.
         logits = logits * logits_scale_factor
 
-    policy_log_probabilities = _get_target_log_probabilities(logits, targets)
+    policy_log_probabilities = get_target_log_probabilities(logits, targets)
     policy_log_ratios = _get_target_log_probability_for_spans(
         policy_log_probabilities, chosen_spans
     ) - _get_target_log_probability_for_spans(policy_log_probabilities, rejected_spans)
 
-    reference_log_probabilities = _get_target_log_probabilities(reference_model_logits.float().detach(), targets)
+    reference_log_probabilities = get_target_log_probabilities(reference_model_logits.float().detach(), targets)
     reference_log_ratios = _get_target_log_probability_for_spans(
         reference_log_probabilities, chosen_spans
     ) - _get_target_log_probability_for_spans(reference_log_probabilities, rejected_spans)
@@ -68,14 +68,17 @@ def dpo_loss(
     return -torch.nn.functional.logsigmoid(beta * (policy_log_ratios - reference_log_ratios)).mean()
 
 
-def _get_target_log_probabilities(logits: torch.Tensor, targets: torch.Tensor):
-    # Gather log probabilities corresponding to the target tokens
-    return torch.nn.functional.log_softmax(logits, dim=-1).gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
-
-
 def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans: list[list[tuple[int, int]]]):
     return sum(
         log_probabilities[sample_index, begin:end].sum()
         for sample_index, sample_spans in enumerate(spans)
         for begin, end in sample_spans
     )
+
+
+@torch.compile
+def get_target_log_probabilities(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    # Avoid negative (masked) labels.
+    targets = targets * (targets >= 0)
+    # Gather log probabilities corresponding to the target tokens
+    return torch.nn.functional.log_softmax(logits, dim=-1).gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
