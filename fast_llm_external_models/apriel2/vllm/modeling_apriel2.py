@@ -2290,7 +2290,19 @@ def get_block_config_for_layer(
         return "attention", {}
 
 
-@support_torch_compile
+def apriel2_model_invariants(
+    input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+):
+    """Shape invariants for Apriel2 model compilation.
+
+    These are translated to runtime assertions for unbacked dynamic shapes
+    and are compiled away for backed shapes.
+    """
+    if input_ids is not None:
+        torch._check(positions.size()[0] == input_ids.size()[0])
+
+
+@support_torch_compile(shape_invariants=apriel2_model_invariants)
 class Apriel2Model(nn.Module):
     """Apriel2 base model (decoder stack)."""
 
