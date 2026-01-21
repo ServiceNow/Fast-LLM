@@ -13,6 +13,10 @@ Usage:
     python test_apriel2.py logits /path/to/model
     python test_apriel2.py logits /path/to/model --prompt "Custom prompt"
 
+    # Statistical comparison with many prompts (for rigorous testing)
+    python test_apriel2.py stats /path/to/model --num-prompts 128
+    python test_apriel2.py stats /path/to/model --num-prompts 64 --min-tokens 256 --no-compile
+
     # Run both tests
     python test_apriel2.py all /path/to/model
 """
@@ -21,6 +25,7 @@ import argparse
 import gc
 import sys
 from pathlib import Path
+import numpy as np
 
 import torch
 import triton
@@ -613,6 +618,463 @@ def cmd_coherence(args):
                 print(f"         TF:   {tf_start!r}...")
 
 
+# ============================================================================
+# Statistical Testing Infrastructure (v2)
+# ============================================================================
+#
+# Design goals:
+# 1. Dataset-based prompts (C4) for reproducibility
+# 2. Controlled tokenization - same token IDs to both backends
+# 3. Per-position statistics (prefill + each decode step)
+# 4. Configurable Transformers kernel selection
+# 5. Full parameter space: prompts, prompt_length, decode_length, batch_size, compile, kernels
+
+from dataclasses import dataclass, field
+from itertools import islice
+
+
+@dataclass
+class TokenComparison:
+    """Comparison data for a single token position."""
+    prompt_idx: int
+    position: int  # 0 = prefill (last token), 1+ = decode steps
+    vllm_token_id: int
+    tf_token_id: int
+    token_match: bool
+    avg_logprob_diff: float
+    max_logprob_diff: float
+    top_k_diffs: list[float] = field(default_factory=list)
+
+
+def load_and_tokenize_prompts(
+    num_prompts: int,
+    prompt_length: int,
+    tokenizer,
+    seed: int = 42,
+) -> list[list[int]]:
+    """Load prompts from C4 dataset and tokenize to exact length.
+
+    Streams through shuffled dataset until we find exactly num_prompts
+    that have at least prompt_length tokens.
+
+    Args:
+        num_prompts: Number of prompts to collect
+        prompt_length: Exact number of tokens per prompt
+        tokenizer: Tokenizer to use
+        seed: Random seed for shuffling
+
+    Returns:
+        List of token ID lists, all exactly prompt_length long
+    """
+    from datasets import load_dataset
+
+    print(f"Loading C4 dataset (streaming, seed={seed})...")
+    dataset = load_dataset('allenai/c4', 'en', split='train', streaming=True)
+
+    # Shuffle with seed for reproducibility
+    dataset = dataset.shuffle(seed=seed, buffer_size=10000)
+
+    token_ids_list = []
+    samples_checked = 0
+
+    for sample in dataset:
+        samples_checked += 1
+        text = sample['text']
+
+        # Tokenize and check length
+        tokens = tokenizer.encode(text, add_special_tokens=False)
+        if len(tokens) >= prompt_length:
+            token_ids_list.append(tokens[:prompt_length])
+
+            if len(token_ids_list) >= num_prompts:
+                break
+
+        # Progress every 100 samples
+        if samples_checked % 100 == 0:
+            print(f"  Checked {samples_checked} samples, found {len(token_ids_list)}/{num_prompts} valid prompts", end="\r")
+
+    print(f"  Checked {samples_checked} samples, found {len(token_ids_list)}/{num_prompts} valid prompts")
+
+    if len(token_ids_list) < num_prompts:
+        print(f"  Warning: Only found {len(token_ids_list)} prompts with >= {prompt_length} tokens")
+
+    return token_ids_list
+
+
+def set_transformers_kernels(model_path: str, kernel_config: str) -> None:
+    """Set kernel configuration in Transformers modeling file.
+
+    Args:
+        model_path: Path to model (to find modeling file)
+        kernel_config: 'upstream' or 'vllm'
+    """
+    import importlib
+    import sys
+
+    # The Transformers model uses the local modeling_apriel2.py in the checkpoint
+    # We need to modify its flags before loading
+    modeling_path = Path(model_path) / "modeling_apriel2.py"
+    if not modeling_path.exists():
+        print(f"  Warning: No modeling_apriel2.py found at {model_path}")
+        return
+
+    # Read the file
+    content = modeling_path.read_text()
+
+    # Set the flags based on kernel_config
+    if kernel_config == "upstream":
+        new_content = content.replace("USE_VLLM_CONV = True", "USE_VLLM_CONV = False")
+        new_content = new_content.replace("USE_VLLM_GDN_OPS = True", "USE_VLLM_GDN_OPS = False")
+        new_content = new_content.replace("USE_VLLM_GATED_NORM = True", "USE_VLLM_GATED_NORM = False")
+    elif kernel_config == "vllm":
+        new_content = content.replace("USE_VLLM_CONV = False", "USE_VLLM_CONV = True")
+        new_content = new_content.replace("USE_VLLM_GDN_OPS = False", "USE_VLLM_GDN_OPS = True")
+        new_content = new_content.replace("USE_VLLM_GATED_NORM = False", "USE_VLLM_GATED_NORM = True")
+    else:
+        raise ValueError(f"Unknown kernel_config: {kernel_config}")
+
+    if new_content != content:
+        modeling_path.write_text(new_content)
+        print(f"  Set Transformers kernels to: {kernel_config}")
+
+        # Clear any cached imports
+        modules_to_remove = [k for k in sys.modules if 'apriel2' in k.lower()]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+
+def run_vllm_inference(
+    model_path: str,
+    token_ids_list: list[list[int]],
+    decode_length: int,
+    dtype: str,
+    no_compile: bool,
+    revision: str | None,
+) -> tuple[list[list[int]], list[list[dict]]]:
+    """Run vLLM inference and return generated tokens and logprobs.
+
+    Returns:
+        - generated_tokens: list of list of token IDs (one list per prompt)
+        - logprobs_per_position: list of list of logprob dicts (one list per prompt)
+    """
+    from vllm import TokensPrompt
+
+    compile_label = "no-compile" if no_compile else "compiled"
+    print(f"\nLoading vLLM model ({compile_label})...")
+    compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
+
+    llm = LLM(
+        model=model_path,
+        revision=revision,
+        trust_remote_code=True,
+        gpu_memory_utilization=0.4,
+        max_model_len=2048,
+        dtype=dtype,
+        compilation_config=compilation_config,
+    )
+
+    # Create TokensPrompt for each prompt
+    vllm_prompts = [TokensPrompt(prompt_token_ids=ids) for ids in token_ids_list]
+
+    sampling_params = SamplingParams(
+        max_tokens=decode_length,
+        temperature=0,
+        logprobs=20,
+    )
+
+    print(f"Running vLLM inference on {len(vllm_prompts)} prompts (decode_length={decode_length})...")
+    outputs = llm.generate(vllm_prompts, sampling_params)
+
+    # Extract results
+    generated_tokens = []
+    logprobs_per_position = []
+
+    for output in outputs:
+        tokens = list(output.outputs[0].token_ids) if output.outputs[0].token_ids else []
+        generated_tokens.append(tokens)
+
+        # Logprobs for each position
+        lps = []
+        if output.outputs[0].logprobs:
+            for pos_lps in output.outputs[0].logprobs:
+                lps.append(pos_lps if pos_lps else {})
+        logprobs_per_position.append(lps)
+
+    del llm
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return generated_tokens, logprobs_per_position
+
+
+def run_transformers_inference(
+    model_path: str,
+    token_ids_list: list[list[int]],
+    decode_length: int,
+    dtype: str,
+    revision: str | None,
+) -> tuple[list[list[int]], list[list[torch.Tensor]]]:
+    """Run Transformers inference and return generated tokens and logprobs.
+
+    Returns:
+        - generated_tokens: list of list of token IDs (one list per prompt)
+        - logprobs_per_position: list of list of logprob tensors (one list per prompt)
+    """
+    from transformers import AutoModelForCausalLM
+
+    torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+    attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
+
+    print(f"\nLoading Transformers model ({attn_impl})...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        revision=revision,
+        torch_dtype=torch_dtype,
+        device_map="cuda",
+        trust_remote_code=True,
+        attn_implementation=attn_impl,
+    )
+    model.eval()
+
+    generated_tokens = []
+    logprobs_per_position = []
+
+    print(f"Running Transformers inference on {len(token_ids_list)} prompts...")
+
+    for i, token_ids in enumerate(token_ids_list):
+        input_ids = torch.tensor([token_ids], device="cuda")
+        prompt_tokens = []
+        prompt_logprobs = []
+
+        with torch.no_grad():
+            # Generate tokens one at a time to get logprobs at each step
+            for step in range(decode_length):
+                outputs = model(input_ids)
+                logits = outputs.logits[:, -1, :]  # Last position
+                logprobs = torch.log_softmax(logits.float(), dim=-1).cpu()
+
+                next_token = logits.argmax(dim=-1).item()
+                prompt_tokens.append(next_token)
+                prompt_logprobs.append(logprobs[0])
+
+                # Append to input for next step
+                input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device="cuda")], dim=1)
+
+        generated_tokens.append(prompt_tokens)
+        logprobs_per_position.append(prompt_logprobs)
+
+        if (i + 1) % 10 == 0:
+            print(f"  Processed {i + 1}/{len(token_ids_list)} prompts", end="\r")
+
+    print()
+
+    del model
+    torch.cuda.empty_cache()
+
+    return generated_tokens, logprobs_per_position
+
+
+def compute_comparisons(
+    vllm_tokens: list[list[int]],
+    vllm_logprobs: list[list[dict]],
+    tf_tokens: list[list[int]],
+    tf_logprobs: list[list[torch.Tensor]],
+) -> list[TokenComparison]:
+    """Compute per-position comparisons between vLLM and Transformers."""
+    comparisons = []
+
+    for prompt_idx, (vt, vl, tt, tl) in enumerate(zip(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)):
+        # Compare each position
+        for pos in range(min(len(vt), len(tt), len(vl), len(tl))):
+            vllm_token = vt[pos]
+            tf_token = tt[pos]
+            vllm_lps = vl[pos]
+            tf_lps = tl[pos]
+
+            # Compute logprob differences for top-K tokens
+            diffs = []
+            if vllm_lps:
+                for tid, lp_info in list(vllm_lps.items())[:20]:
+                    vllm_lp = lp_info.logprob
+                    tf_lp = tf_lps[tid].item()
+                    diffs.append(abs(vllm_lp - tf_lp))
+
+            avg_diff = sum(diffs) / len(diffs) if diffs else 0.0
+            max_diff = max(diffs) if diffs else 0.0
+
+            comparisons.append(TokenComparison(
+                prompt_idx=prompt_idx,
+                position=pos,
+                vllm_token_id=vllm_token,
+                tf_token_id=tf_token,
+                token_match=(vllm_token == tf_token),
+                avg_logprob_diff=avg_diff,
+                max_logprob_diff=max_diff,
+                top_k_diffs=diffs,
+            ))
+
+    return comparisons
+
+
+def print_stats_report(comparisons: list[TokenComparison], title: str = "Statistics"):
+    """Print comprehensive statistics from comparisons."""
+    print(f"\n{'='*70}")
+    print(f" {title}")
+    print(f"{'='*70}")
+
+    if not comparisons:
+        print("No comparisons to report.")
+        return {}
+
+    # Group by position
+    by_position: dict[int, list[TokenComparison]] = {}
+    for c in comparisons:
+        by_position.setdefault(c.position, []).append(c)
+
+    # Overall stats
+    all_avg_diffs = np.array([c.avg_logprob_diff for c in comparisons])
+    all_max_diffs = np.array([c.max_logprob_diff for c in comparisons])
+    all_matches = np.array([c.token_match for c in comparisons])
+
+    n_total = len(comparisons)
+    n_prompts = len(set(c.prompt_idx for c in comparisons))
+    n_positions = len(by_position)
+
+    print(f"\nTotal comparisons: {n_total} ({n_prompts} prompts x {n_positions} positions)")
+    print(f"Token match rate: {all_matches.sum()}/{n_total} ({100*all_matches.mean():.1f}%)")
+
+    # Per-position stats
+    print(f"\n--- Per-Position Statistics ---")
+    print(f"{'Pos':>4} {'N':>6} {'Match%':>8} {'AvgDiff':>10} {'p50':>8} {'p95':>8} {'Max':>8}")
+    print("-" * 60)
+
+    position_stats = {}
+    for pos in sorted(by_position.keys()):
+        pos_comparisons = by_position[pos]
+        pos_diffs = np.array([c.avg_logprob_diff for c in pos_comparisons])
+        pos_matches = np.array([c.token_match for c in pos_comparisons])
+
+        stats = {
+            "n": len(pos_comparisons),
+            "match_rate": pos_matches.mean(),
+            "avg_diff_mean": pos_diffs.mean(),
+            "avg_diff_p50": np.percentile(pos_diffs, 50),
+            "avg_diff_p95": np.percentile(pos_diffs, 95),
+            "avg_diff_max": pos_diffs.max(),
+        }
+        position_stats[pos] = stats
+
+        pos_label = "prefill" if pos == 0 else f"decode{pos}"
+        print(f"{pos_label:>4} {stats['n']:>6} {100*stats['match_rate']:>7.1f}% "
+              f"{stats['avg_diff_mean']:>10.4f} {stats['avg_diff_p50']:>8.4f} "
+              f"{stats['avg_diff_p95']:>8.4f} {stats['avg_diff_max']:>8.4f}")
+
+    # Overall distribution
+    print(f"\n--- Overall Avg Logprob Diff Distribution ---")
+    print(f"  Mean:   {all_avg_diffs.mean():.6f}")
+    print(f"  Std:    {all_avg_diffs.std():.6f}")
+    print(f"  p10:    {np.percentile(all_avg_diffs, 10):.6f}")
+    print(f"  p50:    {np.percentile(all_avg_diffs, 50):.6f}")
+    print(f"  p90:    {np.percentile(all_avg_diffs, 90):.6f}")
+    print(f"  p95:    {np.percentile(all_avg_diffs, 95):.6f}")
+    print(f"  p99:    {np.percentile(all_avg_diffs, 99):.6f}")
+    print(f"  Max:    {all_avg_diffs.max():.6f}")
+
+    # Outliers
+    outlier_threshold = 1.0
+    outliers = [c for c in comparisons if c.avg_logprob_diff > outlier_threshold]
+    if outliers:
+        print(f"\n--- Outliers (avg diff > {outlier_threshold}) ---")
+        print(f"  Count: {len(outliers)} ({100*len(outliers)/n_total:.1f}%)")
+        # Show by position
+        outlier_positions = {}
+        for o in outliers:
+            outlier_positions.setdefault(o.position, []).append(o)
+        for pos, pos_outliers in sorted(outlier_positions.items()):
+            pos_label = "prefill" if pos == 0 else f"decode{pos}"
+            print(f"  Position {pos_label}: {len(pos_outliers)} outliers")
+
+    return {
+        "n_total": n_total,
+        "n_prompts": n_prompts,
+        "n_positions": n_positions,
+        "match_rate": all_matches.mean(),
+        "avg_diff_mean": all_avg_diffs.mean(),
+        "avg_diff_p50": np.percentile(all_avg_diffs, 50),
+        "avg_diff_p95": np.percentile(all_avg_diffs, 95),
+        "avg_diff_max": all_avg_diffs.max(),
+        "n_outliers": len(outliers),
+        "position_stats": position_stats,
+    }
+
+
+def cmd_stats(args):
+    """Run statistical comparison with many prompts."""
+    from transformers import AutoTokenizer
+
+    setup_transformers()
+
+    for model_path in args.model_paths:
+        print(f"\n{'#'*70}")
+        print(f"# Statistical Comparison: {Path(model_path).name}")
+        print(f"# Prompts: {args.num_prompts}, prompt_length: {args.prompt_length}, decode_length: {args.decode_length}")
+        print(f"# Mode: {'no-compile' if args.no_compile else 'compiled'}, TF kernels: {args.tf_kernels}")
+        print(f"{'#'*70}")
+
+        revision = getattr(args, 'revision', None)
+
+        # Set Transformers kernel configuration
+        set_transformers_kernels(model_path, args.tf_kernels)
+
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path, revision=revision, trust_remote_code=True)
+
+        # Load and tokenize prompts from dataset
+        print(f"\nLoading {args.num_prompts} prompts from C4 (exactly {args.prompt_length} tokens each)...")
+        token_ids_list = load_and_tokenize_prompts(
+            args.num_prompts,
+            args.prompt_length,
+            tokenizer,
+            seed=args.seed,
+        )
+        print(f"  Prepared {len(token_ids_list)} token sequences")
+
+        # Run vLLM inference
+        vllm_tokens, vllm_logprobs = run_vllm_inference(
+            model_path, token_ids_list, args.decode_length,
+            args.dtype, args.no_compile, revision
+        )
+
+        # Run Transformers inference
+        tf_tokens, tf_logprobs = run_transformers_inference(
+            model_path, token_ids_list, args.decode_length,
+            args.dtype, revision
+        )
+
+        # Compute comparisons
+        comparisons = compute_comparisons(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)
+
+        # Print statistics
+        mode_label = "no-compile" if args.no_compile else "compiled"
+        stats = print_stats_report(
+            comparisons,
+            f"Results ({mode_label}, TF={args.tf_kernels})"
+        )
+
+        print(f"\n{'='*70}")
+        print(f" SUMMARY: {Path(model_path).name}")
+        print(f"{'='*70}")
+        print(f"  Mode: {mode_label}")
+        print(f"  TF kernels: {args.tf_kernels}")
+        print(f"  Token match rate: {100*stats['match_rate']:.1f}%")
+        print(f"  Avg diff (mean): {stats['avg_diff_mean']:.4f}")
+        print(f"  Avg diff (p95):  {stats['avg_diff_p95']:.4f}")
+        print(f"  Avg diff (max):  {stats['avg_diff_max']:.4f}")
+        if stats['n_outliers'] > 0:
+            print(f"  WARNING: {stats['n_outliers']} outliers detected (avg diff > 1.0)")
+        print()
+
+
 def cmd_logits(args):
     """Run logits comparison test."""
     revision = getattr(args, 'revision', None)
@@ -660,9 +1122,23 @@ def main():
     p_compare.add_argument("--decode-lengths", default="1,5,10", help="Comma-separated decode lengths")
     p_compare.add_argument("--batch-sizes", default="1,2,4", help="Comma-separated batch sizes")
     p_compare.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
-    p_compare.add_argument("--no-compile", action="store_true", default=True, help="Disable torch.compile (default: True)")
+    p_compare.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
     p_compare.add_argument("--revision", default=None, help="Model revision")
     p_compare.set_defaults(func=cmd_compare)
+
+    # Statistical comparison
+    p_stats = subparsers.add_parser("stats", help="Statistical comparison with many prompts (per-position analysis)")
+    p_stats.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
+    p_stats.add_argument("--num-prompts", type=int, default=128, help="Number of prompts to test")
+    p_stats.add_argument("--prompt-length", type=int, default=256, help="Number of tokens to prefill")
+    p_stats.add_argument("--decode-length", type=int, default=10, help="Number of tokens to decode")
+    p_stats.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
+    p_stats.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
+    p_stats.add_argument("--tf-kernels", choices=["upstream", "vllm"], default="upstream",
+                        help="Transformers kernel config: upstream FLA or vLLM forks")
+    p_stats.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    p_stats.add_argument("--revision", default=None, help="Model revision")
+    p_stats.set_defaults(func=cmd_stats)
 
     # All tests
     p_all = subparsers.add_parser("all", help="Run all tests")
