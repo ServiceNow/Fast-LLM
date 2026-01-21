@@ -32,7 +32,7 @@ class LMHeadTestConfig:
     loss_masking: bool = False
     prediction_heads: int = 1
     tied_embedding_weight: bool = False
-    cross_entropy_splits: int = 1
+    num_splits: int = 1
 
     @property
     def actual_label_loss(self):
@@ -46,7 +46,7 @@ class LMHeadTestConfig:
         head_config = {
             "normalization": {"type": "rms_norm"},
             "logits_scale_factor": self.logits_scale_factor,
-            "cross_entropy_splits": self.cross_entropy_splits,
+            "cross_entropy_splits": self.num_splits,
         }
         losses = {}
         if self.label_loss is not False:
@@ -200,28 +200,36 @@ class LMHeadTestConfig:
         return total_loss.detach(), input_.grad, logit_weight.grad, normalization_weight.grad, losses
 
 
-_lm_head_test_configs = (
-    # TODO: Test DPO loss.
-    # TODO: Add more configs
-    # TODO: Add distributed test
-    LMHeadTestConfig("default"),
-    LMHeadTestConfig("bfloat16", compute_dtype=DataType.bfloat16),
-    LMHeadTestConfig("full_precision_residual", full_precision_residual=True),
-    LMHeadTestConfig("sequence_first", sequence_first=True),
-    LMHeadTestConfig("logit_scaling", logits_scale_factor=5.0),
-    LMHeadTestConfig("tied_embedding_weight", tied_embedding_weight=True),
-    LMHeadTestConfig("multi_token_prediction", prediction_heads=2),
-    LMHeadTestConfig("cross_entropy_splits", cross_entropy_splits=2, sequence_first=True),
-    LMHeadTestConfig("loss_masking", loss_masking=True),
-    LMHeadTestConfig("label_loss", label_loss=True),
-    LMHeadTestConfig("distillation_loss", distillation_loss=True),
-    LMHeadTestConfig("distillation_loss_masked", distillation_loss=True, loss_masking=True),
-    LMHeadTestConfig("z_loss", z_loss=True),
-    LMHeadTestConfig("z_loss_masked", z_loss=True, loss_masking=True),
-    LMHeadTestConfig("label_and_distillation_loss", label_loss=True, distillation_loss=True),
-    LMHeadTestConfig("label_and_z_loss_weighted", label_loss=True, z_loss=0.5),
-    LMHeadTestConfig("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0),
-)
+_lm_head_test_configs = []
+
+
+def _add_configs(base_name: str, **kwargs):
+    # Loss masking and splits are important and error-prone, so we test them for all scenarios.
+    for loss_masking in (False, True):
+        for num_splits in (1, 2):
+            _lm_head_test_configs.append(
+                LMHeadTestConfig(
+                    f"{base_name}{"_masked" if loss_masking else ""}{"" if num_splits == 1 else "_split"}",
+                    loss_masking=loss_masking,
+                    num_splits=num_splits,
+                    **kwargs,
+                )
+            )
+
+
+_add_configs("default")
+_add_configs("bfloat16", compute_dtype=DataType.bfloat16)
+_add_configs("full_precision_residual", full_precision_residual=True)
+_add_configs("sequence_first", sequence_first=True)
+_add_configs("logit_scaling", logits_scale_factor=5.0)
+_add_configs("tied_embedding_weight", tied_embedding_weight=True)
+_add_configs("multi_token_prediction", prediction_heads=2)
+_add_configs("label_loss", label_loss=True)
+_add_configs("distillation_loss", distillation_loss=True)
+_add_configs("z_loss", z_loss=True)
+_add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
+_add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
+_add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
 
 
 @pytest.mark.slow

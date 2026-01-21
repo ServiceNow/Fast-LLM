@@ -9,9 +9,9 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.functional.autograd import AuxiliaryLoss
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta

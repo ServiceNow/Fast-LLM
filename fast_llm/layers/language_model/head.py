@@ -1,4 +1,5 @@
 import abc
+import functools
 import logging
 import typing
 
@@ -6,17 +7,16 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import gather_op, split_op
+from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
+from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LM_HEAD_LOSS_NAME,
@@ -95,6 +95,19 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
+        self._losses = [
+            loss_config.get_layer(
+                distributed_config,
+                self._get_full_loss_name(name),
+                self._prediction_distance,
+                self._prediction_heads,
+                self._vocab_parallel,
+                self._config.cross_entropy_splits,
+                self._config.logits_scale_factor,
+                self._loss_coefficient,
+            )
+            for name, loss_config in self._config.losses.items()
+        ]
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (loss)
@@ -163,11 +176,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         self,
         input_: torch.Tensor,
         kwargs: dict,
-        losses: dict | None = None,
+        all_losses_dict: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
 
         if not self.training:
-            logits, _ = self._logits_loss_forward_backward_partial(input_, None, kwargs, return_logits=True)
+            logits, _ = self._logits_loss_forward_backward_partial(input_, kwargs, return_logits=True)
             # TODO: Make a proper way of returning the model output.
             logits = logits.detach()
             if kwargs.get("global_logits"):
@@ -183,15 +196,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             return None, None
 
         input_ = input_.flatten(0, -2)
-        loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-        sequence_dim = 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-        if loss_mask is not None:
-            if self._sequence_parallel_logits:
-                loss_mask = split_op(loss_mask, self._parallel_dim.group, sequence_dim)
-            loss_mask = loss_mask.flatten()
 
         if self._config.cross_entropy_splits == 1:
-            losses_, input_grad = self._logits_loss_forward_backward_partial(input_, loss_mask, kwargs)
+            loss_dict, input_grad = self._logits_loss_forward_backward_partial(input_, kwargs)
         else:
             input_grad = torch.empty_like(input_)
             tensors_split = [
@@ -200,48 +207,49 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     if tensor is None
                     else tensor.chunk(self._config.cross_entropy_splits)
                 )
-                for tensor in [input_, loss_mask, input_grad]
+                for tensor in [input_, input_grad]
             ]
-            for split_index, (partial_input_, loss_mask_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
-                partial_losses_, grad_ = self._logits_loss_forward_backward_partial(
+            for split_index, (partial_input_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
+                partial_loss_dict, grad_ = self._logits_loss_forward_backward_partial(
                     partial_input_,
-                    loss_mask_,
                     kwargs,
                     split_index=split_index,
                 )
                 # TODO: Avoid copy with explicit out argument.
                 input_grad_.copy_(grad_)
                 if split_index == 0:
-                    losses_ = partial_losses_
+                    loss_dict = partial_loss_dict
                 else:
-                    for name in self._config.losses:
-                        losses_[name] += partial_losses_[name]
+                    Assert.eq(partial_loss_dict.keys(), loss_dict.keys())
+                    for name in loss_dict:
+                        loss_dict[name] += partial_loss_dict[name]
 
-        loss: torch.Tensor = sum(
-            (self.config.losses[name].weight * self._loss_coefficient / self._config.cross_entropy_splits) * loss_
-            for name, loss_ in losses_.items()
+        total_loss = sum(
+            (loss_.weight / self._config.cross_entropy_splits) * loss_dict[loss_.name]
+            for loss_ in self._losses
+            if loss_.weight != 0.0 and loss_.name in loss_dict
         )
+
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
+            all_reduce(total_loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
 
-        if losses is not None:
-            losses[self.get_full_loss_name(LM_HEAD_LOSS_NAME)].append(loss)
-            if len(self._config.losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._config.losses.values()):
-                for name, loss_ in losses_.items():
+        if all_losses_dict is not None:
+            all_losses_dict[self._total_loss_name].append(total_loss)
+            if len(self._losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._losses):
+                for name, loss_value in loss_dict.items():
                     if self._config.cross_entropy_splits != 1:
-                        loss_ /= self._config.cross_entropy_splits
+                        loss_value /= self._config.cross_entropy_splits
                     if self._sequence_parallel_logits:
                         # TODO: Async
-                        all_reduce(loss_, op=ReduceOp.AVG, group=self._parallel_dim.group)
-                    losses[name].append(loss_)
+                        all_reduce(loss_value, op=ReduceOp.AVG, group=self._parallel_dim.group)
+                    all_losses_dict[name].append(loss_value)
 
-        return loss, input_grad
+        return total_loss, input_grad
 
     def _logits_loss_forward_backward_partial(
         self,
         input_: torch.Tensor,
-        loss_mask: torch.Tensor | None,
         kwargs: dict,
         split_index: int = 0,
         return_logits: bool = False,
@@ -270,33 +278,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             return logits, None
 
         losses, grad = {}, None
-        for loss_name, loss_config in self._config.losses.items():
+        for loss in self._losses:
             # losses are returned unscaled but the grads are already scaled
-            # TODO: ====== grad_output can't be None?
-            grad_output = kwargs.get(LanguageModelKwargs.grad_output)
-            if grad_output is not None:
-                grad_output = (
-                    grad_output
-                    * self._loss_coefficient
-                    * loss_config.weight
-                    / (self._parallel_dim.size if self._sequence_parallel_logits else 1)
-                    / self._config.cross_entropy_splits
-                )
-            loss, grad_ = loss_config.get_loss(
+            loss_value, grad_ = loss.forward_backward(
                 logits,
-                loss_mask,
-                grad_output=None if grad_output == 0.0 else grad_output,
-                group=self._parallel_dim.group,
-                logits_scale_factor=self._config.logits_scale_factor,
-                kwargs=kwargs,
-                prediction_distance=self._prediction_distance,
-                prediction_heads=self._prediction_heads,
-                split_index=split_index,
-                num_splits=self._config.cross_entropy_splits,
-                sequence_parallel_logits=self._sequence_parallel_logits,
-                vocab_parallel=self._vocab_parallel,
+                kwargs,
+                split_index,
             )
-            losses[loss_name] = loss.detach()
+            losses[loss.name] = loss_value.detach()
             if grad_ is not None:
                 # TODO: Accumulate grads in-place to reduce memory and compute overhead.
                 grad = grad_ if grad is None else grad + grad_
@@ -305,22 +294,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return [
-            LossDef(name=(name := self.get_full_loss_name(LM_HEAD_LOSS_NAME)), formatted_name=name, count=count),
+            LossDef(name=self._total_loss_name, formatted_name=self._total_loss_name, count=count),
             *(
                 LossDef(
-                    name=(name_ := self.get_full_loss_name(name)),
-                    formatted_name=name_,
+                    name=loss.name,
+                    formatted_name=loss.name,
                     count=count,
                     dtype=DataType.float32,
                 )
-                for name, loss_config in self._config.losses.items()
+                for loss in self._losses
             ),
         ]
 
-    def get_full_loss_name(self, name) -> str:
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
+    def _get_full_loss_name(self, name) -> str:
+        return name if self._prediction_distance == 0 else f"{name}_{self._prediction_distance}"
+
+    @functools.cached_property
+    def _total_loss_name(self) -> str:
+        return self._get_full_loss_name(LM_HEAD_LOSS_NAME)
 
     @property
     def heads(self):
