@@ -216,7 +216,7 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
     # --- vLLM ---
     compile_label = "no-compile" if no_compile else "compiled"
     print(f"\n--- vLLM ({dtype}, {compile_label}) ---")
-    # compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
+    compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
     llm = LLM(
         model=model_path,
         revision=revision,
@@ -224,7 +224,7 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
         gpu_memory_utilization=0.4,
         max_model_len=2048,
         dtype=dtype,
-        # compilation_config=compilation_config,
+        compilation_config=compilation_config,
     )
 
     sampling_params = SamplingParams(
@@ -409,7 +409,7 @@ def compare_comprehensive(
     print(f"Loading vLLM model: {model_path}")
     print(f"{'='*70}")
 
-    # compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
+    compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
     llm = LLM(
         model=model_path,
         revision=revision,
@@ -417,7 +417,7 @@ def compare_comprehensive(
         gpu_memory_utilization=0.4,
         max_model_len=2048,
         dtype=dtype,
-        # compilation_config=compilation_config,
+        compilation_config=compilation_config,
     )
 
     # Load Transformers once

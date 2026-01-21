@@ -25,9 +25,9 @@ from .configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 # =============================================================================
 # Kernel implementation flags (for debugging vLLM vs FLA/mamba_ssm differences)
 # =============================================================================
-USE_VLLM_CONV = True
-USE_VLLM_GDN_OPS = True
-USE_VLLM_GATED_NORM = True
+USE_VLLM_CONV = False
+USE_VLLM_GDN_OPS = False
+USE_VLLM_GATED_NORM = False
 USE_VLLM_MAMBA_OPS = False  # Not yet implemented in vLLM wrapper
 
 # Causal conv1d
