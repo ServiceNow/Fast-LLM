@@ -14,7 +14,6 @@ if typing.TYPE_CHECKING:
         LanguageModelDistillationLoss,
         LanguageModelLabelEntropyLoss,
     )
-    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
     from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
     from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
@@ -167,18 +166,3 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
         return LanguageModelZLoss
-
-
-@config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
-class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
-
-    _abstract: typing.ClassVar[bool] = False
-
-    epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
-    epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
-
-    @property
-    def loss_class(self) -> "type[LanguageModelGRPOLoss]":
-        from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
-
-        return LanguageModelGRPOLoss
