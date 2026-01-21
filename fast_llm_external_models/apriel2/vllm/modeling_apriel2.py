@@ -1405,12 +1405,13 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         # Expand K heads to V heads for grouped query attention
         # (matches Fast-LLM and transformers reference implementations)
-        if self.value_heads_per_key > 1:
-            self._debug_print(f"Expanding K heads to V heads (value_heads_per_key={self.value_heads_per_key})")
-            query = query.repeat_interleave(self.value_heads_per_key, dim=2)
-            key = key.repeat_interleave(self.value_heads_per_key, dim=2)
-            self._debug_tensor("query (after expand)", query)
-            self._debug_tensor("key (after expand)", key)
+        # Always call repeat_interleave (no-op when value_heads_per_key == 1) to avoid
+        # conditional branches that confuse torch.compile
+        self._debug_print(f"Expanding K heads to V heads (value_heads_per_key={self.value_heads_per_key})")
+        query = query.repeat_interleave(self.value_heads_per_key, dim=2)
+        key = key.repeat_interleave(self.value_heads_per_key, dim=2)
+        self._debug_tensor("query (after expand)", query)
+        self._debug_tensor("key (after expand)", key)
 
         self._debug_tensor("A_log", self.A_log)
         self._debug_tensor("dt_bias", self.dt_bias)
