@@ -2008,9 +2008,10 @@ class Apriel2AttentionDecoderLayer(nn.Module):
 
     def forward(
         self,
-        positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
+        positions: torch.Tensor | None = None,
+        **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if residual is None:
             residual = hidden_states
@@ -2403,18 +2404,11 @@ class Apriel2Model(nn.Module):
             residual = intermediate_tensors["residual"]
 
         for layer in islice(self.layers, self.start_layer, self.end_layer):
-            # Attention layers need positions for rotary embeddings
-            if isinstance(layer, Apriel2AttentionDecoderLayer):
-                hidden_states, residual = layer(
-                    positions=positions,
-                    hidden_states=hidden_states,
-                    residual=residual,
-                )
-            else:
-                hidden_states, residual = layer(
-                    hidden_states=hidden_states,
-                    residual=residual,
-                )
+            hidden_states, residual = layer(
+                hidden_states=hidden_states,
+                residual=residual,
+                positions=positions,
+            )
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
