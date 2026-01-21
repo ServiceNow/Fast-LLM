@@ -110,6 +110,20 @@ from vllm.logger import init_logger
 
 apriel2_logger = init_logger(__name__)
 
+# =============================================================================
+# Debug Flags
+# =============================================================================
+# Top-level debug flags that control all debug output in the module.
+# Set these to True to enable debugging for specific components.
+
+DEBUG_GDN_LAYER = False      # Debug GDN layer forward pass (tensors, shapes)
+DEBUG_GDN_STATE = False      # Debug GDN recurrent state during decode
+DEBUG_GDN_OUTPUT = False     # Debug GDN output hidden states during decode
+DEBUG_KDA_LAYER = False      # Debug KDA layer outputs
+DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
+DEBUG_FINAL_NORM = False     # Debug final norm before LM head
+DEBUG_LM_HEAD = False        # Debug LM head input/output
+
 
 # =============================================================================
 # KV Cache Spec Computation
@@ -1181,14 +1195,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         value = rearrange(value, "l (h d) -> 1 l h d", d=self.head_v_dim)
         return query.contiguous(), key.contiguous(), value.contiguous()
 
-    _debug_enabled = False  # Set to True for small batches in forward()
-    _debug_layer = False  # num_tokens <= 10
-    _debug_state = True  # Debug recurrent state
-    _debug_output = True  # Debug output hidden states during decode
-
     def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
         """Debug recurrent state with statistics."""
-        if not self._debug_state or state is None:
+        if not DEBUG_GDN_STATE or state is None:
             return
         flat = state.flatten()
         first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
@@ -1198,7 +1207,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
               f"first8=[{first8}]")
 
     def _debug_tensor(self, name: str, t: torch.Tensor):
-        if not self._debug_enabled:
+        if not DEBUG_GDN_LAYER:
             return
         if t is None:
             print(f"[GDN {self.prefix}] {name}: None")
@@ -1210,7 +1219,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
               f"first8=[{vals}]")
 
     def _debug_print(self, msg: str):
-        if not self._debug_enabled:
+        if not DEBUG_GDN_LAYER:
             return
         print(f"[GDN {self.prefix}] {msg}")
 
@@ -1222,8 +1231,6 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         """Forward pass with custom op for core attention."""
         num_tokens = hidden_states.size(0)
 
-        # Debug disabled by default - set to True for debugging
-        self._debug_enabled = False  # num_tokens <= 10
         self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
         self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
         self._debug_tensor("hidden_states", hidden_states)
@@ -1274,7 +1281,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         self._debug_tensor("core_attn_out (before norm)", core_attn_out)
         self._debug_tensor("z (before norm)", z)
         # Debug last token before norm (reshaped has tokens * heads rows)
-        if self._debug_layer and num_tokens > 0:
+        if DEBUG_GDN_LAYER and num_tokens > 0:
             num_heads = self.num_v_heads // self.tp_size
             last_token_start = (num_tokens - 1) * num_heads
             last_attn = core_attn_out[last_token_start:last_token_start+1, :8]
@@ -1286,7 +1293,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         core_attn_out = self.norm(core_attn_out, z)
         self._debug_tensor("core_attn_out (after norm)", core_attn_out)
         # Debug last token after norm
-        if self._debug_layer and num_tokens > 0:
+        if DEBUG_GDN_LAYER and num_tokens > 0:
             last_attn_after = core_attn_out[last_token_start:last_token_start+1, :8]
             print(f"[GDN {self.prefix}] core_attn_out after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn_after.flatten().float().tolist())}]")
         core_attn_out = core_attn_out.reshape(z_shape_og)
@@ -1295,12 +1302,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         output[:num_tokens], _ = self.out_proj(core_attn_out)
         self._debug_tensor("output (final)", output[:num_tokens])
         # Show last token specifically
-        if self._debug_layer:
+        if DEBUG_GDN_LAYER:
             last_token = output[num_tokens-1, :8]
             vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
             print(f"[GDN {self.prefix}] output (last token): last_token_first8=[{vals}]")
         # Debug output hidden states during decode (num_tokens == 1)
-        if self._debug_output and num_tokens == 1:
+        if DEBUG_GDN_OUTPUT and num_tokens == 1:
             flat = output[:num_tokens].flatten()
             first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
             print(f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]")
@@ -1418,7 +1425,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             initial_state[~has_initial_state, ...] = 0
             self._debug_tensor("initial_state", initial_state)
             # Debug PREFILL INPUTS before kernel call
-            if self._debug_state:
+            if DEBUG_GDN_STATE:
                 print(f"[vLLM-GDN {self.prefix}] PREFILL INPUTS:")
                 print(f"  hidden_states: shape={self._cached_hidden_states.shape}, first8={self._cached_hidden_states.flatten()[:8].tolist()}")
                 print(f"  mixed_qkv (input): shape={mixed_qkv.shape}, first8={mixed_qkv.flatten()[:8].tolist()}")
@@ -1458,7 +1465,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 actual_state = ssm_state[slot_idx:slot_idx+1]
                 self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
             # Debug decode inputs
-            if self._debug_state:
+            if DEBUG_GDN_STATE:
                 print(f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}")
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
@@ -2135,10 +2142,8 @@ class Apriel2GDNDecoderLayer(nn.Module):
             config.hidden_size, eps=rms_norm_eps
         )
 
-    _debug_layer = False  # Set to True to debug layer outputs
-
     def _debug_tensor(self, name: str, t: torch.Tensor, show_last=False):
-        if not self._debug_layer or t is None:
+        if not DEBUG_DECODER_LAYER or t is None:
             return
         if show_last:
             # Show last token
@@ -2156,9 +2161,6 @@ class Apriel2GDNDecoderLayer(nn.Module):
         residual: torch.Tensor | None,
         **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        num_tokens = hidden_states.size(0)
-        self._debug_layer = False  # num_tokens <= 10  # Disabled
-
         self._debug_tensor("input hidden_states", hidden_states)
         self._debug_tensor("input residual", residual)
 
@@ -2419,9 +2421,7 @@ class Apriel2Model(nn.Module):
             )
 
         # Debug final norm
-        num_tokens = hidden_states.size(0)
-        _debug_final = False  # num_tokens <= 10
-        if _debug_final:
+        if DEBUG_FINAL_NORM:
             # Show LAST token (to match TF)
             last_hs = hidden_states[-1, :8]
             last_res = residual[-1, :8] if residual is not None else None
@@ -2434,7 +2434,7 @@ class Apriel2Model(nn.Module):
 
         hidden_states, _ = self.norm(hidden_states, residual)
 
-        if _debug_final:
+        if DEBUG_FINAL_NORM:
             last_out = hidden_states[-1, :8]
             out_vals = ", ".join(f"{v:.6f}" for v in last_out.float().tolist())
             print(f"[vLLM Final] hidden_states (after norm): shape={hidden_states.shape}, last_token_first8=[{out_vals}]")
@@ -2509,9 +2509,7 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         hidden_states: torch.Tensor,
     ) -> torch.Tensor | None:
         # Debug LM head input
-        num_tokens = hidden_states.size(0)
-        _debug_lm_head = False  # num_tokens <= 10
-        if _debug_lm_head:
+        if DEBUG_LM_HEAD:
             flat = hidden_states.flatten()[:8]
             vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
             print(f"[vLLM LM Head] input hidden_states: shape={hidden_states.shape}, first8=[{vals}]")
@@ -2521,7 +2519,7 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
 
         logits = self.logits_processor(self.lm_head, hidden_states)
 
-        if _debug_lm_head and logits is not None:
+        if DEBUG_LM_HEAD and logits is not None:
             # Get last token logits
             last_logits = logits[-1] if logits.dim() == 2 else logits[0, -1]
             top_vals, top_idx = last_logits.topk(5)
