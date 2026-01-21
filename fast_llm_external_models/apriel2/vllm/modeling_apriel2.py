@@ -7,11 +7,14 @@ GatedDeltaNet, KDA) with flexible block patterns. This implementation is
 optimized for vLLM inference.
 """
 
+import logging
 import math
 from collections.abc import Iterable
 from itertools import islice
 
 import torch
+
+logger = logging.getLogger(__name__)
 import triton
 from einops import rearrange
 from torch import nn
@@ -291,6 +294,93 @@ def get_block_params(
                 dtypes=dtypes,
                 mamba_type="kda_attention",
             )
+
+        elif mixer_type == "stochastic":
+            # For stochastic mixers, compute params for ALL sub-mixers
+            # This creates the "convex hull" of cache requirements so the unified
+            # page size is large enough for any mixer type
+            mixers = mixer_config.get("mixers", {})
+
+            for sub_mixer_name, sub_mixer_config in mixers.items():
+                sub_mixer_type = sub_mixer_config.get("type", "attention")
+                # Use a compound key to track all sub-mixer params
+                sub_block_name = f"{block_name}.{sub_mixer_name}"
+
+                if sub_mixer_type == "attention" or sub_mixer_type == "sliding_window":
+                    cache_dtype = cache_config.cache_dtype
+                    if cache_dtype is None or cache_dtype == "auto":
+                        kv_cache_dtype = model_dtype
+                    elif isinstance(cache_dtype, str):
+                        kv_cache_dtype = getattr(torch, cache_dtype, model_dtype)
+                    else:
+                        kv_cache_dtype = cache_dtype
+
+                    params[sub_block_name] = AttentionBlockParams(
+                        num_kv_heads=sub_mixer_config["head_groups"],
+                        head_size=sub_mixer_config["head_size"],
+                        window_size=sub_mixer_config.get("window_size"),
+                        dtype=kv_cache_dtype,
+                    )
+                elif sub_mixer_type == "gdn":
+                    shapes = MambaStateShapeCalculator.gated_delta_net_state_shape(
+                        tp_world_size=tp_size,
+                        num_k_heads=sub_mixer_config["key_heads"],
+                        num_v_heads=sub_mixer_config["value_heads"],
+                        head_k_dim=sub_mixer_config["key_head_dim"],
+                        head_v_dim=sub_mixer_config["value_head_dim"],
+                        conv_kernel_size=sub_mixer_config["convolution_layer"]["kernel_size"],
+                        num_spec=0,
+                    )
+                    dtypes = MambaStateDtypeCalculator.gated_delta_net_state_dtype(
+                        model_dtype,
+                        cache_config.mamba_cache_dtype,
+                    )
+                    params[sub_block_name] = MambaBlockParams(
+                        shapes=shapes,
+                        dtypes=dtypes,
+                        mamba_type="gdn_attention",
+                    )
+                elif sub_mixer_type == "kda":
+                    shapes = MambaStateShapeCalculator.kda_state_shape(
+                        tp_world_size=tp_size,
+                        num_heads=sub_mixer_config["heads"],
+                        head_dim=sub_mixer_config["head_dim"],
+                        conv_kernel_size=sub_mixer_config["convolution_layer"]["kernel_size"],
+                    )
+                    dtypes = MambaStateDtypeCalculator.kda_state_dtype(
+                        model_dtype,
+                        cache_config.mamba_cache_dtype,
+                    )
+                    params[sub_block_name] = MambaBlockParams(
+                        shapes=shapes,
+                        dtypes=dtypes,
+                        mamba_type="kda_attention",
+                    )
+                elif sub_mixer_type == "mamba":
+                    d_state = sub_mixer_config["state_size"]
+                    d_conv = sub_mixer_config["d_conv"]
+                    d_inner = sub_mixer_config.get("d_inner")
+                    if d_inner is None:
+                        raise ValueError(
+                            f"Block '{block_name}': mamba sub-mixer must specify 'd_inner'"
+                        )
+                    shapes = MambaStateShapeCalculator.mamba1_state_shape(
+                        tp_world_size=tp_size,
+                        intermediate_size=d_inner,
+                        state_size=d_state,
+                        conv_kernel=d_conv,
+                    )
+                    dtypes = MambaStateDtypeCalculator.mamba1_state_dtype(
+                        model_dtype,
+                        cache_config.mamba_cache_dtype,
+                        cache_config.mamba_ssm_cache_dtype,
+                    )
+                    params[sub_block_name] = MambaBlockParams(
+                        shapes=shapes,
+                        dtypes=dtypes,
+                        mamba_type="mamba",
+                    )
+                # Ignore unknown sub-mixer types (they might not need cache)
 
         else:
             raise ValueError(f"Block '{block_name}': unknown mixer type '{mixer_type}'")
@@ -776,6 +866,36 @@ class Apriel2Attention(nn.Module):
                 self.o_proj.weight_loader(self.o_proj.bias, weight)
                 loaded.add("o_proj.bias")
         return loaded
+
+    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        """Return cache spec for attention with unified page size for hybrid models."""
+        config = vllm_config.model_config.hf_config
+        block_size, _ = get_unified_page_size_for_config(config, vllm_config)
+
+        # Get dtype from cache config
+        cache_dtype = vllm_config.cache_config.cache_dtype
+        if cache_dtype is None or cache_dtype == "auto":
+            kv_cache_dtype = vllm_config.model_config.dtype
+        elif isinstance(cache_dtype, str):
+            kv_cache_dtype = getattr(torch, cache_dtype, vllm_config.model_config.dtype)
+        else:
+            kv_cache_dtype = cache_dtype
+
+        if self.window_size is not None:
+            return SlidingWindowSpec(
+                block_size=block_size,
+                num_kv_heads=self.num_kv_heads,
+                head_size=self.head_dim,
+                dtype=kv_cache_dtype,
+                sliding_window=self.window_size,
+            )
+        else:
+            return FullAttentionSpec(
+                block_size=block_size,
+                num_kv_heads=self.num_kv_heads,
+                head_size=self.head_dim,
+                dtype=kv_cache_dtype,
+            )
 
 
 class Apriel2MambaMixer(nn.Module):
@@ -2260,11 +2380,248 @@ class Apriel2KDADecoderLayer(nn.Module):
         return hidden_states, residual
 
 
+class Apriel2StochasticMixer(nn.Module):
+    """Stochastic mixer that contains multiple sub-mixers.
+
+    At inference time, routes inputs to the active mixer (configurable).
+    All sub-mixer weights are loaded and available for runtime switching.
+
+    Each sub-mixer gets a unique virtual layer index for cache registration,
+    similar to Falcon H1's approach. This allows each mixer type to have its
+    own cache allocation without conflicts.
+    """
+
+    # Map mixer type to (mixer_class, needs_model_config, needs_speculative_config)
+    MIXER_REGISTRY: dict[str, tuple[type, bool, bool]] = {
+        "attention": (Apriel2Attention, False, False),
+        "mamba": (Apriel2MambaMixer, True, False),
+        "gdn": (Apriel2GatedDeltaNet, True, True),
+        "kda": (Apriel2KDAMixer, True, False),
+    }
+
+    # Offset multipliers for virtual layer indices (attention stays at real index)
+    MIXER_TYPE_OFFSETS: dict[str, int] = {
+        "attention": 0,
+        "sliding_window": 0,  # SWA is attention-based, same cache type
+        "mamba": 1,
+        "gdn": 2,
+        "kda": 3,
+    }
+
+    def __init__(
+        self,
+        config: Apriel2Config,
+        mixer_config: dict,
+        layer_idx: int,
+        model_config: ModelConfig | None = None,
+        cache_config: CacheConfig | None = None,
+        quant_config: QuantizationConfig | None = None,
+        speculative_config: SpeculativeConfig | None = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.layer_idx = layer_idx
+        self.config = config
+
+        # Get sub-mixer configs
+        mixers_config = mixer_config.get("mixers", {})
+        self.active_mixer_name = mixer_config.get("main_mixer_name", list(mixers_config.keys())[0])
+
+        # Get total number of layers for computing virtual layer indices
+        decoder_config = getattr(config, "decoder", {}) or {}
+        num_layers = decoder_config["num_blocks"]
+
+        # Parse the prefix to extract base path (e.g., "model.layers" from "model.layers.0.mixer")
+        # prefix format: "model.layers.{layer_idx}.mixer"
+        prefix_parts = prefix.rsplit(".", 2)  # ["model.layers", "0", "mixer"]
+        if len(prefix_parts) >= 3:
+            layers_base = prefix_parts[0]  # "model.layers"
+        else:
+            layers_base = "model.layers"
+
+        # Create all sub-mixers with unique virtual layer indices
+        self.mixers = nn.ModuleDict()
+        for name, sub_mixer_config in mixers_config.items():
+            sub_mixer_type = sub_mixer_config.get("type", "attention")
+
+            if sub_mixer_type not in self.MIXER_REGISTRY:
+                raise ValueError(f"Unknown sub-mixer type '{sub_mixer_type}' in stochastic mixer")
+
+            mixer_class, needs_model_config, needs_spec_config = self.MIXER_REGISTRY[sub_mixer_type]
+
+            # Compute virtual layer index for this mixer type (Falcon H1 style)
+            # Each mixer type gets its own "virtual layer" range to avoid cache conflicts
+            type_offset = self.MIXER_TYPE_OFFSETS.get(sub_mixer_type, 0)
+            virtual_layer_idx = layer_idx + type_offset * num_layers
+
+            # Build prefix with virtual layer index for cache registration
+            # This only affects static_forward_context registration, not weight loading
+            virtual_prefix = f"{layers_base}.{virtual_layer_idx}.stochastic_{name}"
+
+            # Build kwargs based on what each mixer type needs
+            kwargs = {
+                "config": config,
+                "mixer_config": sub_mixer_config,
+                "layer_idx": layer_idx,  # Keep real layer_idx for any internal use
+                "cache_config": cache_config,
+                "quant_config": quant_config,
+                "prefix": virtual_prefix,
+            }
+            if needs_model_config:
+                kwargs["model_config"] = model_config
+            if needs_spec_config:
+                kwargs["speculative_config"] = speculative_config
+
+            self.mixers[name] = mixer_class(**kwargs)
+            logger.debug(
+                f"Created sub-mixer '{name}' (type={sub_mixer_type}) at virtual layer {virtual_layer_idx} "
+                f"(real layer {layer_idx}, prefix={virtual_prefix})"
+            )
+
+        self._mixer_names = list(self.mixers.keys())
+        logger.info(
+            f"Initialized Apriel2StochasticMixer at layer {layer_idx} with {len(self.mixers)} mixers: "
+            f"{', '.join(self._mixer_names)} (active={self.active_mixer_name})"
+        )
+
+    def set_active_mixer(self, name: str) -> None:
+        """Set the active mixer by name."""
+        if name not in self.mixers:
+            raise ValueError(f"Unknown mixer '{name}'. Available: {self._mixer_names}")
+        self.active_mixer_name = name
+
+    def get_active_mixer(self) -> str:
+        """Get the name of the currently active mixer."""
+        return self.active_mixer_name
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Forward through the active mixer."""
+        mixer = self.mixers[self.active_mixer_name]
+        return mixer(positions=positions, hidden_states=hidden_states, **kwargs)
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        """Load weights for all sub-mixers."""
+        loaded = set()
+        # Group weights by sub-mixer name
+        weights_by_mixer: dict[str, list[tuple[str, torch.Tensor]]] = {name: [] for name in self.mixers}
+
+        for name, weight in weights:
+            # Weight names are like "mixers.attention.q_proj.weight"
+            if name.startswith("mixers."):
+                parts = name.split(".", 2)  # ["mixers", "attention", "q_proj.weight"]
+                if len(parts) >= 3:
+                    mixer_name = parts[1]
+                    param_name = parts[2]
+                    if mixer_name in weights_by_mixer:
+                        weights_by_mixer[mixer_name].append((param_name, weight))
+
+        # Load weights for each sub-mixer
+        for mixer_name, mixer_weights in weights_by_mixer.items():
+            if mixer_weights:
+                sub_loaded = self.mixers[mixer_name].load_weights(mixer_weights)
+                # Prefix the loaded names with the mixer path
+                loaded.update(f"mixers.{mixer_name}.{n}" for n in sub_loaded)
+
+        return loaded
+
+    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        """Return cache spec for the active mixer.
+
+        Delegates to the active sub-mixer's get_kv_cache_spec method.
+        """
+        active_mixer = self.mixers[self.active_mixer_name]
+        return active_mixer.get_kv_cache_spec(vllm_config)
+
+
+class Apriel2StochasticDecoderLayer(nn.Module):
+    """Stochastic decoder layer that can switch between multiple mixer types."""
+
+    def __init__(
+        self,
+        config: Apriel2Config,
+        layer_idx: int,
+        block_config: dict,
+        model_config: ModelConfig | None = None,
+        cache_config: CacheConfig | None = None,
+        quant_config: QuantizationConfig | None = None,
+        speculative_config: SpeculativeConfig | None = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.hidden_size = config.hidden_size
+
+        mixer_config = block_config.get("mixer", {})
+        mlp_config = block_config.get("mlp", {})
+        norm_config = block_config.get("normalization", {})
+
+        self.mixer = Apriel2StochasticMixer(
+            config=config,
+            mixer_config=mixer_config,
+            layer_idx=layer_idx,
+            model_config=model_config,
+            cache_config=cache_config,
+            quant_config=quant_config,
+            speculative_config=speculative_config,
+            prefix=f"{prefix}.mixer",
+        )
+
+        intermediate_size = mlp_config["intermediate_size"]
+        mlp_bias = mlp_config.get("add_linear_biases", False)
+        hidden_act = mlp_config.get("activation", "silu")
+        rms_norm_eps = norm_config["epsilon"]
+
+        self.mlp = Apriel2MLP(
+            hidden_size=config.hidden_size,
+            intermediate_size=intermediate_size,
+            hidden_act=hidden_act,
+            quant_config=quant_config,
+            bias=mlp_bias,
+            prefix=f"{prefix}.mlp",
+        )
+
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, eps=rms_norm_eps
+        )
+
+    def set_active_mixer(self, name: str) -> None:
+        """Set the active mixer for this layer."""
+        self.mixer.set_active_mixer(name)
+
+    def get_active_mixer(self) -> str:
+        """Get the name of the currently active mixer."""
+        return self.mixer.get_active_mixer()
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        residual: torch.Tensor | None,
+        positions: torch.Tensor | None = None,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        hidden_states = self.mixer(positions=positions, hidden_states=hidden_states, **kwargs)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+        return hidden_states, residual
+
+
 ALL_DECODER_LAYER_TYPES = {
     "attention": Apriel2AttentionDecoderLayer,
     "mamba": Apriel2MambaDecoderLayer,
     "gdn": Apriel2GDNDecoderLayer,
     "kda": Apriel2KDADecoderLayer,
+    "stochastic": Apriel2StochasticDecoderLayer,
 }
 
 
@@ -2356,6 +2713,17 @@ class Apriel2Model(nn.Module):
                     prefix=prefix,
                 )
             elif mixer_type == "gdn":
+                return layer_class(
+                    config=config,
+                    layer_idx=layer_idx,
+                    block_config=block_config,
+                    model_config=model_config,
+                    cache_config=cache_config,
+                    quant_config=quant_config,
+                    speculative_config=vllm_config.speculative_config,
+                    prefix=prefix,
+                )
+            elif mixer_type == "stochastic":
                 return layer_class(
                     config=config,
                     layer_idx=layer_idx,
