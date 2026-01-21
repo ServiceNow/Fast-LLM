@@ -1231,32 +1231,32 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         """Forward pass with custom op for core attention."""
         num_tokens = hidden_states.size(0)
 
-        self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
-        self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
-        self._debug_tensor("hidden_states", hidden_states)
+        # self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
+        # self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
+        # self._debug_tensor("hidden_states", hidden_states)
 
         # Part 1: Input Projection
         projected_states_qkvz, _ = self.in_proj_qkvz(hidden_states)
         projected_states_ba, _ = self.in_proj_ba(hidden_states)
-        self._debug_tensor("projected_states_qkvz", projected_states_qkvz)
-        self._debug_tensor("projected_states_ba", projected_states_ba)
+        # self._debug_tensor("projected_states_qkvz", projected_states_qkvz)
+        # self._debug_tensor("projected_states_ba", projected_states_ba)
 
         query, key, value, z, b, a = self.fix_query_key_value_ordering(
             projected_states_qkvz, projected_states_ba
         )
-        self._debug_tensor("query (after fix_ordering)", query)
-        self._debug_tensor("key (after fix_ordering)", key)
-        self._debug_tensor("value (after fix_ordering)", value)
-        self._debug_tensor("z (after fix_ordering)", z)
-        self._debug_tensor("b (after fix_ordering)", b)
-        self._debug_tensor("a (after fix_ordering)", a)
+        # self._debug_tensor("query (after fix_ordering)", query)
+        # self._debug_tensor("key (after fix_ordering)", key)
+        # self._debug_tensor("value (after fix_ordering)", value)
+        # self._debug_tensor("z (after fix_ordering)", z)
+        # self._debug_tensor("b (after fix_ordering)", b)
+        # self._debug_tensor("a (after fix_ordering)", a)
 
         # Flatten heads: [tokens, heads, head_dim] -> [tokens, heads * head_dim]
         query = query.reshape(query.size(0), -1)
         key = key.reshape(key.size(0), -1)
         value = value.reshape(value.size(0), -1)
         mixed_qkv = torch.cat((query, key, value), dim=-1)
-        self._debug_tensor("mixed_qkv (flattened)", mixed_qkv)
+        # self._debug_tensor("mixed_qkv (flattened)", mixed_qkv)
 
         # Part 2: Core Attention (Custom Op)
         core_attn_out = torch.zeros(
@@ -1272,14 +1272,14 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             core_attn_out,
             self.prefix,
         )
-        self._debug_tensor("core_attn_out (after custom op)", core_attn_out)
+        # self._debug_tensor("core_attn_out (after custom op)", core_attn_out)
 
         # Part 3: Output Projection
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
-        self._debug_tensor("core_attn_out (before norm)", core_attn_out)
-        self._debug_tensor("z (before norm)", z)
+        # self._debug_tensor("core_attn_out (before norm)", core_attn_out)
+        # self._debug_tensor("z (before norm)", z)
         # Debug last token before norm (reshaped has tokens * heads rows)
         if DEBUG_GDN_LAYER and num_tokens > 0:
             num_heads = self.num_v_heads // self.tp_size
@@ -1288,19 +1288,19 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             last_z = z[last_token_start:last_token_start+1, :8]
             print(f"[GDN {self.prefix}] core_attn_out before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn.flatten().float().tolist())}]")
             print(f"[GDN {self.prefix}] z before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_z.flatten().float().tolist())}]")
-        self._debug_tensor("norm.weight", self.norm.weight)
-        self._debug_print(f"norm.norm_before_gate={self.norm.norm_before_gate}, norm.eps={self.norm.eps}")
+        # self._debug_tensor("norm.weight", self.norm.weight)
+        # self._debug_print(f"norm.norm_before_gate={self.norm.norm_before_gate}, norm.eps={self.norm.eps}")
         core_attn_out = self.norm(core_attn_out, z)
-        self._debug_tensor("core_attn_out (after norm)", core_attn_out)
+        # self._debug_tensor("core_attn_out (after norm)", core_attn_out)
         # Debug last token after norm
         if DEBUG_GDN_LAYER and num_tokens > 0:
             last_attn_after = core_attn_out[last_token_start:last_token_start+1, :8]
             print(f"[GDN {self.prefix}] core_attn_out after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn_after.flatten().float().tolist())}]")
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = rearrange(core_attn_out, "... h d -> ... (h d)")
-        self._debug_tensor("core_attn_out (before out_proj)", core_attn_out)
+        # self._debug_tensor("core_attn_out (before out_proj)", core_attn_out)
         output[:num_tokens], _ = self.out_proj(core_attn_out)
-        self._debug_tensor("output (final)", output[:num_tokens])
+        # self._debug_tensor("output (final)", output[:num_tokens])
         # Show last token specifically
         if DEBUG_GDN_LAYER:
             last_token = output[num_tokens-1, :8]
@@ -1311,7 +1311,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             flat = output[:num_tokens].flatten()
             first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
             print(f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]")
-        self._debug_print("===== FORWARD END =====")
+        # self._debug_print("===== FORWARD END =====")
 
     def _forward_core(
         self,
@@ -1321,16 +1321,16 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         core_attn_out: torch.Tensor,
     ):
         """Core attention computation (called by custom op)."""
-        self._debug_print("===== _forward_core START =====")
-        self._debug_tensor("mixed_qkv (input to core)", mixed_qkv)
-        self._debug_tensor("b (input to core)", b)
-        self._debug_tensor("a (input to core)", a)
+        # self._debug_print("===== _forward_core START =====")
+        # self._debug_tensor("mixed_qkv (input to core)", mixed_qkv)
+        # self._debug_tensor("b (input to core)", b)
+        # self._debug_tensor("a (input to core)", a)
 
         forward_context = get_forward_context()
         attn_metadata: AttentionMetadata = forward_context.attn_metadata
 
         if attn_metadata is None:
-            self._debug_print("attn_metadata is None, returning early")
+            # self._debug_print("attn_metadata is None, returning early")
             return
 
         assert isinstance(attn_metadata, dict)
@@ -1342,37 +1342,37 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
 
-        self._debug_print(f"num_actual_tokens={num_actual_tokens}, num_prefills={attn_metadata.num_prefills}, num_decodes={attn_metadata.num_decodes}")
-        self._debug_print(f"has_initial_state={has_initial_state}")
-        self._debug_print(f"non_spec_query_start_loc={non_spec_query_start_loc}")
+        # self._debug_print(f"num_actual_tokens={num_actual_tokens}, num_prefills={attn_metadata.num_prefills}, num_decodes={attn_metadata.num_decodes}")
+        # self._debug_print(f"has_initial_state={has_initial_state}")
+        # self._debug_print(f"non_spec_query_start_loc={non_spec_query_start_loc}")
 
         self_kv_cache = self.kv_cache[forward_context.virtual_engine]
         conv_state = self_kv_cache[0].transpose(-1, -2)
         ssm_state = self_kv_cache[1]
 
-        self._debug_tensor("conv_state (from cache)", conv_state)
-        self._debug_tensor("ssm_state (from cache)", ssm_state)
+        # self._debug_tensor("conv_state (from cache)", conv_state)
+        # self._debug_tensor("ssm_state (from cache)", ssm_state)
 
         mixed_qkv = mixed_qkv[:num_actual_tokens]
         b = b[:num_actual_tokens]
         a = a[:num_actual_tokens]
 
-        self._debug_tensor("mixed_qkv (truncated)", mixed_qkv)
-        self._debug_tensor("b (truncated)", b)
-        self._debug_tensor("a (truncated)", a)
+        # self._debug_tensor("mixed_qkv (truncated)", mixed_qkv)
+        # self._debug_tensor("b (truncated)", b)
+        # self._debug_tensor("a (truncated)", a)
 
         # Convolution
         conv_weights = self.conv1d.weight.view(
             self.conv1d.weight.size(0), self.conv1d.weight.size(2)
         )
-        self._debug_tensor("conv_weights", conv_weights)
-        self._debug_tensor("conv1d.bias", self.conv1d.bias)
-        self._debug_print(f"activation={self.activation}")
+        # self._debug_tensor("conv_weights", conv_weights)
+        # self._debug_tensor("conv1d.bias", self.conv1d.bias)
+        # self._debug_print(f"activation={self.activation}")
 
         if attn_metadata.num_prefills > 0:
-            self._debug_print("Using causal_conv1d_fn (prefill path)")
+            # self._debug_print("Using causal_conv1d_fn (prefill path)")
             mixed_qkv_T = mixed_qkv.transpose(0, 1)
-            self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
+            # self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
             mixed_qkv = causal_conv1d_fn(
                 mixed_qkv_T,
                 conv_weights,
@@ -1385,7 +1385,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 metadata=attn_metadata,
             ).transpose(0, 1)
         else:
-            self._debug_print("Using causal_conv1d_update (decode path)")
+            # self._debug_print("Using causal_conv1d_update (decode path)")
             mixed_qkv = causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
@@ -1396,35 +1396,35 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 validate_data=True,
             )
 
-        self._debug_tensor("mixed_qkv (after conv)", mixed_qkv)
+        # self._debug_tensor("mixed_qkv (after conv)", mixed_qkv)
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
-        self._debug_tensor("query (after rearrange)", query)
-        self._debug_tensor("key (after rearrange)", key)
-        self._debug_tensor("value (after rearrange)", value)
+        # self._debug_tensor("query (after rearrange)", query)
+        # self._debug_tensor("key (after rearrange)", key)
+        # self._debug_tensor("value (after rearrange)", value)
 
         # Expand K heads to V heads for grouped query attention
         # (matches Fast-LLM and transformers reference implementations)
         # Always call repeat_interleave (no-op when value_heads_per_key == 1) to avoid
         # conditional branches that confuse torch.compile
-        self._debug_print(f"Expanding K heads to V heads (value_heads_per_key={self.value_heads_per_key})")
+        # self._debug_print(f"Expanding K heads to V heads (value_heads_per_key={self.value_heads_per_key})")
         query = query.repeat_interleave(self.value_heads_per_key, dim=2)
         key = key.repeat_interleave(self.value_heads_per_key, dim=2)
-        self._debug_tensor("query (after expand)", query)
-        self._debug_tensor("key (after expand)", key)
+        # self._debug_tensor("query (after expand)", query)
+        # self._debug_tensor("key (after expand)", key)
 
-        self._debug_tensor("A_log", self.A_log)
-        self._debug_tensor("dt_bias", self.dt_bias)
+        # self._debug_tensor("A_log", self.A_log)
+        # self._debug_tensor("dt_bias", self.dt_bias)
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
-        self._debug_tensor("g (from gating)", g)
-        self._debug_tensor("beta (from gating)", beta)
+        # self._debug_tensor("g (from gating)", g)
+        # self._debug_tensor("beta (from gating)", beta)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
-            self._debug_print("Using chunk_gated_delta_rule (prefill)")
+            # self._debug_print("Using chunk_gated_delta_rule (prefill)")
             initial_state = ssm_state[non_spec_state_indices_tensor].contiguous()
             initial_state[~has_initial_state, ...] = 0
-            self._debug_tensor("initial_state", initial_state)
+            # self._debug_tensor("initial_state", initial_state)
             # Debug PREFILL INPUTS before kernel call
             if DEBUG_GDN_STATE:
                 print(f"[vLLM-GDN {self.prefix}] PREFILL INPUTS:")
@@ -1449,22 +1449,22 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
-            self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
-            self._debug_tensor("last_state", last_state)
-            # Debug prefill state - get seq_len from query_start_loc
-            if non_spec_query_start_loc is not None and len(non_spec_query_start_loc) >= 2:
-                prefill_seq_len = int(non_spec_query_start_loc[1] - non_spec_query_start_loc[0])
-            else:
-                prefill_seq_len = num_actual_tokens
-            self._debug_state_stats("PREFILL out_state", last_state, prefill_seq_len)
+            # self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
+            # self._debug_tensor("last_state", last_state)
+            # # Debug prefill state - get seq_len from query_start_loc
+            # if non_spec_query_start_loc is not None and len(non_spec_query_start_loc) >= 2:
+            #     prefill_seq_len = int(non_spec_query_start_loc[1] - non_spec_query_start_loc[0])
+            # else:
+            #     prefill_seq_len = num_actual_tokens
+            # self._debug_state_stats("PREFILL out_state", last_state, prefill_seq_len)
             ssm_state[non_spec_state_indices_tensor] = last_state.to(ssm_state.dtype)
         else:
-            self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
-            # For decode, access the correct slot using state indices
-            if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
-                slot_idx = int(non_spec_state_indices_tensor[0])
-                actual_state = ssm_state[slot_idx:slot_idx+1]
-                self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
+            # self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
+            # # For decode, access the correct slot using state indices
+            # if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
+            #     slot_idx = int(non_spec_state_indices_tensor[0])
+            #     actual_state = ssm_state[slot_idx:slot_idx+1]
+            #     # self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
             # Debug decode inputs
             if DEBUG_GDN_STATE:
                 print(f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}")
@@ -1480,14 +1480,14 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 ssm_state_indices=non_spec_state_indices_tensor,
                 use_qk_l2norm_in_kernel=True,
             )
-            self._debug_tensor("core_out (from fused_recurrent)", core_out)
-            if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
-                actual_state = ssm_state[slot_idx:slot_idx+1]
-                self._debug_state_stats("DECODE out_state", actual_state, num_actual_tokens)
+            # self._debug_tensor("core_out (from fused_recurrent)", core_out)
+            # if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
+            #     actual_state = ssm_state[slot_idx:slot_idx+1]
+            #     # self._debug_state_stats("DECODE out_state", actual_state, num_actual_tokens)
 
         core_attn_out[:num_actual_tokens] = core_out.squeeze(0)[:num_actual_tokens]
-        self._debug_tensor("core_attn_out (final output)", core_attn_out)
-        self._debug_print("===== _forward_core END =====")
+        # self._debug_tensor("core_attn_out (final output)", core_attn_out)
+        # self._debug_print("===== _forward_core END =====")
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         # Checkpoint uses "convolution", model uses "conv1d"
@@ -2163,8 +2163,8 @@ class Apriel2GDNDecoderLayer(nn.Module):
         residual: torch.Tensor | None,
         **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        self._debug_tensor("input hidden_states", hidden_states)
-        self._debug_tensor("input residual", residual)
+        # self._debug_tensor("input hidden_states", hidden_states)
+        # self._debug_tensor("input residual", residual)
 
         if residual is None:
             residual = hidden_states
@@ -2172,22 +2172,22 @@ class Apriel2GDNDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        self._debug_tensor("after input_layernorm", hidden_states)
-        self._debug_tensor("residual after input_layernorm", residual)
+        # self._debug_tensor("after input_layernorm", hidden_states)
+        # self._debug_tensor("residual after input_layernorm", residual)
 
         output = torch.empty_like(hidden_states)
         self.mixer(hidden_states, output)
-        self._debug_tensor("mixer output", output)
+        # self._debug_tensor("mixer output", output)
 
         hidden_states, residual = self.post_attention_layernorm(output, residual)
-        self._debug_tensor("after post_attention_layernorm", hidden_states)
-        self._debug_tensor("residual after post_attention_layernorm", residual)
+        # self._debug_tensor("after post_attention_layernorm", hidden_states)
+        # self._debug_tensor("residual after post_attention_layernorm", residual)
 
         hidden_states = self.mlp(hidden_states)
-        self._debug_tensor("after mlp", hidden_states)
+        # self._debug_tensor("after mlp", hidden_states)
         # Also show last token for final layer comparison
-        self._debug_tensor("after mlp (last token)", hidden_states, show_last=True)
-        self._debug_tensor("residual (last token)", residual, show_last=True)
+        # self._debug_tensor("after mlp (last token)", hidden_states, show_last=True)
+        # self._debug_tensor("residual (last token)", residual, show_last=True)
 
         return hidden_states, residual
 
