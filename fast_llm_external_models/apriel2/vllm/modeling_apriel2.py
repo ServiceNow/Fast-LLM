@@ -139,6 +139,10 @@ from typing import Literal
 # Valid mamba_type values for MambaSpec
 MambaType = Literal["gdn_attention", "kda_attention", "mamba"]
 
+# Cache for unified page size computation (keyed by object ids).
+# Avoids recomputing the same value for every layer during model init.
+_unified_page_size_cache: dict[tuple[int, int], tuple[int, int]] = {}
+
 
 def _get_dtype_size(dtype: torch.dtype) -> int:
     """Get size in bytes for a torch dtype."""
@@ -449,6 +453,9 @@ def get_unified_page_size_for_config(
     all layers return specs with matching page_size_bytes, even when
     vLLM iterates over layers individually (e.g., TransformersForCausalLM).
 
+    Results are cached by object identity to avoid redundant computation
+    when called from each layer's get_kv_cache_spec().
+
     Args:
         config: The HuggingFace model config.
         vllm_config: The vLLM config.
@@ -456,11 +463,18 @@ def get_unified_page_size_for_config(
     Returns:
         Tuple of (block_size, unified_page_size).
     """
+    cache_key = (id(config), id(vllm_config))
+    if cache_key in _unified_page_size_cache:
+        return _unified_page_size_cache[cache_key]
+
     decoder_config = getattr(config, "decoder", {}) or {}
     blocks_config = get_blocks_config(decoder_config)
     block_params = get_block_params(blocks_config, vllm_config)
     attn_page_per_token, mamba_page_sizes = get_block_page_sizes(block_params)
-    return unify_block_page_sizes(attn_page_per_token, mamba_page_sizes)
+    result = unify_block_page_sizes(attn_page_per_token, mamba_page_sizes)
+
+    _unified_page_size_cache[cache_key] = result
+    return result
 
 
 class Apriel2Config(PretrainedConfig):
