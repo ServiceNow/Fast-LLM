@@ -184,6 +184,108 @@ class MambaBlockParams:
 BlockParams = AttentionBlockParams | MambaBlockParams
 
 
+def _create_mixer_params(
+    mixer_config: dict,
+    mixer_type: str,
+    vllm_config: VllmConfig,
+) -> BlockParams | None:
+    """Create BlockParams for a single mixer config.
+
+    This is the single source of truth for converting a mixer config dict
+    into typed BlockParams. Used by both top-level and stochastic mixer handling.
+
+    Args:
+        mixer_config: The mixer configuration dict.
+        mixer_type: The mixer type string (attention, gdn, kda, mamba).
+        vllm_config: The vLLM config for cache/parallel settings.
+
+    Returns:
+        BlockParams for this mixer, or None if the mixer type doesn't need cache.
+    """
+    cache_config = vllm_config.cache_config
+    model_dtype = vllm_config.model_config.dtype
+    tp_size = vllm_config.parallel_config.tensor_parallel_size
+
+    if mixer_type == "attention" or mixer_type == "sliding_window":
+        cache_dtype = cache_config.cache_dtype
+        if cache_dtype is None or cache_dtype == "auto":
+            kv_cache_dtype = model_dtype
+        elif isinstance(cache_dtype, str):
+            kv_cache_dtype = getattr(torch, cache_dtype, model_dtype)
+        else:
+            kv_cache_dtype = cache_dtype
+
+        return AttentionBlockParams(
+            num_kv_heads=mixer_config["head_groups"],
+            head_size=mixer_config["head_size"],
+            window_size=mixer_config.get("window_size"),
+            dtype=kv_cache_dtype,
+        )
+
+    elif mixer_type == "gdn":
+        shapes = MambaStateShapeCalculator.gated_delta_net_state_shape(
+            tp_world_size=tp_size,
+            num_k_heads=mixer_config["key_heads"],
+            num_v_heads=mixer_config["value_heads"],
+            head_k_dim=mixer_config["key_head_dim"],
+            head_v_dim=mixer_config["value_head_dim"],
+            conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
+            num_spec=0,
+        )
+        dtypes = MambaStateDtypeCalculator.gated_delta_net_state_dtype(
+            model_dtype,
+            cache_config.mamba_cache_dtype,
+        )
+        return MambaBlockParams(
+            shapes=shapes,
+            dtypes=dtypes,
+            mamba_type="gdn_attention",
+        )
+
+    elif mixer_type == "kda":
+        shapes = MambaStateShapeCalculator.kda_state_shape(
+            tp_world_size=tp_size,
+            num_heads=mixer_config["heads"],
+            head_dim=mixer_config["head_dim"],
+            conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
+        )
+        dtypes = MambaStateDtypeCalculator.kda_state_dtype(
+            model_dtype,
+            cache_config.mamba_cache_dtype,
+        )
+        return MambaBlockParams(
+            shapes=shapes,
+            dtypes=dtypes,
+            mamba_type="kda_attention",
+        )
+
+    elif mixer_type == "mamba":
+        d_state = mixer_config["state_size"]
+        d_conv = mixer_config["d_conv"]
+        d_inner = mixer_config.get("d_inner")
+        if d_inner is None:
+            raise ValueError("Mamba mixer must specify 'd_inner'")
+        shapes = MambaStateShapeCalculator.mamba1_state_shape(
+            tp_world_size=tp_size,
+            intermediate_size=d_inner,
+            state_size=d_state,
+            conv_kernel=d_conv,
+        )
+        dtypes = MambaStateDtypeCalculator.mamba1_state_dtype(
+            model_dtype,
+            cache_config.mamba_cache_dtype,
+            cache_config.mamba_ssm_cache_dtype,
+        )
+        return MambaBlockParams(
+            shapes=shapes,
+            dtypes=dtypes,
+            mamba_type="mamba",
+        )
+
+    # Unknown mixer type - may not need cache
+    return None
+
+
 def get_block_params(
     blocks_config: dict[str, dict],
     vllm_config: VllmConfig,
@@ -200,190 +302,30 @@ def get_block_params(
     Returns:
         Dict mapping block names to their BlockParams.
     """
-    cache_config = vllm_config.cache_config
-    parallel_config = vllm_config.parallel_config
-    model_dtype = vllm_config.model_config.dtype
-    tp_size = parallel_config.tensor_parallel_size
-
     params: dict[str, BlockParams] = {}
 
     for block_name, block_config in blocks_config.items():
         mixer_config = block_config.get("mixer", {})
         mixer_type = mixer_config.get("type", "attention")
 
-        if mixer_type == "attention":
-            # cache_dtype can be "auto" or None, fall back to model dtype
-            cache_dtype = cache_config.cache_dtype
-            if cache_dtype is None or cache_dtype == "auto":
-                kv_cache_dtype = model_dtype
-            elif isinstance(cache_dtype, str):
-                kv_cache_dtype = getattr(torch, cache_dtype, model_dtype)
-            else:
-                kv_cache_dtype = cache_dtype
-
-            params[block_name] = AttentionBlockParams(
-                num_kv_heads=mixer_config["head_groups"],
-                head_size=mixer_config["head_size"],
-                window_size=mixer_config.get("window_size"),
-                dtype=kv_cache_dtype,
-            )
-
-        elif mixer_type == "gdn":
-            shapes = MambaStateShapeCalculator.gated_delta_net_state_shape(
-                tp_world_size=tp_size,
-                num_k_heads=mixer_config["key_heads"],
-                num_v_heads=mixer_config["value_heads"],
-                head_k_dim=mixer_config["key_head_dim"],
-                head_v_dim=mixer_config["value_head_dim"],
-                conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
-                num_spec=0,
-            )
-            dtypes = MambaStateDtypeCalculator.gated_delta_net_state_dtype(
-                model_dtype,
-                cache_config.mamba_cache_dtype,
-            )
-            params[block_name] = MambaBlockParams(
-                shapes=shapes,
-                dtypes=dtypes,
-                mamba_type="gdn_attention",
-            )
-
-        elif mixer_type == "mamba":
-            d_state = mixer_config["state_size"]
-            d_conv = mixer_config["d_conv"]
-            d_inner = mixer_config.get("d_inner")
-            if d_inner is None:
-                expand = mixer_config.get("expand")
-                if expand is None:
-                    raise ValueError(
-                        f"Block '{block_name}': mamba mixer must specify 'd_inner' or 'expand'"
-                    )
-                raise ValueError(
-                    f"Block '{block_name}': mamba mixer must specify 'd_inner' explicitly"
-                )
-            shapes = MambaStateShapeCalculator.mamba1_state_shape(
-                tp_world_size=tp_size,
-                intermediate_size=d_inner,
-                state_size=d_state,
-                conv_kernel=d_conv,
-            )
-            dtypes = MambaStateDtypeCalculator.mamba1_state_dtype(
-                model_dtype,
-                cache_config.mamba_cache_dtype,
-                cache_config.mamba_ssm_cache_dtype,
-            )
-            params[block_name] = MambaBlockParams(
-                shapes=shapes,
-                dtypes=dtypes,
-                mamba_type="mamba",
-            )
-
-        elif mixer_type == "kda":
-            shapes = MambaStateShapeCalculator.kda_state_shape(
-                tp_world_size=tp_size,
-                num_heads=mixer_config["heads"],
-                head_dim=mixer_config["head_dim"],
-                conv_kernel_size=mixer_config["convolution_layer"]["kernel_size"],
-            )
-            dtypes = MambaStateDtypeCalculator.kda_state_dtype(
-                model_dtype,
-                cache_config.mamba_cache_dtype,
-            )
-            params[block_name] = MambaBlockParams(
-                shapes=shapes,
-                dtypes=dtypes,
-                mamba_type="kda_attention",
-            )
-
-        elif mixer_type == "stochastic":
+        if mixer_type == "stochastic":
             # For stochastic mixers, compute params for ALL sub-mixers
             # This creates the "convex hull" of cache requirements so the unified
             # page size is large enough for any mixer type
             mixers = mixer_config.get("mixers", {})
-
             for sub_mixer_name, sub_mixer_config in mixers.items():
                 sub_mixer_type = sub_mixer_config.get("type", "attention")
-                # Use a compound key to track all sub-mixer params
                 sub_block_name = f"{block_name}.{sub_mixer_name}"
-
-                if sub_mixer_type == "attention" or sub_mixer_type == "sliding_window":
-                    cache_dtype = cache_config.cache_dtype
-                    if cache_dtype is None or cache_dtype == "auto":
-                        kv_cache_dtype = model_dtype
-                    elif isinstance(cache_dtype, str):
-                        kv_cache_dtype = getattr(torch, cache_dtype, model_dtype)
-                    else:
-                        kv_cache_dtype = cache_dtype
-
-                    params[sub_block_name] = AttentionBlockParams(
-                        num_kv_heads=sub_mixer_config["head_groups"],
-                        head_size=sub_mixer_config["head_size"],
-                        window_size=sub_mixer_config.get("window_size"),
-                        dtype=kv_cache_dtype,
-                    )
-                elif sub_mixer_type == "gdn":
-                    shapes = MambaStateShapeCalculator.gated_delta_net_state_shape(
-                        tp_world_size=tp_size,
-                        num_k_heads=sub_mixer_config["key_heads"],
-                        num_v_heads=sub_mixer_config["value_heads"],
-                        head_k_dim=sub_mixer_config["key_head_dim"],
-                        head_v_dim=sub_mixer_config["value_head_dim"],
-                        conv_kernel_size=sub_mixer_config["convolution_layer"]["kernel_size"],
-                        num_spec=0,
-                    )
-                    dtypes = MambaStateDtypeCalculator.gated_delta_net_state_dtype(
-                        model_dtype,
-                        cache_config.mamba_cache_dtype,
-                    )
-                    params[sub_block_name] = MambaBlockParams(
-                        shapes=shapes,
-                        dtypes=dtypes,
-                        mamba_type="gdn_attention",
-                    )
-                elif sub_mixer_type == "kda":
-                    shapes = MambaStateShapeCalculator.kda_state_shape(
-                        tp_world_size=tp_size,
-                        num_heads=sub_mixer_config["heads"],
-                        head_dim=sub_mixer_config["head_dim"],
-                        conv_kernel_size=sub_mixer_config["convolution_layer"]["kernel_size"],
-                    )
-                    dtypes = MambaStateDtypeCalculator.kda_state_dtype(
-                        model_dtype,
-                        cache_config.mamba_cache_dtype,
-                    )
-                    params[sub_block_name] = MambaBlockParams(
-                        shapes=shapes,
-                        dtypes=dtypes,
-                        mamba_type="kda_attention",
-                    )
-                elif sub_mixer_type == "mamba":
-                    d_state = sub_mixer_config["state_size"]
-                    d_conv = sub_mixer_config["d_conv"]
-                    d_inner = sub_mixer_config.get("d_inner")
-                    if d_inner is None:
-                        raise ValueError(
-                            f"Block '{block_name}': mamba sub-mixer must specify 'd_inner'"
-                        )
-                    shapes = MambaStateShapeCalculator.mamba1_state_shape(
-                        tp_world_size=tp_size,
-                        intermediate_size=d_inner,
-                        state_size=d_state,
-                        conv_kernel=d_conv,
-                    )
-                    dtypes = MambaStateDtypeCalculator.mamba1_state_dtype(
-                        model_dtype,
-                        cache_config.mamba_cache_dtype,
-                        cache_config.mamba_ssm_cache_dtype,
-                    )
-                    params[sub_block_name] = MambaBlockParams(
-                        shapes=shapes,
-                        dtypes=dtypes,
-                        mamba_type="mamba",
-                    )
-                # Ignore unknown sub-mixer types (they might not need cache)
-
+                sub_params = _create_mixer_params(sub_mixer_config, sub_mixer_type, vllm_config)
+                if sub_params is not None:
+                    params[sub_block_name] = sub_params
         else:
-            raise ValueError(f"Block '{block_name}': unknown mixer type '{mixer_type}'")
+            # Regular (non-stochastic) mixer
+            mixer_params = _create_mixer_params(mixer_config, mixer_type, vllm_config)
+            if mixer_params is not None:
+                params[block_name] = mixer_params
+            else:
+                raise ValueError(f"Block '{block_name}': unknown mixer type '{mixer_type}'")
 
     return params
 
@@ -474,58 +416,6 @@ def unify_block_page_sizes(
     return block_size, unified_page_size
 
 
-def get_block_specs(
-    block_params: dict[str, BlockParams],
-    vllm_config: VllmConfig,
-    block_size: int,
-    page_size_padded: int,
-) -> dict[str, KVCacheSpec]:
-    """Create KVCacheSpecs from precomputed block params with unified sizes.
-
-    Args:
-        block_params: Dict mapping block names to their BlockParams.
-        vllm_config: The vLLM config for mamba_block_size fallback.
-        block_size: Unified block size for attention specs.
-        page_size_padded: Unified page size for mamba specs.
-
-    Returns:
-        Dict mapping block names to their KVCacheSpec.
-    """
-    cache_config = vllm_config.cache_config
-    mamba_block_size = cache_config.mamba_block_size or vllm_config.model_config.max_model_len
-
-    specs: dict[str, KVCacheSpec] = {}
-
-    for block_name, params in block_params.items():
-        if isinstance(params, AttentionBlockParams):
-            if params.window_size is not None:
-                specs[block_name] = SlidingWindowSpec(
-                    block_size=block_size,
-                    num_kv_heads=params.num_kv_heads,
-                    head_size=params.head_size,
-                    dtype=params.dtype,
-                    sliding_window=params.window_size,
-                )
-            else:
-                specs[block_name] = FullAttentionSpec(
-                    block_size=block_size,
-                    num_kv_heads=params.num_kv_heads,
-                    head_size=params.head_size,
-                    dtype=params.dtype,
-                )
-
-        elif isinstance(params, MambaBlockParams):
-            specs[block_name] = MambaSpec(
-                block_size=mamba_block_size,
-                shapes=params.shapes,
-                dtypes=params.dtypes,
-                page_size_padded=page_size_padded,
-                mamba_type=params.mamba_type,
-            )
-
-    return specs
-
-
 def get_blocks_config(decoder_config: dict) -> dict[str, dict]:
     """Extract the blocks config dict from a decoder config.
 
@@ -571,29 +461,6 @@ def get_unified_page_size_for_config(
     block_params = get_block_params(blocks_config, vllm_config)
     attn_page_per_token, mamba_page_sizes = get_block_page_sizes(block_params)
     return unify_block_page_sizes(attn_page_per_token, mamba_page_sizes)
-
-
-def get_block_name_for_layer(decoder_config: dict, layer_idx: int) -> str:
-    """Get the block name that a specific layer uses.
-
-    Args:
-        decoder_config: The decoder config dict.
-        layer_idx: The layer index.
-
-    Returns:
-        The block name for this layer.
-    """
-    seq_type = decoder_config.get("type", "fixed")
-
-    if seq_type == "fixed":
-        return "block"
-    elif seq_type == "pattern":
-        pattern = decoder_config.get("pattern", [])
-        if not pattern:
-            raise ValueError("Pattern decoder type requires non-empty 'pattern' list")
-        return pattern[layer_idx % len(pattern)]
-    else:
-        raise ValueError(f"Unknown decoder type: {seq_type}")
 
 
 class Apriel2Config(PretrainedConfig):
@@ -2399,15 +2266,6 @@ class Apriel2StochasticMixer(nn.Module):
         "kda": (Apriel2KDAMixer, True, False),
     }
 
-    # Offset multipliers for virtual layer indices (attention stays at real index)
-    MIXER_TYPE_OFFSETS: dict[str, int] = {
-        "attention": 0,
-        "sliding_window": 0,  # SWA is attention-based, same cache type
-        "mamba": 1,
-        "gdn": 2,
-        "kda": 3,
-    }
-
     def __init__(
         self,
         config: Apriel2Config,
@@ -2440,8 +2298,10 @@ class Apriel2StochasticMixer(nn.Module):
             layers_base = "model.layers"
 
         # Create all sub-mixers with unique virtual layer indices
+        # Each sub-mixer gets a unique offset based on its position (not type)
+        # to avoid collisions when multiple mixers have the same type
         self.mixers = nn.ModuleDict()
-        for name, sub_mixer_config in mixers_config.items():
+        for mixer_index, (name, sub_mixer_config) in enumerate(mixers_config.items()):
             sub_mixer_type = sub_mixer_config.get("type", "attention")
 
             if sub_mixer_type not in self.MIXER_REGISTRY:
@@ -2449,10 +2309,10 @@ class Apriel2StochasticMixer(nn.Module):
 
             mixer_class, needs_model_config, needs_spec_config = self.MIXER_REGISTRY[sub_mixer_type]
 
-            # Compute virtual layer index for this mixer type (Falcon H1 style)
-            # Each mixer type gets its own "virtual layer" range to avoid cache conflicts
-            type_offset = self.MIXER_TYPE_OFFSETS.get(sub_mixer_type, 0)
-            virtual_layer_idx = layer_idx + type_offset * num_layers
+            # Compute virtual layer index using mixer's position index (Falcon H1 style)
+            # Each sub-mixer gets its own "virtual layer" range: layer_idx + (index+1) * num_layers
+            # This ensures unique indices even when multiple mixers have the same type
+            virtual_layer_idx = layer_idx + (mixer_index + 1) * num_layers
 
             # Build prefix with virtual layer index for cache registration
             # This only affects static_forward_context registration, not weight loading
@@ -2902,65 +2762,6 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             print(f"[vLLM LM Head] last token top-5 logits: {[(idx.item(), val.item()) for idx, val in zip(top_idx, top_vals)]}")
 
         return logits
-
-    @classmethod
-    def get_kv_cache_spec(
-        cls,
-        vllm_config: VllmConfig,
-    ) -> dict[str, KVCacheSpec]:
-        """Get KV cache specs for each layer.
-
-        This returns a dict mapping layer names (e.g., "model.layers.0.mixer")
-        to their cache specs. Layers using the same block type share the same
-        spec (by equality), allowing vLLM to group them efficiently.
-
-        The flow:
-        1. get_block_params: parse configs, compute shapes/dtypes ONCE
-        2. get_block_page_sizes: extract page sizes from params
-        3. unify_block_page_sizes: find unified (block_size, page_size)
-        4. get_block_specs: create specs from params with unified sizes
-        5. map blocks to layers
-        """
-        config = vllm_config.model_config.hf_config
-        decoder_config = getattr(config, "decoder", {}) or {}
-
-        # Get all unique block configs
-        blocks_config = get_blocks_config(decoder_config)
-
-        # Step 1: Parse configs and compute shapes/dtypes once
-        block_params = get_block_params(blocks_config, vllm_config)
-
-        # Step 2: Extract page sizes from params
-        attn_page_per_token, mamba_page_sizes = get_block_page_sizes(block_params)
-
-        # Step 3: Compute unified sizes
-        block_size, unified_page_size = unify_block_page_sizes(
-            attn_page_per_token, mamba_page_sizes
-        )
-
-        # Step 4: Create specs from params with unified sizes
-        block_specs = get_block_specs(
-            block_params, vllm_config, block_size, unified_page_size
-        )
-
-        # Step 5: Map blocks to layers
-        num_layers = decoder_config.get("num_blocks", config.num_hidden_layers)
-        layer_specs: dict[str, KVCacheSpec] = {}
-
-        for layer_idx in range(num_layers):
-            block_name = get_block_name_for_layer(decoder_config, layer_idx)
-            block_config = blocks_config.get(block_name, {})
-            mixer_type = block_config.get("mixer", {}).get("type", "attention")
-
-            # Attention layers use self_attn, others use mixer
-            if mixer_type == "attention":
-                layer_name = f"model.layers.{layer_idx}.self_attn.attn"
-            else:
-                layer_name = f"model.layers.{layer_idx}.mixer"
-
-            layer_specs[layer_name] = block_specs[block_name]
-
-        return layer_specs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loader = AutoWeightsLoader(
