@@ -176,11 +176,11 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         self,
         input_: torch.Tensor,
         kwargs: dict,
-        losses: dict | None = None,
+        all_losses_dict: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
 
         if not self.training:
-            logits, _ = self._logits_loss_forward_backward_partial(input_, None, kwargs, return_logits=True)
+            logits, _ = self._logits_loss_forward_backward_partial(input_, kwargs, return_logits=True)
             # TODO: Make a proper way of returning the model output.
             logits = logits.detach()
             if kwargs.get("global_logits"):
@@ -198,7 +198,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         input_ = input_.flatten(0, -2)
 
         if self._config.cross_entropy_splits == 1:
-            losses_, input_grad = self._logits_loss_forward_backward_partial(input_, kwargs)
+            loss_dict, input_grad = self._logits_loss_forward_backward_partial(input_, kwargs)
         else:
             input_grad = torch.empty_like(input_)
             tensors_split = [
@@ -210,7 +210,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 for tensor in [input_, input_grad]
             ]
             for split_index, (partial_input_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
-                partial_losses_, grad_ = self._logits_loss_forward_backward_partial(
+                partial_loss_dict, grad_ = self._logits_loss_forward_backward_partial(
                     partial_input_,
                     kwargs,
                     split_index=split_index,
@@ -218,34 +218,34 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 # TODO: Avoid copy with explicit out argument.
                 input_grad_.copy_(grad_)
                 if split_index == 0:
-                    losses_ = partial_losses_
+                    loss_dict = partial_loss_dict
                 else:
-                    Assert.eq(partial_losses_.keys(), losses_.keys())
-                    for name in losses_:
-                        losses_[name] += partial_losses_[name]
+                    Assert.eq(partial_loss_dict.keys(), loss_dict.keys())
+                    for name in loss_dict:
+                        loss_dict[name] += partial_loss_dict[name]
 
-        loss = sum(
-            (loss_.weight / self._config.cross_entropy_splits) * loss_
+        total_loss = sum(
+            (loss_.weight / self._config.cross_entropy_splits) * loss_dict[loss_.name]
             for loss_ in self._losses
-            if loss_.weight != 0.0 and loss_.name in losses_
+            if loss_.weight != 0.0 and loss_.name in loss_dict
         )
 
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
+            all_reduce(total_loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
 
-        if losses is not None:
-            losses[self._total_loss_name].append(loss)
+        if all_losses_dict is not None:
+            all_losses_dict[self._total_loss_name].append(total_loss)
             if len(self._losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._losses):
-                for name, loss_ in losses_.items():
+                for name, loss_value in loss_dict.items():
                     if self._config.cross_entropy_splits != 1:
-                        loss_ /= self._config.cross_entropy_splits
+                        loss_value /= self._config.cross_entropy_splits
                     if self._sequence_parallel_logits:
                         # TODO: Async
-                        all_reduce(loss_, op=ReduceOp.AVG, group=self._parallel_dim.group)
-                    losses[name].append(loss_)
+                        all_reduce(loss_value, op=ReduceOp.AVG, group=self._parallel_dim.group)
+                    all_losses_dict[name].append(loss_value)
 
-        return loss, input_grad
+        return total_loss, input_grad
 
     def _logits_loss_forward_backward_partial(
         self,

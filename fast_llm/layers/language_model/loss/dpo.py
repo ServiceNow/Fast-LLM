@@ -46,7 +46,7 @@ def dpo_loss(
     reference_model_logits: torch.Tensor,
     chosen_spans: list[list[tuple[int, int]]],
     rejected_spans: list[list[tuple[int, int]]],
-    beta: float,
+    beta: float = 1.0,
     logits_scale_factor: float = 1.0,
 ) -> torch.Tensor:
 

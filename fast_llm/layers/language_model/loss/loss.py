@@ -70,7 +70,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
             target = target[target_slice] if sequence_first else target[:, target_slice]
 
         # Flatten the batch and sequence dimensions.
-        target = target.flatten(0, -2)
+        target = target.flatten(0, 1)
 
         # Get the local chunk.
         if self._sequence_parallel:

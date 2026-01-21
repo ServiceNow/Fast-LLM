@@ -4,31 +4,39 @@ import torch
 
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
-from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
+from fast_llm.layers.language_model.loss.config import (
+    LanguageModelDistillationLossConfig,
+    LanguageModelLabelEntropyLossConfig,
+)
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+
+
+def _get_imlementation(
+    default: EntropyLossImplementation = EntropyLossImplementation.auto,
+    loss_type: EntropyLossType = EntropyLossType.cross_entropy,
+    vocab_parallel: bool = False,
+) -> EntropyLossImplementation:
+    # Vocab parallel requires fused.
+    if vocab_parallel:
+        assert default in (EntropyLossImplementation.auto, EntropyLossImplementation.fused)
+        return EntropyLossImplementation.fused
+
+    # Triton only available for cross_entropy
+    if TritonConfig.TRITON_ENABLED and torch.cuda.is_available() and loss_type == EntropyLossType.cross_entropy:
+        return EntropyLossImplementation.triton if default == EntropyLossImplementation.auto else default
+    else:
+        assert default != EntropyLossImplementation.triton
+
+    # Otherwise, use fused.
+    return EntropyLossImplementation.fused if default == EntropyLossImplementation.auto else default
 
 
 class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossConfig](LanguageModelLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._implementation = self._config.implementation
-
-        if self._implementation == EntropyLossImplementation.auto:
-            if self._vocab_parallel:
-                self._implementation = EntropyLossImplementation.fused
-            elif (
-                TritonConfig.TRITON_ENABLED
-                and torch.cuda.is_available()
-                and self._config.loss_type == EntropyLossType.cross_entropy
-            ):
-                self._implementation = EntropyLossImplementation.triton
-            else:
-                self._implementation = EntropyLossImplementation.fused
-        if (
-            self._implementation == EntropyLossImplementation.triton
-            and self._config.loss_type != EntropyLossType.cross_entropy
-        ):
-            raise NotImplementedError(self._config.loss_type)
+        self._implementation = _get_imlementation(
+            self._config.implementation, self._config.loss_type, self._vocab_parallel
+        )
 
     def forward_backward(
         self,
@@ -49,30 +57,15 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         )
 
 
-class LanguageModelLabelDistillationLoss[ConfigType: LanguageModelLabelEntropyLossConfig](
-    LanguageModelLoss[ConfigType]
-):
+class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossConfig](LanguageModelLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self._prediction_distance > 0:
             raise NotImplementedError()
 
-        if self._implementation == EntropyLossImplementation.auto:
-            if self._vocab_parallel:
-                self._implementation = EntropyLossImplementation.fused
-            elif (
-                TritonConfig.TRITON_ENABLED
-                and torch.cuda.is_available()
-                and self._config.loss_type == EntropyLossType.cross_entropy
-            ):
-                self._implementation = EntropyLossImplementation.triton
-            else:
-                self._implementation = EntropyLossImplementation.fused
-        if (
-            self._implementation == EntropyLossImplementation.triton
-            and self._config.loss_type != EntropyLossType.cross_entropy
-        ):
-            raise NotImplementedError(self._config.loss_type)
+        self._implementation = _get_imlementation(
+            self._config.implementation, self._config.loss_type, self._vocab_parallel
+        )
 
     def forward_backward(
         self,

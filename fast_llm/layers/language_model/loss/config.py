@@ -11,7 +11,7 @@ if typing.TYPE_CHECKING:
 
     from fast_llm.layers.language_model.loss.dpo import LanguageModelDPOLoss
     from fast_llm.layers.language_model.loss.entropy_loss import (
-        LanguageModelLabelDistillationLoss,
+        LanguageModelDistillationLoss,
         LanguageModelLabelEntropyLoss,
     )
     from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
@@ -119,10 +119,10 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
     )
 
     @property
-    def loss_class(self) -> "type[LanguageModelLabelDistillationLoss]":
-        from fast_llm.layers.language_model.loss.entropy_loss import LanguageModelLabelDistillationLoss
+    def loss_class(self) -> "type[LanguageModelDistillationLoss]":
+        from fast_llm.layers.language_model.loss.entropy_loss import LanguageModelDistillationLoss
 
-        return LanguageModelLabelDistillationLoss
+        return LanguageModelDistillationLoss
 
     def get_reference_models(self) -> set[str]:
         return {self.reference_model}
@@ -169,7 +169,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         return LanguageModelZLoss
 
 
-@config_class(dynamic_type={LanguageModelLossConfig: "dpo"})
+@config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
 class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
     _abstract: typing.ClassVar[bool] = False

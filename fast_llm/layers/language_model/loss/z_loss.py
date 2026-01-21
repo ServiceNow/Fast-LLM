@@ -23,8 +23,8 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             self._get_grad_output(kwargs),
             z_loss,
             logits,
-            self._logits_scale_factor,
             self._get_loss_mask(kwargs, split_index),
+            self._logits_scale_factor,
         )
 
 
