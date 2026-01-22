@@ -8,6 +8,7 @@ import shutil
 import pytest
 import xdist.scheduler
 
+from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
 from tests.utils.global_variables import TEST_RESULTS_PATH, set_testing_global_variables
@@ -260,6 +261,8 @@ def pytest_runtest_call(item: pytest.Function):
         except RuntimeError:
             pytest.skip("Cuda runtime unavailable due to an error in an earlier test.")
     manager.handle_missing(item)
+    # Some tests may modify this global variable.
+    TritonConfig.TRITON_ENABLED = True
 
 
 def pytest_unconfigure():

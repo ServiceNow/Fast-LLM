@@ -32,7 +32,7 @@ def get_sampling_data(
     preprocessing: LanguageModelPreprocessingConfig | None = None,
 ) -> GPTSamplingData:
     # Config with convenient defaults.
-    distributed = Distributed(DistributedConfig(), use_cpu=True)
+    distributed = Distributed(DistributedConfig(use_cuda=torch.cuda.is_available()))
     if preprocessing is None:
         preprocessing = LanguageModelPreprocessingConfig()
     return GPTSamplingData(
@@ -71,8 +71,8 @@ def get_test_data_and_compare_samples(
     expected_samples: dict[str, list[list[int]]] | list[list[int]],
     preprocessing: LanguageModelPreprocessingConfig,
 ) -> GPTData:
-    distributed_config = DistributedConfig(seed=87522)
-    distributed = Distributed(distributed_config, use_cpu=True)
+    distributed_config = DistributedConfig(seed=87522, use_cuda=torch.cuda.is_available())
+    distributed = Distributed(distributed_config)
     if isinstance(samples_per_dataset, int):
         samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
 

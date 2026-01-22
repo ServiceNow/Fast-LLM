@@ -11,7 +11,7 @@ from fast_llm.layers.language_model.config import LanguageModelHeadConfig, Langu
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
-from tests.utils.utils import get_base_model, get_stage, requires_cuda
+from tests.utils.utils import get_base_model, get_stage
 
 
 def _reverse_kl_loss(
@@ -94,7 +94,6 @@ HIDDEN_SIZE = 256
 VOCAB_SIZE = 500
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize("cross_entropy_impl", tuple(CrossEntropyImpl))
 @pytest.mark.parametrize(
@@ -163,9 +162,11 @@ def test_lm_head(
     loss_masking: bool,
     prediction_heads: int,
 ):
+    if cross_entropy_impl in (CrossEntropyImpl.auto, CrossEntropyImpl.triton) and not torch.cuda.is_available():
+        pytest.skip("Cuda is not available")
     head_config = {
         "cross_entropy_implementation": cross_entropy_impl,
-        "normalization": {"type": "rms_norm"},
+        "normalization": {"type": "rms_norm", "implementation": "auto" if torch.cuda.is_available() else "torch"},
     }
     config = GPTBaseModelConfig.from_dict(
         {
@@ -191,7 +192,7 @@ def test_lm_head(
         GPTModelConfig.from_dict(
             {
                 "base_model": config,
-                "distributed": distributed_config_dict,
+                "distributed": {**distributed_config_dict, "use_cuda": torch.cuda.is_available()},
             },
         )
     )
