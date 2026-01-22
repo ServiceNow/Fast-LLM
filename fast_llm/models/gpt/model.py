@@ -167,7 +167,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         if preprocessed_meta is None:
             preprocessed_meta = self.preprocess_meta(batch, phase)
 
-        distillation_models = self._config.decoder.get_distillation_models()
+        distillation_models = self._config.decoder.get_reference_models()
         # TODO: Support multiple distillation models?
         assert len(distillation_models) <= 1
         reference_logits = [{} for _ in preprocessed_meta]
@@ -273,7 +273,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                             loss_mask[sample_index, begin:end] = False
                     labels = torch.where(loss_mask, labels, -100)
 
-                if self._config.head.get_distillation_models():  # loss masks only used for distillation currently
+                if self._config.head.get_reference_models():  # loss masks only used for distillation currently
                     # loss masks contain all three sources of masking: padding, user-defined spans, image placeholders
                     kwargs[LanguageModelKwargs.loss_mask] = labels >= 0
 

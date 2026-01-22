@@ -3,9 +3,9 @@ import pytest
 import torch
 
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
 
@@ -61,20 +61,14 @@ def reference_dpo_loss(
 
 
 def test_dpo_loss():
-    random_state = np.random.RandomState(0)
-    logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32).requires_grad_()
-    reference_model_logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32)
-    targets = torch.from_numpy(random_state.randint(0, 100, (10, 50)))
+    logits = torch.normal(0, 1, (10, 50, 100))
+    reference_model_logits = torch.normal(0, 1, (10, 50, 100))
+    targets = torch.randint(0, 100, (10, 50))
+    spans = get_random_spans(np.full(10, 50), 0, 10)
 
-    spans = get_random_spans(np.full(10, 50), 0, 10, random_state)
-
-    fastllm_loss, fast_llm_grad = compute_dpo_loss(
-        logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1, grad_output=1
-    )
+    fastllm_loss = dpo_loss(logits, targets, reference_model_logits, spans[::2], spans[1::2])
     reference_loss = reference_dpo_loss(logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1)
-    reference_loss.backward()
     Assert.rms_close(fastllm_loss, reference_loss, 1e-5)
-    Assert.rms_close(fast_llm_grad, logits.grad, 1e-5)
 
 
 @pytest.mark.parametrize("gated", [True, False])

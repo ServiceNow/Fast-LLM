@@ -7,28 +7,26 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import gather_op, split_op
+from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
-from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
-from fast_llm.functional.dpo import compute_dpo_loss
+from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
+    LM_HEAD_LOSS_NAME,
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert, div, get_unique
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +67,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=lr_scale,
             peft=peft,
         )
-        if prediction_distance > 0 and (
-            self._config.distillation_model is not None or self._config.dpo_reference_model is not None
-        ):
-            raise NotImplementedError("Multi-token prediction not supported with distillation or dpo.")
-
         Assert.in_range(prediction_distance, 0, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
@@ -84,18 +77,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         self._sequence_parallel_logits = self._sequence_parallel and not self._vocab_parallel
-        if self._config.cross_entropy_splits is not None and self._sequence_parallel:
+        if self._config.cross_entropy_splits > 1 and self._sequence_parallel:
             assert not self._vocab_parallel
-
-        if not self._config.enable_dpo:
-            self._cross_entropy_impl = self._config.cross_entropy_implementation
-            if self._cross_entropy_impl == CrossEntropyImpl.auto:
-                if self._vocab_parallel:
-                    self._cross_entropy_impl = CrossEntropyImpl.fused
-                elif TritonConfig.TRITON_ENABLED and torch.cuda.is_available():
-                    self._cross_entropy_impl = CrossEntropyImpl.triton
-                else:
-                    self._cross_entropy_impl = CrossEntropyImpl.fused
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
@@ -112,6 +95,31 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
+        self._losses = [
+            loss_config.get_layer(
+                distributed_config,
+                self._get_full_loss_name(name),
+                self._prediction_distance,
+                self._prediction_heads,
+                self._vocab_parallel,
+                self._config.cross_entropy_splits,
+                self._config.logits_scale_factor,
+                self._loss_coefficient,
+            )
+            for name, loss_config in self._config.losses.items()
+        ]
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        # TODO: Add marginal compute? (loss)
+        return (
+            2
+            * (config.forward + 2 * config.backward)
+            * (input_.global_shape if config.global_ else input_).numel()
+            * (self._vocab_dim.global_size if config.global_ else self._vocab_dim.size)
+        )
+
+    def get_output_weights(self) -> list[torch.Tensor]:
+        return [self.output_weights]
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -137,8 +145,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         # TODO: Drop autograd entirely.
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
-        if losses is not None and language_model_loss is not None:
-            losses[self._loss_name].append(language_model_loss.detach())
         # TODO: Return the model output when needed.
         if self._is_last_head:
             # Last head should return the loss for backward.
@@ -150,185 +156,111 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
 
-    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        # TODO: Add marginal compute? (loss)
-        return (
-            2
-            * (config.forward + 2 * config.backward)
-            * (input_.global_shape if config.global_ else input_).numel()
-            * (self._vocab_dim.global_size if config.global_ else self._vocab_dim.size)
-        )
-
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        targets = self._get_targets(kwargs)
-        input_ = input_.detach().requires_grad_(do_grad := targets is not None and self.training)
+        input_ = input_.detach().requires_grad_(self.training)
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
-            # Transormers expect normalized outputs for the last transformer layer,
+            # Transformers expect normalized outputs for the last transformer layer,
             # so we add the norm output to the hidden states.
             self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
-
-        grad_output = kwargs[LanguageModelKwargs.grad_output] / (
-            self._parallel_dim.size if self._sequence_parallel_logits else 1
-        )
-
-        output_weights = self.output_weights
-        loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
-            ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
-        )
-
-        if do_grad:
-            ln_output.backward(ln_output_grad)
-            return loss, input_.grad
-        else:
+        loss, ln_output_grad = self._logits_loss_forward_backward(ln_output.detach(), kwargs, losses)
+        if ln_output_grad is None:
             return loss, None
-
-    def _get_targets(
-        self, kwargs: dict
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None] | None:
-        # Loss mask for distillation. (Labels are already masked.)
-        if self._config.enable_dpo:
-            dpo_target = kwargs.get(LanguageModelKwargs.labels)
-            lm_target = None
-            distillation_target = None
-            loss_mask = None
         else:
-            dpo_target = None
-            if self._config.distillation_model is None:
-                distillation_target, loss_mask = None, None
-            else:
-                # Target is reference model logits.
-                distillation_target = kwargs[f"{self._config.distillation_model}_logits"].flatten(0, -2)
-                loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-                if loss_mask is not None:
-                    loss_mask = loss_mask.flatten()
+            ln_output.backward(ln_output_grad.view_as(ln_output))
+            return loss, input_.grad
 
-            if self._config.distillation_model is None or self._config.language_model_loss_factor > 0.0:
-                lm_target = kwargs.get(LanguageModelKwargs.labels)
-                if lm_target is not None:
-                    # MTP: Shift the labels
-                    lm_target_sequence_length = (
-                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first]) + 1 - self._prediction_heads
-                    )
-                    if LanguageModelKwargs.sequence_q_dim in kwargs:
-                        Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
-                    lm_target_slice = slice(
-                        self._prediction_distance, self._prediction_distance + lm_target_sequence_length
-                    )
-                    lm_target = (
-                        lm_target[lm_target_slice]
-                        if kwargs[LanguageModelKwargs.sequence_first]
-                        else lm_target[:, lm_target_slice]
-                    ).flatten()
-            else:
-                lm_target = None
-
-        targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
-            targets = [None if target is None else split_op(target, self._parallel_dim.group, 0) for target in targets]
-        if not any(target is not None for target in targets):
-            # Simplify so we don't have to check every time.
-            targets = None
-        return targets
-
-    def get_output_weights(self) -> list[torch.Tensor]:
-        return [self.output_weights]
-
-    def _logits_cross_entropy_forward_backward_split(
+    def _logits_loss_forward_backward(
         self,
         input_: torch.Tensor,
-        targets: tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None] | None,
-        weight: torch.Tensor,
-        grad_output: float,
         kwargs: dict,
-        losses: dict | None = None,
+        all_losses_dict: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if self._config.cross_entropy_splits is None or targets is None:
-            loss, logit_input_grad = self._logits_cross_entropy_forward_backward(
-                input_, targets, weight, grad_output, kwargs, losses
+
+        if not self.training:
+            logits, _ = self._logits_loss_forward_backward_partial(input_, kwargs, return_logits=True)
+            # TODO: Make a proper way of returning the model output.
+            logits = logits.detach()
+            if kwargs.get("global_logits"):
+                if self._vocab_parallel:
+                    logits = gather_op(logits, self._parallel_dim.group, 2)
+                elif self._sequence_parallel_logits:
+                    logits = gather_op(
+                        logits, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
+                    )
+            kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = (
+                logits.detach()
             )
-            if targets is None:
-                # TODO: Make a proper way of returning the model output.
-                loss = loss.detach()
-                if kwargs.get("global_logits"):
-                    if self._vocab_parallel:
-                        loss = gather_op(loss, self._parallel_dim.group, 2)
-                    elif self._sequence_parallel_logits:
-                        loss = gather_op(
-                            loss, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-                        )
-                kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
-                return None, None
+            return None, None
+
+        input_ = input_.flatten(0, -2)
+
+        if self._config.cross_entropy_splits == 1:
+            loss_dict, input_grad = self._logits_loss_forward_backward_partial(input_, kwargs)
         else:
-            loss = None
-            # TODO MTP: allow a cross_entropy_splits that is not a divisor of the sequence length
-            grad_output /= self._config.cross_entropy_splits
-            logit_input = input_.flatten(0, -2)
-            if self.training:
-                logit_input_grad = torch.empty_like(logit_input)
-            else:
-                logit_input_grad = None
-            split_size = div(
-                get_unique(target.size(0) for target in targets if target is not None),
-                self._config.cross_entropy_splits,
-            )
+            input_grad = torch.empty_like(input_)
             tensors_split = [
-                [None] * self._config.cross_entropy_splits if tensor is None else tensor.split(split_size)
-                for tensor in [logit_input, *targets, logit_input_grad]
+                (
+                    [None] * self._config.cross_entropy_splits
+                    if tensor is None
+                    else tensor.chunk(self._config.cross_entropy_splits)
+                )
+                for tensor in [input_, input_grad]
             ]
-            for logit_input_, *targets_, logit_input_grad_ in zip(*tensors_split, strict=True):
-                loss_, grad_ = self._logits_cross_entropy_forward_backward(
-                    logit_input_,
-                    targets_,
-                    weight,
-                    grad_output,
+            for split_index, (partial_input_, input_grad_) in enumerate(zip(*tensors_split, strict=True)):
+                partial_loss_dict, grad_ = self._logits_loss_forward_backward_partial(
+                    partial_input_,
                     kwargs,
+                    split_index=split_index,
                 )
                 # TODO: Avoid copy with explicit out argument.
-                if self.training:
-                    logit_input_grad_.copy_(grad_)
-                loss = loss_ if loss is None else loss + loss_
-                del grad_, loss_
-        loss_count = (self._config.cross_entropy_splits or 1) * (
-            self._parallel_dim.size if self._sequence_parallel_logits else 1
+                input_grad_.copy_(grad_)
+                if split_index == 0:
+                    loss_dict = partial_loss_dict
+                else:
+                    Assert.eq(partial_loss_dict.keys(), loss_dict.keys())
+                    for name in loss_dict:
+                        loss_dict[name] += partial_loss_dict[name]
+
+        total_loss = sum(
+            (loss_.weight / self._config.cross_entropy_splits) * loss_dict[loss_.name]
+            for loss_ in self._losses
+            if loss_.weight != 0.0 and loss_.name in loss_dict
         )
-        if loss_count != 1:
-            loss.div_(loss_count)
+
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(loss, group=self._parallel_dim.group)
-        return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
+            all_reduce(total_loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
 
-    def _logits_cross_entropy_forward_backward(
+        if all_losses_dict is not None:
+            all_losses_dict[self._total_loss_name].append(total_loss)
+            if len(self._losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._losses):
+                for name, loss_value in loss_dict.items():
+                    if self._config.cross_entropy_splits != 1:
+                        loss_value /= self._config.cross_entropy_splits
+                    if self._sequence_parallel_logits:
+                        # TODO: Async
+                        all_reduce(loss_value, op=ReduceOp.AVG, group=self._parallel_dim.group)
+                    all_losses_dict[name].append(loss_value)
+
+        return total_loss, input_grad
+
+    def _logits_loss_forward_backward_partial(
         self,
         input_: torch.Tensor,
-        targets: tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None],
-        weight: torch.Tensor,
-        grad_output: float,
         kwargs: dict,
-        losses: dict | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        group = self._parallel_dim.group if self._vocab_parallel else None
+        split_index: int = 0,
+        return_logits: bool = False,
+    ) -> tuple[dict[str, torch.Tensor] | torch.Tensor, torch.Tensor | None]:
         logits, context = output_parallel_linear_forward(
             input_=input_,
-            weight=weight,
+            weight=self.output_weights,
             bias=None,
-            group=group,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
-
-        if self._config.logit_z_loss > 0.0:
-            logits = z_loss(
-                logits,
-                self._config.logit_z_loss,
-                self.training,
-                grad_output,
-                losses,
-                self._z_loss_name,
-                logits_scale_factor=self._config.logits_scale_factor,
-            )
 
         sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
         if LanguageModelKwargs.hidden_dims in kwargs:
@@ -342,171 +274,46 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             dims = None
         self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
 
-        if targets is None:
-            return logits * self._config.logits_scale_factor, None
-        dpo_target, lm_target, distillation_target, loss_mask = targets
+        if return_logits:
+            return logits, None
 
-        if dpo_target is not None:
-            dpo_loss, dpo_grad = compute_dpo_loss(
+        losses, grad = {}, None
+        for loss in self._losses:
+            # losses are returned unscaled but the grads are already scaled
+            loss_value, grad_ = loss.forward_backward(
                 logits,
-                dpo_target,
-                kwargs.get(f"{self._config.dpo_reference_model}_logits"),
-                kwargs[LanguageModelKwargs.chosen_spans],
-                kwargs[LanguageModelKwargs.rejected_spans],
-                self._config.dpo_beta,
-                grad_output * self._loss_coefficient,
+                kwargs,
+                split_index,
             )
-        else:
-            dpo_loss, dpo_grad = None, None
+            losses[loss.name] = loss_value.detach()
+            if grad_ is not None:
+                # TODO: Accumulate grads in-place to reduce memory and compute overhead.
+                grad = grad_ if grad is None else grad + grad_
 
-        if lm_target is not None:
-            lm_loss, lm_grad = cross_entropy_forward_backward(
-                logits.flatten(0, -2),
-                lm_target,
-                None,
-                group=group,
-                grad_output=grad_output * self._loss_coefficient * self._config.language_model_loss_factor,
-                implementation=self._cross_entropy_impl,
-                logits_scale_factor=self._config.logits_scale_factor,
-                target_format=TargetFormat.labels,
-            )
-            lm_loss = lm_loss * self._config.language_model_loss_factor
-        else:
-            lm_loss, lm_grad = None, None
-
-        if distillation_target is not None and self._config.distillation_loss_factor > 0.0:
-            if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
-                distillation_loss, distillation_grad = reverse_kl_forward_backward(
-                    logits.flatten(0, -2),
-                    distillation_target,
-                    loss_mask,
-                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
-                    group=group,
-                    logits_scale_factor=self._config.logits_scale_factor,
-                    teacher_softmax_temperature=self._config.teacher_softmax_temperature,
-                    target_format=(
-                        TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
-                    ),
-                    sequence_parallel_logits=self._sequence_parallel_logits,
-                )
-
-            elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
-                distillation_loss, distillation_grad = cross_entropy_forward_backward(
-                    logits.flatten(0, -2),
-                    distillation_target,
-                    loss_mask,
-                    group=group,
-                    grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
-                    implementation=self._cross_entropy_impl,
-                    logits_scale_factor=self._config.logits_scale_factor,
-                    target_format=TargetFormat.logits,
-                )
-            else:
-                raise ValueError(
-                    f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
-                )
-            distillation_loss = distillation_loss * self._config.distillation_loss_factor
-        else:
-            distillation_loss, distillation_grad = None, None
-
-        # TODO: de-allocate earlier.
-        del logits
-
-        # TODO: Accumulate grads in-place to reduce memory and compute overhead.
-        grad = _add_tensors(dpo_grad, lm_grad, distillation_grad)
-
-        # TODO: Return individual losses?
-        loss = _add_tensors(dpo_loss, lm_loss, distillation_loss)
-        if self.training and losses is not None:
-            if dpo_loss is not None:
-                losses[self._dpo_loss_name].append(dpo_loss.detach())
-            if self._config.distillation_model is not None and distillation_loss is not None:
-                losses[self._distillation_loss_name].append(distillation_loss.detach())
-            if self._config.distillation_model is not None and lm_loss is not None:
-                losses[self._distillation_language_model_loss_name].append(lm_loss.detach())
-
-        return loss, output_parallel_linear_backward(grad, context) if self.training else None
-
-    @functools.cached_property
-    def _loss_name(self) -> str:
-        name = "language_model_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
-    @functools.cached_property
-    def _z_loss_name(self) -> str:
-        name = "z_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
-    @functools.cached_property
-    def _dpo_loss_name(self) -> str:
-        name = "dpo_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
-    @functools.cached_property
-    def _distillation_language_model_loss_name(self) -> str:
-        name = "distillation_language_model_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
-
-    @functools.cached_property
-    def _distillation_loss_name(self) -> str:
-        name = "distillation_loss"
-        if self._prediction_distance > 0:
-            name = f"{name}_{self._prediction_distance}"
-        return name
+        return losses, output_parallel_linear_backward(grad, context) if self.training else None
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        loss_defs = [LossDef(name=self._loss_name, formatted_name=_format_name(self._loss_name), count=count)]
-        if self._config.logit_z_loss:
-            loss_defs.append(
-                LossDef(name=self._z_loss_name, formatted_name=_format_name(self._z_loss_name), count=count)
-            )
-        if self._config.enable_dpo:
-            loss_defs.append(
-                LossDef(name=self._dpo_loss_name, formatted_name=_format_name(self._dpo_loss_name), count=count)
-            )
-
-        if self._config.distillation_model is not None:
-            loss_defs.append(
+        return [
+            LossDef(name=self._total_loss_name, formatted_name=self._total_loss_name, count=count),
+            *(
                 LossDef(
-                    name=self._distillation_loss_name,
-                    formatted_name=_format_name(self._distillation_loss_name),
+                    name=loss.name,
+                    formatted_name=loss.name,
                     count=count,
+                    dtype=DataType.float32,
                 )
-            )
-            if self._config.language_model_loss_factor > 0.0:
-                loss_defs.append(
-                    LossDef(
-                        name=self._distillation_language_model_loss_name,
-                        formatted_name=_format_name(self._distillation_language_model_loss_name),
-                        count=count,
-                    )
-                )
+                for loss in self._losses
+            ),
+        ]
 
-        return loss_defs
+    def _get_full_loss_name(self, name) -> str:
+        return name if self._prediction_distance == 0 else f"{name}_{self._prediction_distance}"
+
+    @functools.cached_property
+    def _total_loss_name(self) -> str:
+        return self._get_full_loss_name(LM_HEAD_LOSS_NAME)
 
     @property
     def heads(self):
         # For compatibility with MTP.
         return [self]
-
-
-def _format_name(name: str) -> str:
-    return name.replace("_", " ")
-
-
-def _add_tensors(*tensors: torch.Tensor | None) -> torch.Tensor:
-    tensors = [tensor for tensor in tensors if tensor is not None]
-    if len(tensors) > 1:
-        return sum(tensors)
-    elif len(tensors) == 1:
-        return tensors[0]
-    else:
-        raise RuntimeError()

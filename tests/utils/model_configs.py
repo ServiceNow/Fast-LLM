@@ -564,7 +564,9 @@ update_and_add_testing_config(
     "mistral",
     "mistral_distill_logits",
     updates={
-        ("model", "base_model", "head", "distillation_model"): "teacher",
+        ("model", "base_model", "head", "losses"): {
+            "distillation": {"type": "distillation", "loss_type": "reverse_kl", "reference_model": "teacher"},
+        },
         ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
@@ -587,34 +589,14 @@ update_and_add_testing_config(
     skip_tests=("ms", "pp2s1_bf4", "pp2s2_bf4", "sdp2"),
 )
 
-update_and_add_testing_config(
-    "mistral_distill_logits",
-    "mistral_reverse_kl",
-    updates={
-        ("model", "base_model", "head", "distillation_loss_implementation"): "reverse_kl",
-    },
-    megatron_args=None,
-    checkpoint_format=MistralCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,  # failing: fp16, tp2, stp2, stp2_ce4
-    },
-    compare_factor=2,
-    # Modes not supported with reference models
-    skip_tests=("sdp", "ms", "pp"),
-)
 
 update_and_add_testing_config(
     "mistral_distill_logits",
     "mistral_distill_activations",
     updates={
-        ("model", "base_model", "head", "distillation_loss_factor"): 0.001,
+        ("model", "base_model", "head", "losses", "distillation", "weight"): 0.001,
         ("model", "base_model", "decoder", "block", "distillation_model"): "teacher",
-        ("model", "base_model", "decoder", "block", "activation_distillation_factor"): 0.1,
+        ("model", "base_model", "decoder", "block", "distillation_loss_weight"): 0.1,
         ("reference_models"): {
             "teacher": {
                 "model": {"base_model": copy.deepcopy(_mistral_base_model)},
