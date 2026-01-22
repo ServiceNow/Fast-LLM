@@ -7,7 +7,7 @@ import pytest
 import torch
 from transformers import LlavaConfig, LlavaForConditionalGeneration, MistralConfig
 
-from fast_llm_external_models.apriel2.cache import _AttentionCache, _SSMCache
+from fast_llm_external_models.apriel2.modeling_apriel2 import _AttentionCache, _SSMCache
 
 
 # Register custom marks
@@ -831,7 +831,7 @@ def apriel2_config_with_bias():
 @pytest.fixture
 def apriel2_cache(apriel2_config_tiny):
     """Create empty Apriel2Cache from tiny config."""
-    from fast_llm_external_models.apriel2.cache import Apriel2Cache
+    from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
 
     return Apriel2Cache(apriel2_config_tiny)
 

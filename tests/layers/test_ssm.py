@@ -11,8 +11,17 @@ from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet, Apriel2Mamba, KimiDeltaAttention
-from tests.utils.utils import get_stage
+from tests.utils.utils import get_stage, requires_cuda
+
+try:
+    from fast_llm_external_models.apriel2.modeling_apriel2 import (
+        Apriel2GatedDeltaNet,
+        Apriel2Mamba,
+        KimiDeltaAttention,
+    )
+except ImportError:
+    Apriel2GatedDeltaNet = None
+    Apriel2Mamba = None
 
 HIDDEN_SIZE = 16
 SEQ_LEN = 65
