@@ -117,7 +117,7 @@ class LMHeadTestConfig:
                 device=device,
             )
             if LanguageModelKwargs.loss_mask in kwargs:
-                labels = torch.where(kwargs[LanguageModelKwargs.loss_mask], -100, labels)
+                labels = torch.where(kwargs[LanguageModelKwargs.loss_mask], labels, -100)
             kwargs[LanguageModelKwargs.labels] = labels
 
         if self.distillation_loss is not False:
