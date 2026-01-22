@@ -7,11 +7,7 @@ from typing import Any, Optional, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
-from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
-from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
 from einops import rearrange, repeat
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
 from transformers.cache_utils import Cache
@@ -51,6 +47,19 @@ except ImportError:
     chunk_kda = None
     fused_recurrent_kda = None
     fused_kda_gate = None
+
+
+try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
+    from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+except ImportError:
+    _causal_conv1d_fn = None
+    _causal_conv1d_update = None
+    selective_scan_fn = None
+    selective_state_update = None
+
 
 is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
 
@@ -489,14 +498,6 @@ class PreprocessingOutput(TypedDict, total=False):
     attention_mask: Optional[torch.Tensor]
 
 
-# Require fast path CUDA kernels - no silent fallback to unoptimized code paths
-if not is_fast_path_available:
-    raise ImportError(
-        "CausalConv1d and Mamba require CUDA kernels from causal_conv1d and mamba_ssm. "
-        "Install with: pip install causal-conv1d mamba-ssm"
-    )
-
-
 class CausalConv1d(nn.Conv1d):
     """
     Causal 1D convolution that pads only on the left side.
@@ -519,6 +520,11 @@ class CausalConv1d(nn.Conv1d):
         activation: str = "silu",
         **kwargs,
     ):
+        if not is_fast_path_available:
+            raise ImportError(
+                "CausalConv1d requires CUDA kernels from causal_conv1d and mamba_ssm. "
+                "Install with: pip install causal-conv1d mamba-ssm"
+            )
         # Remove padding from kwargs since we handle it ourselves
         kwargs.pop("padding", None)
         super().__init__(
