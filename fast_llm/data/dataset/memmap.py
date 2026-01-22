@@ -23,6 +23,21 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
     A memory map dataset, which handles lazy loading of a pre-processed dataset.
     """
 
+    @staticmethod
+    def read_reader_config(path: pathlib.Path | str) -> MemmapIndexDatasetReaderConfig:
+        """
+        Read the MemmapIndexDatasetReaderConfig from a memmap file.
+        """
+        path = pathlib.Path(path) if isinstance(path, str) else path
+        with path.open("rb") as stream:
+            # Verify file type.
+            assert stream.read(len(FILE_HEADER)) == FILE_HEADER
+            # Go to reader configs.
+            stream.seek(int.from_bytes(stream.read(8), signed=False))
+            # Read the reader config.
+            config_bytes = stream.read(int.from_bytes(stream.read(4), signed=False))
+            return MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
+
     def __init__(
         self,
         name: str,
@@ -37,15 +52,7 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         self._path = path
         self._preprocessing = preprocessing
 
-        with self._path.open("rb") as stream:
-            # Very file type.
-            assert stream.read(len(FILE_HEADER)) == FILE_HEADER
-            # Go to reader configs.
-            stream.seek(int.from_bytes(stream.read(8), signed=False))
-            # Read the reader config.
-            reader_config = MemmapIndexDatasetReaderConfig.from_dict(
-                json.loads(stream.read(int.from_bytes(stream.read(4), signed=False)).decode("utf-8"))
-            )
+        reader_config = self.read_reader_config(self._path)
 
         self._memmap = np.memmap(self._path, mode="r")
         self._reader = reader_config.get_reader(memoryview(self._memmap), self._preprocessing)

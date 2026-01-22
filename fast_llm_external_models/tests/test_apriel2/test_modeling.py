@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 
 class TestApriel2Modeling:
@@ -13,9 +14,9 @@ class TestApriel2Modeling:
         "config_name",
         [
             "apriel2_config_tiny",
-            "apriel2_config_stochastic",
-            "apriel2_config_multi_mixer",
-            "apriel2_config_all_mixers",  # Tests all 4 mixer types
+            pytest.param("apriel2_config_stochastic", marks=requires_cuda),
+            pytest.param("apriel2_config_multi_mixer", marks=requires_cuda),
+            pytest.param("apriel2_config_all_mixers", marks=requires_cuda),  # Tests all 4 mixer types
             "apriel2_config_with_bias",  # Tests per-layer bias and non-gated MLP
         ],
     )
@@ -62,7 +63,7 @@ class TestApriel2Modeling:
 
         # Test 1: Empty cache should give different results than filled cache
         # This verifies cache is being used at all
-        from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, _AttentionCache
 
         empty_cache = Apriel2Cache(config)
 

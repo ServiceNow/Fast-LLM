@@ -2,10 +2,16 @@
 
 import torch
 
-from fast_llm_external_models.apriel2.cache import Apriel2Cache, _AttentionCache, _SSMCache
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
+from fast_llm_external_models.apriel2.modeling_apriel2 import (
+    Apriel2Cache,
+    Apriel2ForCausalLM,
+    _AttentionCache,
+    _SSMCache,
+)
+from fast_llm_external_models.tests.test_apriel2.conftest import requires_cuda
 
 
+@requires_cuda
 class TestStochasticMixerStructure:
     """Validate stochastic mixer architecture matches configuration."""
 
