@@ -141,11 +141,12 @@ class CheckpointSaveConfigBase(CheckpointConfigBase):
 
 @config_class()
 class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
+    _abstract = False
     model_weights: bool = FieldUpdate(desc="Save the model weights.")
     optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
 
     def _validate(self) -> None:
-        if self.optimizer_state is None:
+        if self.optimizer_state is None and hasattr(self.format, "support_optimizer"):
             with self._set_implicit_default():
                 # TODO: Make sure it's a type
                 self.optimizer_state = self.format.support_optimizer

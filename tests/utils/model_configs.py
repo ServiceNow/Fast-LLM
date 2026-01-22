@@ -53,6 +53,7 @@ class ModelTestingGroup(enum.StrEnum):
     generate = "generate"
     megatron = "megatron"
     distributed = "distributed"
+    streaming = "streaming"
 
 
 class ModelTestingGroupAction(enum.StrEnum):
@@ -391,6 +392,7 @@ update_and_add_testing_config(
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
     },
 )
 
