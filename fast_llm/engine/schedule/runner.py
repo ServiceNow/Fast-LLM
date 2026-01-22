@@ -1,4 +1,5 @@
 import collections
+import contextlib
 import dataclasses
 import logging
 import time
@@ -16,7 +17,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.optimizer import Optimizer
-from fast_llm.engine.schedule.config import EventType, ScheduleConfig, StepType, StreamType
+from fast_llm.engine.schedule.config import EventType, MockEvent, MockStream, ScheduleConfig, StepType, StreamType
 from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
@@ -36,7 +37,7 @@ class BatchContext:
     # Dictionary of losses, purely for logging purposes.
     # Losses will be reduced over DP and PP, and aggregated over steps.
     losses: dict | None = None
-    profile: list[tuple[EventType, Step | None, torch.cuda.Event, StreamType, float]] = dataclasses.field(
+    profile: list[tuple[EventType, Step | None, torch.cuda.Event | MockEvent, StreamType, float]] = dataclasses.field(
         default_factory=list
     )
     # Store metrics like: grad norm, loss scale, learning-rate, etc.
@@ -65,15 +66,15 @@ class BatchContext:
 
 class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
-    _compute_stream: torch.cuda.Stream
-    _data_stream: torch.cuda.Stream
-    _pipeline_stream: torch.cuda.Stream
+    _compute_stream: torch.cuda.Stream | MockStream
+    _data_stream: torch.cuda.Stream | MockStream
+    _pipeline_stream: torch.cuda.Stream | MockStream
     _streams: dict[int, StreamType]
-    _compute_event: torch.cuda.Event
-    _reduce_event: torch.cuda.Event
-    _send_event: torch.cuda.Event
+    _compute_event: torch.cuda.Event | MockEvent
+    _reduce_event: torch.cuda.Event | MockEvent
+    _send_event: torch.cuda.Event | MockEvent
     _data_stream_needs_sync: bool
-    _profile_events: dict[tuple[EventType, tuple | None], torch.cuda.Event]
+    _profile_events: dict[tuple[EventType, tuple | None], torch.cuda.Event | MockEvent]
     _distributed: Distributed
     _optimizer: Optimizer | None
     _stages_on_device: list[Stage]
@@ -111,12 +112,16 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._stages_owned = [stage.mode.on_device and not stage.is_tied_weight_copy for stage in self._stages]
 
         # Setup the streams
-        self._compute_stream = torch.cuda.current_stream(self._distributed.device)
+        self._compute_stream = self._get_current_stream()
         self._data_stream = (
-            torch.cuda.Stream(self._distributed.device) if self._config.data_overlap else self._compute_stream
+            torch.cuda.Stream(self._distributed.device)
+            if self._config.data_overlap and self._distributed_config.use_cuda
+            else self._compute_stream
         )
         self._pipeline_stream = (
-            torch.cuda.Stream(self._distributed.device) if self._config.pipeline_overlap else self._compute_stream
+            torch.cuda.Stream(self._distributed.device)
+            if self._config.pipeline_overlap and self._distributed_config.use_cuda
+            else self._compute_stream
         )
         # Putting compute stream last in the dict in case it's the same id.
         self._streams = {
@@ -126,10 +131,12 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         }
 
         # Setup the synchronization and profiling events
-        self._profile_events = collections.defaultdict(lambda: torch.cuda.Event(enable_timing=True))
-        self._compute_event = torch.cuda.Event()
-        self._reduce_event = torch.cuda.Event()
-        self._send_event = torch.cuda.Event()
+        self._profile_events = collections.defaultdict(
+            lambda: torch.cuda.Event(enable_timing=True) if self._distributed_config.use_cuda else MockEvent()
+        )
+        self._compute_event = torch.cuda.Event() if self._distributed_config.use_cuda else MockEvent()
+        self._reduce_event = torch.cuda.Event() if self._distributed_config.use_cuda else MockEvent()
+        self._send_event = torch.cuda.Event() if self._distributed_config.use_cuda else MockEvent()
         self._data_stream_needs_sync = False
 
     def run_step(
@@ -164,7 +171,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._distributed.set_step(iteration, schedule.phase)
 
         # Synchronize streams
-        Assert.eq(torch.cuda.current_stream(self._distributed.device), self._compute_stream)
+        Assert.eq(self._get_current_stream(), self._compute_stream)
         if self._config.profile_schedule:
             # Synchronize clocks
             safe_barrier(self._distributed.world_group, f"clock sync {iteration}")
@@ -320,7 +327,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
     ) -> typing.Generator[None, None, None]:
         batch_config = context.schedule.batch_config
-        grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) / batch_config.num_inputs
+        grad_output = (
+            self._optimizer.grad_scale / batch_config.num_inputs if context.schedule.phase.is_training else None
+        )
         for micro_batch in range(batch_config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:
@@ -354,7 +363,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
     def _restore(self, context: BatchContext, step: Step) -> None:
         if step.restore_launch:
-            with torch.cuda.stream(self._data_stream):
+            with self._with_stream(self._data_stream):
                 self._sync_data_stream(context, step)
                 for restore_step in step.restore_launch:
                     self._stages[restore_step.stage].restore_parameters()
@@ -368,7 +377,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
     def _recv(self, context: BatchContext, step: Step) -> None:
         if step.recv_launch:
-            with torch.cuda.stream(self._pipeline_stream):
+            with self._with_stream(self._pipeline_stream):
                 for recv_step in step.recv_launch:
                     # TODO: Pre-allocated buffers
                     context.inputs[recv_step.global_index] = torch.empty_like(
@@ -432,7 +441,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             if step.next_step.recv_step is None:
                 context.inputs[step.next_step.global_index] = output
             else:
-                with torch.cuda.stream(self._pipeline_stream):
+                with self._with_stream(self._pipeline_stream):
                     self._compute_event.wait()
                     self._record_event(context, EventType.pipe_wait_compute, step, self._pipeline_stream)
                     if self._config.debug_send_recv:
@@ -452,7 +461,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
     def _reduce(self, context: BatchContext, step: Step) -> None:
         if step.reduce:
-            with torch.cuda.stream(self._data_stream):
+            with self._with_stream(self._data_stream):
                 self._sync_data_stream(context, step)
                 stage = self._stages[step.stage]
                 if not self._config.skip_step:
@@ -462,12 +471,12 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 self._record_event(context, EventType.reduce, step)
 
     def _record_event(
-        self, context: BatchContext, type_: EventType, step: Step | None, stream: torch.cuda.Stream = None
+        self, context: BatchContext, type_: EventType, step: Step | None, stream: torch.cuda.Stream | MockStream = None
     ) -> None:
         if not self._config.profile_schedule:
             return
         if stream is None:
-            stream = torch.cuda.current_stream()
+            stream = self._get_current_stream()
         event = self._profile_events[(type_, None if step is None else step.map_index)]
         event.record(stream)
         cpu_time = time.perf_counter()
@@ -529,3 +538,11 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_event(context, EventType.run, step)
         if self._config.data_overlap:
             self._data_stream_needs_sync = True
+
+    def _get_current_stream(self):
+        return (
+            torch.cuda.current_stream(self._distributed.device) if self._distributed_config.use_cuda else MockStream()
+        )
+
+    def _with_stream(self, stream: torch.cuda.Stream | MockStream):
+        return torch.cuda.stream(stream) if self._distributed_config.use_cuda else contextlib.nullcontext()

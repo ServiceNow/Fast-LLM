@@ -3,12 +3,11 @@ import pytest
 import torch
 
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
-from tests.utils.utils import requires_cuda
 
 
 def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans: list[list[tuple[int, int]]]):
@@ -62,38 +61,32 @@ def reference_dpo_loss(
 
 
 def test_dpo_loss():
-    random_state = np.random.RandomState(0)
-    logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32).requires_grad_()
-    reference_model_logits = torch.from_numpy(random_state.normal(size=(10, 50, 100))).to(torch.float32)
-    targets = torch.from_numpy(random_state.randint(0, 100, (10, 50)))
+    logits = torch.normal(0, 1, (10, 50, 100))
+    reference_model_logits = torch.normal(0, 1, (10, 50, 100))
+    targets = torch.randint(0, 100, (10, 50))
+    spans = get_random_spans(np.full(10, 50), 0, 10)
 
-    spans = get_random_spans(np.full(10, 50), 0, 10, random_state)
-
-    fastllm_loss, fast_llm_grad = compute_dpo_loss(
-        logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1, grad_output=1
-    )
+    fastllm_loss = dpo_loss(logits, targets, reference_model_logits, spans[::2], spans[1::2])
     reference_loss = reference_dpo_loss(logits, targets, reference_model_logits, spans[::2], spans[1::2], beta=1)
-    reference_loss.backward()
     Assert.rms_close(fastllm_loss, reference_loss, 1e-5)
-    Assert.rms_close(fast_llm_grad, logits.grad, 1e-5)
 
 
-@requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
     "activation", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
 )
 def test_mlp_recomputation(gated, activation):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokens = 1024
     hidden_size = 2048
     intermediate_size = 4096
     std = 1 / 64
-    input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
-    output_grad = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
-    weight_1 = torch.normal(0, std, (intermediate_size * (gated + 1), hidden_size), device="cuda", requires_grad=True)
-    bias_1 = torch.normal(0, std, (intermediate_size * (gated + 1),), device="cuda", requires_grad=True)
-    weight_2 = torch.normal(0, std, (intermediate_size, hidden_size), device="cuda", requires_grad=True)
-    bias_2 = torch.normal(0, std, (hidden_size,), device="cuda", requires_grad=True)
+    input_ = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
+    output_grad = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
+    weight_1 = torch.normal(0, std, (intermediate_size * (gated + 1), hidden_size), device=device, requires_grad=True)
+    bias_1 = torch.normal(0, std, (intermediate_size * (gated + 1),), device=device, requires_grad=True)
+    weight_2 = torch.normal(0, std, (intermediate_size, hidden_size), device=device, requires_grad=True)
+    bias_2 = torch.normal(0, std, (hidden_size,), device=device, requires_grad=True)
     params = (weight_1, bias_1, weight_2, bias_2)
 
     output_ref = torch.nn.functional.linear(
@@ -137,27 +130,27 @@ def test_mlp_recomputation(gated, activation):
 # Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
 @pytest.mark.slow
 @pytest.mark.skip("Dropless MoE is broken")
-@requires_cuda
 def test_dropless_mlp():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_experts = 4
     experts_per_token = 4
     tokens = 256
     hidden_size = 512
     intermediate_size = 1024
     std = 1 / 64
-    input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
-    router_weight = torch.normal(0, std, (num_experts, hidden_size), device="cuda")
+    input_ = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
+    router_weight = torch.normal(0, std, (num_experts, hidden_size), device=device)
 
     top_logits, top_experts = torch.topk(
         torch.nn.functional.linear(input_.detach(), router_weight), k=experts_per_token, dim=-1
     )
     scores = torch.softmax(top_logits, dim=-1, dtype=torch.float32).detach().requires_grad_()
 
-    output_grad = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
+    output_grad = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
     weight_1 = torch.normal(
-        0, std, (intermediate_size * 2 * num_experts, hidden_size), device="cuda", requires_grad=True
+        0, std, (intermediate_size * 2 * num_experts, hidden_size), device=device, requires_grad=True
     )
-    weight_2 = torch.normal(0, std, (intermediate_size * num_experts, hidden_size), device="cuda", requires_grad=True)
+    weight_2 = torch.normal(0, std, (intermediate_size * num_experts, hidden_size), device=device, requires_grad=True)
     params = (weight_1, weight_2)
 
     for param in params:

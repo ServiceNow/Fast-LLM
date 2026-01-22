@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 try:
     from fla.ops.kda import chunk_kda
     from fla.ops.kda.gate import fused_kda_gate
-except ImportError:
-    chunk_kda = None
-    fused_kda_gate = None
+
+    _kda_available = torch.cuda.is_available()
+except (ImportError, RuntimeError):
+    _kda_available = False
 
 
 def index_first_axis(x, indices):
@@ -58,7 +59,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         super().__init__(
             config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft, return_bias=return_bias
         )
-        if chunk_kda is None or fused_kda_gate is None:
+        if not _kda_available:
             raise ImportError(
                 "KimiDeltaAttention requires the `fla-core` package. "
                 "Please install it with `pip install -U fla-core`."

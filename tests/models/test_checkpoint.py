@@ -25,7 +25,6 @@ from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
 from tests.utils.save_load_configs import DISTRIBUTED_SAVE_LOAD_CONFIGS, DistributedSaveLoadConfig
 from tests.utils.subtest import DistributedTestContext
-from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,6 @@ _CHECKPOINT_AND_EVAL_ARGS = [
 ]
 
 
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
@@ -62,7 +60,6 @@ def prepare_resume(run_test_script_base_path: pathlib.Path):
     return do_prepare_resume
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume(run_test_script_for_all_models, compare_results_for_all_models, prepare_resume):
@@ -78,7 +75,6 @@ def test_resume(run_test_script_for_all_models, compare_results_for_all_models, 
     compare_results_for_all_models(distributed_testing_config)
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume_frozen(run_test_script_for_all_models, prepare_resume):
@@ -105,13 +101,13 @@ def run_conversion(model_testing_config: ModelTestingConfig, get_convert_path):
                 path=get_convert_path(save_format, load_format),
                 format=save_format,
             ),
+            use_cpu=not torch.cuda.is_available(),
             model=model_testing_config.model_config_class,
         ).run()
 
     return do_run_conversion
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_conversion(model_testing_config, run_conversion, get_convert_path):
@@ -175,7 +171,6 @@ def compare_safetensor_files(
             Assert.all_equal(reference[key], other[key], msg=f"tensor = {key}, path = {other_path}")
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_round_trip(model_testing_config, get_convert_path):
@@ -222,7 +217,8 @@ def load_and_compare_checkpoints(model_testing_config):
             CheckpointLoadConfig(
                 path=load_path,
                 format=load_format,
-            )
+            ),
+            {("distributed", "use_cuda"): torch.cuda.is_available()},
         )
         if reference_config is not None:
             _compare_model_configs(reference_config, model.config)
@@ -232,7 +228,6 @@ def load_and_compare_checkpoints(model_testing_config):
     return do_load_and_compare_checkpoints
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained(
@@ -242,9 +237,9 @@ def test_load_pretrained(
     reference_config = model_testing_config.model_config_class.from_dict(
         yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
     )
-    reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
-        _WEIGHT_SHARD_SAVE_NAME
-    ]
+    reference_shard = safetensors.torch.load_file(
+        get_convert_path() / "rank_0.safetensors", device="cuda" if torch.cuda.is_available() else "cpu"
+    )[_WEIGHT_SHARD_SAVE_NAME]
     load_and_compare_checkpoints(
         FastLLMCheckpointFormat,
         get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat),
@@ -307,10 +302,11 @@ def test_load_pretrained(
     )
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_huggingface_model(model_testing_config, get_convert_path):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    distributed_update = {("distributed", "use_cuda"): torch.cuda.is_available()}
     if model_testing_config.checkpoint_format is None:
         return
     # Test that Fast-LLM's Hugging Face wrapper produces the same results as the converted Hugging Face model.
@@ -327,18 +323,19 @@ def test_huggingface_model(model_testing_config, get_convert_path):
             path=get_convert_path(),
             format=DistributedCheckpointFormat,
             load_config=ModelConfigType.model,
-        )
+        ),
+        distributed_update,
     ).eval()
     test_input = torch.randint(
         0,
         384,
         size=(4, 100),
         dtype=torch.int64,
-        device="cuda",
+        device=device,
     )
     kwargs = {}
     if model_testing_config.model_type == "multimodal":
-        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).cuda()
+        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(device)
         kwargs["image_sizes"] = torch.tensor(
             [
                 [20, 20],  # Full image, 25 patches
@@ -364,16 +361,21 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         # Last one cropped out.
 
     output_ref = model_ref(test_input, **kwargs)
-    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path).eval()
+    model_from_fast_llm = hf_class.from_pretrained(fast_llm_path, distributed_update).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
             path=hf_path,
             format=model_testing_config.checkpoint_format,
             load_config=ModelConfigType.model,
-        )
+        ),
+        distributed_update,
     ).eval()
     errors = []
-    model_as_hf = model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True).cuda().eval()
+    model_as_hf = (
+        model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True)
+        .to("cuda" if torch.cuda.is_available() else "cpu")
+        .eval()
+    )
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
@@ -429,7 +431,6 @@ def _save_and_load_in_parallel(
                 torch.cuda.empty_cache()
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_save_and_load_in_parallel(run_parallel_script, run_test_script_base_path, model_testing_config):
@@ -458,7 +459,6 @@ def reference_distributed_shard(get_convert_path) -> torch.Tensor | None:
 
 # We don't want to depend on `test_save_and_load_in_parallel` because we still want to run this in cas of failure.
 # This should still run after `test_save_and_load_in_parallel`
-@requires_cuda
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_parallel_checkpoint_in_single_gpu(
@@ -488,7 +488,6 @@ def test_load_parallel_checkpoint_in_single_gpu(
     )
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_parallel_checkpoint_consistency(model_testing_config, run_test_script_base_path):
@@ -520,7 +519,6 @@ def reference_fast_llm_shard(get_convert_path) -> dict[str, torch.Tensor] | None
         return None
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_multi_gpu_fast_llm_checkpoint(

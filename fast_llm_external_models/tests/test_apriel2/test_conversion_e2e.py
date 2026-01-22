@@ -138,6 +138,7 @@ def expand_surgery_chain_with_cycling(
     return expanded
 
 
+@requires_cuda
 class TestPlanCompositionTorture:
     """End-to-end torture test for plan composition.
 

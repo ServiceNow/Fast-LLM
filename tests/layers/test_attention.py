@@ -3,19 +3,19 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.attention.attention import Attention
+from fast_llm.layers.attention.attention import Attention, _flash_available
 from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.utils import Assert
-from tests.utils.utils import requires_cuda
 
 
-@requires_cuda
 @pytest.mark.parametrize("cross_document_attention", (True, False))
 @pytest.mark.parametrize(("causal", "window_size"), ((True, None), (True, 50), (False, None)))
+@pytest.mark.skipif(not _flash_available, reason="Flash attention not available")
 def test_attention_implementations(cross_document_attention: bool, causal: bool, window_size: int | None):
     """
     Check that the flash and backup attention implementation give the same result.
     """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     attention: Attention = AttentionConfig(
         head_size=32,
         heads=4,
@@ -29,11 +29,11 @@ def test_attention_implementations(cross_document_attention: bool, causal: bool,
         lr_scale=None,
         peft=None,
     )
-    query = torch.empty(4, 100, 4, 32, dtype=torch.bfloat16, device="cuda").normal_()
-    key = torch.empty(4, 100, 2, 32, dtype=torch.bfloat16, device="cuda").normal_()
-    value = torch.empty(4, 100, 2, 32, dtype=torch.bfloat16, device="cuda").normal_()
+    query = torch.empty(4, 100, 4, 32, dtype=torch.bfloat16, device=device).normal_()
+    key = torch.empty(4, 100, 2, 32, dtype=torch.bfloat16, device=device).normal_()
+    value = torch.empty(4, 100, 2, 32, dtype=torch.bfloat16, device=device).normal_()
     kwargs = {
-        AttentionKwargs.device: torch.device("cuda"),
+        AttentionKwargs.device: device,
         AttentionKwargs.sequence_length: 100,
         AttentionKwargs.sequence_lengths: [
             [20, 32, 10, 11, 9, 18],

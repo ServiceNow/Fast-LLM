@@ -12,12 +12,10 @@ from tests.utils.distributed_configs import (
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
 from tests.utils.run_test_script import do_run_test_script_for_all_models
 from tests.utils.subtest import DistributedTestContext, check_subtest_success, set_subtest_success
-from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
 
 
-@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_simple(run_test_script_for_all_models, run_test_script_base_path):
     # A simple config to prevent unnecessary testing and creation of dependency group
@@ -25,7 +23,6 @@ def test_model_simple(run_test_script_for_all_models, run_test_script_base_path)
     set_subtest_success(run_test_script_base_path / SIMPLE_TESTING_CONFIG.name)
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_model_simple[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 # Parametrize with config name so it shows in test name.
@@ -66,7 +63,6 @@ def _run_model_distributed(
                 do_run_test_script_for_all_models(config, model_testing_config, base_path)
 
 
-@requires_cuda
 @pytest.mark.depends_on(on=["test_model_simple[{model_testing_config}]"])
 @pytest.mark.model_testing_group(
     ModelTestingGroup.distributed,
@@ -84,7 +80,6 @@ def test_run_model_distributed(run_parallel_script, model_testing_config, run_te
 
 # We don't want to depend on `test_model_distributed` because we still want to run this in cas of failure.
 # This should still run after `test_model_distributed`
-@requires_cuda
 @pytest.mark.depends_on(on=["test_model_simple[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 @pytest.mark.parametrize("config_name", list(DISTRIBUTED_TESTING_CONFIGS))
