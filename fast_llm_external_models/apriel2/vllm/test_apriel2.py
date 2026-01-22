@@ -7,92 +7,120 @@ by comparing vLLM outputs with the reference Transformers implementation.
 Usage:
     # Test coherence (generation quality)
     python test_apriel2.py coherence /path/to/model
-    python test_apriel2.py coherence /path/to/model1 /path/to/model2
+    python test_apriel2.py coherence /path/to/model --placement every2nd-gdn
 
     # Compare logits between vLLM and Transformers
     python test_apriel2.py logits /path/to/model
-    python test_apriel2.py logits /path/to/model --prompt "Custom prompt"
+    python test_apriel2.py logits /path/to/model --placement all-gdn
 
     # Statistical comparison with many prompts (for rigorous testing)
     python test_apriel2.py stats /path/to/model --num-prompts 128
-    python test_apriel2.py stats /path/to/model --num-prompts 64 --min-tokens 256 --no-compile
+    python test_apriel2.py stats /path/to/model --placement every3rd-gdn
 
     # Run both tests
     python test_apriel2.py all /path/to/model
+
+Placement patterns:
+    --placement all-attention       All layers use attention
+    --placement all-gdn             All layers use GDN
+    --placement every2nd-gdn        Every 2nd layer is GDN (1=attn, 2=gdn, 3=attn, ...)
+    --placement every3rd-gdn        Every 3rd layer is GDN
+    --placement every4th-gdn        Every 4th layer is GDN
+    --placement attn,gdn,attn,...   Explicit comma-separated list
 """
 
 import argparse
 import gc
-import sys
 from pathlib import Path
-import numpy as np
 
+import numpy as np
 import torch
 import triton
+
+from vllm import LLM, SamplingParams
+from vllm.config import CompilationConfig
+from vllm.config.compilation import CompilationMode
+
+# Apriel2 model registration is handled automatically via vLLM's plugin system
+# (see fast-llm setup.cfg entry_points for vllm.general_plugins)
+
 
 # Set a triton allocator to avoid "no allocator was set" errors
 def _triton_allocator(size, align, stream):
     return torch.empty(size, dtype=torch.int8, device='cuda').data_ptr()
 
+
 triton.set_allocator(_triton_allocator)
 
-from vllm import LLM, ModelRegistry, SamplingParams
-from vllm.config import CompilationConfig
-from vllm.config.compilation import CompilationMode
-from vllm.transformers_utils.model_arch_config_convertor import (
-    MODEL_ARCH_CONFIG_CONVERTORS,
-    ModelArchConfigConvertorBase,
-)
 
-# Ensure the parent package is importable
-_script_dir = Path(__file__).parent
-_package_root = _script_dir.parent.parent.parent
-if str(_package_root) not in sys.path:
-    sys.path.insert(0, str(_package_root))
+def parse_placement(placement_str: str, num_layers: int) -> list[str]:
+    """Parse placement string into a list of mixer names.
 
-# Register the Apriel2 model class at module level (required for subprocess)
-from fast_llm_external_models.apriel2.vllm.modeling_apriel2 import Apriel2ForCausalLM  # noqa: E402
-ModelRegistry.register_model(
-    "Apriel2ForCausalLM",
-    "fast_llm_external_models.apriel2.vllm:Apriel2ForCausalLM",
-)
+    Args:
+        placement_str: Either a pattern name or comma-separated mixer names.
+            Patterns: all-attention, all-gdn, every2nd-gdn, every3rd-gdn, every4th-gdn
+            Explicit: attention,gdn,attention,gdn,...
+        num_layers: Number of layers in the model.
 
+    Returns:
+        List of mixer names, one per layer.
+    """
+    placement_str = placement_str.strip().lower()
 
-# Register config convertor at module level
-class Apriel2TextModelArchConfigConvertor(ModelArchConfigConvertorBase):
-    def _get_first_attention_block(self):
-        decoder = getattr(self.hf_text_config, 'decoder', {})
-        decoder_type = decoder.get('type', 'fixed')
-        if decoder_type == 'fixed':
-            block = decoder.get('block', {})
-            mixer = block.get('mixer', {})
-            if mixer.get('type') == 'attention':
-                return mixer
-        elif decoder_type == 'pattern':
-            blocks = decoder.get('blocks', {})
-            pattern = decoder.get('pattern', [])
-            for block_name in pattern:
-                block = blocks.get(block_name, {})
-                mixer = block.get('mixer', {})
-                if mixer.get('type') == 'attention':
-                    return mixer
-        return {}
-
-    def get_num_hidden_layers(self) -> int:
-        return getattr(self.hf_text_config, 'decoder', {}).get('num_blocks', 0)
-
-    def get_total_num_attention_heads(self) -> int:
-        return self._get_first_attention_block().get('heads', 0)
-
-    def get_total_num_kv_heads(self) -> int:
-        return self._get_first_attention_block().get('head_groups', self.get_total_num_attention_heads())
-
-    def get_head_size(self) -> int:
-        return self._get_first_attention_block().get('head_size', 0)
+    if placement_str == "all-attention":
+        return ["attention"] * num_layers
+    elif placement_str == "all-gdn":
+        return ["gdn"] * num_layers
+    elif placement_str.startswith("every") and placement_str.endswith("-gdn"):
+        # Parse "every2nd-gdn", "every3rd-gdn", etc.
+        n_str = placement_str[5:-4]  # Extract "2nd", "3rd", etc.
+        n_str = n_str.rstrip("ndrdth")  # Remove ordinal suffix
+        n = int(n_str)
+        placement = []
+        for i in range(num_layers):
+            if (i + 1) % n == 0:  # Every nth layer is GDN
+                placement.append("gdn")
+            else:
+                placement.append("attention")
+        return placement
+    elif "," in placement_str:
+        # Explicit comma-separated list
+        placement = [m.strip() for m in placement_str.split(",")]
+        if len(placement) != num_layers:
+            raise ValueError(f"Placement has {len(placement)} entries but model has {num_layers} layers")
+        return placement
+    else:
+        raise ValueError(f"Unknown placement pattern: {placement_str}")
 
 
-MODEL_ARCH_CONFIG_CONVERTORS['apriel2_text'] = Apriel2TextModelArchConfigConvertor
-MODEL_ARCH_CONFIG_CONVERTORS['apriel2'] = Apriel2TextModelArchConfigConvertor
+def apply_placement(llm: "LLM", placement_str: str | None) -> None:
+    """Apply placement to a vLLM model if specified.
+
+    Args:
+        llm: vLLM LLM instance.
+        placement_str: Placement string or None to skip.
+    """
+    if placement_str is None:
+        return
+
+    # Get current placements to determine num_layers
+    placements = llm.collective_rpc("get_layer_placements")
+    if not placements or not placements[0]:
+        print(f"  Model does not support placement switching, ignoring --placement")
+        return
+
+    num_layers = len(placements[0])
+    current = list(placements[0].values())
+    print(f"  Current placement: {current[0]} (all {num_layers} layers)")
+
+    new_placement = parse_placement(placement_str, num_layers)
+    llm.collective_rpc("set_layer_placements", args=(new_placement,))
+
+    # Verify
+    placements_after = llm.collective_rpc("get_layer_placements")
+    attn_count = sum(1 for v in placements_after[0].values() if v == "attention")
+    gdn_count = sum(1 for v in placements_after[0].values() if v == "gdn")
+    print(f"  Applied placement '{placement_str}': {attn_count} attention, {gdn_count} gdn")
 
 
 def setup_transformers():
@@ -106,7 +134,7 @@ def setup_transformers():
     AutoModelForCausalLM.register(Apriel2TextConfig, Apriel2ForCausalLM)
 
 
-def test_coherence_vllm(model_paths: list[str], prompts: list[str], max_tokens: int = 50):
+def test_coherence_vllm(model_paths: list[str], prompts: list[str], max_tokens: int = 50, placement: str | None = None):
     """Test generation coherence with vLLM."""
     sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0)
 
@@ -123,6 +151,8 @@ def test_coherence_vllm(model_paths: list[str], prompts: list[str], max_tokens: 
             gpu_memory_utilization=0.4,
             max_model_len=2048,
         )
+
+        apply_placement(llm, placement)
 
         outputs = llm.generate(prompts, sampling_params)
         results[model_name] = {}
@@ -188,7 +218,7 @@ def test_coherence_transformers(model_paths: list[str], prompts: list[str], max_
     return results
 
 
-def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16", no_compile: bool = False, revision: str | None = None, debug_gdn: bool = False):
+def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16", no_compile: bool = False, revision: str | None = None, debug_gdn: bool = False, placement: str | None = None):
     """Compare logits between vLLM and Transformers."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -210,6 +240,7 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
     print(f"Dtype: {dtype}")
     print(f"No compile: {no_compile}")
     print(f"Debug GDN: {debug_gdn}")
+    print(f"Placement: {placement}")
     print(f"{'='*70}\n")
 
     # Tokenize
@@ -231,6 +262,8 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
         dtype=dtype,
         compilation_config=compilation_config,
     )
+
+    apply_placement(llm, placement)
 
     sampling_params = SamplingParams(
         max_tokens=max_tokens,
@@ -361,6 +394,7 @@ def compare_comprehensive(
     dtype: str = "bfloat16",
     no_compile: bool = True,
     revision: str | None = None,
+    placement: str | None = None,
 ):
     """Compare vLLM and Transformers across various configurations.
 
@@ -424,6 +458,8 @@ def compare_comprehensive(
         dtype=dtype,
         compilation_config=compilation_config,
     )
+
+    apply_placement(llm, placement)
 
     # Load Transformers once
     print(f"\nLoading Transformers model...")
@@ -578,6 +614,7 @@ def cmd_compare(args):
             dtype=args.dtype,
             no_compile=args.no_compile,
             revision=getattr(args, 'revision', None),
+            placement=getattr(args, 'placement', None),
         )
 
 
@@ -589,10 +626,12 @@ def cmd_coherence(args):
         "Once upon a time, there was a",
     ]
 
+    placement = getattr(args, 'placement', None)
+
     print("\n" + "="*70)
     print("COHERENCE TEST: vLLM")
     print("="*70)
-    vllm_results = test_coherence_vllm(args.model_paths, prompts, args.max_tokens)
+    vllm_results = test_coherence_vllm(args.model_paths, prompts, args.max_tokens, placement=placement)
 
     print("\n" + "="*70)
     print("COHERENCE TEST: Transformers")
@@ -751,6 +790,7 @@ def run_vllm_inference(
     dtype: str,
     no_compile: bool,
     revision: str | None,
+    placement: str | None = None,
 ) -> tuple[list[list[int]], list[list[dict]]]:
     """Run vLLM inference and return generated tokens and logprobs.
 
@@ -775,6 +815,8 @@ def run_vllm_inference(
         max_num_seqs=batch_size,  # Control max concurrent sequences
         enable_prefix_caching=False,  # Disable for hybrid models
     )
+
+    apply_placement(llm, placement)
 
     # Create TokensPrompt for each prompt
     vllm_prompts = [TokensPrompt(prompt_token_ids=ids) for ids in token_ids_list]
@@ -1057,9 +1099,10 @@ def cmd_stats(args):
         print(f"  Prepared {len(token_ids_list)} token sequences")
 
         # Run vLLM inference
+        placement = getattr(args, 'placement', None)
         vllm_tokens, vllm_logprobs = run_vllm_inference(
             model_path, token_ids_list, args.decode_length,
-            args.batch_size, args.dtype, args.no_compile, revision
+            args.batch_size, args.dtype, args.no_compile, revision, placement
         )
 
         # Run Transformers inference
@@ -1100,8 +1143,9 @@ def cmd_logits(args):
     """Run logits comparison test."""
     revision = getattr(args, 'revision', None)
     debug_gdn = getattr(args, 'debug_gdn', False)
+    placement = getattr(args, 'placement', None)
     for model_path in args.model_paths:
-        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype, args.no_compile, revision, debug_gdn)
+        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype, args.no_compile, revision, debug_gdn, placement)
 
 
 def cmd_all(args):
@@ -1119,10 +1163,17 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Placement help text (used by multiple subcommands)
+    placement_help = (
+        "Mixer placement: 'all-attention', 'all-gdn', 'every2nd-gdn', 'every3rd-gdn', "
+        "or comma-separated list like 'attention,gdn,attention,gdn,...'"
+    )
+
     # Coherence test
     p_coherence = subparsers.add_parser("coherence", help="Test generation coherence")
     p_coherence.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
     p_coherence.add_argument("--max-tokens", type=int, default=50, help="Max tokens to generate")
+    p_coherence.add_argument("--placement", default=None, help=placement_help)
     p_coherence.set_defaults(func=cmd_coherence)
 
     # Logits comparison
@@ -1134,6 +1185,7 @@ def main():
     p_logits.add_argument("--no-compile", action="store_true", help="Disable torch.compile")
     p_logits.add_argument("--revision", default=None, help="Model revision")
     p_logits.add_argument("--debug-gdn", action="store_true", help="Enable GDN debug output")
+    p_logits.add_argument("--placement", default=None, help=placement_help)
     p_logits.set_defaults(func=cmd_logits)
 
     # Comprehensive comparison
@@ -1145,6 +1197,7 @@ def main():
     p_compare.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
     p_compare.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
     p_compare.add_argument("--revision", default=None, help="Model revision")
+    p_compare.add_argument("--placement", default=None, help=placement_help)
     p_compare.set_defaults(func=cmd_compare)
 
     # Statistical comparison
@@ -1160,6 +1213,7 @@ def main():
                         help="Transformers kernel config: upstream FLA or vLLM forks")
     p_stats.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     p_stats.add_argument("--revision", default=None, help="Model revision")
+    p_stats.add_argument("--placement", default=None, help=placement_help)
     p_stats.set_defaults(func=cmd_stats)
 
     # All tests
@@ -1167,6 +1221,7 @@ def main():
     p_all.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
     p_all.add_argument("--prompt", default="The capital of France is", help="Input prompt for logits test")
     p_all.add_argument("--max-tokens", type=int, default=50, help="Max tokens for coherence test")
+    p_all.add_argument("--placement", default=None, help=placement_help)
     p_all.set_defaults(func=cmd_all)
 
     args = parser.parse_args()
