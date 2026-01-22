@@ -28,6 +28,12 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         """
         Read the MemmapIndexDatasetReaderConfig from a memmap file.
         """
+        # Import reader configs to register them in the dynamic class registry
+        from fast_llm.data.sample.language_model import LanguageModelReaderConfig  # noqa: F401
+        from fast_llm.data.sample.patch import PatchReaderConfig  # noqa: F401
+        from fast_llm.data.sample.range import RangeReaderConfig  # noqa: F401
+        from fast_llm.data.sample.token import TokenReaderConfig  # noqa: F401
+
         path = pathlib.Path(path) if isinstance(path, str) else path
         with path.open("rb") as stream:
             # Verify file type.
