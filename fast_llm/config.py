@@ -555,9 +555,9 @@ class Config(metaclass=ConfigMeta):
         errors = []
         new_value = {}
         old_keys = {}
-        for key, value_ in value.items():
+        for key in sorted(value):
             new_key = cls._validate_nested(key, args[0], f"{name}(key {key})", None, errors, True)
-            new_value_ = cls._validate_nested(value_, args[1], f"{name}[{key}]", None, errors, True)
+            new_value_ = cls._validate_nested(value[key], args[1], f"{name}[{key}]", None, errors, True)
             if key in new_value:
                 errors.append(f"Duplicate key `{new_key}` after validation (from `{old_keys[new_key]}`, `{key}`)")
             old_keys[new_key] = key
