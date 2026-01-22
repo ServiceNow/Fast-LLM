@@ -747,6 +747,7 @@ def run_vllm_inference(
     model_path: str,
     token_ids_list: list[list[int]],
     decode_length: int,
+    batch_size: int,
     dtype: str,
     no_compile: bool,
     revision: str | None,
@@ -760,7 +761,7 @@ def run_vllm_inference(
     from vllm import TokensPrompt
 
     compile_label = "no-compile" if no_compile else "compiled"
-    print(f"\nLoading vLLM model ({compile_label})...")
+    print(f"\nLoading vLLM model ({compile_label}, batch_size={batch_size})...")
     compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
 
     llm = LLM(
@@ -771,6 +772,8 @@ def run_vllm_inference(
         max_model_len=2048,
         dtype=dtype,
         compilation_config=compilation_config,
+        max_num_seqs=batch_size,  # Control max concurrent sequences
+        enable_prefix_caching=False,  # Disable for hybrid models
     )
 
     # Create TokensPrompt for each prompt
@@ -811,10 +814,15 @@ def run_transformers_inference(
     model_path: str,
     token_ids_list: list[list[int]],
     decode_length: int,
+    batch_size: int,
     dtype: str,
     revision: str | None,
 ) -> tuple[list[list[int]], list[list[torch.Tensor]]]:
     """Run Transformers inference and return generated tokens and logprobs.
+
+    Args:
+        batch_size: Number of prompts to process together. For generation,
+                   each prompt still decodes sequentially within the batch.
 
     Returns:
         - generated_tokens: list of list of token IDs (one list per prompt)
@@ -825,7 +833,7 @@ def run_transformers_inference(
     torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
     attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
 
-    print(f"\nLoading Transformers model ({attn_impl})...")
+    print(f"\nLoading Transformers model ({attn_impl}, batch_size={batch_size})...")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         revision=revision,
@@ -841,30 +849,39 @@ def run_transformers_inference(
 
     print(f"Running Transformers inference on {len(token_ids_list)} prompts...")
 
-    for i, token_ids in enumerate(token_ids_list):
-        input_ids = torch.tensor([token_ids], device="cuda")
-        prompt_tokens = []
-        prompt_logprobs = []
+    # Process in batches
+    for batch_start in range(0, len(token_ids_list), batch_size):
+        batch_end = min(batch_start + batch_size, len(token_ids_list))
+        batch_token_ids = token_ids_list[batch_start:batch_end]
+        actual_batch_size = len(batch_token_ids)
 
-        with torch.no_grad():
-            # Generate tokens one at a time to get logprobs at each step
-            for step in range(decode_length):
-                outputs = model(input_ids)
-                logits = outputs.logits[:, -1, :]  # Last position
-                logprobs = torch.log_softmax(logits.float(), dim=-1).cpu()
+        # For batch_size > 1, we need to handle each prompt separately for generation
+        # because sequences grow at different rates and we need per-token logprobs
+        for i, token_ids in enumerate(batch_token_ids):
+            input_ids = torch.tensor([token_ids], device="cuda")
+            prompt_tokens = []
+            prompt_logprobs = []
 
-                next_token = logits.argmax(dim=-1).item()
-                prompt_tokens.append(next_token)
-                prompt_logprobs.append(logprobs[0])
+            with torch.no_grad():
+                # Generate tokens one at a time to get logprobs at each step
+                for step in range(decode_length):
+                    outputs = model(input_ids)
+                    logits = outputs.logits[:, -1, :]  # Last position
+                    logprobs = torch.log_softmax(logits.float(), dim=-1).cpu()
 
-                # Append to input for next step
-                input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device="cuda")], dim=1)
+                    next_token = logits.argmax(dim=-1).item()
+                    prompt_tokens.append(next_token)
+                    prompt_logprobs.append(logprobs[0])
 
-        generated_tokens.append(prompt_tokens)
-        logprobs_per_position.append(prompt_logprobs)
+                    # Append to input for next step
+                    input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device="cuda")], dim=1)
 
-        if (i + 1) % 10 == 0:
-            print(f"  Processed {i + 1}/{len(token_ids_list)} prompts", end="\r")
+            generated_tokens.append(prompt_tokens)
+            logprobs_per_position.append(prompt_logprobs)
+
+        processed = batch_end
+        if processed % 10 == 0 or processed == len(token_ids_list):
+            print(f"  Processed {processed}/{len(token_ids_list)} prompts", end="\r")
 
     print()
 
@@ -1042,13 +1059,13 @@ def cmd_stats(args):
         # Run vLLM inference
         vllm_tokens, vllm_logprobs = run_vllm_inference(
             model_path, token_ids_list, args.decode_length,
-            args.dtype, args.no_compile, revision
+            args.batch_size, args.dtype, args.no_compile, revision
         )
 
         # Run Transformers inference
         tf_tokens, tf_logprobs = run_transformers_inference(
             model_path, token_ids_list, args.decode_length,
-            args.dtype, revision
+            args.batch_size, args.dtype, revision
         )
 
         # Compute comparisons
@@ -1066,6 +1083,10 @@ def cmd_stats(args):
         print(f"{'='*70}")
         print(f"  Mode: {mode_label}")
         print(f"  TF kernels: {args.tf_kernels}")
+        print(f"  Batch size: {args.batch_size}")
+        print(f"  Dtype: {args.dtype}")
+        if revision:
+            print(f"  Revision: {revision}")
         print(f"  Token match rate: {100*stats['match_rate']:.1f}%")
         print(f"  Avg diff (mean): {stats['avg_diff_mean']:.4f}")
         print(f"  Avg diff (p95):  {stats['avg_diff_p95']:.4f}")
@@ -1129,9 +1150,10 @@ def main():
     # Statistical comparison
     p_stats = subparsers.add_parser("stats", help="Statistical comparison with many prompts (per-position analysis)")
     p_stats.add_argument("model_paths", nargs="+", help="Path(s) to model checkpoint(s)")
-    p_stats.add_argument("--num-prompts", type=int, default=128, help="Number of prompts to test")
+    p_stats.add_argument("--num-prompts", type=int, default=64, help="Number of prompts to test")
     p_stats.add_argument("--prompt-length", type=int, default=256, help="Number of tokens to prefill")
     p_stats.add_argument("--decode-length", type=int, default=10, help="Number of tokens to decode")
+    p_stats.add_argument("--batch-size", type=int, default=1, help="Batch size for inference")
     p_stats.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
     p_stats.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
     p_stats.add_argument("--tf-kernels", choices=["upstream", "vllm"], default="upstream",

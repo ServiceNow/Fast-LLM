@@ -709,15 +709,16 @@ class Apriel2Attention(nn.Module):
 
     def forward(
         self,
-        positions: torch.Tensor,
         hidden_states: torch.Tensor,
-    ) -> torch.Tensor:
+        output: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        **kwargs,
+    ) -> None:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v)
-        output, _ = self.o_proj(attn_output)
-        return output
+        output[:], _ = self.o_proj(attn_output)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loaded = set()
@@ -830,6 +831,8 @@ class Apriel2MambaMixer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         output: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        **kwargs,
     ) -> None:
         self.mamba(hidden_states, output)
 
@@ -1228,7 +1231,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         self,
         hidden_states: torch.Tensor,
         output: torch.Tensor,
-    ):
+        positions: torch.Tensor | None = None,
+        **kwargs,
+    ) -> None:
         """Forward pass with custom op for core attention."""
         num_tokens = hidden_states.size(0)
 
@@ -1728,6 +1733,8 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         self,
         hidden_states: torch.Tensor,
         output: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        **kwargs,
     ) -> None:
         num_tokens = hidden_states.size(0)
         q = self.q_proj(hidden_states)[0]
@@ -2020,8 +2027,9 @@ class Apriel2AttentionDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        hidden_states = self.mixer(positions=positions, hidden_states=hidden_states)
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        output = torch.empty_like(hidden_states)
+        self.mixer(hidden_states, output, positions=positions)
+        hidden_states, residual = self.post_attention_layernorm(output, residual)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
@@ -2370,13 +2378,14 @@ class Apriel2StochasticMixer(nn.Module):
 
     def forward(
         self,
-        positions: torch.Tensor,
         hidden_states: torch.Tensor,
+        output: torch.Tensor,
+        positions: torch.Tensor | None = None,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> None:
         """Forward through the active mixer."""
         mixer = self.mixers[self.active_mixer_name]
-        return mixer(positions=positions, hidden_states=hidden_states, **kwargs)
+        mixer(hidden_states, output, positions=positions, **kwargs)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """Load weights for all sub-mixers."""
@@ -2484,8 +2493,9 @@ class Apriel2StochasticDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        hidden_states = self.mixer(positions=positions, hidden_states=hidden_states, **kwargs)
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        output = torch.empty_like(hidden_states)
+        self.mixer(hidden_states, output, positions=positions, **kwargs)
+        hidden_states, residual = self.post_attention_layernorm(output, residual)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
@@ -2783,3 +2793,76 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
         )
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+
+    def set_layer_placements(self, placement: list[str]) -> dict[int, str]:
+        """Set the active mixer for each stochastic layer.
+
+        This method is designed to be used with vLLM's apply_model:
+            llm.apply_model("set_layer_placements", placement)
+
+        Args:
+            placement: List of mixer names, one per layer. For non-stochastic
+                layers, the value is ignored. Example: ["attention", "gdn", ...]
+
+        Returns:
+            Dict mapping layer index to the mixer that was set (only for
+            stochastic layers that were actually changed).
+        """
+        changed = {}
+        layers = self.model.layers
+        for layer_idx, mixer_name in enumerate(placement):
+            if layer_idx >= len(layers):
+                break
+            layer = layers[layer_idx]
+            if isinstance(layer, Apriel2StochasticDecoderLayer):
+                layer.set_active_mixer(mixer_name)
+                changed[layer_idx] = mixer_name
+        return changed
+
+    def get_layer_placements(self) -> dict[int, str]:
+        """Get the current active mixer for each stochastic layer.
+
+        This method is designed to be used with vLLM's apply_model:
+            placements = llm.apply_model("get_layer_placements")
+
+        Returns:
+            Dict mapping layer index to the currently active mixer name
+            (only for stochastic layers).
+        """
+        placements = {}
+        layers = self.model.layers
+        for layer_idx, layer in enumerate(layers):
+            if isinstance(layer, Apriel2StochasticDecoderLayer):
+                placements[layer_idx] = layer.get_active_mixer()
+        return placements
+
+
+# -----------------------------------------------------------------------------
+# Worker monkey-patching for placement switching via collective_rpc
+# -----------------------------------------------------------------------------
+# This allows calling placement methods by string name without cloudpickle:
+#     placements = llm.collective_rpc("get_layer_placements")
+#     llm.collective_rpc("set_layer_placements", args=(new_placement,))
+
+
+def _patch_worker_for_placement_switching():
+    """Add placement switching methods to the vLLM GPU worker."""
+    try:
+        from vllm.v1.worker.gpu_worker import Worker
+    except ImportError:
+        return  # vLLM not available or different version
+
+    if hasattr(Worker, "get_layer_placements"):
+        return  # Already patched
+
+    def _get_layer_placements(self) -> dict[int, str]:
+        return self.get_model().get_layer_placements()
+
+    def _set_layer_placements(self, placement: list[str]) -> dict[int, str]:
+        return self.get_model().set_layer_placements(placement)
+
+    Worker.get_layer_placements = _get_layer_placements
+    Worker.set_layer_placements = _set_layer_placements
+
+
+_patch_worker_for_placement_switching()

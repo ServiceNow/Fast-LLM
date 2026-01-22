@@ -97,8 +97,34 @@ def main():
     # Model loaded successfully
     print("\nModel loaded successfully!")
 
-    # Note: Model inspection requires different approach in vLLM v1
-    # The model is in a subprocess, so direct access isn't available here
+    # Test placement switching via collective_rpc (uses monkey-patched worker methods)
+    # Get current placements
+    placements = llm.collective_rpc("get_layer_placements")
+    print(f"\nCurrent placements: {placements[0]}")
+    if placements[0]:
+        num_layers = len(placements[0])
+        print(f"  {num_layers} stochastic layers, all active mixer: {list(placements[0].values())[0]}")
+
+        # Switch to alternating attention/gdn pattern
+        new_placement = ["attention", "gdn"] * (num_layers // 2)
+        if num_layers % 2:
+            new_placement.append("attention")
+
+        print(f"\nSwitching to alternating attention/gdn pattern...")
+        changed = llm.collective_rpc("set_layer_placements", args=(new_placement,))
+        print(f"  Changed {len(changed[0])} layers")
+
+        # Verify the change
+        placements_after = llm.collective_rpc("get_layer_placements")
+        attn_count = sum(1 for v in placements_after[0].values() if v == "attention")
+        gdn_count = sum(1 for v in placements_after[0].values() if v == "gdn")
+        print(f"  Now: {attn_count} attention, {gdn_count} gdn")
+
+        # Switch back to all attention
+        print(f"\nSwitching back to all attention...")
+        all_attention = ["attention"] * num_layers
+        llm.collective_rpc("set_layer_placements", args=(all_attention,))
+        print("  Done")
 
     print("\nLoad test passed!")
 
