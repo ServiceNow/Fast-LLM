@@ -158,6 +158,12 @@ class ForwardKLEvaluatorConfig(EvaluatorConfig):
         desc="Trust remote code when loading dataset.",
         hint=FieldHint.optional,
     )
+    inference_mixer: str | None = Field(
+        default=None,
+        desc="Name of the mixer to use during evaluation (for StochasticMixer models). "
+        "If None, uses the model's default main_mixer_name.",
+        hint=FieldHint.optional,
+    )
 
     def get_evaluator(
         self,

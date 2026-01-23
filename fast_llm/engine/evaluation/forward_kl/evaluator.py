@@ -177,10 +177,21 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
         if len(data) == 0:
             return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
 
-        # Switch to eval mode so StochasticMixer uses the main (attention) mixer
-        # instead of randomly sampling. This ensures we evaluate the attention-only path.
+        # Switch to eval mode so StochasticMixer uses the main mixer
+        # instead of randomly sampling.
         was_training = self._multi_stage._training
         self._multi_stage.train(False)
+
+        # Optionally override the inference mixer for StochasticMixer layers
+        stochastic_mixers: list = []
+        if self._config.inference_mixer is not None:
+            from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
+
+            for name, module in self._multi_stage.base_model.named_modules():
+                if isinstance(module, StochasticMixer):
+                    stochastic_mixers.append(module)
+                    module._inference_mixer_override = self._config.inference_mixer
+                    logger.info(f"ForwardKL: Set {name} inference mixer to '{self._config.inference_mixer}'")
 
         try:
             batch_size = self._config.batch_size
@@ -198,6 +209,10 @@ class ForwardKLEvaluator[ConfigType: ForwardKLEvaluatorConfig](Evaluator[ConfigT
             if not student_log_probs_batches:  # non-last PP rank
                 return self._reduce_metrics(0.0, 0.0, 0, 0, data.num_skipped)
         finally:
+            # Clear inference mixer override for StochasticMixer layers
+            for module in stochastic_mixers:
+                module._inference_mixer_override = None
+
             # Restore original training mode
             if was_training:
                 self._multi_stage.train(True)
