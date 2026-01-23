@@ -1,3 +1,5 @@
+import functools
+import math
 import typing
 
 import numpy as np
@@ -8,113 +10,93 @@ from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
     MemmapIndexedDatasetReader,
+    MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
     MemmapWriter,
     Sample,
 )
+from fast_llm.data.sample.patch import PatchReaderBaseConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
 
-def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
-    if len(lengths) == 1:
-        # Shortcut for the frequent case of a single document.
-        return [end - begin]
-    begin_ = 0
-    lengths_ = []
-    for length in lengths:
-        end_ = begin_ + length
-        cropped_length = min(end_, end) - max(begin_, begin)
-        if cropped_length > 0:
-            lengths_.append(cropped_length)
-        if end_ > end:
-            break
-        begin_ = end_
-    return lengths_
+class TokenDataSample(Sample):
+    """
+    A reusable component holding tensor-valued data of fixed dtype and shape for each token.
+    TODO: Use as base class for `TokenSample` and `PatchSample`?
+    """
 
-
-class TokenSample(Sample):
-    def __init__(self, tokens: torch.Tensor, lengths: list[int] | None = None):
-        self.tokens = tokens
-        # Length of each document in the sample. TODO: Use cumsums instead?
-        if lengths is None:
-            lengths = [len(tokens)]
-        else:
-            Assert.eq(sum(lengths), len(tokens))
-        self.lengths = lengths
+    def __init__(self, data: torch.Tensor):
+        self.data = data
 
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
-        return cls(
-            torch.cat([document.tokens for document in documents]),
-            sum((document.lengths for document in documents), []),
-        )
+        return cls(torch.cat([document.data for document in documents]))
 
     def crop(self, begin: int, end: int) -> typing.Self:
-        return self.__class__(self.tokens[begin:end], crop_lengths(self.lengths, begin, end))
+        return self.__class__(self.data[begin:end])
 
     def __len__(self) -> int:
-        return len(self.tokens)
+        return len(self.data)
 
     def get_padding(self, size: int) -> typing.Self:
-        return self.__class__(torch.full([size], -100, dtype=self.tokens.dtype), [size])
+        return self.__class__(torch.full([size], 0, dtype=self.data.dtype))
 
 
-class TokenBatch(Batch):
-    def __init__(self, tokens: torch.Tensor, lengths: list[list[int]] | None) -> None:
-        self.tokens = tokens
-        if lengths is None:
-            lengths = [[tokens.size(1)]] * tokens.size(0)
-        self.lengths = lengths
+class TokenDataBatch(Batch):
+    def __init__(self, data: torch.Tensor) -> None:
+        self.data = data
 
     @classmethod
-    def from_samples(cls, samples: typing.Iterable[TokenSample]) -> typing.Self:
-        return cls(
-            torch.stack([sample.tokens for sample in samples]),
-            [sample.lengths for sample in samples],
-        )
+    def from_samples(cls, samples: typing.Iterable[TokenDataSample]) -> typing.Self:
+        return cls(torch.stack([sample.data for sample in samples]))
 
     def crop(self, begin: int, end: int) -> typing.Self:
-        return self.__class__(
-            self.tokens[:, begin:end],
-            [crop_lengths(lengths, begin, end) for lengths in self.lengths],
-        )
+        return self.__class__(self.data[:, begin:end])
 
     def to_device_(self, device: "torch.device | str"):
-        # Also standardize the dtype while we're here.
-        self.tokens = self.tokens.to(device, dtype=torch.int64, non_blocking=True)
+        self.data = self.data.to(device, non_blocking=True)
 
 
-@config_class(dynamic_type={MemmapReaderBaseConfig: "token"})
-class TokenReaderConfig(MemmapReaderConfig):
+@config_class(dynamic_type={MemmapReaderBaseConfig: "token_data"})
+class TokenDataReaderConfig(MemmapReaderConfig):
     _abstract = False
-    header: typing.ClassVar[bytes] = b"token begin"
-    footer: typing.ClassVar[bytes] = b"token end"
+    header: typing.ClassVar[bytes] = b"token data begin"
+    footer: typing.ClassVar[bytes] = b"token data end"
     num_documents: int = Field()
     num_tokens: int = Field()
+    shape: tuple[int, ...] = Field()
     data_type: DataType = Field()
 
     def __len__(self) -> int:
         return self.num_documents
 
-    @property
-    def reader_class(self) -> "type[TokenReader]":
-        return TokenReader
+    @functools.cached_property
+    def size(self) -> int:
+        return math.prod(self.shape)
 
     @property
-    def writer_class(self) -> "type[TokenWriter]":
-        return TokenWriter
+    def reader_class(self) -> "type[TokenDataReader]":
+        return TokenDataReader
+
+    @property
+    def writer_class(self) -> "type[TokenDataWriter]":
+        return TokenDataWriter
 
     @property
     def _expected_buffer_size(self) -> int:
-        return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.int64.itemsize
+        return (
+            self.num_tokens * self.data_type.torch.itemsize * self.size
+            + (self.num_documents + 1) * torch.int64.itemsize
+        )
 
     def get_metadata(self) -> dict[str, typing.Any]:
         return {
             "num_tokens": self.num_tokens,
             "num_documents": self.num_documents,
             "data_type": str(self.data_type),
+            "shape": self.shape,
         }
 
     @classmethod
@@ -123,32 +105,25 @@ class TokenReaderConfig(MemmapReaderConfig):
             "num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata),
             "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
             "data_type": get_unique(metadata_["data_type"] for metadata_ in metadata),
+            "shape": get_unique(metadata_["shape"] for metadata_ in metadata),
         }
 
 
-class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
+class TokenDataReader[ConfigType: TokenDataReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
         super().__init__(config, buffer, model_preprocessing)
-        self._tokens = torch.frombuffer(
+        self._data = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
-            count=self._config.num_tokens,
-        )
+            count=self._config.num_tokens * self._config.size,
+        ).view(-1, *self._config.shape)
         self._size_cumsums = torch.frombuffer(
-            self._buffer, dtype=torch.int64, count=self._config.num_documents + 1, offset=self._tokens.nbytes
+            self._buffer, dtype=torch.int64, count=self._config.num_documents + 1, offset=self._data.nbytes
         )
 
     def get_document(self, index: int, begin: int, end: int) -> Sample:
         begin_ = self._size_cumsums[index].item()
-        # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
-        # Convert begin and end to int to avoid numpy dtype overflow when adding to begin_
-        return TokenSample(self._tokens[begin_ + begin : begin_ + end].to(torch.int64), [end - begin])
-
-    def get_document_sizes(self) -> torch.Tensor:
-        return self._size_cumsums[1:] - self._size_cumsums[:-1]
-
-    def get_document_size(self, index: int) -> int:
-        return self._size_cumsums[index + 1].item() - self._size_cumsums[index].item()
+        return TokenDataSample(self._data[begin_ + begin : begin_ + end])
 
     def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
         Assert.custom(lambda x: x == sorted(x), [0, begin_ratio, end_ratio, 1])
@@ -166,6 +141,12 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
         )
 
 
+class EmptyPatchReader[ConfigType: PatchReaderBaseConfig](MemmapReaderBase[ConfigType]):
+    def get_document(self, index: int, begin: int, end: int) -> Sample:
+        # TODO: Does this make sense?
+        return TokenDataSample(torch.zeros(end - begin, *self._config.shape, dtype=self._config.data_type.torch))
+
+
 def _get_nearest_split(cumsum: torch.Tensor, value: float) -> int:
     left = torch.searchsorted(cumsum, value, side="right")
     if left == len(cumsum):
@@ -173,21 +154,21 @@ def _get_nearest_split(cumsum: torch.Tensor, value: float) -> int:
     return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
 
 
-class TokenWriter(MemmapWriter):
+class TokenDataWriter(MemmapWriter):
     def __enter__(self):
         super().__enter__()
         self._size_cumsum = [0]
         self._data_type = None
         return self
 
-    def write(self, document: TokenSample):
+    def write(self, document: TokenDataSample):
         super().write(document)
         if self._data_type is None:
-            self._data_type = document.tokens.dtype
+            self._data_type = document.data.dtype
         else:
-            Assert.eq(self._data_type, document.tokens.dtype)
-        self._stream.write(document.tokens.numpy().tobytes())
-        self._size_cumsum.append(self._size_cumsum[-1] + len(document.tokens))
+            Assert.eq(self._data_type, document.data.dtype)
+        self._stream.write(document.data.numpy().tobytes())
+        self._size_cumsum.append(self._size_cumsum[-1] + len(document.data))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
@@ -195,11 +176,11 @@ class TokenWriter(MemmapWriter):
         super().__exit__(exc_type, exc_val, exc_tb)
 
     @classmethod
-    def _get_config_class(cls) -> type[TokenReaderConfig]:
-        return TokenReaderConfig
+    def _get_config_class(cls) -> type[TokenDataReaderConfig]:
+        return TokenDataReaderConfig
 
     def _get_config(self, begin: int, end: int):
-        return TokenReaderConfig(
+        return TokenDataReaderConfig(
             begin=begin,
             end=end,
             num_documents=len(self._size_cumsum) - 1,
