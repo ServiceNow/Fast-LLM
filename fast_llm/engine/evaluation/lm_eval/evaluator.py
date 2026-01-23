@@ -60,7 +60,7 @@ class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
 
         self._flm_wrapper = FastLLMLmEvalWrapper(
             model=self._hf_model,
-            tokenizer=self._config.tokenizer.get_tokenizer(),
+            tokenizer=self._config.tokenizer.get_tokenizer().tokenizer,
             truncation=self._config.truncation,
             logits_cache=self._config.logits_cache,
             add_bos_token=self._config.add_bos_token,
