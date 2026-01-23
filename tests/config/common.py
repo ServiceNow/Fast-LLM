@@ -31,7 +31,7 @@ class ExampleConfig(Config):
     type_field: type[int] = Field(default=int, hint=FieldHint.optional)
     enum_field: ExampleEnum = Field(default=ExampleEnum.a, hint=FieldHint.optional)
     core_field: int = Field(default=4, hint=FieldHint.core)
-    complex_field: dict[str | int, list[tuple[str, int]] | None] = Field(default_factory=dict, hint=FieldHint.optional)
+    complex_field: dict[str, list[tuple[str, int]] | None] = Field(default_factory=dict, hint=FieldHint.optional)
 
     def _validate(self) -> None:
         with self._set_implicit_default():

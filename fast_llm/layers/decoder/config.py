@@ -210,17 +210,12 @@ class DecoderBlockConfig(BlockConfig):
         desc="Name of the reference model to use for activation-level distillation.",
         hint=FieldHint.feature,
     )
-    activation_distillation_factor: float = Field(
-        default=0.0,
-        desc="Factor to scale the activation-level distillation loss by.",
+    distillation_loss_weight: float = Field(
+        default=1.0,
+        desc="Weight for the scale the activation distillation loss.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-
-    def _validate(self) -> None:
-        super()._validate()
-        if self.activation_distillation_factor > 0.0 and self.distillation_model is None:
-            raise ValueError("Activation distillation requires a distillation_model.")
 
     @property
     def layer_class(self) -> "type[DecoderBlock]":
@@ -245,7 +240,5 @@ class DecoderBlockConfig(BlockConfig):
             return_input=return_input,
         )
 
-    def get_distillation_models(self) -> set[str]:
-        if self.distillation_model is not None and self.activation_distillation_factor > 0.0:
-            return {self.distillation_model}
-        return set()
+    def get_reference_models(self) -> set[str]:
+        return set() if self.distillation_model is None else {self.distillation_model}

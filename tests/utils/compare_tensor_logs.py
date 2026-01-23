@@ -140,6 +140,7 @@ class CompareConfig:
                 [
                     f"  Test samples: " + "".join(f"{x:12.4e}" for x in samples_test[: self.show_samples].tolist()),
                     f"  Ref samples:  " + "".join(f"{x:12.4e}" for x in samples_ref[: self.show_samples].tolist()),
+                    f"scale={sub_config.scale}",
                 ]
             )
             errors.append("\n".join([f">>>> [{step_name}] Excessive diff for tensor {tensor_name}:"] + tensor_errors))

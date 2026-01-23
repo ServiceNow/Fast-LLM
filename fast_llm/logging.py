@@ -196,7 +196,7 @@ def log_tensor[
             step = max(tensor.numel() // target_samples, 1)
             while step > 1 and any(step % s == 0 and s > 1 for s in shape):
                 step -= 1
-            samples = tensor.flatten()[: target_samples * step : step].cpu()
+            samples = tensor.flatten()[: target_samples * step : step].to("cpu", copy=True)
             stats.update(samples=samples, step=step)
             # Crop the list in the logs. The full tensor is still in stats.
             samples = [format_number(x) for x in samples.tolist()[: TensorLogs.config.max_elements]]

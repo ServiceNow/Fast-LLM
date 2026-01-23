@@ -5,11 +5,15 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
+from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.language_model.loss.config import (
+    LanguageModelLabelEntropyLossConfig,
+    LanguageModelLossConfig,
+    LanguageModelLossKwargs,
+)
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -19,19 +23,19 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
 
-class LanguageModelKwargs(BlockKwargs):
+class LanguageModelKwargs(LanguageModelLossKwargs):
     token_ids = "token_ids"
     position_ids = "position_ids"
     token_map = "token_map"
     sample_map = "sample_map"
     embedding_map = "embedding_map"
     # TODO: These are generic
-    labels = "labels"
     phase = "phase"
-    chosen_spans = "chosen_spans"
-    rejected_spans = "rejected_spans"
     loss_mask = "loss_mask"
     mask_inputs = "mask_inputs"
+
+
+LM_HEAD_LOSS_NAME = "lm_head_loss"
 
 
 @config_class()
@@ -135,43 +139,23 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         desc="Configuration for the final normalization layer.",
         hint=FieldHint.architecture,
     )
+    losses: dict[str, LanguageModelLossConfig] = Field(
+        default_factory=dict,
+        desc="A dictionary of loss names and their configurations.",
+        hint=FieldHint.core,
+    )
     # TODO: Cleanup
     output_weight: ParameterConfig = Field(
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
         hint=FieldHint.architecture,
     )
-    cross_entropy_implementation: CrossEntropyImpl = Field(
-        default=CrossEntropyImpl.auto,
-        desc="Implementation for the cross-entropy computation.",
-        hint=FieldHint.performance,
-    )
-    distillation_loss_implementation: DistillationLossImpl = Field(
-        default=DistillationLossImpl.cross_entropy,
-        desc="Implementation for the distillation cross-entropy computation.",
-        hint=FieldHint.performance,
-    )
-    cross_entropy_splits: int | None = Field(
-        default=None,
+    # TODO: Option to chose whether to split in batch or sequence dimension?
+    #   (Currently split merged batch and sequence, depends on `sequence_first`)
+    cross_entropy_splits: int = Field(
+        default=1,
         desc="Split the logit and cross-entropy computation into this many fragment, to reduce memory usage.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
-    )
-    logit_z_loss: float = Field(
-        default=0.0,
-        desc="Regularize the logits with Z-loss.",
-        doc="We recommend 1e-4 for stability, as used for training PaLM.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-    language_model_loss_factor: float = Field(
-        default=None,
-        desc="Factor to scale the language modeling loss by when using distillation.",
-        hint=FieldHint.feature,
-    )
-    distillation_loss_factor: float = Field(
-        default=1.0,
-        desc="Factor to scale the distillation loss by when using distillation.",
-        hint=FieldHint.feature,
     )
     logits_scale_factor: float = Field(
         default=1.0,
@@ -180,29 +164,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
-    )
-    teacher_softmax_temperature: float = Field(
-        default=1.0,
-        desc="Divides distillation target logits by this factor.",
-        doc="Divides distillation target logits by this factor.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-    dpo_reference_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for dpo.",
-        hint=FieldHint.feature,
-    )
-    dpo_beta: float | None = Field(
-        default=1.0,
-        desc="Beta value for DPO loss.",
-        hint=FieldHint.feature,
-    )
-    distillation_model: str | None = Field(
-        default=None,
-        desc="Name of the reference model to use for knowledge distillation."
-        "If provided, replace the loss with a distillation loss.",
-        hint=FieldHint.feature,
     )
 
     def get_layer(
@@ -237,21 +198,18 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            if self.language_model_loss_factor is None:
-                if self.distillation_model is None:
-                    self.language_model_loss_factor = 1.0
-                else:
-                    self.language_model_loss_factor = 0.0
+            if not self.losses:
+                if "losses" not in self._explicit_fields:
+                    self.losses = {"lm_loss": LanguageModelLabelEntropyLossConfig()}
         super()._validate()
-        assert self.dpo_reference_model is None or self.distillation_model is None  # currently don't support both
+        assert LM_HEAD_LOSS_NAME not in self.losses
 
     @property
     def max_prediction_distance(self) -> int:
         return 1
 
-    @property
-    def enable_dpo(self) -> bool:
-        return self.dpo_reference_model is not None
+    def get_reference_models(self) -> set[str]:
+        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}
 
 
 @config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
@@ -337,3 +295,6 @@ class LanguageModelConfig(BlockConfig):
         from fast_llm.layers.language_model.language_model import LanguageModel
 
         return LanguageModel
+
+    def get_reference_models(self) -> set[str]:
+        return self.decoder.get_reference_models() | self.head.get_reference_models()

@@ -9,14 +9,15 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.functional.autograd import AuxiliaryLoss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.decoder.mlp.mlp import MLPBase
+from fast_llm.layers.language_model.loss.z_loss import z_loss
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -102,14 +103,13 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
 
         # Apply z_loss if applicable
         if self._config.z_loss_coefficient > 0.0:
-            logits = z_loss(
-                logits,
-                self._config.z_loss_coefficient,
-                self.training,
-                grad_scale=kwargs.get("grad_output"),
-                losses=losses,
-                loss_name=MLPLossNames.router_z_loss,
-            )
+            is_training = (grad_scale := kwargs.get("grad_output")) is not None and self.training
+            if is_training or losses is not None:
+                loss = z_loss(logits)
+                if losses is not None:
+                    losses[MLPLossNames.router_z_loss].append(loss.detach())
+                if is_training:
+                    logits = AuxiliaryLoss.apply(logits, loss, self._config.z_loss_coefficient * grad_scale)
 
         # Apply input_jitter if applicable:
         if self.training and self._config.jitter_eps > 0.0:

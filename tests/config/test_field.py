@@ -184,8 +184,8 @@ def test_core_field():
     "value",
     (
         {},
-        {3: None, "text": [], 0: [["", 3], ["a", -7]]},
-        {0: [[".", 8]]},
+        {"3": None, "text": [], "0": [["", 3], ["a", -7]]},
+        {"0": [[".", 8]]},
     ),
 )
 def test_complex_field(value):
@@ -194,7 +194,7 @@ def test_complex_field(value):
 
 @pytest.mark.parametrize(
     "value",
-    ({3: None, "text": [], False: [["", 3], ["a", -7]]},),
+    ({"3": None, "text": [], False: [["", 3], ["a", -7]]},),
 )
 def test_complex_field_invalid(value):
     check_invalid_config({"complex_field": value})

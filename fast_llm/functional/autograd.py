@@ -60,3 +60,14 @@ def wrap_forward_backward[
 
 def grad_is_context(grad_output: torch.Tensor, context: torch.Tensor) -> torch.Tensor:  # noqa
     return context
+
+
+class AuxiliaryLoss(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_: torch.Tensor, aux_loss: torch.Tensor, grad: float) -> torch.Tensor:  # noqa
+        ctx.grad = torch.full_like(aux_loss, grad)
+        return input_
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
+        return grad_output, ctx.grad, None

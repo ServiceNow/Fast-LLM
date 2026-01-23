@@ -562,6 +562,8 @@ class Config(metaclass=ConfigMeta):
                 errors.append(f"Duplicate key `{new_key}` after validation (from `{old_keys[new_key]}`, `{key}`)")
             old_keys[new_key] = key
             new_value[new_key] = new_value_
+        # Ensure dicts are sorted W.R.T validated keys.
+        new_value = {new_key: new_value[new_key] for new_key in sorted(new_value)}
         if errors:
             raise ValidationError(*errors)
         return new_value

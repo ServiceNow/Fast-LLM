@@ -9,12 +9,11 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.functional.autograd import AuxiliaryLoss
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
-from fast_llm.layers.language_model.head import _format_name
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -176,7 +175,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             Assert.eq(teacher_tensor.shape, mixer_output.shape)
             # TODO: un-scaled loss for reporting? Average loss over layers?
             # L2 loss
-            activation_loss_factor = self._config.activation_distillation_factor
+            activation_loss_factor = self._config.distillation_loss_weight
             # (batch, sequence, hidden) or (sequence, batch, hidden). Take the norm over hidden dim.
 
             # Handle possible padding by using pre-computed activation mask
@@ -249,8 +248,8 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = AuxiliaryLoss.apply(hidden_states, scaled_activation_loss, 1.0)
             bias = AuxiliaryLoss.apply(bias, scaled_activation_loss, 1.0) if bias is not None else None
             # Logging
-            if losses is not None and self._activation_distillation_loss_name in losses:
-                losses[self._activation_distillation_loss_name].append(activation_loss.detach())
+            if losses is not None and self._distillation_loss_name in losses:
+                losses[self._distillation_loss_name].append(activation_loss.detach())
             # Per-layer metrics
             if metrics is not None:
                 metrics[f"{self.module_name}/activation_distillation_loss"] = activation_loss.detach()
@@ -279,15 +278,15 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.mlp.preprocess(kwargs)
 
     # TODO: add layer_index
-    _activation_distillation_loss_name = "activation_distillation_loss"
+    _distillation_loss_name = "activation_distillation_loss"
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         loss_definitions = []
-        if self._config.activation_distillation_factor > 0.0 and self._config.distillation_model is not None:
+        if self._config.distillation_model is not None:
             loss_definitions.append(
                 LossDef(
-                    name=self._activation_distillation_loss_name,
-                    formatted_name=_format_name(self._activation_distillation_loss_name),
+                    name=self._distillation_loss_name,
+                    formatted_name=self._distillation_loss_name,
                     count=count,
                 )
             )

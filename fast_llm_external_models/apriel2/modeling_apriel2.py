@@ -533,6 +533,11 @@ class CausalConv1d(nn.Conv1d):
         activation: str = "silu",
         **kwargs,
     ):
+        if causal_conv1d_fn is None:
+            raise ImportError(
+                "CausalConv1d requires CUDA kernels from causal_conv1d. "
+                "Install with: pip install causal-conv1d"
+            )
         # Remove padding from kwargs since we handle it ourselves
         kwargs.pop("padding", None)
         super().__init__(
