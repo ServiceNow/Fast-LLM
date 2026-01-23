@@ -178,27 +178,18 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         kwargs: dict,
         all_losses_dict: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-
-        if not self.training:
-            logits, _ = self._logits_loss_forward_backward_partial(input_, kwargs, return_logits=True)
-            # TODO: Make a proper way of returning the model output.
-            logits = logits.detach()
-            if kwargs.get("global_logits"):
-                if self._vocab_parallel:
-                    logits = gather_op(logits, self._parallel_dim.group, 2)
-                elif self._sequence_parallel_logits:
-                    logits = gather_op(
-                        logits, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-                    )
-            kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = (
-                logits.detach()
+        if self._config.cross_entropy_splits is None or targets is None:
+            loss, logit_input_grad = self._logits_loss_forward_backward(
+                input_, targets, weight, grad_output, kwargs, losses
             )
-            return None, None
-
-        input_ = input_.flatten(0, -2)
-
-        if self._config.cross_entropy_splits == 1:
-            loss_dict, input_grad = self._logits_loss_forward_backward_partial(input_, kwargs)
+            if targets is None:
+                # global_logits: raw logits already stored and gathered in inner function
+                # non-global_logits: store scaled logits for distillation backwards compat
+                if not kwargs.get("global_logits"):
+                    kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = (
+                        loss.detach()
+                    )
+                return None, None
         else:
             input_grad = torch.empty_like(input_)
             tensors_split = [
@@ -274,13 +265,25 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             dims = None
         self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
 
-        if return_logits:
-            return logits, None
+        if kwargs.get("global_logits"):
+            logits_for_storage = logits.detach()
+            if self._vocab_parallel:
+                logits_for_storage = gather_op(logits_for_storage, self._parallel_dim.group, 2)
+            elif self._sequence_parallel_logits:
+                logits_for_storage = gather_op(
+                    logits_for_storage,
+                    self._parallel_dim.group,
+                    0 if kwargs[LanguageModelKwargs.sequence_first] else 1,
+                )
+            logits_key = "logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"
+            kwargs[logits_key] = logits_for_storage
 
-        losses, grad = {}, None
-        for loss in self._losses:
-            # losses are returned unscaled but the grads are already scaled
-            loss_value, grad_ = loss.forward_backward(
+        if targets is None:
+            return logits * self._config.logits_scale_factor, None
+        dpo_target, lm_target, distillation_target, loss_mask = targets
+
+        if dpo_target is not None:
+            dpo_loss, dpo_grad = compute_dpo_loss(
                 logits,
                 kwargs,
                 split_index,
