@@ -837,11 +837,6 @@ class Apriel2MambaMixer(nn.Module):
         self.mamba(hidden_states, output)
 
 
-def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
-    """L2 normalization."""
-    return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
-
-
 # ============================================================================
 # GDN custom op registration
 # ============================================================================

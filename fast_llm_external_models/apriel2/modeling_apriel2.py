@@ -1332,11 +1332,6 @@ class Apriel2Mamba(nn.Module):
         return ssm_state, conv_state
 
 
-def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
-    """L2 normalization matching Fast-LLM's implementation."""
-    return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
-
-
 class GatedRMSNormalization(nn.Module):
     """
     Gated RMS normalization layer matching Fast-LLM's implementation.
