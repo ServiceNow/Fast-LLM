@@ -176,4 +176,6 @@ def test_run_entropy_loss_distributed(run_parallel_script, result_path):
 def test_entropy_loss_distributed(result_path, report_subtest, target_format, entropy_loss_type, loss_masking):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Not implemented")
-    report_subtest(result_path / f"test_entropy_loss/{entropy_loss_type}_{target_format}_{loss_masking}", 2)
+    report_subtest(
+        result_path / f"test_entropy_loss/{entropy_loss_type}_{target_format}_{loss_masking}", 2, use_cuda=False
+    )

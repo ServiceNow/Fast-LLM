@@ -51,12 +51,12 @@ class DistributedTestContext:
         self._configure_logging()
         self._group = self._pool.get_process_group(range(self._world_size), self._rank)
         # TODO: Barriers needed?
-        safe_barrier(self._group, "start", device=self._pool.device)
+        safe_barrier(self._group, "start")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Final barrier to ensure everything is done before torchrun potentially kills workers.
-        safe_barrier(self._group, "testing end", device=self._pool.device)
+        safe_barrier(self._group, "testing end")
         # Let pytest know how things went.
         # These should already be reported above, we repeat for convenience.
         if self._failures:
@@ -138,13 +138,8 @@ class DistributedTestContext:
 
             if (group := self._test_context._group) is not None:
                 # Barrier so `allreduce_scalar` doesn't go crazy in case of desync.
-                safe_barrier(group, self._name, device=self._test_context._pool.device)
-                self._success = (
-                    allreduce_scalar(
-                        self._success, dtype=torch.int64, group=group, device=self._test_context._pool.device
-                    )
-                    == group.size()
-                )
+                safe_barrier(group, self._name)
+                self._success = allreduce_scalar(self._success, dtype=torch.int64, group=group) == group.size()
 
             if self._do_capture and torch.cuda.is_available():
                 # Free resources to limit memory usage.
@@ -201,8 +196,8 @@ def report_subtest(request: pytest.FixtureRequest):
     verbose = request.config.getoption("verbose")
     do_capture = request.config.getoption("distributed_capture")
 
-    def do_report_subtest(path: pathlib.Path, world_size: int) -> None:
-        if torch.cuda.device_count() < world_size:
+    def do_report_subtest(path: pathlib.Path, world_size: int, use_cuda: bool = True) -> None:
+        if use_cuda and torch.cuda.device_count() < world_size:
             pytest.skip(f"Not enough GPUs to run dependency: {torch.cuda.device_count()} < {world_size}")
         success = check_subtest_success(path)
         if not do_capture:
