@@ -48,7 +48,6 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         optimizer_state_names: tuple[str, ...] | None = None,
         setup: bool = True,
         mode: StageMode = StageMode.training,
-        use_cpu: bool = False,
         stage_filter: set | None = None,
     ) -> typing.Self:
         metadata = cls.config_class.load_metadata(pretrained_config)
@@ -69,7 +68,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         )
 
         if setup:
-            model.setup(Distributed(config.distributed, use_cpu=use_cpu), mode=mode)
+            model.setup(Distributed(config.distributed), mode=mode)
 
             if mode.on_device:
                 if pretrained_config.model_weights:

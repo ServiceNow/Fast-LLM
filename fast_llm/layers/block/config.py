@@ -92,7 +92,7 @@ class BlockConfig(ModuleConfig):
             peft=peft,
         )
 
-    def get_distillation_models(self) -> set[str]:
+    def get_reference_models(self) -> set[str]:
         return set()
 
 
@@ -126,8 +126,8 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
 
         return FixedBlockSequence
 
-    def get_distillation_models(self) -> set[str]:
-        return self.block.get_distillation_models()
+    def get_reference_models(self) -> set[str]:
+        return self.block.get_reference_models()
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
@@ -176,10 +176,10 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
         # The index at which each block first appears. These blocks are used for preprocessing.
         return {name: self.expanded_pattern.index(name) for name in set(self.expanded_pattern)}
 
-    def get_distillation_models(self) -> set[str]:
+    def get_reference_models(self) -> set[str]:
         models = set()
         for block in self.blocks.values():
-            models.update(block.get_distillation_models())
+            models.update(block.get_reference_models())
         return models
 
     @classmethod

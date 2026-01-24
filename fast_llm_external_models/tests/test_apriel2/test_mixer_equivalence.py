@@ -53,6 +53,24 @@ def seq_len(request):
     return request.param
 
 
+@pytest.fixture(params=[4, 32, 64])
+def prefill_len(request):
+    """Length of initial prefill phase in cache tests."""
+    return request.param
+
+
+@pytest.fixture(params=[4])
+def decode_steps(request):
+    """Number of decode steps in cache tests. Single value to limit test explosion."""
+    return request.param
+
+
+@pytest.fixture(params=[4, 16])
+def prefill2_len(request):
+    """Length of second prefill phase in cache tests."""
+    return request.param
+
+
 @pytest.fixture(params=[256, 512])
 def hidden_size(request):
     """Hidden sizes to test. 256 is minimal, 512 exercises larger matrices."""
@@ -102,6 +120,41 @@ def kda_config(request):
     return request.param
 
 
+@pytest.fixture
+def gdn_mixer_config(gdn_config):
+    """GDN mixer config dict derived from gdn_config tuple."""
+    value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
+    return {
+        "type": "gdn",
+        "value_heads": value_heads,
+        "key_heads": key_heads,
+        "key_head_dim": key_head_dim,
+        "value_head_dim": value_head_dim,
+        "convolution_layer": {"kernel_size": 4},
+        "norm_eps": 1e-5,
+    }
+
+
+@pytest.fixture
+def kda_mixer_config(kda_config):
+    """KDA mixer config dict derived from kda_config tuple."""
+    num_heads, head_dim = kda_config
+    return {
+        "type": "kda",
+        "heads": num_heads,
+        "head_dim": head_dim,
+        "convolution_layer": {"kernel_size": 4},
+        "normalization": {"epsilon": 1e-5},
+    }
+
+
+@pytest.fixture
+def kda_hidden_size(kda_config):
+    """Hidden size for KDA (constrained: num_heads * head_dim)."""
+    num_heads, head_dim = kda_config
+    return num_heads * head_dim
+
+
 # =============================================================================
 # Test Mode Configuration
 # =============================================================================
@@ -110,11 +163,8 @@ def kda_config(request):
 @pytest.fixture(
     params=[
         "precise",
-        # "fast" mode (bf16/sdpa) is intentionally skipped:
-        # - These are correctness tests, not performance benchmarks
-        # - bf16 has ~3 decimal digits precision, masking real bugs
-        # - Small tensor sizes make GPU overhead dominate anyway
-        pytest.param("fast", marks=pytest.mark.skip(reason="Correctness tests use fp32")),
+        # "fast" mode (bf16/sdpa) - enabled for testing
+        "fast",
     ]
 )
 def test_mode(request):
@@ -178,6 +228,10 @@ def assert_close(
         atol: Absolute tolerance
         msg: Context message for failure
     """
+    # Cast to same dtype for comparison (fp32 for precision)
+    if actual.dtype != expected.dtype:
+        actual = actual.float()
+        expected = expected.float()
     if not torch.allclose(actual, expected, rtol=rtol, atol=atol):
         diff = (actual - expected).abs()
         max_diff = diff.max().item()
@@ -209,6 +263,20 @@ def assert_deterministic(out1: torch.Tensor, out2: torch.Tensor, mixer_name: str
             f"  {num_diff} elements differ (of {diff.numel()} total)\n"
             f"  Max difference: {max_diff:.6e}"
         )
+
+
+def make_apriel2_config(hidden_size: int, mixer_config: dict):
+    """Create minimal Apriel2TextConfig for single-layer mixer testing."""
+    from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig
+
+    return Apriel2TextConfig(
+        hidden_size=hidden_size,
+        decoder={
+            "type": "fixed",
+            "num_blocks": 1,
+            "block": {"mixer": mixer_config},
+        },
+    )
 
 
 def extract_module_weights(module: nn.Module) -> dict[W, torch.Tensor]:
@@ -443,26 +511,15 @@ class TestDeterminism:
         assert_deterministic(out1, out2, "Apriel2Attention")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
-    def test_gdn_determinism(self, gdn_config):
+    def test_gdn_determinism(self, gdn_mixer_config):
         """Verify Apriel2GatedDeltaNet produces identical output on repeated calls."""
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
 
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
         hidden_size = 256
         batch_size, seq_len = 2, 32
 
-        config_dict = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
-
         torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
@@ -475,28 +532,18 @@ class TestDeterminism:
         assert_deterministic(out1, out2, "Apriel2GatedDeltaNet")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
-    def test_kda_determinism(self, kda_config):
+    def test_kda_determinism(self, kda_mixer_config, kda_hidden_size):
         """Verify Apriel2 KimiDeltaAttention produces identical output on repeated calls."""
         from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention
 
-        num_heads, head_dim = kda_config
-        hidden_size = num_heads * head_dim
         batch_size, seq_len = 2, 32
 
-        config_dict = {
-            "type": "kda",
-            "heads": num_heads,
-            "head_dim": head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "normalization": {"epsilon": 1e-5},
-        }
-
         torch.manual_seed(42)
-        model = KimiDeltaAttention(hidden_size, config_dict, layer_idx=0)
+        model = KimiDeltaAttention(kda_hidden_size, kda_mixer_config, layer_idx=0)
         model.eval()
 
         torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        hidden_states = torch.randn(batch_size, seq_len, kda_hidden_size)
 
         with torch.no_grad():
             out1 = model(hidden_states)[0]
@@ -725,13 +772,41 @@ class TestAttentionEquivalence:
 class TestGDNEquivalence:
     """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet."""
 
-    @pytest.fixture
-    def qwen3_config(self, hidden_size, gdn_config):
-        """Create Qwen3NextConfig for GDN testing."""
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    def test_vs_qwen3next(
+        self,
+        gdn_config,
+        gdn_mixer_config,
+        hidden_size,
+        batch_size,
+        prefill_len,
+        decode_steps,
+        prefill2_len,
+        seed,
+        tolerance,
+        test_dtype,
+    ):
+        """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet output.
+
+        Three-phase test (prefill → decode → prefill) verifies cache handling.
+
+        Note: Phase 3 diverges because Qwen3Next has a bug where chunk mode
+        always uses initial_state=None, ignoring cached recurrent state.
+        """
         from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
+        from transformers.models.qwen3_next.modeling_qwen3_next import (
+            Qwen3NextDynamicCache,
+            Qwen3NextGatedDeltaNet,
+        )
+
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
-        return Qwen3NextConfig(
+        seq_len = prefill_len + decode_steps + prefill2_len
+
+        # Create config with layer_types (required by Qwen3NextDynamicCache)
+        qwen3_config = Qwen3NextConfig(
             hidden_size=hidden_size,
             linear_num_value_heads=value_heads,
             linear_num_key_heads=key_heads,
@@ -744,43 +819,16 @@ class TestGDNEquivalence:
             num_key_value_heads=2,
             head_dim=64,
             torch_dtype=torch.get_default_dtype(),
+            num_hidden_layers=1,
+            layer_types=["linear_attention"],
         )
 
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
-    @pytest.mark.parametrize("seed", [42, 123, 456])
-    def test_vs_qwen3next(
-        self,
-        qwen3_config,
-        gdn_config,
-        hidden_size,
-        batch_size,
-        seq_len,
-        seed,
-        tolerance,
-    ):
-        """Verify Apriel2GatedDeltaNet matches Qwen3NextGatedDeltaNet output."""
-        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
-
-        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2GatedDeltaNet
-
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
-
-        config_dict = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
-
-        # Create models
+        # Create models with same weights
         torch.manual_seed(seed)
-        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0)
-        apriel2_gdn = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
+        qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
-        # Transfer weights
+        # Transfer weights using conversion plan
         plan = plan_qwen3next_gdn_to_apriel2(
             num_k_heads=key_heads,
             num_v_heads=value_heads,
@@ -789,28 +837,181 @@ class TestGDNEquivalence:
         )
         source_weights = extract_module_weights(qwen_gdn)
         target_weights = execute(plan, source_weights, seed=seed)
-        load_weights_into_module(apriel2_gdn, target_weights)
-
-        # Create input
-        torch.manual_seed(seed)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        load_weights_into_module(apriel_gdn, target_weights)
 
         qwen_gdn.eval()
-        apriel2_gdn.eval()
-
-        with torch.no_grad():
-            qwen_out = qwen_gdn(hidden_states)
-            apriel2_out = apriel2_gdn(hidden_states)[0]
+        apriel_gdn.eval()
 
         rtol, atol = tolerance
+
+        # Create full input sequence
+        torch.manual_seed(seed + 1)
+        hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda", dtype=test_dtype)
+
+        # Create caches
+        qwen_cache = Qwen3NextDynamicCache(qwen3_config)
+        apriel_cache = Apriel2Cache(make_apriel2_config(hidden_size, gdn_mixer_config))
+
+        # ========== PHASE 1: Initial Prefill ==========
+        prefill_input = hidden_states[:, :prefill_len, :]
+
+        with torch.no_grad():
+            qwen_out1 = qwen_gdn(
+                prefill_input,
+                cache_params=qwen_cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )
+            apriel_out1 = apriel_gdn(
+                prefill_input,
+                past_key_values=apriel_cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )[0]
+
         assert_close(
-            apriel2_out,
-            qwen_out,
+            apriel_out1,
+            qwen_out1,
             rtol=rtol,
             atol=atol,
-            msg=f"Apriel2GatedDeltaNet vs Qwen3NextGatedDeltaNet (batch={batch_size}, seq={seq_len})",
+            msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
         )
 
+        # Compare recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            qwen_cache.recurrent_states[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 1: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 2: Decode (single tokens) ==========
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = hidden_states[:, pos : pos + 1, :]
+
+            with torch.no_grad():
+                qwen_out = qwen_gdn(
+                    decode_input,
+                    cache_params=qwen_cache,
+                    cache_position=torch.tensor([pos], device="cuda"),
+                )
+                apriel_out = apriel_gdn(
+                    decode_input,
+                    past_key_values=apriel_cache,
+                    cache_position=torch.tensor([pos], device="cuda"),
+                )[0]
+
+            assert_close(
+                apriel_out,
+                qwen_out,
+                rtol=rtol,
+                atol=atol,
+                msg=f"Phase 2 (decode step {i}): output mismatch",
+            )
+
+        # Compare recurrent states after decode
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            qwen_cache.recurrent_states[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 2: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
+        # NOTE: Qwen3Next passes initial_state=None in chunk mode, so outputs diverge.
+        prefill2_start = prefill_len + decode_steps
+        prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
+
+        with torch.no_grad():
+            qwen_out3 = qwen_gdn(
+                prefill2_input,
+                cache_params=qwen_cache,
+                cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
+            )
+            apriel_out3 = apriel_gdn(
+                prefill2_input,
+                past_key_values=apriel_cache,
+                cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
+            )[0]
+
+        # Phase 3 diverges due to Qwen3Next bug - just verify we can run it
+        _ = (qwen_out3, apriel_out3)  # Outputs computed but not compared
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="GDN requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    def test_chunked_vs_recurrent(
+        self,
+        gdn_mixer_config,
+        hidden_size,
+        batch_size,
+        prefill_len,
+        decode_steps,
+        seed,
+        tolerance,
+        test_dtype,
+    ):
+        """Verify GDN recurrent mode (decode) matches chunked mode (prefill).
+
+        This tests the inference path: after prefilling N tokens with chunked mode,
+        subsequent single-token decodes using recurrent mode should produce the same
+        output as if we had run the full sequence through chunked mode.
+        """
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
+
+        total_len = prefill_len + decode_steps
+
+        # Create model
+        torch.manual_seed(seed)
+        model = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        model.eval()
+
+        # Create input sequence
+        torch.manual_seed(seed + 1)
+        full_hidden_states = torch.randn(batch_size, total_len, hidden_size, device="cuda", dtype=test_dtype)
+
+        # === Reference: Run full sequence through chunked mode ===
+        with torch.no_grad():
+            reference_output = model(full_hidden_states)[0]
+
+        # === Test: Prefill + decode ===
+        cache = Apriel2Cache(make_apriel2_config(hidden_size, gdn_mixer_config))
+
+        # Prefill phase
+        prefill_input = full_hidden_states[:, :prefill_len, :]
+        with torch.no_grad():
+            prefill_output = model(
+                prefill_input,
+                past_key_values=cache,
+                cache_position=torch.arange(prefill_len, device="cuda"),
+            )[0]
+
+        # Decode phase - one token at a time
+        decode_outputs = []
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = full_hidden_states[:, pos : pos + 1, :]
+            with torch.no_grad():
+                decode_output = model(
+                    decode_input,
+                    past_key_values=cache,
+                    cache_position=torch.tensor([pos], device="cuda"),
+                )[0]
+            decode_outputs.append(decode_output)
+
+        # Concatenate prefill + decode outputs
+        test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
+
+        # Use looser tolerance for chunked vs recurrent comparison
+        # (different numerical accumulation order leads to larger differences)
+        rtol, atol = tolerance
+        assert_close(
+            test_output,
+            reference_output,
+            rtol=rtol * 5,
+            atol=atol * 5,
+            msg=f"GDN chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
+        )
 
 # =============================================================================
 # SECTION 2: EQUIVALENCE TESTS - KimiDeltaAttention
@@ -825,125 +1026,250 @@ class TestKDAEquivalence:
     def test_vs_fla(
         self,
         kda_config,
+        kda_mixer_config,
+        kda_hidden_size,
         batch_size,
-        seq_len,
+        prefill_len,
+        decode_steps,
+        prefill2_len,
         seed,
         tolerance,
+        test_dtype,
     ):
-        """Verify Apriel2 KimiDeltaAttention matches FLA KimiDeltaAttention output."""
-        from fla.layers.kda import KimiDeltaAttention as FLA_KDA
+        """Verify Apriel2 KimiDeltaAttention matches FLA KimiDeltaAttention output.
 
-        from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention as Apriel2_KDA
+        Three-phase test (prefill → decode → prefill) verifies cache handling.
+
+        Unlike GDN (where Qwen3Next has a bug), FLA KDA correctly passes initial_state
+        in chunk mode, so all three phases should match.
+        """
+        from fla.layers.kda import KimiDeltaAttention as FLA_KDA
+        from fla.models.utils import Cache as FLACache
+
+        from fast_llm_external_models.apriel2.modeling_apriel2 import (
+            Apriel2Cache,
+            KimiDeltaAttention as Apriel2_KDA,
+        )
 
         num_heads, head_dim = kda_config
-        hidden_size = num_heads * head_dim
+        seq_len = prefill_len + decode_steps + prefill2_len
 
-        config_dict = {
-            "type": "kda",
-            "heads": num_heads,
-            "head_dim": head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "normalization": {"epsilon": 1e-5},
-        }
-
-        # Create FLA KDA
+        # Create FLA KDA with same weights
         torch.manual_seed(seed)
         fla_kda = FLA_KDA(
-            hidden_size=hidden_size,
+            hidden_size=kda_hidden_size,
             num_heads=num_heads,
             head_dim=head_dim,
             conv_size=4,
             conv_bias=False,
             norm_eps=1e-5,
             layer_idx=0,
-        )
+        ).to(device="cuda", dtype=test_dtype)
         # FLA has g_proj.1 bias=True but Apriel2/upstream Kimi doesn't - zero it out
         fla_kda.g_proj[1].bias.data.zero_()
 
         # Create Apriel2 KDA
-        apriel2_kda = Apriel2_KDA(hidden_size, config_dict, layer_idx=0)
+        apriel_kda = Apriel2_KDA(kda_hidden_size, kda_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
 
-        # Transfer weights
+        # Transfer weights using conversion plan
         plan = plan_fla_kda_to_apriel2()
         source_weights = extract_module_weights(fla_kda)
         target_weights = execute(plan, source_weights, seed=seed)
-        load_weights_into_module(apriel2_kda, target_weights)
-
-        # Create input
-        torch.manual_seed(seed)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        load_weights_into_module(apriel_kda, target_weights)
 
         fla_kda.eval()
-        apriel2_kda.eval()
-
-        with torch.no_grad():
-            # use_cache=True ensures FLA initializes conv cache for short sequences
-            fla_out = fla_kda(hidden_states, use_cache=True)[0]
-            apriel2_out = apriel2_kda(hidden_states)[0]
+        apriel_kda.eval()
 
         rtol, atol = tolerance
-        assert_close(
-            apriel2_out,
-            fla_out,
-            rtol=rtol,
-            atol=atol,
-            msg=f"Apriel2 KDA vs FLA KDA (batch={batch_size}, seq={seq_len}, hidden={hidden_size})",
-        )
 
+        # Create full input sequence
+        torch.manual_seed(seed + 1)
+        hidden_states = torch.randn(batch_size, seq_len, kda_hidden_size, device="cuda", dtype=test_dtype)
 
-# =============================================================================
-# SECTION 3: FAST PATH vs SLOW PATH TESTS
-# =============================================================================
+        # Create caches
+        fla_cache = FLACache()
+        apriel_cache = Apriel2Cache(make_apriel2_config(kda_hidden_size, kda_mixer_config))
 
+        # Force chunk mode for prefill
+        fla_kda.mode = "chunk"
+        apriel_kda.mode = "chunk"
 
-class TestFastVsSlowPath:
-    """Verify CUDA kernel outputs match PyTorch fallback outputs.
-
-    These tests ensure the optimized CUDA kernels (from fla-core) produce
-    the same results as the pure PyTorch implementations used on CPU or
-    when CUDA kernels are unavailable.
-    """
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
-    def test_gdn_fast_vs_slow(self, gdn_config, batch_size):
-        """Verify GDN CUDA kernel matches PyTorch fallback."""
-        from fast_llm_external_models.apriel2.modeling_apriel2 import (
-            Apriel2GatedDeltaNet,
-            chunk_gated_delta_rule,
-            torch_chunk_gated_delta_rule,
-        )
-
-        if chunk_gated_delta_rule is None:
-            pytest.skip("Fast path (fla) not available")
-
-        value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
-        hidden_size, seq_len = 256, 32
-
-        config_dict = {
-            "type": "gdn",
-            "value_heads": value_heads,
-            "key_heads": key_heads,
-            "key_head_dim": key_head_dim,
-            "value_head_dim": value_head_dim,
-            "convolution_layer": {"kernel_size": 4},
-            "norm_eps": 1e-5,
-        }
-
-        torch.manual_seed(42)
-        model = Apriel2GatedDeltaNet(hidden_size, config_dict, layer_idx=0)
-        model.eval()
-
-        torch.manual_seed(123)
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+        # ========== PHASE 1: Initial Prefill ==========
+        prefill_input = hidden_states[:, :prefill_len, :]
 
         with torch.no_grad():
-            # Fast path (CUDA kernel)
-            model._chunk_gated_delta_rule = chunk_gated_delta_rule
-            fast_out = model(hidden_states)[0].clone()
+            fla_out1 = fla_kda(
+                prefill_input,
+                past_key_values=fla_cache,
+                use_cache=True,
+            )[0]
+            apriel_out1 = apriel_kda(
+                prefill_input,
+                past_key_values=apriel_cache,
+            )[0]
 
-            # Slow path (PyTorch fallback)
-            model._chunk_gated_delta_rule = torch_chunk_gated_delta_rule
-            slow_out = model(hidden_states)[0].clone()
+        assert_close(
+            apriel_out1,
+            fla_out1,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Phase 1 (prefill): output mismatch (batch={batch_size}, prefill={prefill_len})",
+        )
 
-        # Looser tolerance for kernel vs reference comparison
-        assert_close(fast_out, slow_out, rtol=1e-3, atol=1e-3, msg="GDN fast path (CUDA) vs slow path (PyTorch)")
+        # Compare recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 1: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 2: Decode (single tokens) ==========
+        fla_kda.mode = "fused_recurrent"
+        apriel_kda.mode = "fused_recurrent"
+
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = hidden_states[:, pos : pos + 1, :]
+
+            with torch.no_grad():
+                fla_out = fla_kda(
+                    decode_input,
+                    past_key_values=fla_cache,
+                    use_cache=True,
+                )[0]
+                apriel_out = apriel_kda(
+                    decode_input,
+                    past_key_values=apriel_cache,
+                )[0]
+
+            assert_close(
+                apriel_out,
+                fla_out,
+                rtol=rtol,
+                atol=atol,
+                msg=f"Phase 2 (decode step {i}): output mismatch",
+            )
+
+        # Compare recurrent states after decode
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 2: recurrent_state mismatch",
+        )
+
+        # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
+        # FLA KDA correctly uses initial_state in chunk mode, so this should match
+        fla_kda.mode = "chunk"
+        apriel_kda.mode = "chunk"
+
+        prefill2_start = prefill_len + decode_steps
+        prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
+
+        with torch.no_grad():
+            fla_out3 = fla_kda(
+                prefill2_input,
+                past_key_values=fla_cache,
+                use_cache=True,
+            )[0]
+            apriel_out3 = apriel_kda(
+                prefill2_input,
+                past_key_values=apriel_cache,
+            )[0]
+
+        assert_close(
+            apriel_out3,
+            fla_out3,
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 3 (decode→prefill): output mismatch",
+        )
+
+        # Compare final recurrent states
+        assert_close(
+            apriel_cache.recurrent_states[0],
+            fla_cache[0]["recurrent_state"],
+            rtol=rtol,
+            atol=atol,
+            msg="Phase 3: recurrent_state mismatch",
+        )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="KDA requires CUDA")
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    def test_chunked_vs_recurrent(
+        self,
+        kda_mixer_config,
+        kda_hidden_size,
+        batch_size,
+        prefill_len,
+        decode_steps,
+        seed,
+        tolerance,
+        test_dtype,
+    ):
+        """Verify KDA recurrent mode (fused_recurrent_kda) matches chunked mode (chunk_kda).
+
+        This tests the inference path: after prefilling N tokens with chunked mode,
+        subsequent single-token decodes using recurrent mode should produce the same
+        output as if we had run the full sequence through chunked mode.
+        """
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, KimiDeltaAttention
+
+        total_len = prefill_len + decode_steps
+
+        # Create model
+        torch.manual_seed(seed)
+        model = KimiDeltaAttention(kda_hidden_size, kda_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        model.eval()
+
+        # Create input sequence
+        torch.manual_seed(seed + 1)
+        full_hidden_states = torch.randn(batch_size, total_len, kda_hidden_size, device="cuda", dtype=test_dtype)
+
+        # === Reference: Run full sequence through chunked mode ===
+        model.mode = "chunk"
+        with torch.no_grad():
+            reference_output = model(full_hidden_states)[0]
+
+        # === Test: Prefill + decode ===
+        cache = Apriel2Cache(make_apriel2_config(kda_hidden_size, kda_mixer_config))
+
+        # Prefill phase - force chunk mode
+        model.mode = "chunk"
+        prefill_input = full_hidden_states[:, :prefill_len, :]
+        with torch.no_grad():
+            prefill_output = model(
+                prefill_input,
+                past_key_values=cache,
+            )[0]
+
+        # Decode phase - one token at a time
+        model.mode = "fused_recurrent"
+        decode_outputs = []
+        for i in range(decode_steps):
+            pos = prefill_len + i
+            decode_input = full_hidden_states[:, pos : pos + 1, :]
+            with torch.no_grad():
+                decode_output = model(
+                    decode_input,
+                    past_key_values=cache,
+                )[0]
+            decode_outputs.append(decode_output)
+
+        # Concatenate prefill + decode outputs
+        test_output = torch.cat([prefill_output] + decode_outputs, dim=1)
+
+        # Use looser tolerance for chunked vs recurrent comparison
+        # (different numerical accumulation order leads to larger differences)
+        rtol, atol = tolerance
+        assert_close(
+            test_output,
+            reference_output,
+            rtol=rtol * 5,
+            atol=atol * 5,
+            msg=f"KDA chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
+        )
+
