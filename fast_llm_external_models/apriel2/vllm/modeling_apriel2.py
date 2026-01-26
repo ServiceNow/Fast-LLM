@@ -877,6 +877,62 @@ direct_register_custom_op(
 )
 
 
+# =============================================================================
+# Stochastic Mixer dispatch custom op (escapes torch.compile for dynamic placement)
+# =============================================================================
+
+
+def stochastic_mixer_dispatch(
+    hidden_states: torch.Tensor,
+    output: torch.Tensor,
+    positions: torch.Tensor | None,
+    layer_name: str,
+) -> None:
+    """Dispatch to the active mixer at runtime (escapes torch.compile)."""
+    forward_context: ForwardContext = get_forward_context()
+    stochastic_mixer = forward_context.no_compile_layers[layer_name]
+
+    # Get the currently active mixer (runtime lookup)
+    active_mixer = stochastic_mixer.mixers[stochastic_mixer.active_mixer_name]
+
+    # Forward through the active mixer
+    active_mixer(hidden_states, output, positions=positions)
+
+
+def stochastic_mixer_dispatch_fake(
+    hidden_states: torch.Tensor,
+    output: torch.Tensor,
+    positions: torch.Tensor | None,
+    layer_name: str,
+) -> None:
+    """Fake implementation for torch.compile tracing.
+
+    Must touch the output tensor to signal it's being modified,
+    otherwise torch.compile may use uninitialized memory.
+    """
+    # Copy input to output to establish proper data dependency for compiler
+    output.copy_(hidden_states)
+
+
+direct_register_custom_op(
+    op_name="stochastic_mixer_dispatch",
+    op_func=stochastic_mixer_dispatch,
+    mutates_args=["output"],
+    fake_impl=stochastic_mixer_dispatch_fake,
+)
+
+# Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks
+# This allows dynamic dispatch at runtime even with CUDA graphs enabled
+try:
+    from vllm.config.compilation import CompilationConfig
+    _stochastic_op = "vllm::stochastic_mixer_dispatch"
+    if _stochastic_op not in CompilationConfig._attention_ops:
+        CompilationConfig._attention_ops.append(_stochastic_op)
+        logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
+except ImportError:
+    logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
+
+
 @triton.jit
 def fused_gdn_gating_kernel(
     A_log_ptr,
@@ -2361,6 +2417,15 @@ class Apriel2StochasticMixer(nn.Module):
             f"{', '.join(self._mixer_names)} (active={self.active_mixer_name})"
         )
 
+        # Store prefix for custom op lookup
+        self.prefix = prefix
+
+        # Register with compilation context for dynamic dispatch
+        compilation_config = get_current_vllm_config().compilation_config
+        if prefix in compilation_config.static_forward_context:
+            raise ValueError(f"Duplicate layer name: {prefix}")
+        compilation_config.static_forward_context[prefix] = self
+
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
         if name not in self.mixers:
@@ -2378,9 +2443,13 @@ class Apriel2StochasticMixer(nn.Module):
         positions: torch.Tensor | None = None,
         **kwargs,
     ) -> None:
-        """Forward through the active mixer."""
-        mixer = self.mixers[self.active_mixer_name]
-        mixer(hidden_states, output, positions=positions, **kwargs)
+        """Forward through the active mixer (dynamic dispatch via custom op)."""
+        torch.ops.vllm.stochastic_mixer_dispatch(
+            hidden_states,
+            output,
+            positions,
+            self.prefix,
+        )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """Load weights for all sub-mixers."""
@@ -2831,6 +2900,21 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
                 placements[layer_idx] = layer.get_active_mixer()
         return placements
 
+    def get_mixer_names(self) -> tuple[str, ...]:
+        """Get the available mixer names for stochastic layers.
+
+        This method is designed to be used with vLLM's collective_rpc:
+            mixer_names = llm.collective_rpc("get_mixer_names")
+
+        Returns:
+            Tuple of available mixer names (e.g., ("attention", "gdn", "kda")).
+            Returns empty tuple if model has no stochastic layers.
+        """
+        for layer in self.model.layers:
+            if isinstance(layer, Apriel2StochasticDecoderLayer):
+                return tuple(layer.mixer._mixer_names)
+        return ()
+
 
 # -----------------------------------------------------------------------------
 # Worker monkey-patching for placement switching via collective_rpc
@@ -2856,8 +2940,12 @@ def _patch_worker_for_placement_switching():
     def _set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         return self.get_model().set_layer_placements(placement)
 
+    def _get_mixer_names(self) -> tuple[str, ...]:
+        return self.get_model().get_mixer_names()
+
     Worker.get_layer_placements = _get_layer_placements
     Worker.set_layer_placements = _set_layer_placements
+    Worker.get_mixer_names = _get_mixer_names
 
 
 _patch_worker_for_placement_switching()
