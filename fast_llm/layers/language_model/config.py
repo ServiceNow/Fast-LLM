@@ -9,11 +9,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.language_model.loss.config import (
-    LanguageModelLabelEntropyLossConfig,
-    LanguageModelLossConfig,
-    LanguageModelLossKwargs,
-)
+from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -197,10 +193,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         return LanguageModelHead
 
     def _validate(self) -> None:
-        with self._set_implicit_default():
-            if not self.losses:
-                if "losses" not in self._explicit_fields:
-                    self.losses = {"lm_loss": LanguageModelLabelEntropyLossConfig()}
         super()._validate()
         assert LM_HEAD_LOSS_NAME not in self.losses
 

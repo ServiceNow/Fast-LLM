@@ -25,6 +25,7 @@ from fast_llm.layers.language_model.config import (
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
+from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -95,19 +96,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        self._losses = [
-            loss_config.get_layer(
-                distributed_config,
-                self._get_full_loss_name(name),
-                self._prediction_distance,
-                self._prediction_heads,
-                self._vocab_parallel,
-                self._config.cross_entropy_splits,
-                self._config.logits_scale_factor,
-                self._loss_coefficient,
-            )
-            for name, loss_config in self._config.losses.items()
-        ]
+        if self._config.losses:
+            self._losses = [
+                loss_config.get_layer(
+                    distributed_config,
+                    self._get_full_loss_name(name),
+                    self._prediction_distance,
+                    self._prediction_heads,
+                    self._vocab_parallel,
+                    self._config.cross_entropy_splits,
+                    self._config.logits_scale_factor,
+                    self._loss_coefficient,
+                )
+                for name, loss_config in self._config.losses.items()
+            ]
+        else:
+            self._losses = {"cross_entropy": LanguageModelLabelEntropyLossConfig().get_layer()}
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (loss)
