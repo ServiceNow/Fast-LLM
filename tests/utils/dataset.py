@@ -129,6 +129,7 @@ def _get_hf_test_dataset(
     min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
+    has_grpo_data: bool = False,
     min_images: int = 0,
     max_images: int = 0,
     min_image_size: int = 4,
@@ -153,6 +154,9 @@ def _get_hf_test_dataset(
             document_sizes, min_images, max_images, min_image_size, max_image_size, random_state
         )
 
+    if has_grpo_data:
+        dataset_dict["advantages"] = random_state.randn(num_documents).tolist()
+
     return datasets.Dataset.from_dict(dataset_dict)
 
 
@@ -168,6 +172,7 @@ def _get_test_dataset(
     min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
+    has_grpo_data: bool = False,
     splits: dict[str, float] | None = None,
     min_images: int = 0,
     max_images: int = 0,
@@ -192,6 +197,7 @@ def _get_test_dataset(
             min_loss_masking_spans=min_loss_masking_spans,
             max_loss_masking_spans=max_loss_masking_spans,
             has_preference_spans=has_preference_spans,
+            has_grpo_data=has_grpo_data,
             min_images=min_images,
             max_images=max_images,
             min_image_size=min_image_size,
@@ -207,6 +213,8 @@ def _get_test_dataset(
         if max_images > 0:
             source_schema["images"] = "images"
             source_schema["image_positions"] = "image_positions"
+        if has_grpo_data:
+            source_schema["advantages"] = "advantages"
 
         download_santacoder_tokenizer()
         preparator_config = GPTMemmapDatasetPreparatorConfig.from_dict(
@@ -239,6 +247,7 @@ def _get_test_dataset(
         vocab_size=max_vocab_size,
         use_loss_masking_spans=max_loss_masking_spans > 0,
         use_preference_spans=has_preference_spans,
+        use_grpo_data=has_grpo_data,
     )
     return path, config, hf_path, preprocessing
 

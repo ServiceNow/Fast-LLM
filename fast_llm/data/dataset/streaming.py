@@ -7,7 +7,8 @@ import torch.utils.data
 
 from fast_llm.config import Config, Configurable, Field, config_class
 from fast_llm.data.dataset.abstract import SamplableIterableDataset
-from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, StreamingDatasetConfig
+from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, SamplingData, StreamingDatasetConfig
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
@@ -83,24 +84,27 @@ class RedisDocument(Config):
             message["data"] = json.dumps(data)
         return message
 
-    def to_sample(self):
+    def to_sample(self, preprocessing: LanguageModelPreprocessingConfig | None):
         sample_size = len(self.tokens)
+        # TODO: Check explicitly that required data is available?
         return LanguageModelSample(
             tokens=TokenSample(self.tokens, [sample_size]),
             loss_masking_spans=(
-                None
-                if self.loss_masking_spans is None
-                else RangeSample([(begin, end) for begin, end in self.loss_masking_spans], sample_size)
+                RangeSample([(begin, end) for begin, end in self.loss_masking_spans], sample_size)
+                if preprocessing.use_loss_masking_spans
+                else None
             ),
-            chosen_spans=None if self.chosen_span is None else RangeSample([self.chosen_span], sample_size),
-            rejected_spans=None if self.rejected_span is None else RangeSample([self.rejected_span], sample_size),
+            chosen_spans=RangeSample([self.chosen_span], sample_size) if preprocessing.use_preference_spans else None,
+            rejected_spans=(
+                RangeSample([self.rejected_span], sample_size) if preprocessing.use_preference_spans else None
+            ),
             advantages=(
-                None
-                if self.advantage is None
-                else TokenDataSample(torch.full([sample_size], self.advantage, dtype=torch.float32))
+                TokenDataSample(torch.full([sample_size], self.advantage, dtype=torch.float32))
+                if preprocessing.use_advantages
+                else None
             ),
             old_log_probabilities=(
-                None if self.old_log_probabilities is None else TokenDataSample(self.old_log_probabilities)
+                TokenDataSample(self.old_log_probabilities) if preprocessing.use_old_log_probabilities else None
             ),
         )
 
@@ -125,7 +129,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
     def name(self) -> str:
         return self._name
 
-    def __iter__(self) -> typing.Iterator[LanguageModelSample]:
+    def iterate(self, sampling: SamplingData) -> typing.Iterator[SampleType]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None and worker_info.num_workers > 1:
             raise RuntimeError("StreamingDataset can work only with one instance per rank")
@@ -166,4 +170,4 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
                         print(message)
-                        yield RedisDocument.from_message(message).to_sample()
+                        yield RedisDocument.from_message(message).to_sample(sampling.preprocessing)

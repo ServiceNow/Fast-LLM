@@ -42,6 +42,7 @@ from fast_llm.data.sample.language_model import LanguageModelSample, LanguageMod
 from fast_llm.data.sample.patch import PatchSample
 from fast_llm.data.sample.range import RangeSample
 from fast_llm.data.sample.token import TokenSample
+from fast_llm.data.sample.token_data import TokenDataSample
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import normalize_probabilities, padded_cumsum
@@ -226,7 +227,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
         token_spans_by_type = collections.defaultdict(list)
-        image_patches = image_token_maps = image_position_ids = patch_counts = None
+        image_patches = image_token_maps = image_position_ids = patch_counts = advantages = old_log_probabilities = (
+            None
+        )
 
         if isinstance(self._source_schema, ConversationSourceConfig):
             # Conversation format: tokenize messages and get loss masking spans from chat template
@@ -332,6 +335,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         else:
             raise NotImplementedError(f"Unsupported source schema type: {type(self._source_schema)}")
 
+        if self._source_schema.has_grpo_data:
+            advantages = torch.full_like(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
+            old_log_probabilities = torch.zeros(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
+
         sample_size = len(tokens)
 
         return LanguageModelSample(
@@ -357,6 +364,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 if self._source_schema.has_images
                 else None
             ),
+            TokenDataSample(advantages) if self._source_schema.has_grpo_data else None,
+            TokenDataSample(old_log_probabilities) if self._source_schema.has_grpo_data else None,
         )
 
     def generate_config_yaml_for_sharded_dst(

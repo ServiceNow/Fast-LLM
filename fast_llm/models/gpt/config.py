@@ -54,6 +54,16 @@ class GPTBatchConfig(BatchConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
+    use_preference_spans: bool = Field(
+        default=False,
+        desc="Read dpo data (chosen and rejected spans) from the dataset.",
+        hint=FieldHint.feature,
+    )
+    use_grpo_data: bool = Field(
+        default=False,
+        desc="Read grpo data (advantages and old log probabilities) from the dataset.",
+        hint=FieldHint.feature,
+    )
     truncate_documents: bool | None = Field(
         default=True,
         desc=(

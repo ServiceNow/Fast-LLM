@@ -22,8 +22,7 @@ class LanguageModelPreprocessingConfig(PreprocessingConfig):
     vocab_size: int | None = Field(default=None)
     use_loss_masking_spans: bool = Field(default=False)
     use_preference_spans: bool = Field(default=False)
-    use_advantages: bool = Field(default=False)
-    use_old_log_probabilities: bool = Field(default=False)
+    use_grpo_data: bool = Field(default=False)
 
     def _validate(self) -> None:
         super()._validate()
@@ -33,6 +32,14 @@ class LanguageModelPreprocessingConfig(PreprocessingConfig):
     @functools.cached_property
     def use_image_patches(self) -> bool:
         return isinstance(self.image_patches, ImagePatchConfig)
+
+    @functools.cached_property
+    def use_advantages(self) -> bool:
+        return self.use_grpo_data
+
+    @functools.cached_property
+    def use_old_log_probabilities(self) -> bool:
+        return self.use_grpo_data
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, LanguageModelPreprocessingConfig)

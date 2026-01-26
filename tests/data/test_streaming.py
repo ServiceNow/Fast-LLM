@@ -21,6 +21,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 from tests.conftest import WorkerResources
+from tests.data.common import get_sampling_data
 from tests.utils.redis import make_sampling, redis_batch_producer
 from tests.utils.subtest import DistributedTestContext
 
@@ -39,26 +40,36 @@ def fake_redis(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "documents",
+    ("documents", "preprocessing"),
     [
-        (range(3),),
-        (range(3), range(3, 6)),
-        (range(3), range(5), [9, 4]),
+        ((range(3),), {}),
+        ((range(3), range(3, 6)), {}),
+        ((range(3), range(5), [9, 4]), {}),
+        (({"tokens": list(range(5)), "loss_masking_spans": [(0, 1), (2, 3)]},), {"use_loss_masking_spans": True}),
         (
-            {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
-            {"tokens": list(range(5)), "loss_masking_spans": [(0, 1), (2, 3)]},
-            {"tokens": list(range(8)), "chosen_span": (0, 2), "rejected_span": (3, 5)},
+            ({"tokens": list(range(8)), "chosen_span": (0, 2), "rejected_span": (3, 5)},),
+            {"use_preference_spans": True},
+        ),
+        (
+            (
+                {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
+                {"tokens": list(range(4)), "advantage": 0.7, "old_log_probabilities": [1, 2, 3, 4]},
+            ),
+            {"use_grpo_data": True},
         ),
     ],
 )
 def test_streaming_dataset(
     fake_redis: fakeredis.FakeRedis,
     documents: tuple[list[int] | dict[str, typing.Any], ...],
+    preprocessing: dict,
     worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
-    dataset_iterator = iter(RedisStreamingDataset(stream_config, DistributedConfig()))
+    dataset_iterator = RedisStreamingDataset(stream_config, DistributedConfig()).iterate(
+        get_sampling_data(len(documents), preprocessing=LanguageModelPreprocessingConfig.from_dict(preprocessing))
+    )
     documents = [document if isinstance(document, dict) else {"tokens": list(document)} for document in documents]
     for document in documents:
         fake_redis.xadd(REDIS_DATA_STREAM, RedisDocument.from_dict(document).to_message())
