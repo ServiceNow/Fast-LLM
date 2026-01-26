@@ -96,22 +96,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        if self._config.losses:
-            self._losses = [
-                loss_config.get_layer(
-                    distributed_config,
-                    self._get_full_loss_name(name),
-                    self._prediction_distance,
-                    self._prediction_heads,
-                    self._vocab_parallel,
-                    self._config.cross_entropy_splits,
-                    self._config.logits_scale_factor,
-                    self._loss_coefficient,
-                )
-                for name, loss_config in self._config.losses.items()
-            ]
-        else:
-            self._losses = {"cross_entropy": LanguageModelLabelEntropyLossConfig().get_layer()}
+        loss_configs = (
+            self._config.losses if self._config.losses else {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
+        )
+        self._losses = [
+            loss_config.get_layer(
+                distributed_config,
+                self._get_full_loss_name(name),
+                self._prediction_distance,
+                self._prediction_heads,
+                self._vocab_parallel,
+                self._config.cross_entropy_splits,
+                self._config.logits_scale_factor,
+                self._loss_coefficient,
+            )
+            for name, loss_config in loss_configs.items()
+        ]
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (loss)

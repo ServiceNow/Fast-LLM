@@ -137,7 +137,8 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
     )
     losses: dict[str, LanguageModelLossConfig] = Field(
         default_factory=dict,
-        desc="A dictionary of loss names and their configurations.",
+        desc="A dictionary of loss names and their configurations. "
+        "If not specified, a cross-entropy loss with respect to the targets will be used.",
         hint=FieldHint.core,
     )
     # TODO: Cleanup
