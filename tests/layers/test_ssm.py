@@ -11,7 +11,7 @@ from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage, requires_cuda
+from tests.utils.utils import get_stage
 
 try:
     from fast_llm_external_models.apriel2.modeling_apriel2 import (

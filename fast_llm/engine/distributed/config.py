@@ -410,9 +410,9 @@ class DistributedConfig(Config):
     def get_distributed_dim(self, name: str) -> DistributedDim:
         return self.distributed_dims[name]
 
-    def _log_on_rank[
-        T
-    ](self, *message, rank: int | None = None, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info):
+    def _log_on_rank[T](
+        self, *message, rank: int | None = None, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info
+    ):
         if rank is None or self.rank == rank:
             return log(*message, log_fn=log_fn)
 

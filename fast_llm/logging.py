@@ -123,9 +123,7 @@ def format_metrics(
 
 
 @torch._dynamo.disable  # noqa
-def log_tensor[
-    T
-](
+def log_tensor[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -133,7 +131,7 @@ def log_tensor[
     level: int = 2,
     storage: bool = False,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
-) -> (T | None):
+) -> T | None:
     if level < 1:
         return
     tensor = tensor.detach()
@@ -219,9 +217,7 @@ def log_tensor[
 
 
 @torch._dynamo.disable  # noqa
-def log_grad[
-    T
-](
+def log_grad[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -244,9 +240,7 @@ def log_grad[
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_tensor[
-    T
-](
+def log_distributed_tensor[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -257,7 +251,7 @@ def log_distributed_tensor[
     global_: bool = True,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-) -> (T | None):
+) -> T | None:
     if level <= 0:
         return
     if global_:
@@ -278,9 +272,7 @@ def log_distributed_tensor[
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_grad[
-    T
-](
+def log_distributed_grad[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -292,7 +284,7 @@ def log_distributed_grad[
     global_: bool = True,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-) -> (T | None):
+) -> T | None:
     if level <= 0:
         return
     tensor.register_hook(
@@ -311,9 +303,7 @@ def log_distributed_grad[
 
 
 @torch._dynamo.disable  # noqa
-def log_generator[
-    T
-](
+def log_generator[T](
     name,
     generator: torch.Tensor | torch.Generator | None = None,
     log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
@@ -328,9 +318,7 @@ _global_max_allocated = 0
 _global_max_reserved = 0
 
 
-def log_memory_usage[
-    T
-](
+def log_memory_usage[T](
     header: str | None = None,
     log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
     reset_stats: bool = True,
