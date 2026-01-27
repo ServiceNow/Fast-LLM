@@ -108,9 +108,7 @@ class RunnableConfig(Config):
     def run(self) -> None:
         self._get_runnable()()
 
-    def _show[
-        T
-    ](
+    def _show[T](
         self,
         verbose: int = FieldVerboseLevel.core,
         *,

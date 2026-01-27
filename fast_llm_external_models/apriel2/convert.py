@@ -41,9 +41,13 @@ from fast_llm_external_models.apriel2.conversion import (
     compose_configs,
 )
 from fast_llm_external_models.apriel2.conversion import llava as llava_converter
-from fast_llm_external_models.apriel2.conversion import plan_surgery
+from fast_llm_external_models.apriel2.conversion import (
+    plan_surgery,
+)
 from fast_llm_external_models.apriel2.conversion import qwen2 as qwen2_converter
-from fast_llm_external_models.apriel2.conversion import strip_init_fields
+from fast_llm_external_models.apriel2.conversion import (
+    strip_init_fields,
+)
 
 # Allow running as script or module
 if __name__ == "__main__":

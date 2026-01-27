@@ -243,9 +243,9 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class[
-    T: Config
-](registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
+def config_class[T: Config](
+    registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None
+) -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -715,9 +715,7 @@ class Config(metaclass=ConfigMeta):
     def __repr__(self):
         return self.to_logs(log_fn=str)
 
-    def to_logs[
-        T
-    ](
+    def to_logs[T](
         self,
         verbose: int | None = FieldVerboseLevel.core,
         log_fn: typing.Callable[[str], T] = logger.info,
@@ -1048,9 +1046,7 @@ class Configurable[ConfigType: Config](abc.ABC):
         return self._config
 
 
-def set_nested_dict_value[
-    KeyType, ValueType
-](
+def set_nested_dict_value[KeyType, ValueType](
     d: dict[KeyType, ValueType],
     keys: KeyType | tuple[KeyType, ...],
     value: ValueType,
@@ -1094,9 +1090,9 @@ def set_nested_dict_value[
         raise NotImplementedError(update_type)
 
 
-def get_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+def get_nested_dict_value[KeyType, ValueType](
+    d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]
+) -> ValueType:
     if isinstance(keys, tuple):
         for key in keys:
             d = d[key]
@@ -1105,9 +1101,9 @@ def get_nested_dict_value[
         return d[keys]
 
 
-def pop_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+def pop_nested_dict_value[KeyType, ValueType](
+    d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]
+) -> ValueType:
     if isinstance(keys, tuple):
         for key in keys[:-1]:
             d = d[key]

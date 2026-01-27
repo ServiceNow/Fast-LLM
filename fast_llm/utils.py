@@ -261,9 +261,9 @@ class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
         return super().__getitem__(key)()
 
 
-def log[
-    T
-](*message: typing.Any, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
+def log[T](
+    *message: typing.Any, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", "
+) -> T:
     message = join.join([str(m() if callable(m) else m) for m in message])
     logged = log_fn(message)
     if isinstance(logged, BaseException):

@@ -240,9 +240,9 @@ def is_main_rank() -> bool:
     return DistributedConfig.default_rank == _MAIN_RANK
 
 
-def log_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
+def log_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", "
+) -> T:
     if is_main_rank():
         return log(*message, log_fn=log_fn, join=join)
 
@@ -251,9 +251,9 @@ def is_model_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_model_parallel_main_rank  # Noqa
 
 
-def log_model_parallel_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
+def log_model_parallel_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info
+) -> T:
     if is_model_parallel_main_rank():
         return log(*message, log_fn=log_fn)
 
@@ -262,8 +262,8 @@ def is_pipeline_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_pipeline_parallel_main_rank  # Noqa
 
 
-def log_pipeline_parallel_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
+def log_pipeline_parallel_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info
+) -> T:
     if is_pipeline_parallel_main_rank():
         return log(*message, log_fn=log_fn)
