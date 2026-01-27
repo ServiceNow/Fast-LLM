@@ -9,7 +9,7 @@ from fast_llm.config import Field, config_class
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import (
     Batch,
-    MemmapIndexedDatasetReader,
+    MemmapReader,
     MemmapReaderBase,
     MemmapReaderBaseConfig,
     MemmapReaderConfig,
@@ -109,7 +109,7 @@ class TokenDataReaderConfig(MemmapReaderConfig):
         }
 
 
-class TokenDataReader[ConfigType: TokenDataReaderConfig](MemmapIndexedDatasetReader[ConfigType]):
+class TokenDataReader[ConfigType: TokenDataReaderConfig](MemmapReader[ConfigType]):
     def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
         super().__init__(config, buffer, model_preprocessing)
         self._data = torch.frombuffer(
@@ -125,20 +125,15 @@ class TokenDataReader[ConfigType: TokenDataReaderConfig](MemmapIndexedDatasetRea
         begin_ = self._size_cumsums[index].item()
         return TokenDataSample(self._data[begin_ + begin : begin_ + end])
 
-    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
-        Assert.custom(lambda x: x == sorted(x), [0, begin_ratio, end_ratio, 1])
-        begin_index = _get_nearest_split(self._size_cumsums[1:], begin_ratio * self.num_tokens)
-        end_index = _get_nearest_split(self._size_cumsums[1:], end_ratio * self.num_tokens)
+    def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
+        Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])
 
-        return (
-            begin_index,
-            end_index,
-            {
-                "num_tokens": self._size_cumsums[end_index].item() - self._size_cumsums[begin_index].item(),
-                "num_documents": end_index - begin_index,
-                "data_type": str(self._config.data_type),
-            },
-        )
+        return {
+            "num_tokens": self._size_cumsums[end_index].item() - self._size_cumsums[begin_index].item(),
+            "num_documents": end_index - begin_index,
+            "data_type": str(self._config.data_type),
+            "shape": self._config.shape,
+        }
 
 
 class EmptyPatchReader[ConfigType: PatchReaderBaseConfig](MemmapReaderBase[ConfigType]):
@@ -159,14 +154,17 @@ class TokenDataWriter(MemmapWriter):
         super().__enter__()
         self._size_cumsum = [0]
         self._data_type = None
+        self._shape = None
         return self
 
     def write(self, document: TokenDataSample):
         super().write(document)
         if self._data_type is None:
             self._data_type = document.data.dtype
+            self._shape = document.data.shape[1:]
         else:
             Assert.eq(self._data_type, document.data.dtype)
+            Assert.eq(self._shape, document.data.shape[1:])
         self._stream.write(document.data.numpy().tobytes())
         self._size_cumsum.append(self._size_cumsum[-1] + len(document.data))
 
@@ -185,6 +183,7 @@ class TokenDataWriter(MemmapWriter):
             end=end,
             num_documents=len(self._size_cumsum) - 1,
             num_tokens=self._size_cumsum[-1],
+            shape=self._shape,
             data_type=DataType.from_torch(self._data_type),
             preprocessing=self._preprocessing_config,
         )

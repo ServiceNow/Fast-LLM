@@ -223,6 +223,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             ),
             use_loss_masking_spans=self._source_schema.has_loss_masking_span,
             use_preference_spans=self._source_schema.has_preference_spans,
+            use_grpo_data=self._source_schema.has_grpo_data,
         )
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
@@ -337,35 +338,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         if self._source_schema.has_grpo_data:
             advantages = torch.full_like(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
-            old_log_probabilities = torch.zeros(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
+            old_log_probabilities = torch.zeros_like(tokens, dtype=torch.float32)
 
         sample_size = len(tokens)
 
         return LanguageModelSample(
             TokenSample(tokens, [sample_size]),
-            (
+            loss_masking_spans=(
                 RangeSample(token_spans_by_type[SpanType.loss_masking], sample_size)
                 if self._source_schema.has_loss_masking_span
                 else None
             ),
-            (
+            chosen_spans=(
                 RangeSample(token_spans_by_type[SpanType.chosen], sample_size)
                 if self._source_schema.has_preference_spans
                 else None
             ),
-            (
+            rejected_spans=(
                 # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
                 RangeSample([(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]], sample_size)
                 if self._source_schema.has_preference_spans
                 else None
             ),
-            (
+            image_patches=(
                 PatchSample(image_patches, image_token_maps, image_position_ids, sample_size, patch_counts)
                 if self._source_schema.has_images
                 else None
             ),
-            TokenDataSample(advantages) if self._source_schema.has_grpo_data else None,
-            TokenDataSample(old_log_probabilities) if self._source_schema.has_grpo_data else None,
+            advantages=TokenDataSample(advantages) if self._source_schema.has_grpo_data else None,
+            old_log_probabilities=(
+                TokenDataSample(old_log_probabilities) if self._source_schema.has_grpo_data else None
+            ),
         )
 
     def generate_config_yaml_for_sharded_dst(

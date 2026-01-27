@@ -39,7 +39,13 @@ from fast_llm.data.sample.range import (
     RangeWriter,
 )
 from fast_llm.data.sample.token import TokenBatch, TokenReaderConfig, TokenSample, TokenWriter
-from fast_llm.data.sample.token_data import TokenDataBatch, TokenDataReader, TokenDataReaderConfig, TokenDataSample
+from fast_llm.data.sample.token_data import (
+    TokenDataBatch,
+    TokenDataReader,
+    TokenDataReaderConfig,
+    TokenDataSample,
+    TokenDataWriter,
+)
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
@@ -443,9 +449,11 @@ class LanguageModelWriter(MemmapWriter):
         if self._preprocessing_config.use_image_patches:
             self._image_patches_writer = PatchWriter(self._path.joinpath("image_patches")).__enter__()
         if self._preprocessing_config.use_advantages:
-            self._advantages_writer = PatchWriter(self._path.joinpath("advantages")).__enter__()
+            self._advantages_writer = TokenDataWriter(self._path.joinpath("advantages")).__enter__()
         if self._preprocessing_config.use_old_log_probabilities:
-            self._old_log_probabilities_writer = PatchWriter(self._path.joinpath("old_log_probabilities")).__enter__()
+            self._old_log_probabilities_writer = TokenDataWriter(
+                self._path.joinpath("old_log_probabilities")
+            ).__enter__()
         return self
 
     def write(self, document: LanguageModelSample):
@@ -524,6 +532,20 @@ class LanguageModelWriter(MemmapWriter):
                     self._stream,
                     config.image_patches.begin,
                     config.image_patches.end,
+                )
+            if self._preprocessing_config.use_advantages:
+                _copy_chunked(
+                    self._path.joinpath("advantages"),
+                    self._stream,
+                    config.advantages.begin,
+                    config.advantages.end,
+                )
+            if self._preprocessing_config.use_old_log_probabilities:
+                _copy_chunked(
+                    self._path.joinpath("old_log_probabilities"),
+                    self._stream,
+                    config.old_log_probabilities.begin,
+                    config.old_log_probabilities.end,
                 )
 
         self._directory.cleanup()

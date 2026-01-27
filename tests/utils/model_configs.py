@@ -739,8 +739,10 @@ update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "llama_grpo",
-    updates={("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}}, ("batch", "use_grpo_data"): True},
-    # TODO: New base image broke mixtral
+    updates={
+        ("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}},
+        ("batch", "use_grpo_data"): True,
+    },
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
