@@ -82,14 +82,13 @@ def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_maskin
     out_torch, grad_torch = entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.torch)
     out_fused, grad_fused = entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.fused)
 
-    # TODO: Why is the error so high with loss masking for reverse KL?
     _compare_entropy_loss_outputs(
         out_fused,
         out_torch,
         grad_output is not None,
         grad_fused,
         grad_torch,
-        loss_min_threshold=2e-4 if entropy_loss_type == EntropyLossType.reverse_kl and loss_masking else 5e-6,
+        loss_min_threshold=5e-6,
     )
 
     if entropy_loss_type != EntropyLossType.cross_entropy or not torch.cuda.is_available():
