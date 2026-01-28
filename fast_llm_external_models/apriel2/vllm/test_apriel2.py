@@ -17,16 +17,35 @@ Usage:
     python test_apriel2.py stats /path/to/model --num-prompts 128
     python test_apriel2.py stats /path/to/model --placement every3rd-gdn
 
+    # Multi-placement sweep (loads model once, tests multiple placements)
+    python test_apriel2.py stats /path/to/model --placements all-attention all-gdn every2nd-gdn
+    python test_apriel2.py stats /path/to/model --placement-sweep  # Test common placements
+
+    # Compare standalone model vs supernet with matching placement
+    # (Diagnose if placement switching is working correctly)
+    python test_apriel2.py compare-placement \
+        --standalone /tmp/apriel2-0.5b-every2nd-gdn \
+        --supernet /tmp/apriel2-0.5b-dev \
+        --placement every2nd-gdn \
+        --framework both
+
     # Run both tests
     python test_apriel2.py all /path/to/model
 
 Placement patterns:
+    all-X                   All layers use mixer X (attention, gdn, kda, swa)
+    everyNth-X              Every Nth layer uses mixer X, others use attention
+                            (e.g., every2nd-gdn, every3rd-kda, every4th-swa)
+    bookend-attn-X          First 2 and last 2 layers use attention, middle uses X
+                            (e.g., bookend-attn-gdn, bookend-attn-kda)
+    attn,gdn,attn,...       Explicit comma-separated list
+
+Examples:
     --placement all-attention       All layers use attention
     --placement all-gdn             All layers use GDN
     --placement every2nd-gdn        Every 2nd layer is GDN (1=attn, 2=gdn, 3=attn, ...)
-    --placement every3rd-gdn        Every 3rd layer is GDN
-    --placement every4th-gdn        Every 4th layer is GDN
-    --placement attn,gdn,attn,...   Explicit comma-separated list
+    --placement every4th-kda        Every 4th layer is KDA
+    --placement bookend-attn-gdn    Attention at ends, GDN in middle
 """
 
 import argparse
@@ -53,12 +72,25 @@ def _triton_allocator(size, align, stream):
 triton.set_allocator(_triton_allocator)
 
 
+def normalize_mixer_name(name: str) -> str:
+    """Normalize mixer name aliases to canonical names."""
+    # Map shorthand names to canonical names
+    aliases = {
+        "swa": "sliding_window",
+        "attn": "attention",
+    }
+    return aliases.get(name, name)
+
+
 def parse_placement(placement_str: str, num_layers: int) -> list[str]:
     """Parse placement string into a list of mixer names.
 
     Args:
         placement_str: Either a pattern name or comma-separated mixer names.
-            Patterns: all-attention, all-gdn, every2nd-gdn, every3rd-gdn, every4th-gdn
+            Patterns:
+                all-X: All layers use mixer X (attention, gdn, kda, swa/sliding_window)
+                everyNth-X: Every Nth layer uses mixer X, others use attention
+                bookend-attn-X: First 2 and last 2 layers use attention, middle uses X
             Explicit: attention,gdn,attention,gdn,...
         num_layers: Number of layers in the model.
 
@@ -67,30 +99,50 @@ def parse_placement(placement_str: str, num_layers: int) -> list[str]:
     """
     placement_str = placement_str.strip().lower()
 
-    if placement_str == "all-attention":
-        return ["attention"] * num_layers
-    elif placement_str == "all-gdn":
-        return ["gdn"] * num_layers
-    elif placement_str.startswith("every") and placement_str.endswith("-gdn"):
-        # Parse "every2nd-gdn", "every3rd-gdn", etc.
-        n_str = placement_str[5:-4]  # Extract "2nd", "3rd", etc.
-        n_str = n_str.rstrip("ndrdth")  # Remove ordinal suffix
-        n = int(n_str)
+    # Handle all-X patterns (e.g., all-attention, all-gdn, all-kda, all-swa)
+    if placement_str.startswith("all-"):
+        mixer = normalize_mixer_name(placement_str[4:])  # Extract mixer name after "all-"
+        return [mixer] * num_layers
+
+    # Handle bookend-attn-X patterns (e.g., bookend-attn-gdn, bookend-attn-kda)
+    if placement_str.startswith("bookend-attn-"):
+        mixer = normalize_mixer_name(placement_str[13:])  # Extract mixer name after "bookend-attn-"
         placement = []
         for i in range(num_layers):
-            if (i + 1) % n == 0:  # Every nth layer is GDN
-                placement.append("gdn")
-            else:
+            if i < 2 or i >= num_layers - 2:
                 placement.append("attention")
+            else:
+                placement.append(mixer)
         return placement
-    elif "," in placement_str:
-        # Explicit comma-separated list
-        placement = [m.strip() for m in placement_str.split(",")]
+
+    # Handle everyNth-X patterns (e.g., every2nd-gdn, every3rd-kda, every4th-swa)
+    if placement_str.startswith("every"):
+        # Find where the mixer name starts (after the dash)
+        dash_idx = placement_str.rfind("-")
+        if dash_idx > 5:  # "every" is 5 chars, need at least that plus ordinal
+            n_str = placement_str[5:dash_idx]  # Extract "2nd", "3rd", etc.
+            n_str = n_str.rstrip("ndrdth")  # Remove ordinal suffix
+            mixer = normalize_mixer_name(placement_str[dash_idx + 1:])  # Extract mixer name
+            try:
+                n = int(n_str)
+                placement = []
+                for i in range(num_layers):
+                    if (i + 1) % n == 0:  # Every nth layer uses the specified mixer
+                        placement.append(mixer)
+                    else:
+                        placement.append("attention")
+                return placement
+            except ValueError:
+                pass  # Fall through to explicit list or error
+
+    # Explicit comma-separated list
+    if "," in placement_str:
+        placement = [normalize_mixer_name(m.strip()) for m in placement_str.split(",")]
         if len(placement) != num_layers:
             raise ValueError(f"Placement has {len(placement)} entries but model has {num_layers} layers")
         return placement
-    else:
-        raise ValueError(f"Unknown placement pattern: {placement_str}")
+
+    raise ValueError(f"Unknown placement pattern: {placement_str}")
 
 
 def apply_placement(llm: "LLM", placement_str: str | None) -> None:
@@ -118,9 +170,41 @@ def apply_placement(llm: "LLM", placement_str: str | None) -> None:
 
     # Verify
     placements_after = llm.collective_rpc("get_layer_placements")
-    attn_count = sum(1 for v in placements_after[0].values() if v == "attention")
-    gdn_count = sum(1 for v in placements_after[0].values() if v == "gdn")
-    print(f"  Applied placement '{placement_str}': {attn_count} attention, {gdn_count} gdn")
+    counts = {}
+    for v in placements_after[0].values():
+        counts[v] = counts.get(v, 0) + 1
+    counts_str = ", ".join(f"{c} {m}" for m, c in sorted(counts.items()))
+    print(f"  Applied placement '{placement_str}': {counts_str}")
+
+
+def apply_placement_transformers(model, placement: list[str], verbose: bool = True) -> None:
+    """Apply placement to Transformers model by setting main_mixer_name for stochastic layers.
+
+    Args:
+        model: Transformers model instance.
+        placement: List of mixer names, one per layer.
+        verbose: Whether to print status messages.
+    """
+    # Apriel2 uses model.model.decoder.blocks instead of model.model.layers
+    blocks = model.model.decoder.blocks
+    num_layers = len(blocks)
+    if len(placement) != num_layers:
+        raise ValueError(f"Placement has {len(placement)} entries but model has {num_layers} layers")
+
+    applied = 0
+    for layer_idx, mixer_name in enumerate(placement):
+        block = blocks[layer_idx]
+        # Check if block has a stochastic mixer with main_mixer_name
+        if hasattr(block, 'mixer') and hasattr(block.mixer, 'main_mixer_name'):
+            block.mixer.main_mixer_name = mixer_name
+            applied += 1
+
+    if verbose:
+        counts = {}
+        for m in placement:
+            counts[m] = counts.get(m, 0) + 1
+        counts_str = ", ".join(f"{c} {m}" for m, c in sorted(counts.items()))
+        print(f"  Applied placement to Transformers: {counts_str} (applied to {applied} layers)")
 
 
 def setup_transformers():
@@ -392,7 +476,7 @@ def compare_comprehensive(
     decode_lengths: list[int],
     batch_sizes: list[int],
     dtype: str = "bfloat16",
-    no_compile: bool = True,
+    no_compile: bool = False,
     revision: str | None = None,
     placement: str | None = None,
 ):
@@ -672,6 +756,54 @@ from dataclasses import dataclass, field
 from itertools import islice
 
 
+# Common placement patterns for sweep testing
+SWEEP_PLACEMENTS = [
+    "all-attention",
+    "all-gdn",
+    "all-kda",
+    "bookend-attn-gdn",   # 2x attn, middle layers gdn, 2x attn
+    "bookend-attn-kda",   # 2x attn, middle layers kda, 2x attn
+    "every2nd-gdn",
+    "every2nd-kda",
+    "every2nd-swa",       # sliding window attention
+    "every4th-gdn",
+    "every4th-kda",
+    "every4th-swa",
+]
+
+
+def resolve_placements(args) -> list[str] | None:
+    """Resolve placement arguments into a list of placement patterns.
+
+    Handles --placement, --placements, and --placement-sweep arguments.
+    Returns None if no placement is specified (use model default).
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        List of placement pattern strings, or None if no placement specified.
+    """
+    placements = []
+
+    # Check --placement-sweep first (highest priority)
+    if getattr(args, 'placement_sweep', False):
+        placements.extend(SWEEP_PLACEMENTS)
+
+    # Then check --placements (list)
+    if getattr(args, 'placements', None):
+        placements.extend(args.placements)
+
+    # Finally check --placement (single, deprecated)
+    if getattr(args, 'placement', None):
+        if placements:
+            print("  Warning: --placement is deprecated when using --placements or --placement-sweep")
+        else:
+            placements.append(args.placement)
+
+    return placements if placements else None
+
+
 @dataclass
 class TokenComparison:
     """Comparison data for a single token position."""
@@ -782,24 +914,25 @@ def set_transformers_kernels(model_path: str, kernel_config: str) -> None:
             del sys.modules[mod]
 
 
-def run_vllm_inference(
+def load_vllm_model(
     model_path: str,
-    token_ids_list: list[list[int]],
-    decode_length: int,
     batch_size: int,
     dtype: str,
     no_compile: bool,
     revision: str | None,
-    placement: str | None = None,
-) -> tuple[list[list[int]], list[list[dict]]]:
-    """Run vLLM inference and return generated tokens and logprobs.
+) -> "LLM":
+    """Load vLLM model.
+
+    Args:
+        model_path: Path to model checkpoint.
+        batch_size: Max concurrent sequences.
+        dtype: Data type (bfloat16 or float32).
+        no_compile: Whether to disable torch.compile.
+        revision: Model revision.
 
     Returns:
-        - generated_tokens: list of list of token IDs (one list per prompt)
-        - logprobs_per_position: list of list of logprob dicts (one list per prompt)
+        Loaded LLM instance.
     """
-    from vllm import TokensPrompt
-
     compile_label = "no-compile" if no_compile else "compiled"
     print(f"\nLoading vLLM model ({compile_label}, batch_size={batch_size})...")
     compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
@@ -816,7 +949,34 @@ def run_vllm_inference(
         enable_prefix_caching=False,  # Disable for hybrid models
     )
 
-    apply_placement(llm, placement)
+    return llm
+
+
+def run_vllm_inference_with_model(
+    llm: "LLM",
+    token_ids_list: list[list[int]],
+    decode_length: int,
+    placement: list[str] | None = None,
+    verbose: bool = True,
+) -> tuple[list[list[int]], list[list[dict]]]:
+    """Run vLLM inference with an already-loaded model.
+
+    Args:
+        llm: Loaded LLM instance.
+        token_ids_list: List of token ID sequences for prompts.
+        decode_length: Number of tokens to decode.
+        placement: Placement list (already parsed), or None to skip.
+        verbose: Whether to print progress.
+
+    Returns:
+        - generated_tokens: list of list of token IDs (one list per prompt)
+        - logprobs_per_position: list of list of logprob dicts (one list per prompt)
+    """
+    from vllm import TokensPrompt
+
+    # Apply placement if specified
+    if placement is not None:
+        llm.collective_rpc("set_layer_placements", args=(placement,))
 
     # Create TokensPrompt for each prompt
     vllm_prompts = [TokensPrompt(prompt_token_ids=ids) for ids in token_ids_list]
@@ -827,7 +987,8 @@ def run_vllm_inference(
         logprobs=20,
     )
 
-    print(f"Running vLLM inference on {len(vllm_prompts)} prompts (decode_length={decode_length})...")
+    if verbose:
+        print(f"Running vLLM inference on {len(vllm_prompts)} prompts (decode_length={decode_length})...")
     outputs = llm.generate(vllm_prompts, sampling_params)
 
     # Extract results
@@ -845,9 +1006,141 @@ def run_vllm_inference(
                 lps.append(pos_lps if pos_lps else {})
         logprobs_per_position.append(lps)
 
+    return generated_tokens, logprobs_per_position
+
+
+def run_vllm_inference(
+    model_path: str,
+    token_ids_list: list[list[int]],
+    decode_length: int,
+    batch_size: int,
+    dtype: str,
+    no_compile: bool,
+    revision: str | None,
+    placement: str | None = None,
+) -> tuple[list[list[int]], list[list[dict]]]:
+    """Run vLLM inference and return generated tokens and logprobs.
+
+    This is a convenience wrapper that loads the model, runs inference, and cleans up.
+
+    Returns:
+        - generated_tokens: list of list of token IDs (one list per prompt)
+        - logprobs_per_position: list of list of logprob dicts (one list per prompt)
+    """
+    llm = load_vllm_model(model_path, batch_size, dtype, no_compile, revision)
+
+    # Parse and apply placement if specified
+    placement_list = None
+    if placement is not None:
+        # Get num_layers from model
+        placements = llm.collective_rpc("get_layer_placements")
+        if placements and placements[0]:
+            num_layers = len(placements[0])
+            placement_list = parse_placement(placement, num_layers)
+            apply_placement(llm, placement)
+
+    generated_tokens, logprobs_per_position = run_vllm_inference_with_model(
+        llm, token_ids_list, decode_length, placement_list
+    )
+
     del llm
     gc.collect()
     torch.cuda.empty_cache()
+
+    return generated_tokens, logprobs_per_position
+
+
+def load_transformers_model(
+    model_path: str,
+    dtype: str,
+    revision: str | None,
+):
+    """Load Transformers model.
+
+    Args:
+        model_path: Path to model checkpoint.
+        dtype: Data type (bfloat16 or float32).
+        revision: Model revision.
+
+    Returns:
+        Loaded model instance.
+    """
+    from transformers import AutoModelForCausalLM
+
+    torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+    attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
+
+    print(f"\nLoading Transformers model ({attn_impl})...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        revision=revision,
+        torch_dtype=torch_dtype,
+        device_map="cuda",
+        trust_remote_code=True,
+        attn_implementation=attn_impl,
+    )
+    model.eval()
+
+    return model
+
+
+def run_transformers_inference_with_model(
+    model,
+    token_ids_list: list[list[int]],
+    decode_length: int,
+    placement: list[str] | None = None,
+    verbose: bool = True,
+) -> tuple[list[list[int]], list[list[torch.Tensor]]]:
+    """Run Transformers inference with an already-loaded model.
+
+    Args:
+        model: Loaded Transformers model.
+        token_ids_list: List of token ID sequences for prompts.
+        decode_length: Number of tokens to decode.
+        placement: Placement list (already parsed), or None to skip.
+        verbose: Whether to print progress.
+
+    Returns:
+        - generated_tokens: list of list of token IDs (one list per prompt)
+        - logprobs_per_position: list of list of logprob tensors (one list per prompt)
+    """
+    # Apply placement if specified
+    if placement is not None:
+        apply_placement_transformers(model, placement, verbose=verbose)
+
+    generated_tokens = []
+    logprobs_per_position = []
+
+    if verbose:
+        print(f"Running Transformers inference on {len(token_ids_list)} prompts...")
+
+    for idx, token_ids in enumerate(token_ids_list):
+        input_ids = torch.tensor([token_ids], device="cuda")
+        prompt_tokens = []
+        prompt_logprobs = []
+
+        with torch.no_grad():
+            # Generate tokens one at a time to get logprobs at each step
+            for step in range(decode_length):
+                outputs = model(input_ids)
+                logits = outputs.logits[:, -1, :]  # Last position
+                logprobs = torch.log_softmax(logits.float(), dim=-1).cpu()
+
+                next_token = logits.argmax(dim=-1).item()
+                prompt_tokens.append(next_token)
+                prompt_logprobs.append(logprobs[0])
+
+                # Append to input for next step
+                input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device="cuda")], dim=1)
+
+        generated_tokens.append(prompt_tokens)
+        logprobs_per_position.append(prompt_logprobs)
+
+        if verbose and ((idx + 1) % 10 == 0 or (idx + 1) == len(token_ids_list)):
+            print(f"  Processed {idx + 1}/{len(token_ids_list)} prompts", end="\r")
+
+    if verbose:
+        print()
 
     return generated_tokens, logprobs_per_position
 
@@ -859,73 +1152,31 @@ def run_transformers_inference(
     batch_size: int,
     dtype: str,
     revision: str | None,
+    placement: str | None = None,
 ) -> tuple[list[list[int]], list[list[torch.Tensor]]]:
     """Run Transformers inference and return generated tokens and logprobs.
 
+    This is a convenience wrapper that loads the model, runs inference, and cleans up.
+
     Args:
-        batch_size: Number of prompts to process together. For generation,
-                   each prompt still decodes sequentially within the batch.
+        batch_size: Unused (kept for API compatibility).
 
     Returns:
         - generated_tokens: list of list of token IDs (one list per prompt)
         - logprobs_per_position: list of list of logprob tensors (one list per prompt)
     """
-    from transformers import AutoModelForCausalLM
+    model = load_transformers_model(model_path, dtype, revision)
 
-    torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
-    attn_impl = "flash_attention_2" if dtype == "bfloat16" else "eager"
+    # Parse placement if specified
+    placement_list = None
+    if placement is not None:
+        # Apriel2 uses model.model.decoder.blocks instead of model.model.layers
+        num_layers = len(model.model.decoder.blocks)
+        placement_list = parse_placement(placement, num_layers)
 
-    print(f"\nLoading Transformers model ({attn_impl}, batch_size={batch_size})...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        revision=revision,
-        torch_dtype=torch_dtype,
-        device_map="cuda",
-        trust_remote_code=True,
-        attn_implementation=attn_impl,
+    generated_tokens, logprobs_per_position = run_transformers_inference_with_model(
+        model, token_ids_list, decode_length, placement_list
     )
-    model.eval()
-
-    generated_tokens = []
-    logprobs_per_position = []
-
-    print(f"Running Transformers inference on {len(token_ids_list)} prompts...")
-
-    # Process in batches
-    for batch_start in range(0, len(token_ids_list), batch_size):
-        batch_end = min(batch_start + batch_size, len(token_ids_list))
-        batch_token_ids = token_ids_list[batch_start:batch_end]
-        actual_batch_size = len(batch_token_ids)
-
-        # For batch_size > 1, we need to handle each prompt separately for generation
-        # because sequences grow at different rates and we need per-token logprobs
-        for i, token_ids in enumerate(batch_token_ids):
-            input_ids = torch.tensor([token_ids], device="cuda")
-            prompt_tokens = []
-            prompt_logprobs = []
-
-            with torch.no_grad():
-                # Generate tokens one at a time to get logprobs at each step
-                for step in range(decode_length):
-                    outputs = model(input_ids)
-                    logits = outputs.logits[:, -1, :]  # Last position
-                    logprobs = torch.log_softmax(logits.float(), dim=-1).cpu()
-
-                    next_token = logits.argmax(dim=-1).item()
-                    prompt_tokens.append(next_token)
-                    prompt_logprobs.append(logprobs[0])
-
-                    # Append to input for next step
-                    input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device="cuda")], dim=1)
-
-            generated_tokens.append(prompt_tokens)
-            logprobs_per_position.append(prompt_logprobs)
-
-        processed = batch_end
-        if processed % 10 == 0 or processed == len(token_ids_list):
-            print(f"  Processed {processed}/{len(token_ids_list)} prompts", end="\r")
-
-    print()
 
     del model
     torch.cuda.empty_cache()
@@ -967,6 +1218,78 @@ def compute_comparisons(
                 vllm_token_id=vllm_token,
                 tf_token_id=tf_token,
                 token_match=(vllm_token == tf_token),
+                avg_logprob_diff=avg_diff,
+                max_logprob_diff=max_diff,
+                top_k_diffs=diffs,
+            ))
+
+    return comparisons
+
+
+def compute_same_framework_comparisons(
+    model1_tokens: list[list[int]],
+    model1_logprobs: list[list],  # Either list[dict] (vLLM) or list[torch.Tensor] (TF)
+    model2_tokens: list[list[int]],
+    model2_logprobs: list[list],  # Same type as model1_logprobs
+    is_vllm: bool = False,
+) -> list[TokenComparison]:
+    """Compute per-position comparisons between two models using the same framework.
+
+    This handles both vLLM-style logprobs (list of dicts) and Transformers-style
+    logprobs (list of tensors).
+
+    Args:
+        model1_tokens: Generated tokens from model 1.
+        model1_logprobs: Logprobs from model 1.
+        model2_tokens: Generated tokens from model 2.
+        model2_logprobs: Logprobs from model 2.
+        is_vllm: If True, logprobs are vLLM-style dicts; if False, Transformers-style tensors.
+
+    Returns:
+        List of TokenComparison objects.
+    """
+    comparisons = []
+
+    for prompt_idx, (t1, lp1, t2, lp2) in enumerate(zip(
+        model1_tokens, model1_logprobs, model2_tokens, model2_logprobs
+    )):
+        for pos in range(min(len(t1), len(t2), len(lp1), len(lp2))):
+            token1 = t1[pos]
+            token2 = t2[pos]
+            logprobs1 = lp1[pos]
+            logprobs2 = lp2[pos]
+
+            diffs = []
+            if is_vllm:
+                # vLLM: logprobs are dicts with token_id -> LogprobInfo
+                if logprobs1 and logprobs2:
+                    # Compare logprobs for tokens in model1's top-K
+                    for tid, lp_info1 in list(logprobs1.items())[:20]:
+                        lp1_val = lp_info1.logprob
+                        lp_info2 = logprobs2.get(tid)
+                        if lp_info2 is not None:
+                            lp2_val = lp_info2.logprob
+                            diffs.append(abs(lp1_val - lp2_val))
+            else:
+                # Transformers: logprobs are tensors
+                if logprobs1 is not None and logprobs2 is not None:
+                    # Get top-K token IDs from model1
+                    top_k = logprobs1.topk(20)
+                    for i in range(min(20, len(top_k.indices))):
+                        tid = top_k.indices[i].item()
+                        lp1_val = logprobs1[tid].item()
+                        lp2_val = logprobs2[tid].item()
+                        diffs.append(abs(lp1_val - lp2_val))
+
+            avg_diff = sum(diffs) / len(diffs) if diffs else 0.0
+            max_diff = max(diffs) if diffs else 0.0
+
+            comparisons.append(TokenComparison(
+                prompt_idx=prompt_idx,
+                position=pos,
+                vllm_token_id=token1,  # Model 1 token (reusing field name)
+                tf_token_id=token2,    # Model 2 token (reusing field name)
+                token_match=(token1 == token2),
                 avg_logprob_diff=avg_diff,
                 max_logprob_diff=max_diff,
                 top_k_diffs=diffs,
@@ -1067,17 +1390,82 @@ def print_stats_report(comparisons: list[TokenComparison], title: str = "Statist
     }
 
 
+def print_multi_placement_report(results: dict[str, dict], model_name: str, decode_length: int) -> None:
+    """Print comparison table across placements.
+
+    Args:
+        results: Dict mapping placement_str -> stats dict from print_stats_report.
+        model_name: Model name for header.
+        decode_length: Number of decode positions.
+    """
+    print(f"\n{'='*90}")
+    print(f" PLACEMENT COMPARISON: {model_name}")
+    print(f"{'='*90}")
+
+    if not results:
+        print("No placements to compare.")
+        return
+
+    # Header
+    header = f"{'Placement':<20} {'Prefill%':>10} {'Decode1%':>10}"
+    if decode_length >= 15:
+        header += f" {'Decode15%':>10}"
+    header += f" {'AvgDiff':>10} {'Outliers':>10}"
+    print(header)
+    print("-" * 90)
+
+    for placement_str, stats in results.items():
+        position_stats = stats.get("position_stats", {})
+
+        # Get prefill match rate (position 0)
+        prefill_stats = position_stats.get(0, {})
+        prefill_match = prefill_stats.get("match_rate", 0.0) * 100
+
+        # Get decode1 match rate (position 1)
+        decode1_stats = position_stats.get(1, {})
+        decode1_match = decode1_stats.get("match_rate", 0.0) * 100
+
+        row = f"{placement_str:<20} {prefill_match:>9.1f}% {decode1_match:>9.1f}%"
+
+        # Get decode15 match rate if available
+        if decode_length >= 15:
+            decode15_stats = position_stats.get(14, {})  # 0-indexed, so position 14 is 15th
+            decode15_match = decode15_stats.get("match_rate", 0.0) * 100
+            row += f" {decode15_match:>9.1f}%"
+
+        avg_diff = stats.get("avg_diff_mean", 0.0)
+        n_outliers = stats.get("n_outliers", 0)
+
+        row += f" {avg_diff:>10.4f} {n_outliers:>10}"
+        print(row)
+
+    print()
+
+
 def cmd_stats(args):
-    """Run statistical comparison with many prompts."""
+    """Run statistical comparison with many prompts.
+
+    Supports comparing vLLM vs Transformers across multiple placements.
+    When multiple placements are specified, models are loaded once and
+    placements are switched dynamically.
+    """
     from transformers import AutoTokenizer
 
     setup_transformers()
 
+    # Resolve placements list
+    placements = resolve_placements(args)
+
     for model_path in args.model_paths:
+        model_name = Path(model_path).name
+        mode_label = "no-compile" if args.no_compile else "compiled"
+
         print(f"\n{'#'*70}")
-        print(f"# Statistical Comparison: {Path(model_path).name}")
+        print(f"# Statistical Comparison: {model_name}")
         print(f"# Prompts: {args.num_prompts}, prompt_length: {args.prompt_length}, decode_length: {args.decode_length}")
-        print(f"# Mode: {'no-compile' if args.no_compile else 'compiled'}, TF kernels: {args.tf_kernels}")
+        print(f"# Mode: {mode_label}, TF kernels: {args.tf_kernels}")
+        if placements:
+            print(f"# Placements: {len(placements)} ({', '.join(placements[:3])}{'...' if len(placements) > 3 else ''})")
         print(f"{'#'*70}")
 
         revision = getattr(args, 'revision', None)
@@ -1098,45 +1486,313 @@ def cmd_stats(args):
         )
         print(f"  Prepared {len(token_ids_list)} token sequences")
 
-        # Run vLLM inference
-        placement = getattr(args, 'placement', None)
-        vllm_tokens, vllm_logprobs = run_vllm_inference(
-            model_path, token_ids_list, args.decode_length,
-            args.batch_size, args.dtype, args.no_compile, revision, placement
+        # Single placement mode (backwards compatible)
+        if placements is None or len(placements) == 1:
+            placement_str = placements[0] if placements else None
+
+            # Run vLLM inference
+            vllm_tokens, vllm_logprobs = run_vllm_inference(
+                model_path, token_ids_list, args.decode_length,
+                args.batch_size, args.dtype, args.no_compile, revision, placement_str
+            )
+
+            # Run Transformers inference (with same placement if specified)
+            tf_tokens, tf_logprobs = run_transformers_inference(
+                model_path, token_ids_list, args.decode_length,
+                args.batch_size, args.dtype, revision, placement_str
+            )
+
+            # Compute comparisons
+            comparisons = compute_comparisons(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)
+
+            # Print statistics
+            stats = print_stats_report(
+                comparisons,
+                f"Results ({mode_label}, TF={args.tf_kernels})"
+            )
+
+            print(f"\n{'='*70}")
+            print(f" SUMMARY: {model_name}")
+            print(f"{'='*70}")
+            print(f"  Mode: {mode_label}")
+            print(f"  TF kernels: {args.tf_kernels}")
+            print(f"  Batch size: {args.batch_size}")
+            print(f"  Dtype: {args.dtype}")
+            if placement_str:
+                print(f"  Placement: {placement_str}")
+            if revision:
+                print(f"  Revision: {revision}")
+            print(f"  Token match rate: {100*stats['match_rate']:.1f}%")
+            print(f"  Avg diff (mean): {stats['avg_diff_mean']:.4f}")
+            print(f"  Avg diff (p95):  {stats['avg_diff_p95']:.4f}")
+            print(f"  Avg diff (max):  {stats['avg_diff_max']:.4f}")
+            if stats['n_outliers'] > 0:
+                print(f"  WARNING: {stats['n_outliers']} outliers detected (avg diff > 1.0)")
+            print()
+            continue
+
+        # Multi-placement sweep mode: load models ONCE and iterate placements
+        print(f"\n--- Multi-placement sweep mode ({len(placements)} placements) ---")
+
+        # Load vLLM model once
+        llm = load_vllm_model(
+            model_path, args.batch_size, args.dtype, args.no_compile, revision
         )
 
-        # Run Transformers inference
-        tf_tokens, tf_logprobs = run_transformers_inference(
-            model_path, token_ids_list, args.decode_length,
-            args.batch_size, args.dtype, revision
-        )
+        # Get num_layers from vLLM model
+        vllm_placements = llm.collective_rpc("get_layer_placements")
+        if not vllm_placements or not vllm_placements[0]:
+            print(f"  WARNING: Model does not support placement switching, skipping sweep")
+            del llm
+            gc.collect()
+            torch.cuda.empty_cache()
+            continue
 
-        # Compute comparisons
-        comparisons = compute_comparisons(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)
+        num_layers = len(vllm_placements[0])
+        print(f"  Model has {num_layers} layers")
 
-        # Print statistics
-        mode_label = "no-compile" if args.no_compile else "compiled"
-        stats = print_stats_report(
-            comparisons,
-            f"Results ({mode_label}, TF={args.tf_kernels})"
-        )
+        # Load Transformers model once
+        tf_model = load_transformers_model(model_path, args.dtype, revision)
 
+        # Run sweep over placements
+        all_results: dict[str, dict] = {}
+
+        for placement_idx, placement_str in enumerate(placements):
+            print(f"\n--- Placement {placement_idx + 1}/{len(placements)}: {placement_str} ---")
+
+            try:
+                placement_list = parse_placement(placement_str, num_layers)
+            except ValueError as e:
+                print(f"  ERROR: {e}, skipping")
+                continue
+
+            # Run vLLM with this placement
+            vllm_tokens, vllm_logprobs = run_vllm_inference_with_model(
+                llm, token_ids_list, args.decode_length, placement_list, verbose=True
+            )
+
+            # Run Transformers with SAME placement
+            tf_tokens, tf_logprobs = run_transformers_inference_with_model(
+                tf_model, token_ids_list, args.decode_length, placement_list, verbose=True
+            )
+
+            # Compute comparisons
+            comparisons = compute_comparisons(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)
+
+            # Print statistics for this placement
+            stats = print_stats_report(comparisons, f"Results: {placement_str}")
+            all_results[placement_str] = stats
+
+        # Print combined comparison table
+        print_multi_placement_report(all_results, model_name, args.decode_length)
+
+        # Cleanup
+        del llm, tf_model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+def cmd_compare_placement(args):
+    """Compare standalone model vs supernet with matching placement.
+
+    This command diagnoses whether placement switching works correctly by comparing:
+    - A standalone model (e.g., /tmp/apriel2-0.5b-every2nd-gdn) that was trained/converted
+      with a fixed architecture
+    - A supernet model (e.g., /tmp/apriel2-0.5b-dev) with placement dynamically set to
+      match the standalone model's architecture
+
+    If the two models produce different outputs, placement switching is broken for
+    that framework.
+    """
+    from transformers import AutoTokenizer
+
+    setup_transformers()
+
+    standalone_path = args.standalone
+    supernet_path = args.supernet
+    placement_str = args.placement
+    framework = args.framework
+    num_prompts = args.num_prompts
+    prompt_length = args.prompt_length
+    decode_length = args.decode_length
+    dtype = args.dtype
+    no_compile = args.no_compile
+    revision = getattr(args, 'revision', None)
+
+    standalone_name = Path(standalone_path).name
+    supernet_name = Path(supernet_path).name
+
+    print(f"\n{'#'*70}")
+    print(f"# COMPARE-PLACEMENT: Standalone vs Supernet")
+    print(f"#")
+    print(f"# Standalone: {standalone_name}")
+    print(f"# Supernet:   {supernet_name}")
+    print(f"# Placement:  {placement_str}")
+    print(f"# Framework:  {framework}")
+    print(f"# Prompts:    {num_prompts}, length={prompt_length}, decode={decode_length}")
+    print(f"{'#'*70}")
+
+    # Load tokenizer from standalone model (should be compatible)
+    tokenizer = AutoTokenizer.from_pretrained(standalone_path, revision=revision, trust_remote_code=True)
+
+    # Load and tokenize prompts from dataset
+    print(f"\nLoading {num_prompts} prompts from C4 (exactly {prompt_length} tokens each)...")
+    token_ids_list = load_and_tokenize_prompts(
+        num_prompts,
+        prompt_length,
+        tokenizer,
+        seed=args.seed,
+    )
+    print(f"  Prepared {len(token_ids_list)} token sequences")
+
+    results = {}
+
+    # =========================================================================
+    # Transformers comparison
+    # =========================================================================
+    if framework in ("transformers", "both"):
         print(f"\n{'='*70}")
-        print(f" SUMMARY: {Path(model_path).name}")
+        print(f" TRANSFORMERS COMPARISON")
         print(f"{'='*70}")
-        print(f"  Mode: {mode_label}")
-        print(f"  TF kernels: {args.tf_kernels}")
-        print(f"  Batch size: {args.batch_size}")
-        print(f"  Dtype: {args.dtype}")
-        if revision:
-            print(f"  Revision: {revision}")
-        print(f"  Token match rate: {100*stats['match_rate']:.1f}%")
-        print(f"  Avg diff (mean): {stats['avg_diff_mean']:.4f}")
-        print(f"  Avg diff (p95):  {stats['avg_diff_p95']:.4f}")
-        print(f"  Avg diff (max):  {stats['avg_diff_max']:.4f}")
-        if stats['n_outliers'] > 0:
-            print(f"  WARNING: {stats['n_outliers']} outliers detected (avg diff > 1.0)")
-        print()
+
+        # Load standalone model (no placement switching needed)
+        print(f"\n--- Loading standalone Transformers model: {standalone_name} ---")
+        standalone_tf = load_transformers_model(standalone_path, dtype, revision)
+
+        # Run inference on standalone (no placement - uses its native architecture)
+        print(f"  Running inference on standalone model (native architecture)...")
+        standalone_tf_tokens, standalone_tf_logprobs = run_transformers_inference_with_model(
+            standalone_tf, token_ids_list, decode_length, placement=None, verbose=True
+        )
+
+        del standalone_tf
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Load supernet model
+        print(f"\n--- Loading supernet Transformers model: {supernet_name} ---")
+        supernet_tf = load_transformers_model(supernet_path, dtype, revision)
+
+        # Get num_layers and parse placement
+        num_layers = len(supernet_tf.model.decoder.blocks)
+        placement_list = parse_placement(placement_str, num_layers)
+        print(f"  Supernet has {num_layers} layers")
+
+        # Run inference on supernet with placement
+        print(f"  Running inference on supernet model with placement '{placement_str}'...")
+        supernet_tf_tokens, supernet_tf_logprobs = run_transformers_inference_with_model(
+            supernet_tf, token_ids_list, decode_length, placement=placement_list, verbose=True
+        )
+
+        del supernet_tf
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Compare standalone vs supernet (both Transformers)
+        print(f"\n--- Comparing Standalone vs Supernet (Transformers) ---")
+        comparisons = compute_same_framework_comparisons(
+            standalone_tf_tokens, standalone_tf_logprobs,
+            supernet_tf_tokens, supernet_tf_logprobs,
+            is_vllm=False,
+        )
+        stats = print_stats_report(comparisons, "Transformers: Standalone vs Supernet")
+        results["transformers"] = stats
+
+    # =========================================================================
+    # vLLM comparison
+    # =========================================================================
+    if framework in ("vllm", "both"):
+        print(f"\n{'='*70}")
+        print(f" VLLM COMPARISON")
+        print(f"{'='*70}")
+
+        # Load standalone vLLM model (no placement switching needed)
+        print(f"\n--- Loading standalone vLLM model: {standalone_name} ---")
+        standalone_llm = load_vllm_model(standalone_path, args.batch_size, dtype, no_compile, revision)
+
+        # Check if standalone supports placement (it shouldn't need it)
+        standalone_placements = standalone_llm.collective_rpc("get_layer_placements")
+        if standalone_placements and standalone_placements[0]:
+            standalone_num_layers = len(standalone_placements[0])
+            print(f"  Standalone has {standalone_num_layers} layers (stochastic mixers detected)")
+        else:
+            print(f"  Standalone model does not have stochastic mixers (expected for standalone)")
+
+        # Run inference on standalone (no placement - uses native architecture)
+        print(f"  Running inference on standalone model (native architecture)...")
+        standalone_vllm_tokens, standalone_vllm_logprobs = run_vllm_inference_with_model(
+            standalone_llm, token_ids_list, decode_length, placement=None, verbose=True
+        )
+
+        del standalone_llm
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Load supernet vLLM model
+        print(f"\n--- Loading supernet vLLM model: {supernet_name} ---")
+        supernet_llm = load_vllm_model(supernet_path, args.batch_size, dtype, no_compile, revision)
+
+        # Get num_layers and parse placement
+        supernet_placements = supernet_llm.collective_rpc("get_layer_placements")
+        if not supernet_placements or not supernet_placements[0]:
+            print(f"  ERROR: Supernet does not support placement switching!")
+            del supernet_llm
+            gc.collect()
+            torch.cuda.empty_cache()
+        else:
+            num_layers = len(supernet_placements[0])
+            placement_list = parse_placement(placement_str, num_layers)
+            print(f"  Supernet has {num_layers} layers")
+
+            # Run inference on supernet with placement
+            print(f"  Running inference on supernet model with placement '{placement_str}'...")
+            supernet_vllm_tokens, supernet_vllm_logprobs = run_vllm_inference_with_model(
+                supernet_llm, token_ids_list, decode_length, placement=placement_list, verbose=True
+            )
+
+            del supernet_llm
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            # Compare standalone vs supernet (both vLLM)
+            print(f"\n--- Comparing Standalone vs Supernet (vLLM) ---")
+            comparisons = compute_same_framework_comparisons(
+                standalone_vllm_tokens, standalone_vllm_logprobs,
+                supernet_vllm_tokens, supernet_vllm_logprobs,
+                is_vllm=True,
+            )
+            stats = print_stats_report(comparisons, "vLLM: Standalone vs Supernet")
+            results["vllm"] = stats
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    print(f"\n{'#'*70}")
+    print(f"# SUMMARY: Compare-Placement Results")
+    print(f"#")
+    print(f"# Standalone: {standalone_name}")
+    print(f"# Supernet:   {supernet_name}")
+    print(f"# Placement:  {placement_str}")
+    print(f"{'#'*70}")
+
+    for fw, stats in results.items():
+        avg_diff = stats.get("avg_diff_mean", 0.0)
+        match_rate = stats.get("match_rate", 0.0) * 100
+        n_outliers = stats.get("n_outliers", 0)
+
+        # Determine if results are acceptable (avg diff < 1.0 is good)
+        status = "OK" if avg_diff < 1.0 else "BROKEN"
+        emoji = "✓" if avg_diff < 1.0 else "✗"
+
+        print(f"\n  {fw.upper():>12}: [{status}] {emoji}")
+        print(f"               Match rate: {match_rate:.1f}%")
+        print(f"               Avg diff:   {avg_diff:.4f}")
+        print(f"               Outliers:   {n_outliers}")
+
+        if avg_diff >= 1.0:
+            print(f"               >>> PLACEMENT SWITCHING IS BROKEN IN {fw.upper()} <<<")
+
+    print()
 
 
 def cmd_logits(args):
@@ -1165,8 +1821,10 @@ def main():
 
     # Placement help text (used by multiple subcommands)
     placement_help = (
-        "Mixer placement: 'all-attention', 'all-gdn', 'every2nd-gdn', 'every3rd-gdn', "
-        "or comma-separated list like 'attention,gdn,attention,gdn,...'"
+        "Mixer placement: 'all-X' (all-attention, all-gdn, all-kda), "
+        "'everyNth-X' (every2nd-gdn, every4th-kda), "
+        "'bookend-attn-X' (bookend-attn-gdn), "
+        "or comma-separated list like 'attention,gdn,attention,...'"
     )
 
     # Coherence test
@@ -1213,8 +1871,48 @@ def main():
                         help="Transformers kernel config: upstream FLA or vLLM forks")
     p_stats.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     p_stats.add_argument("--revision", default=None, help="Model revision")
-    p_stats.add_argument("--placement", default=None, help=placement_help)
+    # Placement arguments - support single, multiple, and sweep modes
+    p_stats.add_argument("--placement", default=None, help=f"(Deprecated) Single placement - use --placements instead. {placement_help}")
+    p_stats.add_argument("--placements", nargs="+", default=None,
+                        help="Placement patterns to test (e.g., all-attention all-gdn every2nd-gdn)")
+    p_stats.add_argument("--placement-sweep", action="store_true",
+                        help=f"Test common placements: {', '.join(SWEEP_PLACEMENTS[:4])}...")
     p_stats.set_defaults(func=cmd_stats)
+
+    # Compare-placement: standalone vs supernet comparison
+    p_compare_placement = subparsers.add_parser(
+        "compare-placement",
+        help="Compare standalone model vs supernet with matching placement",
+        description=(
+            "Diagnose whether placement switching works correctly by comparing a standalone "
+            "model (with fixed architecture) against a supernet model with dynamically set "
+            "placement. If outputs differ significantly, placement switching is broken."
+        ),
+    )
+    p_compare_placement.add_argument("--standalone", required=True,
+                                     help="Path to standalone model (e.g., /tmp/apriel2-0.5b-every2nd-gdn)")
+    p_compare_placement.add_argument("--supernet", required=True,
+                                     help="Path to supernet model (e.g., /tmp/apriel2-0.5b-dev)")
+    p_compare_placement.add_argument("--placement", required=True,
+                                     help=f"Placement to apply to supernet. {placement_help}")
+    p_compare_placement.add_argument("--framework", choices=["transformers", "vllm", "both"],
+                                     default="both", help="Framework(s) to test")
+    p_compare_placement.add_argument("--num-prompts", type=int, default=32,
+                                     help="Number of prompts to test")
+    p_compare_placement.add_argument("--prompt-length", type=int, default=256,
+                                     help="Number of tokens to prefill")
+    p_compare_placement.add_argument("--decode-length", type=int, default=10,
+                                     help="Number of tokens to decode")
+    p_compare_placement.add_argument("--batch-size", type=int, default=1,
+                                     help="Batch size for vLLM inference")
+    p_compare_placement.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16",
+                                     help="Data type")
+    p_compare_placement.add_argument("--no-compile", action="store_true",
+                                     help="Disable torch.compile for vLLM")
+    p_compare_placement.add_argument("--seed", type=int, default=42,
+                                     help="Random seed for reproducibility")
+    p_compare_placement.add_argument("--revision", default=None, help="Model revision")
+    p_compare_placement.set_defaults(func=cmd_compare_placement)
 
     # All tests
     p_all = subparsers.add_parser("all", help="Run all tests")
