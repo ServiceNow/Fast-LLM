@@ -924,13 +924,51 @@ direct_register_custom_op(
 # Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks
 # This allows dynamic dispatch at runtime even with CUDA graphs enabled
 try:
-    from vllm.config.compilation import CompilationConfig
+    from vllm.config.compilation import CompilationConfig, CUDAGraphMode
     _stochastic_op = "vllm::stochastic_mixer_dispatch"
     if _stochastic_op not in CompilationConfig._attention_ops:
         CompilationConfig._attention_ops.append(_stochastic_op)
         logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
 except ImportError:
     logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
+
+
+def _force_piecewise_cudagraph_for_stochastic_mixers():
+    """Force PIECEWISE cudagraph mode for stochastic mixers with multiple sub-mixers.
+
+    In FULL cudagraph mode, the entire forward pass is captured as one graph.
+    During capture (warmup), only the ACTIVE mixer's GPU operations execute.
+    Dormant mixers (e.g., GDN, KDA, sliding_window when attention is active)
+    never run during capture, so their operations are NOT in the captured graph.
+
+    When we later switch to a dormant mixer, CUDA graph replay executes the
+    WRONG operations (the previously-active mixer's ops) instead of the new
+    mixer's ops. This causes incorrect outputs and potential crashes.
+
+    PIECEWISE mode splits at the stochastic_mixer_dispatch op, allowing the
+    Python dispatch code to run at each replay and route to the correct mixer.
+
+    NOTE: This is only needed for STOCHASTIC mixers where runtime switching
+    between mixers is required. Standalone GDN/KDA/Mamba models (non-stochastic)
+    can use FULL cudagraph mode without issues.
+    """
+    try:
+        compilation_config = get_current_vllm_config().compilation_config
+        current_mode = compilation_config.cudagraph_mode
+
+        # Only override if using FULL mode (either FULL or FULL_AND_PIECEWISE)
+        if current_mode is not None and current_mode.has_full_cudagraphs():
+            # Use PIECEWISE instead of FULL for decode
+            # This ensures mixer dispatch runs at each forward, not just capture
+            new_mode = CUDAGraphMode.PIECEWISE
+            compilation_config.cudagraph_mode = new_mode
+            logger.info(
+                f"Forced cudagraph_mode from {current_mode} to {new_mode} "
+                "for stochastic mixer (FULL mode captures only active mixer ops, "
+                "breaking dormant mixer switching)"
+            )
+    except Exception as e:
+        logger.debug(f"Could not force PIECEWISE cudagraph mode: {e}")
 
 
 @triton.jit
@@ -1391,6 +1429,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             return
 
         assert isinstance(attn_metadata, dict)
+        if self.prefix not in attn_metadata:
+            return
         attn_metadata = attn_metadata[self.prefix]
         assert isinstance(attn_metadata, GDNAttentionMetadata)
 
@@ -2425,6 +2465,10 @@ class Apriel2StochasticMixer(nn.Module):
         if prefix in compilation_config.static_forward_context:
             raise ValueError(f"Duplicate layer name: {prefix}")
         compilation_config.static_forward_context[prefix] = self
+
+        # Force PIECEWISE cudagraph mode for stochastic mixers
+        # FULL mode captures only active mixer ops, breaking dormant mixer switching
+        _force_piecewise_cudagraph_for_stochastic_mixers()
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
