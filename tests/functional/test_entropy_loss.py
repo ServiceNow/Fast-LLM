@@ -5,33 +5,33 @@ import torch
 
 from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
-from fast_llm.functional.entropy_loss import entropy_loss_forward_backward
+from fast_llm.layers.language_model.loss.entropy_loss import entropy_loss_forward_backward
 from fast_llm.utils import Assert
 from tests.utils.subtest import DistributedTestContext
 
 
-def _get_cross_entropy_inputs(
-    num_columns: int, loss_masking: bool, target_format: TargetFormat
+def get_entropy_loss_inputs(
+    num_columns: int, loss_masking: bool, target_format: TargetFormat, batch_shape: tuple[int] = (256,)
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # We want something moderately close to the target for the test to be meaningful
-    logits_var = torch.randn(256, num_columns, dtype=torch.float32, device=device) / 3
-    loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device=device) if loss_masking else None
+    logits_var = torch.randn((*batch_shape, num_columns), dtype=torch.float32, device=device) / 3
+    loss_mask = torch.randint(0, 2, batch_shape, dtype=torch.bool, device=device) if loss_masking else None
     if target_format == TargetFormat.labels:
-        target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device=device)
+        target = torch.randint(0, num_columns, batch_shape, dtype=torch.int64, device=device)
         logits = torch.nn.functional.one_hot(target, num_columns) + logits_var
         if loss_masking:
-            logits = torch.where(loss_mask.unsqueeze(-1), logits, -100)
+            target = torch.where(loss_mask, target, -100)
             loss_mask = None
     else:
-        target = torch.randn(256, num_columns, dtype=torch.float32, device=device)
+        target = torch.randn((*batch_shape, num_columns), dtype=torch.float32, device=device)
         logits = target + logits_var
         if target_format == TargetFormat.probabilities:
             target = torch.softmax(target, -1)
     return logits, target, loss_mask
 
 
-def _compare_entropy_loss_outputs(
+def compare_losses_and_grads(
     loss: torch.Tensor,
     ref_loss: torch.Tensor,
     has_grad: bool,
@@ -49,6 +49,7 @@ def _compare_entropy_loss_outputs(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", ((64,), (16, 8)))
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking"),
     (
@@ -64,11 +65,13 @@ def _compare_entropy_loss_outputs(
 )
 @pytest.mark.parametrize("target_format", TargetFormat)
 @pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
-def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type):
+def test_entropy_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type
+):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Not implemented")
     # TODO: Test tensor-parallel implementation.
-    logits, target, loss_mask = _get_cross_entropy_inputs(num_columns, loss_masking, target_format)
+    logits, target, loss_mask = get_entropy_loss_inputs(num_columns, loss_masking, target_format, batch_shape)
     kwargs = {
         "logits": logits,
         "target": target,
@@ -83,7 +86,7 @@ def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_maskin
     out_fused, grad_fused = entropy_loss_forward_backward(**kwargs, implementation=EntropyLossImplementation.fused)
 
     # TODO: Why is the error so high with loss masking for reverse KL?
-    _compare_entropy_loss_outputs(
+    compare_losses_and_grads(
         out_fused,
         out_torch,
         grad_output is not None,
@@ -103,7 +106,7 @@ def test_entropy_loss(num_columns, grad_output, logits_scale_factor, loss_maskin
         out_triton, grad_triton = entropy_loss_forward_backward(
             **kwargs, implementation=EntropyLossImplementation.triton
         )
-        _compare_entropy_loss_outputs(out_triton, out_torch, grad_output is not None, grad_triton, grad_torch)
+        compare_losses_and_grads(out_triton, out_torch, grad_output is not None, grad_triton, grad_torch)
 
 
 def _entropy_loss_distributed(
@@ -116,7 +119,7 @@ def _entropy_loss_distributed(
     torch.manual_seed(0)
     rank = group.rank()
     world_size = group.size()
-    logits, target, loss_mask = _get_cross_entropy_inputs(1000, loss_masking, target_format)
+    logits, target, loss_mask = get_entropy_loss_inputs(1000, loss_masking, target_format)
 
     kwargs = {
         "loss_mask": loss_mask,
@@ -133,7 +136,7 @@ def _entropy_loss_distributed(
         group=group,
         **kwargs,
     )
-    _compare_entropy_loss_outputs(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4)
+    compare_losses_and_grads(out, out_ref, True, grad, grad_ref.chunk(world_size, 1)[rank], 1e-4)
 
 
 def _run_entropy_loss_distributed(test_context: DistributedTestContext, base_path: pathlib.Path):
@@ -159,7 +162,7 @@ def test_entropy_loss_distributed_dependency():
 def test_run_entropy_loss_distributed(run_parallel_script, result_path):
     run_parallel_script(
         _run_entropy_loss_distributed,
-        (result_path / "test_entropy_loss",),
+        (result_path / "test_losses",),
         world_size=2,
         backend=DistributedBackend.gloo,
         use_cuda=False,  # Disable device count check.
@@ -176,6 +179,4 @@ def test_run_entropy_loss_distributed(run_parallel_script, result_path):
 def test_entropy_loss_distributed(result_path, report_subtest, target_format, entropy_loss_type, loss_masking):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Not implemented")
-    report_subtest(
-        result_path / f"test_entropy_loss/{entropy_loss_type}_{target_format}_{loss_masking}", 2, use_cuda=False
-    )
+    report_subtest(result_path / f"test_losses/{entropy_loss_type}_{target_format}_{loss_masking}", 2, use_cuda=False)
