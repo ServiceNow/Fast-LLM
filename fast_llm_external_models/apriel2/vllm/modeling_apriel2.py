@@ -17,6 +17,21 @@ import torch
 logger = logging.getLogger(__name__)
 import triton
 from einops import rearrange
+
+# Lazy triton allocator setup - only called when a triton kernel needs scratch memory
+_triton_allocator_installed = False
+
+def _install_triton_allocator() -> None:
+    """Install triton allocator lazily to avoid early CUDA initialization."""
+    global _triton_allocator_installed
+    if _triton_allocator_installed:
+        return
+
+    def _triton_allocator(size: int, alignment: int, stream: int | None):  # type: ignore[return]
+        return torch.empty(size, dtype=torch.int8, device="cuda").data_ptr()
+
+    triton.set_allocator(_triton_allocator)
+    _triton_allocator_installed = True
 from torch import nn
 from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
@@ -2830,6 +2845,9 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
+        # Install triton allocator lazily - this runs in the vLLM subprocess
+        # after CUDA is already initialized
+        _install_triton_allocator()
 
         config = vllm_config.model_config.hf_config
         self.config = config
