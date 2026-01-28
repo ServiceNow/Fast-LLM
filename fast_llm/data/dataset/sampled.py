@@ -442,11 +442,10 @@ class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
         sampling: SamplingData,
     ):
         self._dataset = dataset
-        self._config = sampling.config
-        self._parameters = sampling.parameters
+        self._sampling = sampling
         self._documents: list[SampleType] = []
         self._current_length = 0
-        self._sample_length = self._parameters.sequence_length + self._parameters.extra_tokens
+        self._sample_length = self._sampling.parameters.sequence_length + self._sampling.parameters.extra_tokens
         # Delay iterator creation to avoid pickling issues.
         self._iterator: typing.Iterator[SampleType] | None = None
 
@@ -458,7 +457,7 @@ class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
 
     def __getitem__(self, index: int) -> SampleType:
         if self._iterator is None:
-            self._iterator = iter(self._dataset)
+            self._iterator = self._dataset.iterate(self._sampling)
         while self._current_length < self._sample_length:
             document = next(self._iterator)
             if len(document) > self._sample_length:
@@ -474,7 +473,7 @@ class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
         else:
             last_length = len(self._documents[-1])
             remaining_length = last_length - (self._current_length - self._sample_length)
-            if self._parameters.truncate_documents:
+            if self._sampling.parameters.truncate_documents:
                 documents = self._documents[:-1] + [self._documents[-1].crop(0, remaining_length)]
                 self._documents = [self._documents[-1].crop(remaining_length, last_length)]
             else:
@@ -486,7 +485,7 @@ class SampledIterableDataset[SampleType: Sample](SampledDataset[SampleType]):
         return sample
 
     def __len__(self) -> int:
-        return self._parameters.num_samples
+        return self._sampling.parameters.num_samples
 
     @property
     def name(self) -> str:

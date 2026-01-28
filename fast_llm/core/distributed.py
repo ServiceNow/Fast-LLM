@@ -29,6 +29,15 @@ from torch.distributed import (  # noqa
 logger = logging.getLogger(__name__)
 
 
+def _get_device(group: ProcessGroup) -> torch.device:
+    if torch.distributed.is_nccl_available() and isinstance(group, torch.distributed.ProcessGroupNCCL):
+        return torch.device(torch.cuda.current_device())
+    elif isinstance(group, torch.distributed.ProcessGroupGloo):
+        return torch.device("cpu")
+    else:
+        raise NotImplementedError(type(group))
+
+
 @contextlib.contextmanager
 def set_timeout(group: ProcessGroup | None, timeout: float | None = None):
     if group is not None and timeout is not None:
@@ -72,12 +81,10 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
         )
 
 
-def safe_barrier(
-    group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None, device: torch.device | None = None
-) -> None:
+def safe_barrier(group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None) -> None:
     if group:
         hashed = hash(value) % 2**32
-        out = allreduce_scalar(hashed, dtype=torch.int64, group=group, timeout=timeout, device=device)
+        out = allreduce_scalar(hashed, dtype=torch.int64, group=group, timeout=timeout)
         if out != hashed * group.size():
             raise RuntimeError(f"Desync detected for barrier {value} ({out}!={hashed*group.size()})")
 
@@ -88,10 +95,9 @@ def allreduce_scalar(
     group: torch.distributed.ProcessGroup | None = None,
     op=ReduceOp.SUM,
     timeout: float | None = None,
-    device: torch.device | None = None,
 ) -> float | int:
     if group:
-        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device() if device is None else device)
+        value = torch.full([1], value, dtype=dtype, device=_get_device(group))
         with set_timeout(group, timeout):
             torch.distributed.all_reduce(value, op=op, group=group)
         return value.item()
@@ -106,7 +112,7 @@ def all_gather_scalar(
     timeout: float | None = None,
 ):
     if group:
-        value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
+        value = torch.full([1], value, dtype=dtype, device=_get_device(group))
         output_tensor = value.new_empty((group.size(),))
         with set_timeout(group, timeout):
             torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
@@ -116,7 +122,7 @@ def all_gather_scalar(
 
 
 def broadcast_scalar(
-    value: float | int,
+    value: float | int | None,
     dtype: torch.dtype = torch.float64,
     group: torch.distributed.ProcessGroup | None = None,
     src: int = 0,
@@ -124,7 +130,7 @@ def broadcast_scalar(
 ) -> float | int:
     if not group:
         return value
-    tensor = torch.empty([1], dtype=dtype, device=torch.device(torch.cuda.current_device()))
+    tensor = torch.empty([1], dtype=dtype, device=torch.device(_get_device(group)))
     if group.rank() == src:
         tensor.fill_(value)
     broadcast(tensor, src, group, timeout=timeout)
@@ -141,14 +147,14 @@ def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None
     if group.rank() == src:
         tensor = _object_to_tensor(input_object)
         size = tensor.numel()
-        broadcast_tensor = torch.empty(size, dtype=torch.uint8, device=torch.cuda.current_device())
+        broadcast_tensor = torch.empty(size, dtype=torch.uint8, device=_get_device(group))
         broadcast_tensor.copy_(tensor)
         broadcast_scalar(size, torch.int64, group, src)
         broadcast(broadcast_tensor, src, group)
         return input_object
     else:
         size = int(broadcast_scalar(None, torch.int64, group, src))
-        output_tensor = torch.empty(size, dtype=torch.uint8, device=torch.cuda.current_device())
+        output_tensor = torch.empty(size, dtype=torch.uint8, device=_get_device(group))
         broadcast(output_tensor, src, group)
         return _tensor_to_object(output_tensor)
 

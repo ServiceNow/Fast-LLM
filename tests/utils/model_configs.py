@@ -735,6 +735,25 @@ update_and_add_testing_config(
     auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
+update_and_add_testing_config(
+    # Tests mixture of experts, mixtral converter.
+    "llama",
+    "llama_grpo",
+    updates={
+        ("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}},
+        ("batch", "use_grpo_data"): True,
+    },
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
+    },
+)
+
 
 update_and_add_testing_config(
     # Tests hybrid with attention + gated delta net mixer.

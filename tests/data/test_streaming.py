@@ -12,18 +12,18 @@ from fast_llm.config import NoAutoValidate
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.config import RedisConfig, SamplingParameters, StreamingDatasetConfig
-from fast_llm.data.dataset.streaming import RedisStreamingDataset
+from fast_llm.data.dataset.config import REDIS_DATA_STREAM, RedisConfig, SamplingParameters, StreamingDatasetConfig
+from fast_llm.data.dataset.streaming import RedisDocument, RedisStreamingDataset
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 from tests.conftest import WorkerResources
-from tests.utils.redis import make_sampling, push_msg, redis_batch_producer
+from tests.data.common import get_sampling_data
+from tests.utils.redis import make_sampling, redis_batch_producer
 from tests.utils.subtest import DistributedTestContext
-from tests.utils.utils import requires_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -40,31 +40,73 @@ def fake_redis(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "messages",
+    ("documents", "preprocessing"),
     [
-        (range(3),),
-        (range(3), range(3, 7)),
-        (range(3), range(5), [], [9, 4]),
+        ((range(3),), {}),
+        ((range(3), range(3, 6)), {}),
+        ((range(3), range(5), [9, 4]), {}),
+        (({"tokens": list(range(5)), "loss_masking_spans": [(0, 1), (2, 3)]},), {"use_loss_masking_spans": True}),
+        (
+            ({"tokens": list(range(8)), "chosen_span": (0, 2), "rejected_span": (3, 5)},),
+            {"use_preference_spans": True},
+        ),
+        (
+            (
+                {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
+                {"tokens": list(range(4)), "advantage": 0.7, "old_log_probabilities": [1, 2, 3, 4]},
+            ),
+            {"use_grpo_data": True},
+        ),
     ],
 )
 def test_streaming_dataset(
     fake_redis: fakeredis.FakeRedis,
-    messages: tuple[list[int], ...],
+    documents: tuple[list[int] | dict[str, typing.Any], ...],
+    preprocessing: dict,
     worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
-    dataset_iterator = iter(RedisStreamingDataset(stream_config, DistributedConfig()))
-    for message in messages:
-        push_msg(fake_redis, list(message))
-    for message in messages:
+    dataset_iterator = RedisStreamingDataset(stream_config, DistributedConfig()).iterate(
+        get_sampling_data(len(documents), preprocessing=LanguageModelPreprocessingConfig.from_dict(preprocessing))
+    )
+    documents = [document if isinstance(document, dict) else {"tokens": list(document)} for document in documents]
+    for document in documents:
+        fake_redis.xadd(REDIS_DATA_STREAM, RedisDocument.from_dict(document).to_message())
+    for document in documents:
         sample = next(dataset_iterator)
         assert isinstance(sample, LanguageModelSample)
-        Assert.eq(sample.tokens.tokens.tolist(), list(message))
-        Assert.eq(sample.tokens.lengths, [len(message)])
-        assert sample.loss_masking_spans is None
-        assert sample.chosen_spans is None
-        assert sample.rejected_spans is None
+        Assert.eq(sample.tokens.tokens.tolist(), document["tokens"])
+        Assert.eq(sample.tokens.lengths, [len(document["tokens"])])
+
+        if "loss_masking_spans" in document:
+            Assert.eq(sample.loss_masking_spans.ranges, document["loss_masking_spans"])
+        else:
+            assert sample.loss_masking_spans is None
+
+        if "chosen_span" in document:
+            Assert.eq(sample.chosen_spans.ranges, [document["chosen_span"]])
+        else:
+            assert sample.chosen_spans is None
+
+        if "rejected_span" in document:
+            Assert.eq(sample.rejected_spans.ranges, [document["rejected_span"]])
+        else:
+            assert sample.rejected_spans is None
+
+        assert sample.image_patches is None
+
+        if "advantage" in document:
+            Assert.rms_close(
+                sample.advantages.data, torch.full([len(document["tokens"])], document["advantage"]), 1e-8
+            )
+        else:
+            assert sample.advantages is None
+
+        if "old_log_probabilities" in document:
+            Assert.rms_close(sample.old_log_probabilities.data, torch.tensor(document["old_log_probabilities"]), 1e-8)
+        else:
+            assert sample.old_log_probabilities is None
 
 
 @pytest.mark.parametrize(
@@ -95,12 +137,12 @@ def test_streaming_sampled_dataset(
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
-    distributed = Distributed(DistributedConfig(), use_cpu=True)
+    distributed = Distributed(DistributedConfig(use_cuda=False))
     dataset_iterator = iter(
         RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(5, 1, distributed))
     )
     for message in messages:
-        push_msg(fake_redis, list(message))
+        fake_redis.xadd(REDIS_DATA_STREAM, RedisDocument.from_dict({"tokens": list(message)}).to_message())
     for expected_sample, expected_lengths_ in zip(expected_samples, expected_lengths, strict=True):
         sample = next(dataset_iterator)
         assert isinstance(sample, LanguageModelSample)
@@ -118,7 +160,13 @@ def _get_distributed_and_batch_config(
     distributed_config_dict: dict[str, typing.Any], world_size: int = 1
 ) -> tuple[DistributedConfig, GPTBatchConfig]:
     distributed_config = DistributedConfig.from_dict(
-        distributed_config_dict, {"world_size": world_size, "local_world_size": world_size}
+        distributed_config_dict,
+        {
+            "world_size": world_size,
+            "local_world_size": world_size,
+            "use_cuda": False,
+            "backend": DistributedBackend.gloo,
+        },
     )
     with NoAutoValidate():
         batch_config = GPTBatchConfig(micro_batch_size=2, sequence_length=10)
@@ -189,14 +237,15 @@ def _run_test_data_streaming_distributed(
     # Import all dynamic classes. TODO: needed?
     import fast_llm.cli  # noqa
 
+    print(_DISTRIBUTED_TESTING_CONFIGS)
     for name, num_gpus, distributed_config_dict in _DISTRIBUTED_TESTING_CONFIGS:
         with test_context.subtest(base_path, name, num_gpus) as subtest:
+            print(name, subtest.do_run)
             if subtest.do_run:
                 distributed_config, batch_config = _get_distributed_and_batch_config(distributed_config_dict, num_gpus)
                 _run_test_data_streaming(base_path / name, distributed_config, batch_config, port)
 
 
-@requires_cuda
 def test_data_streaming(result_path, worker_resources):
     distributed_config, batch_config = _get_distributed_and_batch_config({})
     path = result_path / "data_streaming/single_gpu"
@@ -218,24 +267,22 @@ _DISTRIBUTED_TESTING_CONFIGS = [
 ]
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
 def test_run_data_streaming_distributed(run_parallel_script, result_path, worker_resources):
-    if torch.cuda.device_count() < 2:
-        pytest.skip(f"Not enough GPUs")
     run_parallel_script(
         _run_test_data_streaming_distributed,
         (result_path / "data_streaming", worker_resources.torchrun_port),
-        world_size=torch.cuda.device_count(),
+        world_size=4,
+        backend=DistributedBackend.gloo,
+        use_cuda=False,  # Disable device count check.
     )
 
 
-@requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
 @pytest.mark.parametrize(("name", "num_gpus", "distributed_config_dict"), _DISTRIBUTED_TESTING_CONFIGS)
 def test_data_streaming_distributed(result_path, name, num_gpus, distributed_config_dict, report_subtest):
-    report_subtest(path := result_path / f"data_streaming/{name}", num_gpus)
+    report_subtest(path := result_path / f"data_streaming/{name}", num_gpus, use_cuda=False)
     distributed_config, batch_config = _get_distributed_and_batch_config(distributed_config_dict, num_gpus)
     check_data_streaming_results(path, distributed_config, batch_config)

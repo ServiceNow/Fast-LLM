@@ -302,7 +302,6 @@ class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
 
 
 REDIS_DATA_STREAM = "fast_llm_streaming"
-REDIS_FIELD = "data"
 REDIS_GROUP_NAME = "fast_llm_group"
 
 

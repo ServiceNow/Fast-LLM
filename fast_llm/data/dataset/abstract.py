@@ -61,7 +61,7 @@ class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
 
 class SamplableIterableDataset[SampleType: Sample](SamplableDataset[SampleType]):
     @abc.abstractmethod
-    def __iter__(self) -> typing.Iterator[SampleType]:
+    def iterate(self, sampling: "SamplingData") -> typing.Iterator[SampleType]:
         pass
 
     def sample(self, config: "SamplingData") -> "SampledIterableDataset[SampleType]":

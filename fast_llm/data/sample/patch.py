@@ -85,7 +85,7 @@ class PatchSample(Sample):
         return self.sample_size
 
     def get_padding(self, size: int) -> typing.Self:
-        return PatchSample(
+        return self.__class__(
             self.patches.new_empty((0, *self.patches.shape[1:])),
             self.token_map.new_empty(0),
             self.positions.new_empty([0, self.patches.ndim - 2]),

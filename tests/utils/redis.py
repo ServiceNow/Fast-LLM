@@ -1,6 +1,5 @@
 import contextlib
 import itertools
-import json
 import pathlib
 import socket
 import threading
@@ -10,7 +9,6 @@ import fakeredis
 
 from fast_llm.data.dataset.config import (
     REDIS_DATA_STREAM,
-    REDIS_FIELD,
     REDIS_GROUP_NAME,
     RedisConfig,
     SamplingConfig,
@@ -18,6 +16,7 @@ from fast_llm.data.dataset.config import (
     SamplingParameters,
     StreamingDatasetConfig,
 )
+from fast_llm.data.dataset.streaming import RedisDocument
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.models.gpt.config import GPTBatchConfig
 
@@ -27,11 +26,6 @@ def find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
-
-
-def push_msg(redis_client, tokens):
-    """Push a message into FakeRedis stream."""
-    redis_client.xadd(REDIS_DATA_STREAM, {REDIS_FIELD: json.dumps({"tokens": tokens, "tokens_dtype": "int64"})})
 
 
 def wait_until_stream_empty(
@@ -76,7 +70,10 @@ def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
             for sample_index in itertools.count():
                 if stop_event.is_set():
                     break
-                push_msg(client, [sample_index] * batch_config.sequence_length)
+                client.xadd(
+                    REDIS_DATA_STREAM,
+                    RedisDocument.from_dict({"tokens": [sample_index] * batch_config.sequence_length}).to_message(),
+                )
                 if sample_index % 5 == 0:
                     wait_until_stream_empty(client, REDIS_DATA_STREAM, REDIS_GROUP_NAME, stop_event)
 
