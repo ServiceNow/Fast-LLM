@@ -7,34 +7,9 @@ from transformers import PretrainedConfig
 
 logger = logging.getLogger(__name__)
 
-_MERGE_DICT_FIELDS = {"decoder", "embeddings", "head", "vision_encoder"}
-
-
-def _deep_merge_dict(base: dict, update: dict) -> dict:
-    """Recursively merge two dicts without mutating inputs."""
-    merged = dict(base)
-    for key, value in update.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = _deep_merge_dict(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
 
 class Apriel2TextConfig(PretrainedConfig):
     model_type = "apriel2_text"
-
-    def __setattr__(self, key, value):
-        # Transformers' PretrainedConfig.from_dict applies kwargs overrides
-        # via setattr() *after* the config is constructed. For nested dict
-        # fields like `decoder`, that would normally replace the entire dict.
-        # We want to support partial overrides such as:
-        #   decoder.block.mixer.main_mixer_name = "gdn"
-        if key in _MERGE_DICT_FIELDS and isinstance(value, dict):
-            current = self.__dict__.get(key)
-            if isinstance(current, dict):
-                value = _deep_merge_dict(current, value)
-        super().__setattr__(key, value)
 
     def __init__(
         self,
