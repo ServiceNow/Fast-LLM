@@ -10,16 +10,65 @@ optimized for vLLM inference.
 import logging
 import math
 from collections.abc import Iterable
+from dataclasses import dataclass
 from itertools import islice
+from typing import Literal
 
 import torch
-
-logger = logging.getLogger(__name__)
 import triton
+import vllm.model_executor.layers.kda  # noqa: F401
 from einops import rearrange
+from torch import nn
+from transformers import PretrainedConfig
+from transformers.activations import ACT2FN
+from vllm.attention.layer import Attention
+from vllm.compilation.decorators import support_torch_compile
+from vllm.config import CacheConfig, ModelConfig, SpeculativeConfig, VllmConfig, get_current_vllm_config
+from vllm.distributed import divide, get_pp_group, get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
+from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.logger import init_logger
+from vllm.model_executor.layers.activation import SiluAndMul
+from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+from vllm.model_executor.layers.fla.ops import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+from vllm.model_executor.layers.fla.ops.kda import FusedRMSNormGated, chunk_kda, fused_kda_gate, fused_recurrent_kda
+from vllm.model_executor.layers.layernorm import RMSNorm, RMSNormGated
+from vllm.model_executor.layers.linear import (
+    ColumnParallelLinear,
+    MergedColumnParallelLinear,
+    QKVParallelLinear,
+    ReplicatedLinear,
+    RowParallelLinear,
+)
+from vllm.model_executor.layers.logits_processor import LogitsProcessor
+from vllm.model_executor.layers.mamba.mamba_mixer import MambaMixer
+from vllm.model_executor.layers.mamba.mamba_mixer2 import mamba_v2_sharded_weight_loader
+from vllm.model_executor.layers.mamba.mamba_utils import MambaStateDtypeCalculator, MambaStateShapeCalculator
+from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+from vllm.model_executor.layers.quantization import QuantizationConfig
+from vllm.model_executor.layers.rotary_embedding import get_rope
+from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead, VocabParallelEmbedding
+from vllm.model_executor.model_loader.weight_utils import sharded_weight_loader
+from vllm.model_executor.models.interfaces import HasInnerState, SupportsPP
+from vllm.model_executor.models.utils import (
+    AutoWeightsLoader,
+    WeightsMapper,
+    make_empty_intermediate_tensors_factory,
+    make_layers,
+    maybe_prefix,
+)
+from vllm.model_executor.utils import set_weight_attrs
+from vllm.platforms import current_platform
+from vllm.sequence import IntermediateTensors
+from vllm.triton_utils import tl, triton
+from vllm.utils.torch_utils import direct_register_custom_op
+from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
+from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
+from vllm.v1.attention.selector import get_mamba_attn_backend
+from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec, MambaSpec, SlidingWindowSpec
 
 # Lazy triton allocator setup - only called when a triton kernel needs scratch memory
 _triton_allocator_installed = False
+
 
 def _install_triton_allocator() -> None:
     """Install triton allocator lazily to avoid early CUDA initialization."""
@@ -32,99 +81,10 @@ def _install_triton_allocator() -> None:
 
     triton.set_allocator(_triton_allocator)
     _triton_allocator_installed = True
-from torch import nn
-from transformers import PretrainedConfig
-from transformers.activations import ACT2FN
 
-from vllm.v1.attention.backend import AttentionMetadata
-from vllm.attention.layer import Attention
-from vllm.compilation.decorators import support_torch_compile
-from vllm.config import (
-    CacheConfig,
-    ModelConfig,
-    SpeculativeConfig,
-    VllmConfig,
-    get_current_vllm_config,
-)
-from vllm.distributed import (
-    divide,
-    get_pp_group,
-    get_tensor_model_parallel_rank,
-    get_tensor_model_parallel_world_size,
-)
-from vllm.forward_context import ForwardContext, get_forward_context
-from vllm.model_executor.layers.activation import SiluAndMul
-from vllm.model_executor.layers.fla.ops import (
-    chunk_gated_delta_rule,
-    fused_recurrent_gated_delta_rule,
-)
-from vllm.model_executor.models.qwen3_next import (
-    fused_gdn_gating as qwen3_fused_gdn_gating,
-)
-from vllm.model_executor.layers.fla.ops.kda import (
-    FusedRMSNormGated,
-    chunk_kda,
-    fused_kda_gate,
-    fused_recurrent_kda,
-)
 
-# Import to register kda_attention custom op
-import vllm.model_executor.layers.kda  # noqa: F401
-from vllm.model_executor.layers.layernorm import RMSNorm, RMSNormGated
-from vllm.model_executor.layers.linear import (
-    ColumnParallelLinear,
-    MergedColumnParallelLinear,
-    QKVParallelLinear,
-    ReplicatedLinear,
-    RowParallelLinear,
-)
-from vllm.model_executor.layers.logits_processor import LogitsProcessor
-from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
-from vllm.v1.attention.backend import AttentionBackend
-from vllm.v1.attention.selector import get_mamba_attn_backend
-from vllm.model_executor.layers.mamba.mamba_mixer import MambaMixer
-from vllm.model_executor.layers.mamba.mamba_mixer2 import mamba_v2_sharded_weight_loader
-from vllm.model_executor.layers.mamba.mamba_utils import (
-    MambaStateDtypeCalculator,
-    MambaStateShapeCalculator,
-)
-from vllm.model_executor.layers.mamba.ops.causal_conv1d import (
-    causal_conv1d_fn,
-    causal_conv1d_update,
-)
-from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.rotary_embedding import get_rope
-from vllm.model_executor.layers.vocab_parallel_embedding import (
-    ParallelLMHead,
-    VocabParallelEmbedding,
-)
-from vllm.model_executor.model_loader.weight_utils import (
-    default_weight_loader,
-    sharded_weight_loader,
-)
-from vllm.model_executor.models.interfaces import HasInnerState, SupportsPP
-from vllm.model_executor.models.utils import (
-    AutoWeightsLoader,
-    WeightsMapper,
-    extract_layer_index,
-    is_pp_missing_parameter,
-    make_empty_intermediate_tensors_factory,
-    make_layers,
-    maybe_prefix,
-)
-from vllm.model_executor.utils import set_weight_attrs
-from vllm.platforms import current_platform
-from vllm.sequence import IntermediateTensors
-from vllm.triton_utils import tl, triton
-from vllm.utils.torch_utils import direct_register_custom_op
-from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
-from vllm.v1.kv_cache_interface import (
-    FullAttentionSpec,
-    KVCacheSpec,
-    MambaSpec,
-    SlidingWindowSpec,
-)
-from vllm.logger import init_logger
+logger = logging.getLogger(__name__)
+
 
 apriel2_logger = init_logger(__name__)
 
@@ -134,21 +94,18 @@ apriel2_logger = init_logger(__name__)
 # Top-level debug flags that control all debug output in the module.
 # Set these to True to enable debugging for specific components.
 
-DEBUG_GDN_LAYER = False      # Debug GDN layer forward pass (tensors, shapes)
-DEBUG_GDN_STATE = False      # Debug GDN recurrent state during decode
-DEBUG_GDN_OUTPUT = False     # Debug GDN output hidden states during decode
-DEBUG_KDA_LAYER = False      # Debug KDA layer outputs
+DEBUG_GDN_LAYER = False  # Debug GDN layer forward pass (tensors, shapes)
+DEBUG_GDN_STATE = False  # Debug GDN recurrent state during decode
+DEBUG_GDN_OUTPUT = False  # Debug GDN output hidden states during decode
+DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
 DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
-DEBUG_FINAL_NORM = False     # Debug final norm before LM head
-DEBUG_LM_HEAD = False        # Debug LM head input/output
+DEBUG_FINAL_NORM = False  # Debug final norm before LM head
+DEBUG_LM_HEAD = False  # Debug LM head input/output
 
 
 # =============================================================================
 # KV Cache Spec Computation
 # =============================================================================
-
-from dataclasses import dataclass
-from typing import Literal
 
 
 # Valid mamba_type values for MambaSpec
@@ -173,6 +130,7 @@ def _get_dtype_size(dtype: torch.dtype) -> int:
 @dataclass
 class AttentionBlockParams:
     """Parameters for an attention block's KV cache."""
+
     num_kv_heads: int
     head_size: int
     window_size: int | None
@@ -187,6 +145,7 @@ class AttentionBlockParams:
 @dataclass
 class MambaBlockParams:
     """Parameters for a mamba-like block's state cache."""
+
     shapes: tuple
     dtypes: tuple
     mamba_type: MambaType
@@ -194,10 +153,7 @@ class MambaBlockParams:
     @property
     def natural_page_size(self) -> int:
         """Natural page size based on state shapes."""
-        return sum(
-            _get_dtype_size(dtype) * math.prod(shape)
-            for shape, dtype in zip(self.shapes, self.dtypes)
-        )
+        return sum(_get_dtype_size(dtype) * math.prod(shape) for shape, dtype in zip(self.shapes, self.dtypes))
 
 
 BlockParams = AttentionBlockParams | MambaBlockParams
@@ -423,13 +379,21 @@ def unify_block_page_sizes(
     # Use larger of default and computed
     block_size = max(default_block_size, aligned_block_size)
 
+    # Align to hash block size used by KV cache (default 128) so
+    # HybridKVCacheCoordinator's block_size % hash_block_size == 0 holds.
+    hash_block_alignment = 256
+    if block_size % hash_block_alignment != 0:
+        block_size = hash_block_alignment * -(-block_size // hash_block_alignment)
+
     # Unified page size (attention page, mamba will be padded to match)
     unified_page_size = block_size * attn_page_per_token
 
     apriel2_logger.info(
-        "Page size unification: max_mamba=%d, attn_per_token=%d, "
-        "block_size=%d, unified_page=%d",
-        max_mamba_page, attn_page_per_token, block_size, unified_page_size
+        "Page size unification: max_mamba=%d, attn_per_token=%d, " "block_size=%d, unified_page=%d",
+        max_mamba_page,
+        attn_page_per_token,
+        block_size,
+        unified_page_size,
     )
 
     return block_size, unified_page_size
@@ -539,9 +503,7 @@ class Apriel2Config(PretrainedConfig):
 
         # Apriel2 specific configs
         self.decoder = decoder or {}
-        self.embeddings = embeddings or {
-            "max_position_embeddings": max_position_embeddings
-        }
+        self.embeddings = embeddings or {"max_position_embeddings": max_position_embeddings}
         self.head = head or {"normalization": {"epsilon": rms_norm_eps}}
         self.vision_encoder = vision_encoder
         self.image_token_index = image_token_index
@@ -565,11 +527,7 @@ class Apriel2Config(PretrainedConfig):
             result = []
             for i in range(num_blocks):
                 block_name = pattern[i % len(pattern)]
-                mixer_type = (
-                    blocks_config.get(block_name, {})
-                    .get("mixer", {})
-                    .get("type", "attention")
-                )
+                mixer_type = blocks_config.get(block_name, {}).get("mixer", {}).get("type", "attention")
                 result.append(mixer_type)
             return result
         return ["attention"] * num_blocks
@@ -603,9 +561,7 @@ class Apriel2MLP(nn.Module):
             prefix=f"{prefix}.down_proj",
         )
         if hidden_act != "silu":
-            raise ValueError(
-                f"Unsupported activation: {hidden_act}. Only silu is supported."
-            )
+            raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported.")
         self.act_fn = SiluAndMul()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -891,7 +847,6 @@ direct_register_custom_op(
     fake_impl=apriel2_gdn_attention_core_fake,
 )
 
-
 # =============================================================================
 # Stochastic Mixer dispatch custom op (escapes torch.compile for dynamic placement)
 # =============================================================================
@@ -940,6 +895,7 @@ direct_register_custom_op(
 # This allows dynamic dispatch at runtime even with CUDA graphs enabled
 try:
     from vllm.config.compilation import CompilationConfig, CUDAGraphMode
+
     _stochastic_op = "vllm::stochastic_mixer_dispatch"
     if _stochastic_op not in CompilationConfig._attention_ops:
         CompilationConfig._attention_ops.append(_stochastic_op)
@@ -1104,10 +1060,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         config = vllm_config.model_config.hf_config
         _, unified_page_size = get_unified_page_size_for_config(config, vllm_config)
 
-        block_size = (
-            vllm_config.cache_config.mamba_block_size
-            or vllm_config.model_config.max_model_len
-        )
+        block_size = vllm_config.cache_config.mamba_block_size or vllm_config.model_config.max_model_len
+        # Align to hash block size (128) required by KV cache hashing.
+        hash_block_alignment = 256
+        if block_size % hash_block_alignment != 0:
+            block_size = hash_block_alignment * -(-block_size // hash_block_alignment)
         return MambaSpec(
             shapes=self.get_state_shape(),
             dtypes=self.get_state_dtype(),
@@ -1155,11 +1112,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         self.cache_config = cache_config
         self.quant_config = quant_config
         self.speculative_config = speculative_config
-        self.num_spec = (
-            self.speculative_config.num_speculative_tokens
-            if self.speculative_config
-            else 0
-        )
+        self.num_spec = self.speculative_config.num_speculative_tokens if self.speculative_config else 0
 
         # Derived dimensions
         self.key_dim = self.head_k_dim * self.num_k_heads
@@ -1229,7 +1182,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             group_size=None,
             norm_before_gate=True,
             device=current_platform.current_device(),
-            dtype=config.torch_dtype if hasattr(config, 'torch_dtype') else None,
+            dtype=config.torch_dtype if hasattr(config, "torch_dtype") else None,
         )
 
         self.out_proj = RowParallelLinear(
@@ -1262,10 +1215,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         # Split QKVZ using flat layout (matching Fast-LLM/transformers reference)
         qkvz_sizes = (
-            self.key_dim // self.tp_size,   # Q: key_heads * key_head_dim
-            self.key_dim // self.tp_size,   # K: key_heads * key_head_dim
-            self.value_dim // self.tp_size, # V: value_heads * value_head_dim
-            self.value_dim // self.tp_size, # Z: value_heads * value_head_dim
+            self.key_dim // self.tp_size,  # Q: key_heads * key_head_dim
+            self.key_dim // self.tp_size,  # K: key_heads * key_head_dim
+            self.value_dim // self.tp_size,  # V: value_heads * value_head_dim
+            self.value_dim // self.tp_size,  # Z: value_heads * value_head_dim
         )
         query, key, value, z = torch.split(mixed_qkvz, qkvz_sizes, dim=-1)
 
@@ -1309,10 +1262,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             return
         flat = state.flatten()
         first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
-        print(f"[vLLM-GDN {self.prefix}] {name} (seq_len={seq_len}): shape={state.shape}, "
-              f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
-              f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
-              f"first8=[{first8}]")
+        print(
+            f"[vLLM-GDN {self.prefix}] {name} (seq_len={seq_len}): shape={state.shape}, "
+            f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
+            f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
+            f"first8=[{first8}]"
+        )
 
     def _debug_tensor(self, name: str, t: torch.Tensor):
         if not DEBUG_GDN_LAYER:
@@ -1322,9 +1277,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             return
         flat = t.flatten()[:8]
         vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
-        print(f"[GDN {self.prefix}] {name}: shape={t.shape}, dtype={t.dtype}, "
-              f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
-              f"first8=[{vals}]")
+        print(
+            f"[GDN {self.prefix}] {name}: shape={t.shape}, dtype={t.dtype}, "
+            f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
+            f"first8=[{vals}]"
+        )
 
     def _debug_print(self, msg: str):
         if not DEBUG_GDN_LAYER:
@@ -1351,9 +1308,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # self._debug_tensor("projected_states_qkvz", projected_states_qkvz)
         # self._debug_tensor("projected_states_ba", projected_states_ba)
 
-        query, key, value, z, b, a = self.fix_query_key_value_ordering(
-            projected_states_qkvz, projected_states_ba
-        )
+        query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
         # self._debug_tensor("query (after fix_ordering)", query)
         # self._debug_tensor("key (after fix_ordering)", key)
         # self._debug_tensor("value (after fix_ordering)", value)
@@ -1394,33 +1349,45 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         if DEBUG_GDN_LAYER and num_tokens > 0:
             num_heads = self.num_v_heads // self.tp_size
             last_token_start = (num_tokens - 1) * num_heads
-            last_attn = core_attn_out[last_token_start:last_token_start+1, :8]
-            last_z = z[last_token_start:last_token_start+1, :8]
-            print(f"[GDN {self.prefix}] core_attn_out before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn.flatten().float().tolist())}]")
-            print(f"[GDN {self.prefix}] z before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_z.flatten().float().tolist())}]")
+            last_attn = core_attn_out[last_token_start : last_token_start + 1, :8]
+            last_z = z[last_token_start : last_token_start + 1, :8]
+            print(
+                f"[GDN {self.prefix}] core_attn_out before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn.flatten().float().tolist())}]"
+            )
+            print(
+                f"[GDN {self.prefix}] z before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_z.flatten().float().tolist())}]"
+            )
         # self._debug_tensor("norm.weight", self.norm.weight)
         # self._debug_print(f"norm.norm_before_gate={self.norm.norm_before_gate}, norm.eps={self.norm.eps}")
         core_attn_out = self.norm(core_attn_out, z)
         # self._debug_tensor("core_attn_out (after norm)", core_attn_out)
         # Debug last token after norm
         if DEBUG_GDN_LAYER and num_tokens > 0:
-            last_attn_after = core_attn_out[last_token_start:last_token_start+1, :8]
-            print(f"[GDN {self.prefix}] core_attn_out after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn_after.flatten().float().tolist())}]")
+            last_attn_after = core_attn_out[last_token_start : last_token_start + 1, :8]
+            print(
+                f"[GDN {self.prefix}] core_attn_out after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn_after.flatten().float().tolist())}]"
+            )
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = rearrange(core_attn_out, "... h d -> ... (h d)")
+        # Align dtype with projection weights (FA kernels may yield float32)
+        target_dtype = self.out_proj.weight.dtype
+        if core_attn_out.dtype != target_dtype:
+            core_attn_out = core_attn_out.to(target_dtype)
         # self._debug_tensor("core_attn_out (before out_proj)", core_attn_out)
         output[:num_tokens], _ = self.out_proj(core_attn_out)
         # self._debug_tensor("output (final)", output[:num_tokens])
         # Show last token specifically
         if DEBUG_GDN_LAYER:
-            last_token = output[num_tokens-1, :8]
+            last_token = output[num_tokens - 1, :8]
             vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
             print(f"[GDN {self.prefix}] output (last token): last_token_first8=[{vals}]")
         # Debug output hidden states during decode (num_tokens == 1)
         if DEBUG_GDN_OUTPUT and num_tokens == 1:
             flat = output[:num_tokens].flatten()
             first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
-            print(f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]")
+            print(
+                f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]"
+            )
         # self._debug_print("===== FORWARD END =====")
 
     def _forward_core(
@@ -1474,9 +1441,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # self._debug_tensor("a (truncated)", a)
 
         # Convolution
-        conv_weights = self.conv1d.weight.view(
-            self.conv1d.weight.size(0), self.conv1d.weight.size(2)
-        )
+        conv_weights = self.conv1d.weight.view(self.conv1d.weight.size(0), self.conv1d.weight.size(2))
         # self._debug_tensor("conv_weights", conv_weights)
         # self._debug_tensor("conv1d.bias", self.conv1d.bias)
         # self._debug_print(f"activation={self.activation}")
@@ -1540,7 +1505,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             # Debug PREFILL INPUTS before kernel call
             if DEBUG_GDN_STATE:
                 print(f"[vLLM-GDN {self.prefix}] PREFILL INPUTS:")
-                print(f"  hidden_states: shape={self._cached_hidden_states.shape}, first8={self._cached_hidden_states.flatten()[:8].tolist()}")
+                print(
+                    f"  hidden_states: shape={self._cached_hidden_states.shape}, first8={self._cached_hidden_states.flatten()[:8].tolist()}"
+                )
                 print(f"  mixed_qkv (input): shape={mixed_qkv.shape}, first8={mixed_qkv.flatten()[:8].tolist()}")
                 print(f"  q: shape={query.shape}, first8={query.flatten()[:8].tolist()}")
                 print(f"  k: shape={key.shape}, first8={key.flatten()[:8].tolist()}")
@@ -1579,7 +1546,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             #     # self._debug_state_stats("DECODE in_state", actual_state, num_actual_tokens)
             # Debug decode inputs
             if DEBUG_GDN_STATE:
-                print(f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}")
+                print(
+                    f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}"
+                )
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1588,7 +1557,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=ssm_state,
                 inplace_final_state=True,
-                cu_seqlens=non_spec_query_start_loc[:attn_metadata.num_decodes + 1],
+                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
                 ssm_state_indices=non_spec_state_indices_tensor,
                 use_qk_l2norm_in_kernel=True,
             )
@@ -1650,9 +1619,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
     ) -> tuple[torch.dtype, torch.dtype, torch.dtype, torch.dtype]:
         if self.model_config is None or self.cache_config is None:
             raise ValueError("model_config and cache_config must be set")
-        return MambaStateDtypeCalculator.kda_state_dtype(
-            self.model_config.dtype, self.cache_config.mamba_cache_dtype
-        )
+        return MambaStateDtypeCalculator.kda_state_dtype(self.model_config.dtype, self.cache_config.mamba_cache_dtype)
 
     def get_state_shape(
         self,
@@ -1671,10 +1638,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         config = vllm_config.model_config.hf_config
         _, unified_page_size = get_unified_page_size_for_config(config, vllm_config)
 
-        block_size = (
-            vllm_config.cache_config.mamba_block_size
-            or vllm_config.model_config.max_model_len
-        )
+        block_size = vllm_config.cache_config.mamba_block_size or vllm_config.model_config.max_model_len
+        hash_block_alignment = 256
+        if block_size % hash_block_alignment != 0:
+            block_size = hash_block_alignment * -(-block_size // hash_block_alignment)
         return MambaSpec(
             shapes=self.get_state_shape(),
             dtypes=self.get_state_dtype(),
@@ -1758,9 +1725,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             quant_config=quant_config,
             prefix=f"{prefix}.f_b_proj",
         )
-        self.dt_bias = nn.Parameter(
-            torch.empty(divide(projection_size, self.tp_size), dtype=torch.float32)
-        )
+        self.dt_bias = nn.Parameter(torch.empty(divide(projection_size, self.tp_size), dtype=torch.float32))
         set_weight_attrs(self.dt_bias, {"weight_loader": sharded_weight_loader(0)})
 
         self.b_proj = ColumnParallelLinear(
@@ -1799,9 +1764,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         self.v_conv1d.weight.data = self.v_conv1d.weight.data.unsqueeze(1)
 
         # Store A_log as 1D to match checkpoint format - fused_kda_gate accepts [H] or [1,1,H,1]
-        self.A_log = nn.Parameter(
-            torch.empty(self.local_num_heads, dtype=torch.float32)
-        )
+        self.A_log = nn.Parameter(torch.empty(self.local_num_heads, dtype=torch.float32))
         set_weight_attrs(self.A_log, {"weight_loader": sharded_weight_loader(0)})
 
         self.g_a_proj = ReplicatedLinear(
@@ -1818,9 +1781,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             quant_config=quant_config,
             prefix=f"{prefix}.g_b_proj",
         )
-        self.o_norm = FusedRMSNormGated(
-            self.head_dim, eps=rms_norm_eps, activation=norm_activation
-        )
+        self.o_norm = FusedRMSNormGated(self.head_dim, eps=rms_norm_eps, activation=norm_activation)
         self.o_proj = RowParallelLinear(
             projection_size,
             self.hidden_size,
@@ -1909,15 +1870,9 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         conv_state_k = conv_state_k.transpose(-1, -2)
         conv_state_v = conv_state_v.transpose(-1, -2)
 
-        q_conv_weights = self.q_conv1d.weight.view(
-            self.q_conv1d.weight.size(0), self.q_conv1d.weight.size(2)
-        )
-        k_conv_weights = self.k_conv1d.weight.view(
-            self.k_conv1d.weight.size(0), self.k_conv1d.weight.size(2)
-        )
-        v_conv_weights = self.v_conv1d.weight.view(
-            self.v_conv1d.weight.size(0), self.v_conv1d.weight.size(2)
-        )
+        q_conv_weights = self.q_conv1d.weight.view(self.q_conv1d.weight.size(0), self.q_conv1d.weight.size(2))
+        k_conv_weights = self.k_conv1d.weight.view(self.k_conv1d.weight.size(0), self.k_conv1d.weight.size(2))
+        v_conv_weights = self.v_conv1d.weight.view(self.v_conv1d.weight.size(0), self.v_conv1d.weight.size(2))
 
         if attn_metadata.num_prefills > 0:
             q_proj_states = q_proj_states.transpose(0, 1)
@@ -1986,9 +1941,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 validate_data=True,
             )
 
-        q, k, v = map(
-            lambda x: rearrange(x, "n (h d) -> 1 n h d", d=self.head_dim), (q, k, v)
-        )
+        q, k, v = map(lambda x: rearrange(x, "n (h d) -> 1 n h d", d=self.head_dim), (q, k, v))
 
         if attn_metadata.num_prefills > 0:
             zero_idx = non_spec_state_indices_tensor[~has_initial_state]
@@ -2015,7 +1968,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=recurrent_state,
                 use_qk_l2norm_in_kernel=True,
-                cu_seqlens=non_spec_query_start_loc[:attn_metadata.num_decodes + 1],
+                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
                 ssm_state_indices=non_spec_state_indices_tensor,
             )
         core_attn_out[0, :num_actual_tokens] = core_attn_out_non_spec[0, :num_actual_tokens]
@@ -2116,9 +2069,7 @@ class Apriel2AttentionDecoderLayer(nn.Module):
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -2127,6 +2078,12 @@ class Apriel2AttentionDecoderLayer(nn.Module):
         positions: torch.Tensor | None = None,
         **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        target_dtype = self.input_layernorm.weight.dtype
+        if hidden_states.dtype != target_dtype:
+            hidden_states = hidden_states.to(target_dtype)
+        if residual is not None and residual.dtype != target_dtype:
+            residual = residual.to(target_dtype)
+
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
@@ -2185,9 +2142,7 @@ class Apriel2MambaDecoderLayer(nn.Module):
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -2255,9 +2210,7 @@ class Apriel2GDNDecoderLayer(nn.Module):
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
     def _debug_tensor(self, name: str, t: torch.Tensor, show_last=False):
         if not DEBUG_DECODER_LAYER or t is None:
@@ -2352,9 +2305,7 @@ class Apriel2KDADecoderLayer(nn.Module):
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -2591,9 +2542,7 @@ class Apriel2StochasticDecoderLayer(nn.Module):
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer for this layer."""
@@ -2632,9 +2581,7 @@ ALL_DECODER_LAYER_TYPES = {
 }
 
 
-def get_block_config_for_layer(
-    config: Apriel2Config, layer_idx: int
-) -> tuple[str, dict]:
+def get_block_config_for_layer(config: Apriel2Config, layer_idx: int) -> tuple[str, dict]:
     """Get mixer type and block config for a specific layer."""
     decoder_config = config.decoder
     seq_type = decoder_config.get("type", "fixed")
@@ -2654,9 +2601,7 @@ def get_block_config_for_layer(
         return "attention", {}
 
 
-def apriel2_model_invariants(
-    input_ids, positions, intermediate_tensors=None, inputs_embeds=None
-):
+def apriel2_model_invariants(input_ids, positions, intermediate_tensors=None, inputs_embeds=None):
     """Shape invariants for Apriel2 model compilation.
 
     These are translated to runtime assertions for unbacked dynamic shapes
@@ -2681,9 +2626,7 @@ class Apriel2Model(nn.Module):
         self.config = config
         self.vocab_size = config.vocab_size
 
-        if get_pp_group().is_first_rank or (
-            config.tie_word_embeddings and get_pp_group().is_last_rank
-        ):
+        if get_pp_group().is_first_rank or (config.tie_word_embeddings and get_pp_group().is_last_rank):
             self.embed_tokens = VocabParallelEmbedding(
                 self.vocab_size,
                 config.hidden_size,
@@ -2798,9 +2741,7 @@ class Apriel2Model(nn.Module):
             )
 
         if not get_pp_group().is_last_rank:
-            return IntermediateTensors(
-                {"hidden_states": hidden_states, "residual": residual}
-            )
+            return IntermediateTensors({"hidden_states": hidden_states, "residual": residual})
 
         # Debug final norm
         if DEBUG_FINAL_NORM:
@@ -2809,9 +2750,15 @@ class Apriel2Model(nn.Module):
             last_res = residual[-1, :8] if residual is not None else None
             hs_vals = ", ".join(f"{v:.6f}" for v in last_hs.float().tolist())
             res_vals = ", ".join(f"{v:.6f}" for v in last_res.float().tolist()) if last_res is not None else "None"
-            print(f"[vLLM Final] hidden_states (before norm): shape={hidden_states.shape}, last_token_first8=[{hs_vals}]")
-            print(f"[vLLM Final] residual (before norm): shape={residual.shape if residual is not None else None}, last_token_first8=[{res_vals}]")
-            print(f"[vLLM Final] norm.weight: first8=[{', '.join(f'{v:.6f}' for v in self.norm.weight.flatten()[:8].float().tolist())}]")
+            print(
+                f"[vLLM Final] hidden_states (before norm): shape={hidden_states.shape}, last_token_first8=[{hs_vals}]"
+            )
+            print(
+                f"[vLLM Final] residual (before norm): shape={residual.shape if residual is not None else None}, last_token_first8=[{res_vals}]"
+            )
+            print(
+                f"[vLLM Final] norm.weight: first8=[{', '.join(f'{v:.6f}' for v in self.norm.weight.flatten()[:8].float().tolist())}]"
+            )
             print(f"[vLLM Final] norm.variance_epsilon={self.norm.variance_epsilon}")
 
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -2819,7 +2766,9 @@ class Apriel2Model(nn.Module):
         if DEBUG_FINAL_NORM:
             last_out = hidden_states[-1, :8]
             out_vals = ", ".join(f"{v:.6f}" for v in last_out.float().tolist())
-            print(f"[vLLM Final] hidden_states (after norm): shape={hidden_states.shape}, last_token_first8=[{out_vals}]")
+            print(
+                f"[vLLM Final] hidden_states (after norm): shape={hidden_states.shape}, last_token_first8=[{out_vals}]"
+            )
 
         return hidden_states
 
@@ -2884,9 +2833,7 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         inputs_embeds: torch.Tensor | None = None,
         **kwargs,
     ) -> torch.Tensor | IntermediateTensors:
-        hidden_states = self.model(
-            input_ids, positions, intermediate_tensors, inputs_embeds
-        )
+        hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds)
         return hidden_states
 
     def compute_logits(
@@ -2900,7 +2847,9 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             print(f"[vLLM LM Head] input hidden_states: shape={hidden_states.shape}, first8=[{vals}]")
             if self.lm_head is not None:
                 lm_weight = self.lm_head.weight
-                print(f"[vLLM LM Head] lm_head.weight: shape={lm_weight.shape}, first8=[{', '.join(f'{v:.6f}' for v in lm_weight.flatten()[:8].float().tolist())}]")
+                print(
+                    f"[vLLM LM Head] lm_head.weight: shape={lm_weight.shape}, first8=[{', '.join(f'{v:.6f}' for v in lm_weight.flatten()[:8].float().tolist())}]"
+                )
 
         logits = self.logits_processor(self.lm_head, hidden_states)
 
@@ -2909,14 +2858,23 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             last_logits = logits[-1] if logits.dim() == 2 else logits[0, -1]
             top_vals, top_idx = last_logits.topk(5)
             print(f"[vLLM LM Head] logits shape={logits.shape}")
-            print(f"[vLLM LM Head] last token top-5 logits: {[(idx.item(), val.item()) for idx, val in zip(top_idx, top_vals)]}")
+            print(
+                f"[vLLM LM Head] last token top-5 logits: {[(idx.item(), val.item()) for idx, val in zip(top_idx, top_vals)]}"
+            )
 
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        # Some checkpoints are exported as multimodal (e.g. architectures:
+        # Apriel2ForConditionalGeneration) and include vision encoder weights
+        # under `model.vision_encoder.*`. vLLM's Apriel2 implementation here is
+        # text-generation only, so skip vision encoder weights to allow loading.
+        skip_prefixes: list[str] = ["model.vision_encoder"]
+        if self.config.tie_word_embeddings:
+            skip_prefixes.append("lm_head.")
         loader = AutoWeightsLoader(
             self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
+            skip_prefixes=skip_prefixes,
         )
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
