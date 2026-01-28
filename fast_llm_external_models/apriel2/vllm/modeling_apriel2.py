@@ -847,18 +847,6 @@ direct_register_custom_op(
     fake_impl=apriel2_gdn_attention_core_fake,
 )
 
-# Ensure GDN core op causes a graph break (capture-safe)
-try:
-    from vllm.config.compilation import CompilationConfig
-
-    _gdn_core_op = "vllm::apriel2_gdn_attention_core"
-    if _gdn_core_op not in CompilationConfig._attention_ops:
-        CompilationConfig._attention_ops.append(_gdn_core_op)
-        logger.info(f"Added {_gdn_core_op} to vLLM splitting ops")
-except ImportError:
-    logger.warning("Could not add apriel2_gdn_attention_core to vLLM splitting ops")
-
-
 # =============================================================================
 # Stochastic Mixer dispatch custom op (escapes torch.compile for dynamic placement)
 # =============================================================================
