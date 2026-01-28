@@ -951,6 +951,7 @@ update_and_add_testing_config(
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
     skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
     requires_cuda=True,
+    auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
 

@@ -1,0 +1,19 @@
+# Step 1: Convert fixed -> pattern with all GDN blocks
+#
+# Sets main_mixer_name to gdn for all layers
+# Run before pure_gdn_step2.yaml
+#
+# Usage:
+#   python convert.py /tmp/apriel2-0.5b-dev /tmp/apriel2-0.5b-pure-gdn \
+#       -s examples/pure_gdn_step1.yaml \
+#       -s examples/pure_gdn_step2.yaml
+
+decoder:
+  type: pattern
+  # Single block type - all layers use GDN
+  pattern: [gdn_block]
+
+  blocks:
+    gdn_block:
+      mixer:
+        main_mixer_name: gdn
