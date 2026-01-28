@@ -75,7 +75,7 @@ def grpo_loss_forward_backward(
         grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
             -1,
             target_masked.unsqueeze(-1),
-            -(loss_mask if target_mask is None else -target_mask).unsqueeze(-1).to(torch.float32),
+            -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
         )
         grad = (grad * loss_mask.unsqueeze(-1)).to(logits.dtype)
 

@@ -180,7 +180,7 @@ def test_grpo_loss_distributed_dependency():
 
 
 @pytest.mark.slow
-@pytest.mark.depends_on(on=["test_entropy_loss_distributed_dependency"])
+@pytest.mark.depends_on(on=["test_grpo_loss_distributed_dependency"])
 def test_run_grpo_loss_distributed(run_parallel_script, result_path):
     run_parallel_script(
         _run_grpo_loss_distributed,
