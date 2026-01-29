@@ -795,10 +795,7 @@ class TestGDNEquivalence:
         always uses initial_state=None, ignoring cached recurrent state.
         """
         from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-        from transformers.models.qwen3_next.modeling_qwen3_next import (
-            Qwen3NextDynamicCache,
-            Qwen3NextGatedDeltaNet,
-        )
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache, Qwen3NextGatedDeltaNet
 
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
 
@@ -826,7 +823,9 @@ class TestGDNEquivalence:
         # Create models with same weights
         torch.manual_seed(seed)
         qwen_gdn = Qwen3NextGatedDeltaNet(qwen3_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
-        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(device="cuda", dtype=test_dtype)
+        apriel_gdn = Apriel2GatedDeltaNet(hidden_size, gdn_mixer_config, layer_idx=0).to(
+            device="cuda", dtype=test_dtype
+        )
 
         # Transfer weights using conversion plan
         plan = plan_qwen3next_gdn_to_apriel2(
@@ -1013,6 +1012,7 @@ class TestGDNEquivalence:
             msg=f"GDN chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
         )
 
+
 # =============================================================================
 # SECTION 2: EQUIVALENCE TESTS - KimiDeltaAttention
 # =============================================================================
@@ -1046,10 +1046,8 @@ class TestKDAEquivalence:
         from fla.layers.kda import KimiDeltaAttention as FLA_KDA
         from fla.models.utils import Cache as FLACache
 
-        from fast_llm_external_models.apriel2.modeling_apriel2 import (
-            Apriel2Cache,
-            KimiDeltaAttention as Apriel2_KDA,
-        )
+        from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache
+        from fast_llm_external_models.apriel2.modeling_apriel2 import KimiDeltaAttention as Apriel2_KDA
 
         num_heads, head_dim = kda_config
         seq_len = prefill_len + decode_steps + prefill2_len
@@ -1272,4 +1270,3 @@ class TestKDAEquivalence:
             atol=atol * 5,
             msg=f"KDA chunked vs recurrent mode (prefill={prefill_len}, decode={decode_steps})",
         )
-

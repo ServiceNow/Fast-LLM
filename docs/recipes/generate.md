@@ -12,7 +12,7 @@ Fast-LLM models support `generate` and `forward` operations through Hugging Face
 
 ---
 
-### 🔧 Generating Text from a Fast-LLM Model
+## 🔧 Generating Text from a Fast-LLM Model
 
 Below is a step-by-step example of how to generate text using a Fast-LLM model checkpoint from Hugging Face Hub.
 

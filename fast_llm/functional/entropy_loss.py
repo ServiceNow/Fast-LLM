@@ -145,7 +145,7 @@ def _fused_reverse_kl_base(
     # Compute loss terms: student_probs * log_ratio, then sum over vocab
     # This is equivalent to kl_div(..., log_target=True) but more memory efficient
     log_ratio = predicted_log_probability - target_log_probability
-    per_sample_loss = (predicted_probability * log_ratio).sum(dim=-1)
+    per_sample_loss = (predicted_probability * log_ratio).sum(dim=-1, keepdim=True)
     if group is not None:
         all_reduce(per_sample_loss, op=ReduceOp.SUM, group=group)
 
@@ -154,7 +154,7 @@ def _fused_reverse_kl_base(
     else:
         # Gradient: d/d(logits) KL(q||p) = q * (log(q/p) - E_q[log(q/p)])
         # where E_q[log(q/p)] is the expected log ratio under the student distribution
-        grad = (log_ratio - per_sample_loss.unsqueeze(-1)) * predicted_probability * grad_output
+        grad = (log_ratio - per_sample_loss) * predicted_probability * grad_output
 
     return per_sample_loss, grad
 

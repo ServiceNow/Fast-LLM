@@ -10,9 +10,7 @@ from fast_llm.utils import Assert
 
 
 # TODO: Improve type hint (use protocol?)
-def wrap_forward_backward[
-    OutputType, ContextType
-](
+def wrap_forward_backward[OutputType, ContextType](
     forward: typing.Callable[..., tuple[OutputType, ContextType]],
     backward: typing.Callable[[OutputType, ContextType], typing.Any],
 ) -> typing.Callable[..., OutputType]:

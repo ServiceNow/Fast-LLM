@@ -25,6 +25,7 @@ from fast_llm.layers.language_model.config import (
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
+from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -95,6 +96,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
+        loss_configs = (
+            self._config.losses if self._config.losses else {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
+        )
         self._losses = [
             loss_config.get_layer(
                 distributed_config,
@@ -106,7 +110,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                 self._config.logits_scale_factor,
                 self._loss_coefficient,
             )
-            for name, loss_config in self._config.losses.items()
+            for name, loss_config in loss_configs.items()
         ]
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

@@ -39,7 +39,6 @@ from tests.utils.subtest import format_resource_report, report_subtest, run_para
 # Import all dynamic classes.
 import fast_llm.cli  # isort: skip
 
-
 logger = logging.getLogger(__name__)
 
 manager: DependencyManager | None = None
