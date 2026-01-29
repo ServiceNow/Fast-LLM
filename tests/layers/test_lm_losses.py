@@ -299,8 +299,8 @@ def test_entropy_loss(
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
 )
-def test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
-    _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
+def test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
+    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.slow
@@ -308,8 +308,8 @@ def test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, l
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
 )
-def test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
-    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
+def test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
+    _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.skip(reason="DPO loss is broken")
@@ -349,7 +349,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                                 dtype,
                                 test_context.group,
                             )
-            # GRPO
+            # Z loss
             with test_context.subtest(base_path, f"z_loss-{suffix}", 2) as subtest:
                 if subtest.do_run:
                     torch.manual_seed((seed + hash(subtest.name)) % 2**32)
@@ -362,7 +362,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         dtype,
                         test_context.group,
                     )
-            # Z loss
+            # GRPO
             with test_context.subtest(base_path, f"grpo-{suffix}", 2) as subtest:
                 if subtest.do_run:
                     torch.manual_seed((seed + hash(subtest.name)) % 2**32)
@@ -412,8 +412,8 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
             for target_format in TargetFormat
             if target_format != TargetFormat.labels or entropy_loss_type != EntropyLossType.reverse_kl
         ),
-        "grpo",
         "z_loss",
+        "grpo",
     ),
 )
 def test_lm_loss_distributed(

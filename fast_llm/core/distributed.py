@@ -15,7 +15,6 @@ import typing
 
 import torch
 import torch.monitor
-from torch._C._distributed_c10d import Work
 from torch.distributed import (  # noqa
     ProcessGroup,
     ReduceOp,
@@ -51,7 +50,7 @@ def set_timeout(group: ProcessGroup | None, timeout: float | None = None):
 
 def broadcast(
     tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, timeout: float | None = None
-) -> Work | None:
+) -> torch.distributed.Work | None:
     """Same as torch.distributed.broadcast, but without the complication of going through the global rank."""
     assert group is not None
     opts = torch.distributed.BroadcastOptions()
@@ -159,7 +158,9 @@ def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None
         return _tensor_to_object(output_tensor)
 
 
-def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
+def send(
+    tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0
+) -> torch.distributed.Work | None:
     assert group is not None
     if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
         # send not supported for gloo on GPU.
@@ -175,7 +176,9 @@ def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, ta
         return None
 
 
-def recv(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
+def recv(
+    tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, tag: int = 0
+) -> torch.distributed.Work | None:
     assert group is not None
     if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
         # recv not supported for gloo on GPU.

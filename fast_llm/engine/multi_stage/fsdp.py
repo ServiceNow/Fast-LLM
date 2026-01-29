@@ -4,7 +4,6 @@ import math
 import typing
 
 import torch
-from torch._C._distributed_c10d import ReduceOp
 from torch.distributed import all_reduce, reduce_scatter_tensor
 
 from fast_llm.core.distributed import ProcessGroup
@@ -270,7 +269,9 @@ class FSDP:
         # Also ensures a correct parameter count in loading context.
         shard_meta = self._weight_shard_meta if shard_name == ShardName.weights else self._grad_shard_meta
         shard_meta.validate(shard)
-        if self._shard_pad > 0:
+        # Only count padding for non-empty shards. Frozen FSDPs have empty optimizer shards
+        # (numel()==0) but non-zero shard_pad, which would incorrectly inflate the count.
+        if self._shard_pad > 0 and shard.numel() > 0:
             shard[-self._shard_pad :].zero_()
             return self._shard_pad
         return 0
@@ -396,7 +397,7 @@ class FSDP:
                 out,
                 self._grad_buffer,
                 group=self._fsdp_group,
-                op=ReduceOp.AVG,
+                op=torch.distributed.ReduceOp.AVG,
             )
             if accumulate:
                 triton_add(self._grad_shard, out, self._grad_shard)

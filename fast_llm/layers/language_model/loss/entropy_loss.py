@@ -1,7 +1,6 @@
 import typing
 
 import torch
-from torch._C._distributed_c10d import ProcessGroup
 
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
@@ -101,7 +100,7 @@ def entropy_loss_forward_backward(
     target: torch.Tensor,  # (*batch,) or (*batch, vocab)
     loss_mask: torch.Tensor | None,  # (*batch,)
     grad_output: float | None,
-    group: ProcessGroup | None = None,
+    group: torch.distributed.ProcessGroup | None = None,
     implementation: EntropyLossImplementation = EntropyLossImplementation.fused,
     logits_scale_factor: float = 1.0,
     temperature: float = 1.0,
