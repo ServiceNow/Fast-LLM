@@ -46,7 +46,7 @@ def torch_entropy_loss_forward_backward(
         if entropy_loss_type == EntropyLossType.cross_entropy:
             if target_format == TargetFormat.logits:
                 target = torch.softmax(target, dim=-1)
-            loss = torch.nn.functional.cross_entropy(logits_scaled, target, reduction="none")
+            per_sample_loss = torch.nn.functional.cross_entropy(logits_scaled, target, reduction="none")
         else:
             predicted_log_probability = torch.nn.functional.log_softmax(logits_scaled, dim=-1)
             if target_format == TargetFormat.logits:
@@ -61,14 +61,14 @@ def torch_entropy_loss_forward_backward(
                     target_probability = target_probability * loss_mask.unsqueeze(-1)
                 target_log_probability = target_probability.add(1.0e-10).log()
             if entropy_loss_type == EntropyLossType.forward_kl:
-                loss = torch.nn.functional.kl_div(
+                per_sample_loss = torch.nn.functional.kl_div(
                     predicted_log_probability,
                     target_log_probability,
                     reduction="none",
                     log_target=True,
                 )
             elif entropy_loss_type == EntropyLossType.reverse_kl:
-                loss = torch.nn.functional.kl_div(
+                per_sample_loss = torch.nn.functional.kl_div(
                     target_log_probability,
                     predicted_log_probability,
                     reduction="none",
@@ -76,11 +76,11 @@ def torch_entropy_loss_forward_backward(
                 )
             else:
                 raise NotImplementedError(entropy_loss_type)
-            loss = loss.sum(dim=-1)
+            per_sample_loss = per_sample_loss.sum(dim=-1)
 
         if loss_mask is not None:
-            loss = loss * loss_mask
-        loss = loss.mean()
+            per_sample_loss = per_sample_loss * loss_mask
+        loss = per_sample_loss.mean()
 
         if grad_output is None:
             grad = None
@@ -145,7 +145,7 @@ def _fused_reverse_kl_base(
     # Compute loss terms: student_probs * log_ratio, then sum over vocab
     # This is equivalent to kl_div(..., log_target=True) but more memory efficient
     log_ratio = predicted_log_probability - target_log_probability
-    per_sample_loss = (predicted_probability * log_ratio).sum(dim=-1, keepdim=True)
+    per_sample_loss = (predicted_probability * log_ratio).sum(dim=-1)
     if group is not None:
         all_reduce(per_sample_loss, op=ReduceOp.SUM, group=group)
 
@@ -154,7 +154,7 @@ def _fused_reverse_kl_base(
     else:
         # Gradient: d/d(logits) KL(q||p) = q * (log(q/p) - E_q[log(q/p)])
         # where E_q[log(q/p)] is the expected log ratio under the student distribution
-        grad = (log_ratio - per_sample_loss) * predicted_probability * grad_output
+        grad = (log_ratio - per_sample_loss.unsqueeze(-1)) * predicted_probability * grad_output
 
     return per_sample_loss, grad
 
