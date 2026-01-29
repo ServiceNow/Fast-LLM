@@ -49,6 +49,7 @@ def dpo_loss(
     beta: float = 1.0,
     logits_scale_factor: float = 1.0,
 ) -> torch.Tensor:
+    logits = logits.float()
 
     if logits_scale_factor != 1.0:
         # TODO: Make more efficient.

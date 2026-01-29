@@ -214,7 +214,6 @@ class LMHeadTestConfig:
         if self.grpo_loss is not False:
             grpo_loss = reference_grpo_loss(
                 logits,
-                kwargs.get(LanguageModelKwargs.loss_mask),
                 labels,
                 kwargs[LanguageModelLossKwargs.advantages],
                 kwargs[LanguageModelLossKwargs.old_log_probabilities],

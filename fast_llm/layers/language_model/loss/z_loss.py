@@ -37,6 +37,7 @@ def z_loss(
     """
     Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
     """
+    logits = logits.float()
     out = torch.logsumexp(logits if logits_scale_factor == 1.0 else logits * logits_scale_factor, dim=-1) ** 2
     if loss_mask is not None:
         out = out * loss_mask

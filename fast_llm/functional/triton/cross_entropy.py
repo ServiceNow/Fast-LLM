@@ -140,7 +140,8 @@ def triton_cross_entropy_forward_backward(
     # TODO: Improve assumptions.
     assert logits.is_contiguous()
     assert target.is_contiguous()
-    n_rows, n_cols = logits.shape
+    n_rows = logits.shape[:-1].numel()
+    n_cols = logits.size(-1)
     block_size = triton.next_power_of_2(n_cols)
     assert block_size <= TritonConfig.MAX_BLOCK_SIZE_BYTES
     num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
@@ -155,8 +156,8 @@ def triton_cross_entropy_forward_backward(
             losses,
             None if grad_output is None else grad_output / n_rows,
             n_cols,
-            logits.stride(0),
-            None if grad_output is None else grad_logits.stride(0),
+            logits.stride(-2),
+            None if grad_output is None else grad_logits.stride(-2),
             logits_scale_factor,
             block_size=block_size,
             num_warps=num_warps,
@@ -172,9 +173,9 @@ def triton_cross_entropy_forward_backward(
             losses,
             None if grad_output is None else grad_output / n_rows,
             n_cols,
-            logits.stride(0),
-            target.stride(0),
-            None if grad_output is None else grad_logits.stride(0),
+            logits.stride(-2),
+            target.stride(-2),
+            None if grad_output is None else grad_logits.stride(-2),
             logits_scale_factor,
             block_size=block_size,
             num_warps=num_warps,
