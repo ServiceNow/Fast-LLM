@@ -479,6 +479,10 @@ def test_load_parallel_checkpoint_in_single_gpu(
     distributed_save_load_config = distributed_save_load_config.resolve(
         base_path=run_test_script_base_path, model_testing_config=model_testing_config
     )
+    if torch.cuda.device_count() < distributed_save_load_config.num_gpus:
+        pytest.skip(
+            f"Not enough GPUs to run dependency: {torch.cuda.device_count()} < {distributed_save_load_config.num_gpus}"
+        )
     report_subtest(distributed_save_load_config.save_path, distributed_save_load_config.num_gpus)
     load_and_compare_checkpoints(
         DistributedCheckpointFormat,

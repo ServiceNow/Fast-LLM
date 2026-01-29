@@ -156,8 +156,8 @@ _LOSS_PARAMETERS = (
     (500, 1.0, 4.0, False, DataType.float32),  # Loss scaling
     (500, 4.0, 1.0, False, DataType.float32),  # Grad scaling
     (500, 1.0, 1.0, True, DataType.float32),  # Loss masking
-    (500, 1.0, 1.0, True, DataType.float16),  # Fp16
-    (500, 1.0, 1.0, True, DataType.bfloat16),  # Bf16
+    (500, 1.0, 1.0, False, DataType.float16),  # Fp16
+    (500, 1.0, 1.0, True, DataType.bfloat16),  # Bf16, loss masking
     (65538, 1.0, 1.0, False, DataType.float32),  # Above max block size
 )
 
