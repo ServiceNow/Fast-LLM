@@ -47,7 +47,7 @@ def grpo_loss_forward_backward(
     grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
     loss_mask = target >= 0
 
-    logits_norm, exp_logits, sum_exp_logits = fused_softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
     predicted_logits, target_masked, target_mask = fused_predicted_logits_from_labels(
         logits_norm, target, loss_mask, group
     )
@@ -65,10 +65,15 @@ def grpo_loss_forward_backward(
     else:
         # loss[a>=0] = -a * min(x, 1 + epsilon_high)  =>  grad[a>=0] = -a * (x <= 1 + epsilon_high)
         # loss[a<=0] = a * max(x, 1 - epsilon_low)  =>  grad[a<=0] = a * (x >= 1 - epsilon_low)
-        probability_ratio_grad = grad_output * (
-            torch.clamp_min(advantages, 0) * (probability_ratio <= 1 + epsilon_high)
-            + torch.clamp_max(advantages, 0) * (probability_ratio >= 1 - epsilon_low)
+        probability_ratio_grad = (
+            grad_output
+            * (
+                torch.clamp_min(advantages, 0) * (probability_ratio <= 1 + epsilon_high)
+                + torch.clamp_max(advantages, 0) * (probability_ratio >= 1 - epsilon_low)
+            )
+            * loss_mask
         )
+
         # d(probability_ratio)/d(logits) = - probability_ratio * (predicted_probabilities - target_probabilities)
         # (Sign absorbed in probability_ratio_grad)
         predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze_(-1)
@@ -76,8 +81,6 @@ def grpo_loss_forward_backward(
             -1,
             target_masked.unsqueeze(-1),
             -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
-        )
-        grad = (grad * loss_mask.unsqueeze(-1)).to(logits.dtype)
+        ).to(logits.dtype)
 
-    # return per_sample_loss, grad
     return loss, grad

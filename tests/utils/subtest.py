@@ -160,6 +160,10 @@ class DistributedTestContext:
         def do_run(self) -> bool:
             return self._do_run and not self._skip
 
+        @property
+        def name(self) -> str:
+            return self._name
+
 
 def set_subtest_success(path: pathlib.Path, success: bool = True):
     path.joinpath("pytest_success").write_text(str(int(success)))

@@ -94,19 +94,27 @@ def fused_softmax_base(
     logits_scale_factor: float = 1.0,
     group: ProcessGroup | None = None,
     dim: int = -1,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:  # (*batch, vocab), (*batch, vocab), (*batch,)
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:  # (*batch, vocab), (*batch, vocab), (*batch,), (*batch,)
+    """
+    Calculate the required inputs for softmax computation, mainly sum_exp_logits,
+    in a numerically stable way and with tensor-parallel support.
+    Warning: The returned values are regularized by `logits_max`.
+        The regularization typically but not always cancels out in derived quantities.
+    """
     logits = logits.float()
     if logits_scale_factor != 1.0:
         logits = logits * logits_scale_factor
-    logits_max = torch.max(logits, dim=dim, keepdim=True)[0]
+    logits_max = logits.max(dim=dim)[0]
     if group is not None:
         all_reduce(logits_max, op=ReduceOp.MAX, group=group)
-    logits_norm = (logits - logits_max).float()
+    logits_norm = (logits - logits_max.unsqueeze(-1)).float()
     exp_logits = logits_norm.exp()
     sum_exp_logits = exp_logits.sum(dim=dim)
     if group is not None:
         all_reduce(sum_exp_logits, op=ReduceOp.SUM, group=group)
-    return logits_norm, exp_logits, sum_exp_logits
+    return logits_norm, exp_logits, sum_exp_logits, logits_max
 
 
 @torch.compile
@@ -120,12 +128,12 @@ def _fused_reverse_kl_base(
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
     assert target_format in (TargetFormat.logits, TargetFormat.probabilities)
-    logits_norm, exp_logits, sum_exp_logits = fused_softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
     predicted_log_probability = logits_norm - sum_exp_logits.log().unsqueeze(-1)
     predicted_probability = exp_logits / sum_exp_logits.unsqueeze(-1)
 
     if target_format == TargetFormat.logits:
-        target_logits_norm, _, sum_exp_target_logits = fused_softmax_base(
+        target_logits_norm, _, sum_exp_target_logits, _ = fused_softmax_base(
             target, logits_scale_factor / temperature, group
         )
         target_log_probability = target_logits_norm - sum_exp_target_logits.log().unsqueeze(-1)
@@ -160,10 +168,10 @@ def _fused_cross_entropy_base(
     temperature: float = 1.0,
     return_kl_loss: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits = fused_softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target_logits_norm, exp_logits_targets, sum_exp_target_logits = fused_softmax_base(
+        target_logits_norm, exp_logits_targets, sum_exp_target_logits, _ = fused_softmax_base(
             target, logits_scale_factor / temperature, group
         )
         target = exp_logits_targets / sum_exp_target_logits.unsqueeze(-1)
@@ -238,7 +246,7 @@ def _fused_cross_entropy_base_from_labels(
     logits_scale_factor: float,
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits = fused_softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
     predicted_logits, target_masked, target_mask = fused_predicted_logits_from_labels(
         logits_norm, target, loss_mask, group
     )
