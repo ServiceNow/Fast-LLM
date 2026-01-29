@@ -7,6 +7,8 @@ import pytest
 import torch
 
 from fast_llm.core.ops import split_op
+from fast_llm.engine.config_utils import data_type
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
@@ -23,11 +25,11 @@ NUM_TOKENS = 200
 
 
 def _get_lm_loss_inputs(
-    num_columns: int, loss_masking: bool, target_format: TargetFormat, batch_shape: tuple[int] = (256,)
+    num_columns: int, loss_masking: bool, target_format: TargetFormat, batch_shape: tuple[int], dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # We want something moderately close to the target for the test to be meaningful
-    logits_var = torch.randn((*batch_shape, num_columns), dtype=torch.float32, device=device) / 3
+    logits_var = torch.randn((*batch_shape, num_columns), dtype=dtype.torch, device=device) / 3
     loss_mask = torch.randint(0, 2, batch_shape, dtype=torch.bool, device=device) if loss_masking else None
     if target_format == TargetFormat.labels:
         target = torch.randint(0, num_columns, batch_shape, dtype=torch.int64, device=device)
@@ -36,15 +38,17 @@ def _get_lm_loss_inputs(
             target = torch.where(loss_mask, target, -100)
             loss_mask = None
     else:
-        target = torch.randn((*batch_shape, num_columns), dtype=torch.float32, device=device)
+        # Target logits are typically in training precision, ex. with distillation model.
+        target = torch.randn((*batch_shape, num_columns), dtype=dtype.torch, device=device)
         logits = target + logits_var
         if target_format == TargetFormat.probabilities:
-            target = torch.softmax(target, -1)
+            # Probabilities need to be in full precision for accuracy.
+            target = torch.softmax(target, -1, dtype=torch.float32)
     return logits, target, loss_mask
 
 
-def _get_grpo_loss_inputs(num_columns: int, loss_masking: bool, batch_shape: tuple[int] = (256,)):
-    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape)
+def _get_grpo_loss_inputs(num_columns: int, loss_masking: bool, batch_shape: tuple[int], dtype):
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
     advantages = torch.randn_like(target, dtype=torch.float32)
     # We want some correlation between the old and new log probabilities for the test to be meaningful.
     old_log_probabilities = (
@@ -63,12 +67,13 @@ def _compare_losses_and_grads(
     grad: torch.Tensor | None,
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
-    loss_min_threshold=1e-6,
     group: torch.distributed.ProcessGroup | None = None,
 ):
-    Assert.rms_close_relative(loss, ref_loss, threshold, loss_min_threshold)
+    Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
     if has_grad:
-        Assert.rms_close_relative(grad, split_op(ref_grad, group, -1), threshold, 1e-8)
+        Assert.rms_close_relative(
+            grad, split_op(ref_grad, group, -1), threshold, 1e-8 if grad.dtype == torch.float32 else 1e-7
+        )
     else:
         assert grad is None
         assert ref_grad is None
@@ -145,13 +150,15 @@ def reference_grpo_loss(
 
 _BATCH_SHAPES = ((64,), (16, 8))
 _LOSS_PARAMETERS = (
-    (500, 1.0, 1.0, False),  # Simple
-    (512, 1.0, 1.0, False),  # Power of 2
-    (500, None, 1.0, False),  # No grad
-    (500, 1.0, 4.0, False),  # Loss scaling
-    (500, 4.0, 1.0, False),  # Grad scaling
-    (500, 1.0, 1.0, True),  # Loss masking
-    (65538, 1.0, 1.0, False),  # Above max block size
+    (500, 1.0, 1.0, False, DataType.float32),  # Simple
+    (512, 1.0, 1.0, False, DataType.float32),  # Power of 2
+    (500, None, 1.0, False, DataType.float32),  # No grad
+    (500, 1.0, 4.0, False, DataType.float32),  # Loss scaling
+    (500, 4.0, 1.0, False, DataType.float32),  # Grad scaling
+    (500, 1.0, 1.0, True, DataType.float32),  # Loss masking
+    (500, 1.0, 1.0, True, DataType.float16),  # Fp16
+    (500, 1.0, 1.0, True, DataType.bfloat16),  # Bf16
+    (65538, 1.0, 1.0, False, DataType.float32),  # Above max block size
 )
 
 
@@ -163,12 +170,13 @@ def _test_entropy_loss(
     loss_masking,
     target_format,
     entropy_loss_type,
+    dtype,
     group=None,
 ):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Not implemented")
     # TODO: Test tensor-parallel implementation.
-    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape)
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape, dtype)
     # Torch serves as the reference implementation.
     out_ref, grad_ref = entropy_loss_forward_backward(
         logits=logits,
@@ -198,7 +206,7 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_fused,
         grad_ref,
-        loss_min_threshold=2e-4 if entropy_loss_type == EntropyLossType.reverse_kl and loss_masking else 5e-6,
+        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
         group=group,
     )
 
@@ -220,8 +228,10 @@ def _test_entropy_loss(
         _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref)
 
 
-def _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, group=None):
-    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(num_columns, loss_masking, batch_shape)
+def _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, group=None):
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
         reference_grpo_loss,
@@ -243,8 +253,8 @@ def _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, 
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
 
 
-def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, group=None):
-    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.logits, batch_shape)
+def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, group=None):
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.logits, batch_shape, dtype)
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
         z_loss,
@@ -264,29 +274,42 @@ def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, los
 
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
-@pytest.mark.parametrize(("num_columns", "grad_output", "logits_scale_factor", "loss_masking"), _LOSS_PARAMETERS)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
+)
 @pytest.mark.parametrize("target_format", TargetFormat)
 @pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
 def test_entropy_loss(
-    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type, dtype
 ):
     _test_entropy_loss(
-        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, target_format, entropy_loss_type
+        batch_shape,
+        num_columns,
+        grad_output,
+        logits_scale_factor,
+        loss_masking,
+        target_format,
+        entropy_loss_type,
+        dtype,
     )
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
-@pytest.mark.parametrize(("num_columns", "grad_output", "logits_scale_factor", "loss_masking"), _LOSS_PARAMETERS)
-def test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking):
-    _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
+)
+def test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
+    _test_grpo_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
-@pytest.mark.parametrize(("num_columns", "grad_output", "logits_scale_factor", "loss_masking"), _LOSS_PARAMETERS)
-def test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking):
-    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
+)
+def test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype):
+    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.skip(reason="DPO loss is broken")
@@ -303,8 +326,8 @@ def test_dpo_loss():
 
 def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pathlib.Path, seed: int):
     for batch_shape in _BATCH_SHAPES:
-        for num_columns, grad_output, logits_scale_factor, loss_masking in _LOSS_PARAMETERS:
-            suffix = f"{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{"_".join([str(i) for i in batch_shape])}"
+        for num_columns, grad_output, logits_scale_factor, loss_masking, dtype in _LOSS_PARAMETERS:
+            suffix = f"{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{dtype}-{"_".join([str(i) for i in batch_shape])}"
             # Entropy loss
             for entropy_loss_type in EntropyLossType:
                 for target_format in TargetFormat:
@@ -323,6 +346,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                                 loss_masking,
                                 target_format,
                                 entropy_loss_type,
+                                dtype,
                                 test_context.group,
                             )
             # GRPO
@@ -330,14 +354,26 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                 if subtest.do_run:
                     torch.manual_seed((seed + hash(subtest.name)) % 2**32)
                     _test_z_loss(
-                        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, test_context.group
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        test_context.group,
                     )
             # Z loss
             with test_context.subtest(base_path, f"grpo-{suffix}", 2) as subtest:
                 if subtest.do_run:
                     torch.manual_seed((seed + hash(subtest.name)) % 2**32)
                     _test_grpo_loss(
-                        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, test_context.group
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        test_context.group,
                     )
 
 
@@ -364,7 +400,9 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_lm_loss_distributed_dependency"])
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
-@pytest.mark.parametrize(("num_columns", "grad_output", "logits_scale_factor", "loss_masking"), _LOSS_PARAMETERS)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype"), _LOSS_PARAMETERS
+)
 @pytest.mark.parametrize(
     "loss_type",
     (
@@ -379,11 +417,19 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
     ),
 )
 def test_lm_loss_distributed(
-    result_path, report_subtest, loss_type, batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking
+    result_path,
+    report_subtest,
+    loss_type,
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
 ):
     report_subtest(
         result_path
-        / f"test_losses/{loss_type}-{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{"_".join([str(i) for i in batch_shape])}",
+        / f"test_losses/{loss_type}-{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{dtype}-{"_".join([str(i) for i in batch_shape])}",
         2,
         use_cuda=False,
     )

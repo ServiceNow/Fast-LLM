@@ -81,6 +81,7 @@ def grpo_loss_forward_backward(
             -1,
             target_masked.unsqueeze(-1),
             -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
-        ).to(logits.dtype)
+        )
+        grad = grad.to(logits.dtype)
 
     return loss, grad

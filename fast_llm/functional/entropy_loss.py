@@ -27,8 +27,10 @@ def torch_entropy_loss_forward_backward(
     if target_format == TargetFormat.labels:
         assert loss_mask is None
         loss_mask = target >= 0
-    elif loss_mask is not None:
-        loss_mask = loss_mask.flatten()
+    else:
+        target = target.float()
+        if loss_mask is not None:
+            loss_mask = loss_mask.flatten()
 
     # Torch compile doesn't understand this.
     with torch.set_grad_enabled(grad_output is not None):
