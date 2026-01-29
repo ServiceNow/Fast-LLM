@@ -4,7 +4,6 @@ import math
 import typing
 
 import torch
-from torch._C._distributed_c10d import ReduceOp
 from torch.distributed import all_reduce, reduce_scatter_tensor
 
 from fast_llm.core.distributed import ProcessGroup
@@ -398,7 +397,7 @@ class FSDP:
                 out,
                 self._grad_buffer,
                 group=self._fsdp_group,
-                op=ReduceOp.AVG,
+                op=torch.distributed.ReduceOp.AVG,
             )
             if accumulate:
                 triton_add(self._grad_shard, out, self._grad_shard)

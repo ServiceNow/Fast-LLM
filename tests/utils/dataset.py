@@ -322,9 +322,10 @@ def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
+        num_documents=200,
         max_loss_masking_spans=5,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 19, "test": 1},
         config_only=config_only,
     )
 
@@ -333,6 +334,7 @@ def get_multimodal_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset_multimodal",
         seed=1234,
+        num_documents=200,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         max_images=2,
         image_patch_config=ImagePatchConfig(
@@ -343,6 +345,6 @@ def get_multimodal_test_dataset(config_only: bool = False):
             image_break_token=None,
             image_end_token=None,
         ),
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 19, "test": 1},
         config_only=config_only,
     )

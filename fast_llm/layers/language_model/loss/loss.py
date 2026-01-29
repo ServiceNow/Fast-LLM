@@ -116,6 +116,6 @@ def loss_forward_backward(
             grad = None
         else:
             loss.backward(torch.full_like(loss, grad_output))
-            grad = input_.grad.detach().to(input_.dtype)
+            grad = input_.grad.detach()
 
     return loss, grad

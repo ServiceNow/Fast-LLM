@@ -58,7 +58,7 @@ class TokenSample(Sample):
         return len(self.tokens)
 
     def get_padding(self, size: int) -> typing.Self:
-        return TokenSample(torch.full([size], -100, dtype=self.tokens.dtype), [size])
+        return self.__class__(torch.full([size], -100, dtype=self.tokens.dtype), [size])
 
 
 class TokenBatch(Batch):
