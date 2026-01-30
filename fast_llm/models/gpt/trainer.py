@@ -39,5 +39,6 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             "vocab_size": self._config.model.base_model.embeddings.vocab_size,
             "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
             "use_preference_spans": self._config.batch.use_preference_spans,
+            "use_grpo_data": self._config.batch.use_grpo_data,
         }
         return out if _return_dict else LanguageModelPreprocessingConfig.from_dict(out)

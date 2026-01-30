@@ -39,6 +39,13 @@ from fast_llm.data.sample.range import (
     RangeWriter,
 )
 from fast_llm.data.sample.token import TokenBatch, TokenReaderConfig, TokenSample, TokenWriter
+from fast_llm.data.sample.token_data import (
+    TokenDataBatch,
+    TokenDataReader,
+    TokenDataReaderConfig,
+    TokenDataSample,
+    TokenDataWriter,
+)
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
@@ -53,12 +60,16 @@ class LanguageModelSample(Sample):
         chosen_spans: RangeSample | None = None,
         rejected_spans: RangeSample | None = None,
         image_patches: PatchSample | None = None,
+        advantages: TokenDataSample | None = None,
+        old_log_probabilities: TokenDataSample | None = None,
     ):
         self.tokens = tokens
         self.loss_masking_spans = loss_masking_spans
         self.chosen_spans = chosen_spans
         self.rejected_spans = rejected_spans
         self.image_patches = image_patches
+        self.advantages = advantages
+        self.old_log_probabilities = old_log_probabilities
 
     @classmethod
     def from_documents(cls, documents: typing.Iterable[typing.Self]) -> typing.Self:
@@ -68,6 +79,10 @@ class LanguageModelSample(Sample):
             _merge_optional(RangeSample.from_documents, [document.chosen_spans for document in documents]),
             _merge_optional(RangeSample.from_documents, [document.rejected_spans for document in documents]),
             _merge_optional(PatchSample.from_documents, [document.image_patches for document in documents]),
+            _merge_optional(TokenDataSample.from_documents, [document.advantages for document in documents]),
+            _merge_optional(
+                TokenDataSample.from_documents, [document.old_log_probabilities for document in documents]
+            ),
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -77,18 +92,22 @@ class LanguageModelSample(Sample):
             _crop_optional(self.chosen_spans, begin, end),
             _crop_optional(self.rejected_spans, begin, end),
             _crop_optional(self.image_patches, begin, end),
+            _crop_optional(self.advantages, begin, end),
+            _crop_optional(self.old_log_probabilities, begin, end),
         )
 
     def __len__(self) -> int:
         return len(self.tokens)
 
     def get_padding(self, size: int) -> typing.Self:
-        return LanguageModelSample(
+        return self.__class__(
             self.tokens.get_padding(size),
             None if self.loss_masking_spans is None else self.loss_masking_spans.get_padding(size),
             None if self.chosen_spans is None else self.chosen_spans.get_padding(size),
             None if self.rejected_spans is None else self.rejected_spans.get_padding(size),
             None if self.image_patches is None else self.image_patches.get_padding(size),
+            None if self.advantages is None else self.advantages.get_padding(size),
+            None if self.old_log_probabilities is None else self.old_log_probabilities.get_padding(size),
         )
 
 
@@ -100,12 +119,16 @@ class LanguageModelBatch(Batch):
         chosen_spans: RangeBatch | None = None,
         rejected_spans: RangeBatch | None = None,
         image_patches: PatchBatch | None = None,
+        advantages: TokenDataBatch | None = None,
+        old_log_probabilities: TokenDataBatch | None = None,
     ):
         self.tokens = tokens
         self.loss_masking_spans = loss_masking_spans
         self.chosen_spans = chosen_spans
         self.rejected_spans = rejected_spans
         self.image_patches = image_patches
+        self.advantages = advantages
+        self.old_log_probabilities = old_log_probabilities
 
     @classmethod
     def from_samples(cls, samples: typing.Iterable[LanguageModelSample]) -> typing.Self:
@@ -115,6 +138,8 @@ class LanguageModelBatch(Batch):
             _merge_optional(RangeBatch.from_samples, [sample.chosen_spans for sample in samples]),
             _merge_optional(RangeBatch.from_samples, [sample.rejected_spans for sample in samples]),
             _merge_optional(PatchBatch.from_samples, [sample.image_patches for sample in samples]),
+            _merge_optional(TokenDataBatch.from_samples, [sample.advantages for sample in samples]),
+            _merge_optional(TokenDataBatch.from_samples, [sample.old_log_probabilities for sample in samples]),
         )
 
     def crop(self, begin: int, end: int) -> typing.Self:
@@ -124,6 +149,8 @@ class LanguageModelBatch(Batch):
             _crop_optional(self.chosen_spans, begin, end),
             _crop_optional(self.rejected_spans, begin, end),
             _crop_optional(self.image_patches, begin, end),
+            _crop_optional(self.advantages, begin, end),
+            _crop_optional(self.old_log_probabilities, begin, end),
         )
 
     def to_device_(self, device: "torch.device | str"):
@@ -136,6 +163,10 @@ class LanguageModelBatch(Batch):
             self.rejected_spans.to_device_(device)
         if self.image_patches is not None:
             self.image_patches.to_device_(device)
+        if self.advantages is not None:
+            self.advantages.to_device_(device)
+        if self.old_log_probabilities is not None:
+            self.old_log_probabilities.to_device_(device)
 
 
 def _merge_optional[T](fn: typing.Callable[[typing.Iterable], T], args: typing.Iterable) -> T | None:
@@ -157,6 +188,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
     image_patches: MemmapReaderBaseConfig = Field()
+    advantages: MemmapReaderBaseConfig = Field()
+    old_log_probabilities: MemmapReaderBaseConfig = Field()
 
     def _validate(self) -> None:
         super()._validate()
@@ -192,6 +225,16 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             self.rejected_spans,
             RangeReaderConfig if self.preprocessing.use_preference_spans else NullReaderConfig,
         )
+        Assert.custom(
+            isinstance,
+            self.advantages,
+            TokenDataReaderConfig if self.preprocessing.use_advantages else NullReaderConfig,
+        )
+        Assert.custom(
+            isinstance,
+            self.old_log_probabilities,
+            TokenDataReaderConfig if self.preprocessing.use_old_log_probabilities else NullReaderConfig,
+        )
         if self.preprocessing.use_image_patches:
             Assert.custom(isinstance, self.image_patches, PatchReaderConfig)
             Assert.eq(self.image_patches.patch_shape, self.preprocessing.image_patches.patch_shape)
@@ -222,6 +265,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.chosen_spans.expected_buffer_size
             + self.rejected_spans.expected_buffer_size
             + self.image_patches.expected_buffer_size
+            + self.advantages.expected_buffer_size
+            + self.old_log_probabilities.expected_buffer_size
         )
 
     def get_metadata(self) -> dict[str, typing.Any]:
@@ -235,6 +280,10 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["rejected_spans"] = self.rejected_spans.get_metadata()
         if not isinstance(self.image_patches, NullReaderConfig):
             out["image_patches"] = self.image_patches.get_metadata()
+        if not isinstance(self.advantages, NullReaderConfig):
+            out["advantages"] = self.advantages.get_metadata()
+        if not isinstance(self.old_log_probabilities, NullReaderConfig):
+            out["old_log_probabilities"] = self.old_log_probabilities.get_metadata()
         return out
 
     @classmethod
@@ -256,6 +305,12 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         if "image_patches" in metadata[0]:
             out["image_patches"] = PatchReaderConfig.blend_metadata(
                 [metadata_["image_patches"] for metadata_ in metadata]
+            )
+        if "advantages" in metadata[0]:
+            out["advantages"] = RangeReaderConfig.blend_metadata([metadata_["advantages"] for metadata_ in metadata])
+        if "old_log_probabilities" in metadata[0]:
+            out["old_log_probabilities"] = RangeReaderConfig.blend_metadata(
+                [metadata_["old_log_probabilities"] for metadata_ in metadata]
             )
         return out
 
@@ -289,6 +344,10 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         if self._model_preprocessing.use_preference_spans:
             self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
             self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
+
+        if self._model_preprocessing.use_advantages:
+            self._advantages = self._config.advantages.get_reader(buffer)
+            self._old_log_probabilities = self._config.old_log_probabilities.get_reader(buffer)
 
         if self._model_preprocessing.use_image_patches:
             model_image_preprocessing: ImagePatchConfig = self._model_preprocessing.image_patches
@@ -334,6 +393,12 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
                 else None
             ),
             image_patches,
+            (self._advantages.get_document(index, begin, end) if self._model_preprocessing.use_advantages else None),
+            (
+                self._old_log_probabilities.get_document(index, begin, end)
+                if self._model_preprocessing.use_old_log_probabilities
+                else None
+            ),
         )
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -356,6 +421,10 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             metadata["rejected_spans"] = self._rejected_spans.get_split(begin_index, end_index)
         if hasattr(self, "_image_patches") and isinstance(self._image_patches, PatchReader):
             metadata["image_patches"] = self._image_patches.get_split(begin_index, end_index)
+        if hasattr(self, "_advantages") and isinstance(self._advantages, TokenDataReader):
+            metadata["advantages"] = self._advantages.get_split(begin_index, end_index)
+        if hasattr(self, "_old_log_probabilities") and isinstance(self._old_log_probabilities, TokenDataReader):
+            metadata["old_log_probabilities"] = self._old_log_probabilities.get_split(begin_index, end_index)
 
         return begin_index, end_index, metadata
 
@@ -379,6 +448,12 @@ class LanguageModelWriter(MemmapWriter):
             self._rejected_spans_writer = RangeWriter(self._path.joinpath("rejected_spans")).__enter__()
         if self._preprocessing_config.use_image_patches:
             self._image_patches_writer = PatchWriter(self._path.joinpath("image_patches")).__enter__()
+        if self._preprocessing_config.use_advantages:
+            self._advantages_writer = TokenDataWriter(self._path.joinpath("advantages")).__enter__()
+        if self._preprocessing_config.use_old_log_probabilities:
+            self._old_log_probabilities_writer = TokenDataWriter(
+                self._path.joinpath("old_log_probabilities")
+            ).__enter__()
         return self
 
     def write(self, document: LanguageModelSample):
@@ -403,6 +478,14 @@ class LanguageModelWriter(MemmapWriter):
             assert document.image_patches is not None
             self._image_patches_writer.write(document.image_patches)
 
+        if self._preprocessing_config.use_advantages:
+            assert document.advantages is not None
+            self._advantages_writer.write(document.advantages)
+
+        if self._preprocessing_config.use_old_log_probabilities:
+            assert document.old_log_probabilities is not None
+            self._old_log_probabilities_writer.write(document.old_log_probabilities)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._token_writer.__exit__(exc_type, exc_val, exc_tb)
         if self._preprocessing_config.use_loss_masking_spans:
@@ -412,6 +495,10 @@ class LanguageModelWriter(MemmapWriter):
             self._rejected_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         if self._preprocessing_config.use_image_patches:
             self._image_patches_writer.__exit__(exc_type, exc_val, exc_tb)
+        if self._preprocessing_config.use_advantages:
+            self._advantages_writer.__exit__(exc_type, exc_val, exc_tb)
+        if self._preprocessing_config.use_old_log_probabilities:
+            self._old_log_probabilities_writer.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
             # A dummy config so we can verify the begin and end offsets.
@@ -446,6 +533,20 @@ class LanguageModelWriter(MemmapWriter):
                     config.image_patches.begin,
                     config.image_patches.end,
                 )
+            if self._preprocessing_config.use_advantages:
+                _copy_chunked(
+                    self._path.joinpath("advantages"),
+                    self._stream,
+                    config.advantages.begin,
+                    config.advantages.end,
+                )
+            if self._preprocessing_config.use_old_log_probabilities:
+                _copy_chunked(
+                    self._path.joinpath("old_log_probabilities"),
+                    self._stream,
+                    config.old_log_probabilities.begin,
+                    config.old_log_probabilities.end,
+                )
 
         self._directory.cleanup()
         super().__exit__(exc_type, exc_val, exc_tb)
@@ -475,6 +576,16 @@ class LanguageModelWriter(MemmapWriter):
             offset = image_patches.end
         else:
             image_patches = NullReaderConfig()
+        if self._preprocessing_config.use_advantages:
+            advantages = self._advantages_writer.get_config(offset)
+            offset = advantages.end
+        else:
+            advantages = NullReaderConfig()
+        if self._preprocessing_config.use_old_log_probabilities:
+            old_log_probabilities = self._old_log_probabilities_writer.get_config(offset)
+            offset = old_log_probabilities.end
+        else:
+            old_log_probabilities = NullReaderConfig()
 
         if end is None:
             end = offset + len(LanguageModelReaderConfig.footer)
@@ -488,6 +599,8 @@ class LanguageModelWriter(MemmapWriter):
             rejected_spans=rejected_spans,
             image_patches=image_patches,
             preprocessing=self._preprocessing_config,
+            advantages=advantages,
+            old_log_probabilities=old_log_probabilities,
         )
 
 

@@ -15,6 +15,7 @@ from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.data.sample.language_model import LanguageModelSample
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
@@ -298,3 +299,49 @@ class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
             return LegacyMemmapDataset[SampleType](name, self.path, preprocessing)
         else:
             raise FileNotFoundError(self.path)
+
+
+REDIS_DATA_STREAM = "fast_llm_streaming"
+REDIS_GROUP_NAME = "fast_llm_group"
+
+
+@config_class()
+class RedisConfig(Config):
+    REDIS_FIELD: typing.ClassVar[str] = "data"
+    REDIS_FIELD_B: typing.ClassVar[bytes] = REDIS_FIELD.encode()
+    REDIS_GROUP_NAME: typing.ClassVar[str] = "fast_llm_group"
+    REDIS_GROUP_NAME_B: typing.ClassVar[bytes] = REDIS_GROUP_NAME.encode()
+
+    # TODO: Move elsewhere? (Also used in trainer) Get it from the trainer in sampling config?
+    host: str = Field(
+        default="localhost",
+        desc="Hostname or IP address of the Redis server.",
+        hint=FieldHint.core,
+    )
+
+    port: int = Field(
+        default=6379,
+        desc="Port number on which the Redis server is running.",
+        hint=FieldHint.core,
+    )
+
+    def get_client(self):
+        import redis
+
+        return redis.Redis(self.host, self.port)
+
+
+@config_class(dynamic_type={SampledDatasetConfig: "streaming"})
+class StreamingDatasetConfig[SampleType: LanguageModelSample](RedisConfig, SamplableDatasetConfig[SampleType]):
+    """
+    Configuration for a streaming dataset that reads training data from a Redis stream.
+    """
+
+    _abstract = False
+
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+        from fast_llm.data.dataset.streaming import RedisStreamingDataset
+
+        return RedisStreamingDataset[StreamingDatasetConfig, SampleType](self, sampling.distributed.config).sample(
+            sampling
+        )

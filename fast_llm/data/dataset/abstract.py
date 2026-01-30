@@ -5,6 +5,7 @@ from fast_llm.data.sample.abstract import Sample
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.config import SamplingData
+    from fast_llm.data.dataset.sampled import SampledIterableDataset
 
 
 class Dataset[SampleType: Sample](abc.ABC):
@@ -27,6 +28,14 @@ class Dataset[SampleType: Sample](abc.ABC):
             del state["__orig_class__"]
         return state
 
+    @property
+    def requires_broadcast(self) -> bool:
+        """
+        Some dataset schemes load the dataset on a batch-data-parallel group leaders,
+        then broadcast to the other devices.
+        """
+        return False
+
 
 class SampledDataset[SampleType: Sample](Dataset[SampleType]):
     """
@@ -48,3 +57,14 @@ class SamplableDataset[SampleType: Sample](Dataset[SampleType]):
     @abc.abstractmethod
     def sample(self, config: "SamplingData") -> SampledDataset[SampleType]:
         pass
+
+
+class SamplableIterableDataset[SampleType: Sample](SamplableDataset[SampleType]):
+    @abc.abstractmethod
+    def iterate(self, sampling: "SamplingData") -> typing.Iterator[SampleType]:
+        pass
+
+    def sample(self, config: "SamplingData") -> "SampledIterableDataset[SampleType]":
+        from fast_llm.data.dataset.sampled import SampledIterableDataset
+
+        return SampledIterableDataset(self, config)

@@ -151,6 +151,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed_config=self._config.model.distributed,
         )
         self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
+        self._callbacks = {
+            name: config.get_callback(self._multi_stage) for name, config in self._config.callbacks.items()
+        }
 
         if not self._is_evaluation_only:
             steps_per_split = {
@@ -286,6 +289,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._is_setup
         with self._wandb:
             self._run_training()
+        for callback in self._callbacks.values():
+            callback.train_end(self._completed_steps)
 
     def _run_training(self) -> None:
         self._prepare_training_state()
@@ -358,6 +363,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # TODO: Synchronization is probably unnecessary.
         safe_barrier(self._distributed.world_group, "train begin")
+
+        for callback in self._callbacks.values():
+            callback.run_begin(self._completed_steps)
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         start_time = time.perf_counter()
@@ -389,6 +398,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     skipped_iters += 1
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
 
+                for callback in self._callbacks.values():
+                    callback.step_end(self._completed_steps, reduced_losses, update_successful, train_metrics)
                 # Logging.
                 metrics = {}
                 if is_logging:

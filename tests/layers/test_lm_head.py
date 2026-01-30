@@ -9,8 +9,10 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
+from tests.layers.test_lm_losses import reference_grpo_loss
 from tests.utils.utils import get_base_model, get_stage
 
 SEQUENCE_LENGTH = 200
@@ -25,6 +27,7 @@ class LMHeadTestConfig:
     label_loss: bool | float = False
     distillation_loss: bool | float = False
     z_loss: bool | float = False
+    grpo_loss: bool | float = False
     logits_scale_factor: float = 1.0
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
@@ -38,7 +41,10 @@ class LMHeadTestConfig:
     def actual_label_loss(self):
         return (
             True
-            if self.label_loss is False and self.distillation_loss is False and self.z_loss is False
+            if self.label_loss is False
+            and self.distillation_loss is False
+            and self.z_loss is False
+            and self.grpo_loss is False
             else self.label_loss
         )
 
@@ -61,6 +67,10 @@ class LMHeadTestConfig:
             losses["z_loss"] = {"type": "z_loss"}
             if isinstance(self.z_loss, float):
                 losses["z_loss"]["weight"] = self.z_loss
+        if self.grpo_loss is not False:
+            losses["grpo_loss"] = {"type": "grpo"}
+            if isinstance(self.grpo_loss, float):
+                losses["grpo_loss"]["weight"] = self.grpo_loss
         if losses:
             head_config["losses"] = losses
 
@@ -108,7 +118,7 @@ class LMHeadTestConfig:
         }
         if self.loss_masking:
             kwargs[LanguageModelKwargs.loss_mask] = torch.randint(0, 2, label_shape, dtype=torch.bool, device=device)
-        if self.actual_label_loss is not False:
+        if self.actual_label_loss is not False or self.grpo_loss is not False:
             labels = torch.randint(
                 0,
                 VOCAB_SIZE,
@@ -127,6 +137,19 @@ class LMHeadTestConfig:
                 dtype=input_.dtype,
                 device=device,
             )
+
+        if self.grpo_loss is not False:
+            kwargs[LanguageModelLossKwargs.advantages] = torch.randn(
+                input_.shape[:-1],
+                dtype=torch.float32,
+                device=device,
+            )
+            kwargs[LanguageModelLossKwargs.old_log_probabilities] = torch.randn(
+                input_.shape[:-1],
+                dtype=torch.float32,
+                device=device,
+            )
+
         return input_, kwargs
 
     def get_reference_outputs(
@@ -152,7 +175,7 @@ class LMHeadTestConfig:
         total_loss = 0
         losses = {}
 
-        if self.actual_label_loss is not False:
+        if self.actual_label_loss is not False or self.grpo_loss is not False:
             if self.sequence_first:
                 labels = kwargs[LanguageModelKwargs.labels][
                     head._prediction_distance : head._prediction_distance + logits.size(0)
@@ -161,6 +184,7 @@ class LMHeadTestConfig:
                 labels = kwargs[LanguageModelKwargs.labels][
                     :, head._prediction_distance : head._prediction_distance + logits.size(1)
                 ]
+        if self.actual_label_loss is not False:
             label_loss = torch.nn.functional.cross_entropy(
                 logits.flatten(0, -2), labels.flatten(), reduction="none"
             ).mean()
@@ -186,6 +210,16 @@ class LMHeadTestConfig:
             z_loss = z_loss.mean()
             losses["z_loss"] = z_loss.detach()
             total_loss = total_loss + float(self.z_loss) * z_loss
+
+        if self.grpo_loss is not False:
+            grpo_loss = reference_grpo_loss(
+                logits,
+                labels,
+                kwargs[LanguageModelLossKwargs.advantages],
+                kwargs[LanguageModelLossKwargs.old_log_probabilities],
+            )
+            losses["grpo_loss"] = grpo_loss.detach()
+            total_loss = total_loss + float(self.grpo_loss) * grpo_loss
 
         total_loss.backward()
 
@@ -227,6 +261,7 @@ _add_configs("multi_token_prediction", prediction_heads=2)
 _add_configs("label_loss", label_loss=True)
 _add_configs("distillation_loss", distillation_loss=True)
 _add_configs("z_loss", z_loss=True)
+_add_configs("grpo_loss", grpo_loss=True)
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)

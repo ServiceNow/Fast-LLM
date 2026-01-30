@@ -53,6 +53,7 @@ class ModelTestingGroup(enum.StrEnum):
     generate = "generate"
     megatron = "megatron"
     distributed = "distributed"
+    streaming = "streaming"
 
 
 class ModelTestingGroupAction(enum.StrEnum):
@@ -391,6 +392,7 @@ update_and_add_testing_config(
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
     },
 )
 
@@ -731,6 +733,25 @@ update_and_add_testing_config(
     # TODO: Gradient accumulation works but comparison is broken.
     skip_tests=("sdp", "ms", GRAD_ACC),
     auto_model_class=transformers.AutoModelForImageTextToText,
+)
+
+update_and_add_testing_config(
+    # Tests mixture of experts, mixtral converter.
+    "llama",
+    "llama_grpo",
+    updates={
+        ("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}},
+        ("batch", "use_grpo_data"): True,
+    },
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
+    },
 )
 
 
