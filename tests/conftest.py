@@ -256,7 +256,7 @@ def pytest_runtest_call(item: pytest.Function):
     if torch.cuda.is_available():
         # Empty cache to check is cuda is still working (TODO: Is there a better way? Can we kill the worker?)
         try:
-            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         except RuntimeError:
             pytest.skip("Cuda runtime unavailable due to an error in an earlier test.")
     manager.handle_missing(item)
