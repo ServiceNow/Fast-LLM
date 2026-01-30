@@ -33,11 +33,11 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
     def _get_preprocessing_config(
         self, *, _return_dict: bool = False
     ) -> LanguageModelPreprocessingConfig | dict[str, typing.Any]:
+
         out = {
             "type": "language_model",
             "vocab_size": self._config.model.base_model.embeddings.vocab_size,
             "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
-            # OK since DPO is not supported for MTP.
-            "use_preference_spans": getattr(self._config.model.base_model.head, "enable_dpo", False),
+            "use_preference_spans": self._config.batch.use_preference_spans,
         }
         return out if _return_dict else LanguageModelPreprocessingConfig.from_dict(out)
