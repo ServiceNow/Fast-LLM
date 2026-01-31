@@ -128,7 +128,6 @@ def triton_cross_entropy_forward_backward(
     target_format: TargetFormat,
     entropy_loss_type: EntropyLossType,
     temperature: float = 1.0,
-    looped: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
