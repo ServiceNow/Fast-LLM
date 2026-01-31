@@ -128,6 +128,7 @@ def triton_cross_entropy_forward_backward(
     target_format: TargetFormat,
     entropy_loss_type: EntropyLossType,
     temperature: float = 1.0,
+    looped: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -143,7 +144,6 @@ def triton_cross_entropy_forward_backward(
     n_rows = logits.shape[:-1].numel()
     n_cols = logits.size(-1)
     block_size = triton.next_power_of_2(n_cols)
-    assert block_size <= TritonConfig.MAX_BLOCK_SIZE_BYTES
     num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
     losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
     # TODO: Safe to do inplace?
