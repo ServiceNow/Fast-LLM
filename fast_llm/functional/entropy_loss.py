@@ -14,6 +14,7 @@ def torch_entropy_loss_forward_backward(
     logits_scale_factor: float,
     target_format: TargetFormat,
     entropy_loss_type: EntropyLossType,
+    group: ProcessGroup | None = None,
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (), (*batch, vocab)
     """
@@ -21,7 +22,7 @@ def torch_entropy_loss_forward_backward(
     The cross-entropy kernels themselves are well-optimized, but the need for explicit casting
     and separate forward and backward kernels lead to poor performance.
     """
-
+    assert group is None
     # Torch methods require flattened batch dimension.
     target = target.flatten() if target_format == TargetFormat.labels else target.flatten(0, -2)
     if target_format == TargetFormat.labels:

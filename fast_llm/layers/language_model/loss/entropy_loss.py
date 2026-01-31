@@ -122,27 +122,14 @@ def entropy_loss_forward_backward(
         assert target.dtype.is_floating_point, target.dtype
         if loss_mask is not None:
             Assert.eq(loss_mask.shape, logits.shape[:-1])
-    if group:
-        Assert.eq(implementation, EntropyLossImplementation.fused)
-        return fused_entropy_loss_forward_backward(
-            logits,
-            target,
-            loss_mask,
-            grad_output,
-            logits_scale_factor,
-            target_format,
-            entropy_loss_type,
-            group,
-            temperature,
-        )
-    else:
-        return _ENTROPY_LOSS_IMPLEMENTATIONS[implementation](
-            logits,
-            target,
-            loss_mask,
-            grad_output,
-            logits_scale_factor,
-            target_format,
-            entropy_loss_type,
-            temperature=temperature,
-        )
+    return _ENTROPY_LOSS_IMPLEMENTATIONS[implementation](
+        logits,
+        target,
+        loss_mask,
+        grad_output,
+        logits_scale_factor,
+        target_format,
+        entropy_loss_type,
+        group,
+        temperature=temperature,
+    )
