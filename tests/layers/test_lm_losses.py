@@ -1,4 +1,3 @@
-import contextlib
 import pathlib
 import random
 
@@ -173,18 +172,17 @@ def _test_entropy_loss(
         # Triton implementation only supports cross-entropy.
         return
     assert TritonConfig.TRITON_ENABLED
-    with pytest.raises(AssertionError) if num_columns > 65536 else contextlib.nullcontext():
-        out_triton, grad_triton = entropy_loss_forward_backward(
-            logits=logits,
-            target=target,
-            loss_mask=loss_mask,
-            grad_output=grad_output,
-            logits_scale_factor=logits_scale_factor,
-            target_format=target_format,
-            entropy_loss_type=entropy_loss_type,
-            implementation=EntropyLossImplementation.triton,
-        )
-        _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref)
+    out_triton, grad_triton = entropy_loss_forward_backward(
+        logits=logits,
+        target=target,
+        loss_mask=loss_mask,
+        grad_output=grad_output,
+        logits_scale_factor=logits_scale_factor,
+        target_format=target_format,
+        entropy_loss_type=entropy_loss_type,
+        implementation=EntropyLossImplementation.triton,
+    )
+    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref)
 
 
 def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, group=None):
