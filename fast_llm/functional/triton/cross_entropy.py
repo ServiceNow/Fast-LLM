@@ -6,10 +6,13 @@ from fast_llm.utils import Assert
 
 
 @triton_jit()
-def triton_softmax_base_kernel(
+def triton_cross_entropy_forward_parallel_kernel(
     logits_ptr,
+    labels_ptr,
     max_logits_ptr,
     sum_exp_logits_ptr,
+    predicted_logits_ptr,
+    col_min: tl_constexpr,
     n_cols: tl_constexpr,
     logits_stride_0: tl_constexpr,
     logits_scale_factor: tl_constexpr,
@@ -29,6 +32,17 @@ def triton_softmax_base_kernel(
     exp_logits = tl.exp(logits - max_logits)
     sum_exp_logits = tl.sum(exp_logits, 0)
 
+    if labels_ptr is not None and predicted_logits_ptr is not None:
+        label_idx = tl.load(labels_ptr + block_idx) - col_min
+        if label_idx < 0 or label_idx >= n_cols:
+            # Loss mask
+            predicted_logits = 0.0
+        else:
+            predicted_logits = tl.load(logits_ptr + label_idx).to(tl.float32)
+            if logits_scale_factor != 1.0:
+                predicted_logits *= logits_scale_factor
+        tl.store(predicted_logits_ptr + block_idx, predicted_logits)
+
     tl.store(max_logits_ptr + block_idx, max_logits)
     tl.store(sum_exp_logits_ptr + block_idx, sum_exp_logits)
 
@@ -42,6 +56,7 @@ def triton_cross_entropy_forward_backward_kernel(
     max_logits_ptr,
     sum_exp_logits_ptr,
     grad_losses,
+    col_min: tl_constexpr,
     n_cols: tl_constexpr,
     logits_stride_0: tl_constexpr,
     grad_logits_stride_0: tl_constexpr,
@@ -68,26 +83,32 @@ def triton_cross_entropy_forward_backward_kernel(
     else:
         sum_exp_logits = tl.load(sum_exp_logits_ptr + block_idx)
 
-    label_idx = tl.load(labels_ptr + block_idx)
+    label_idx = tl.load(labels_ptr + block_idx) - col_min
 
-    if label_idx < 0:
-        # Loss mask
-        loss = 0.0
-    else:
-        label_logits = tl.load(logits_ptr + label_idx).to(tl.float32)
-        if logits_scale_factor != 1.0:
-            label_logits *= logits_scale_factor
-        loss = tl.log(sum_exp_logits) + max_logits - label_logits
-    tl.store(losses_ptr + block_idx, loss)
+    if losses_ptr is not None:
+        if label_idx < 0 or label_idx >= n_cols:
+            # Loss mask
+            loss = 0.0
+        else:
+            predicted_logits = tl.load(logits_ptr + label_idx).to(tl.float32)
+            if logits_scale_factor != 1.0:
+                predicted_logits *= logits_scale_factor
+            loss = tl.log(sum_exp_logits) + max_logits - predicted_logits
+        tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
-        if label_idx < 0:
+        if label_idx < -col_min:
             grad_losses = 0.0
+        elif logits_scale_factor != 1.0:
+            grad_losses *= logits_scale_factor
         grad_base = exp_logits / sum_exp_logits
-        grad_logits = grad_losses * tl.where(col_offsets == label_idx, grad_base - 1.0, grad_base)
-        if logits_scale_factor != 1.0:
-            grad_logits *= logits_scale_factor
-        tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
+        if label_idx < 0 or label_idx >= n_cols:
+            grad_logits = grad_base
+        else:
+            grad_logits = tl.where(col_offsets == label_idx, grad_base - 1.0, grad_base)
+        tl.store(
+            grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits * grad_losses, mask=mask
+        )
 
 
 @triton_jit()
@@ -155,6 +176,25 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
 
 
+@torch.compile
+def _rescale_sum_exp_logits(
+    sum_exp_logits: torch.Tensor,
+    local_max_logits: torch.Tensor,
+    max_logits: torch.Tensor,
+) -> torch.Tensor:
+    return sum_exp_logits * (local_max_logits - max_logits).exp()
+
+
+@torch.compile
+def _calculate_loss(
+    predicted_logits: torch.Tensor,
+    target: torch.Tensor,
+    sum_exp_logits: torch.Tensor,
+    max_logits: torch.Tensor,
+) -> torch.Tensor:
+    return torch.where(target.flatten() >= 0, sum_exp_logits.log() + max_logits - predicted_logits, 0).mean()
+
+
 def triton_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -181,45 +221,69 @@ def triton_cross_entropy_forward_backward(
     n_cols = logits.size(-1)
     block_size = triton.next_power_of_2(n_cols)
     num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
-    losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
     # TODO: Safe to do inplace?
     grad_logits = None if grad_output is None else torch.empty_like(logits)
     if target_format == TargetFormat.labels:
         if group is None:
-            max_logits = sum_exp_logits = None
-        else:
-            local_max_logits = torch.empty_like(losses)
-            sum_exp_logits = torch.empty_like(losses)
-            triton_softmax_base_kernel[(n_rows,)](
+            losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
+            triton_cross_entropy_forward_backward_kernel[(n_rows,)](
                 logits,
+                target,
+                grad_logits,
+                losses,
+                None,
+                None,
+                None if grad_output is None else grad_output / n_rows,
+                0,
+                n_cols,
+                logits.stride(-2),
+                None if grad_output is None else grad_logits.stride(-2),
+                logits_scale_factor,
+                block_size=block_size,
+                num_warps=num_warps,
+            )
+            loss = losses.mean()
+        else:
+            predicted_logits = torch.empty(n_rows, dtype=torch.float, device=logits.device)
+            local_max_logits = torch.empty_like(predicted_logits)
+            sum_exp_logits = torch.empty_like(predicted_logits)
+            triton_cross_entropy_forward_parallel_kernel[(n_rows,)](
+                logits,
+                target,
                 local_max_logits,
                 sum_exp_logits,
+                predicted_logits,
+                n_cols * group.rank(),
                 n_cols,
                 logits.stride(-2),
                 logits_scale_factor,
                 block_size=block_size,
             )
             max_logits = local_max_logits.clone()
-            torch.distributedall_reduce(max_logits, op=torch.distributed.ReduceOp.MAX, group=group)
-            sum_exp_logits = sum_exp_logits * (local_max_logits - max_logits).exp()
-            torch.distributedall_reduce(sum_exp_logits, op=torch.distributed.ReduceOp.SUM, group=group)
-        triton_cross_entropy_forward_backward_kernel[(n_rows,)](
-            logits,
-            target,
-            grad_logits,
-            losses,
-            max_logits,
-            sum_exp_logits,
-            None if grad_output is None else grad_output / n_rows,
-            n_cols,
-            logits.stride(-2),
-            None if grad_output is None else grad_logits.stride(-2),
-            logits_scale_factor,
-            block_size=block_size,
-            num_warps=num_warps,
-        )
+            torch.distributed.all_reduce(max_logits, op=torch.distributed.ReduceOp.MAX, group=group)
+            sum_exp_logits = _rescale_sum_exp_logits(sum_exp_logits, local_max_logits, max_logits)
+            torch.distributed.all_reduce(sum_exp_logits, op=torch.distributed.ReduceOp.SUM, group=group)
+            torch.distributed.all_reduce(predicted_logits, op=torch.distributed.ReduceOp.SUM, group=group)
+            loss = _calculate_loss(predicted_logits, target, sum_exp_logits, max_logits)
+            triton_cross_entropy_forward_backward_kernel[(n_rows,)](
+                logits,
+                target,
+                grad_logits,
+                None,
+                max_logits,
+                sum_exp_logits,
+                None if grad_output is None else grad_output / n_rows,
+                n_cols * group.rank(),
+                n_cols,
+                logits.stride(-2),
+                None if grad_output is None else grad_logits.stride(-2),
+                logits_scale_factor,
+                block_size=block_size,
+                num_warps=num_warps,
+            )
     else:
         assert group is None
+        losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
         if loss_mask is not None:
             assert loss_mask.is_contiguous()
         triton_cross_entropy_from_distribution_forward_backward_kernel[(n_rows,)](
@@ -238,4 +302,5 @@ def triton_cross_entropy_forward_backward(
             num_warps=num_warps,
             from_logits=target_format == TargetFormat.logits,
         )
-    return losses.mean(), grad_logits
+        loss = losses.mean()
+    return loss, grad_logits
