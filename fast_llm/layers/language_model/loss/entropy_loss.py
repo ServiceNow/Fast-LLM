@@ -106,6 +106,7 @@ def entropy_loss_forward_backward(
     temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
+    **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Select the appropriate implementation of cross-entropy.
@@ -132,4 +133,5 @@ def entropy_loss_forward_backward(
         entropy_loss_type,
         group,
         temperature=temperature,
+        **kwargs,
     )

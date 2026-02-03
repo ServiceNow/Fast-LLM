@@ -6,6 +6,32 @@ from fast_llm.utils import Assert
 
 
 @triton_jit()
+def triton_fused_softmax_base(
+    logits_ptr,
+    n_cols: tl_constexpr,
+    logits_scale_factor: tl_constexpr,
+    block_size: tl_constexpr,
+):
+    for col_offset in tl.static_range(0, n_cols, block_size):
+        col_offsets = tl.arange(col_offset, col_offset + block_size)
+        mask = col_offsets < n_cols
+        logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+        if logits_scale_factor != 1.0:
+            logits *= logits_scale_factor
+
+        if col_offset == 0:
+            max_logits = tl.max(logits, 0)
+            exp_logits = tl.exp(logits - max_logits)
+            sum_exp_logits = tl.sum(exp_logits, 0)
+        else:
+            new_max_logits = tl.maximum(tl.max(logits, 0), max_logits)
+            exp_logits = tl.exp(logits - new_max_logits)
+            sum_exp_logits = tl.sum(exp_logits, 0) + sum_exp_logits * tl.exp(max_logits - new_max_logits)
+            max_logits = new_max_logits
+    return exp_logits, sum_exp_logits, max_logits, mask
+
+
+@triton_jit()
 def triton_cross_entropy_forward_parallel_kernel(
     logits_ptr,
     labels_ptr,
@@ -20,17 +46,11 @@ def triton_cross_entropy_forward_parallel_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
-    col_offsets = tl.arange(0, block_size)
     logits_ptr = logits_ptr + block_idx * logits_stride_0
-    mask = col_offsets < n_cols
 
-    logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
-    if logits_scale_factor != 1.0:
-        logits *= logits_scale_factor
-
-    max_logits = tl.max(logits, 0)
-    exp_logits = tl.exp(logits - max_logits)
-    sum_exp_logits = tl.sum(exp_logits, 0)
+    exp_logits, sum_exp_logits, max_logits, mask = triton_fused_softmax_base(
+        logits_ptr, n_cols, logits_scale_factor, block_size
+    )
 
     if labels_ptr is not None and predicted_logits_ptr is not None:
         label_idx = tl.load(labels_ptr + block_idx) - col_min
@@ -65,22 +85,14 @@ def triton_cross_entropy_forward_backward_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
-    col_offsets = tl.arange(0, block_size)
     logits_ptr = logits_ptr + block_idx * logits_stride_0
-    mask = col_offsets < n_cols
 
-    logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
-    if logits_scale_factor != 1.0:
-        logits *= logits_scale_factor
-
-    if max_logits_ptr is None:
-        max_logits = tl.max(logits, 0)
+    if max_logits_ptr is None or sum_exp_logits_ptr is None:
+        exp_logits, sum_exp_logits, max_logits, mask = triton_fused_softmax_base(
+            logits_ptr, n_cols, logits_scale_factor, block_size
+        )
     else:
         max_logits = tl.load(max_logits_ptr + block_idx)
-    exp_logits = tl.exp(logits - max_logits)
-    if sum_exp_logits_ptr is None:
-        sum_exp_logits = tl.sum(exp_logits, 0)
-    else:
         sum_exp_logits = tl.load(sum_exp_logits_ptr + block_idx)
 
     label_idx = tl.load(labels_ptr + block_idx) - col_min
@@ -89,6 +101,7 @@ def triton_cross_entropy_forward_backward_kernel(
         if label_idx < 0 or label_idx >= n_cols:
             # Loss mask
             loss = 0.0
+            predicted_logits = 0.0
         else:
             predicted_logits = tl.load(logits_ptr + label_idx).to(tl.float32)
             if logits_scale_factor != 1.0:
@@ -97,18 +110,28 @@ def triton_cross_entropy_forward_backward_kernel(
         tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
-        if label_idx < -col_min:
-            grad_losses = 0.0
-        elif logits_scale_factor != 1.0:
-            grad_losses *= logits_scale_factor
-        grad_base = exp_logits / sum_exp_logits
-        if label_idx < 0 or label_idx >= n_cols:
-            grad_logits = grad_base
-        else:
-            grad_logits = tl.where(col_offsets == label_idx, grad_base - 1.0, grad_base)
-        tl.store(
-            grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits * grad_losses, mask=mask
-        )
+        # Run in reverse order to maximize input and cache reuse.
+        for col_offset in tl.static_range((n_cols - 1) // block_size * block_size, -1, -block_size):
+            if max_logits_ptr is None or sum_exp_logits_ptr is None or col_offset != n_cols - block_size:
+                col_offsets = tl.arange(col_offset, col_offset + block_size)
+                mask = col_offsets < n_cols
+                logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+                if logits_scale_factor != 1.0:
+                    logits *= logits_scale_factor
+                exp_logits = tl.exp(logits - max_logits)
+
+            if label_idx < -col_min:
+                grad_losses = 0.0
+            elif logits_scale_factor != 1.0:
+                grad_losses *= logits_scale_factor
+            grad_base = exp_logits / sum_exp_logits
+            if label_idx < 0 or label_idx >= n_cols:
+                grad_logits = grad_base
+            else:
+                grad_logits = tl.where(col_offsets == label_idx, grad_base - 1.0, grad_base)
+            tl.store(
+                grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits * grad_losses, mask=mask
+            )
 
 
 @triton_jit()
@@ -205,6 +228,8 @@ def triton_cross_entropy_forward_backward(
     entropy_loss_type: EntropyLossType,
     group: torch.distributed.ProcessGroup | None = None,
     temperature: float = 1.0,
+    block_size: int | None = None,
+    num_warps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -219,8 +244,10 @@ def triton_cross_entropy_forward_backward(
     assert target.is_contiguous()
     n_rows = logits.shape[:-1].numel()
     n_cols = logits.size(-1)
-    block_size = triton.next_power_of_2(n_cols)
-    num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
+    if block_size is None:
+        block_size = min(triton.next_power_of_2(n_cols), 32768)
+    if num_warps is None:
+        num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
     # TODO: Safe to do inplace?
     grad_logits = None if grad_output is None else torch.empty_like(logits)
     if target_format == TargetFormat.labels:
