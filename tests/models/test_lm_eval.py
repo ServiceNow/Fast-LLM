@@ -33,8 +33,8 @@ def get_lm_eval_config(tokenizer_path, monkeypatch):
 
         task_dir = pathlib.Path(lm_eval.tasks.__file__).parent.resolve()
         return [
-            f"data.tokenizer.path={tokenizer_path}",
-            f"model.base_model.vocab_size=49157",
+            f"training.evaluators.evaluation_test.evaluator.tokenizer.path={tokenizer_path}",
+            f"model.base_model.embeddings.vocab_size=49157",
             "training.evaluators.evaluation_test.interval=2",
             "training.evaluators.evaluation_test.evaluator.type=lm_eval",
             "training.evaluators.evaluation_test.evaluator.cli_args="
