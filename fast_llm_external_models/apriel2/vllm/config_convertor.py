@@ -85,52 +85,15 @@ def register():
 
     Safe to call multiple times - skips registration if already done.
     """
-    # Register config convertors (idempotent).
-    #
-    # Apriel2 has two HuggingFace config "model_type" variants:
-    # - apriel2_text: text-only config
-    # - apriel2: multimodal config (text + vision fields), but the text decoder
-    #   uses the same nested structure. vLLM still needs the text decoder arch
-    #   info even when multimodal fields exist.
-    if "apriel2_text" not in MODEL_ARCH_CONFIG_CONVERTORS:
-        MODEL_ARCH_CONFIG_CONVERTORS["apriel2_text"] = Apriel2TextModelArchConfigConvertor
-    if "apriel2" not in MODEL_ARCH_CONFIG_CONVERTORS:
-        MODEL_ARCH_CONFIG_CONVERTORS["apriel2"] = Apriel2TextModelArchConfigConvertor
+    # Skip if already registered
+    if "apriel2_text" in MODEL_ARCH_CONFIG_CONVERTORS:
+        return
 
-    # Register HuggingFace config classes for model_type -> config mapping.
-    # vLLM loads configs with `trust_remote_code` ignored, so without this
-    # Transformers would fall back to a generic PretrainedConfig and `decoder`
-    # overrides would replace (not merge) nested dicts.
-    try:
-        from transformers import AutoConfig
-
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config as HFApriel2Config
-        from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2TextConfig as HFApriel2TextConfig
-
-        AutoConfig.register("apriel2_text", HFApriel2TextConfig, exist_ok=True)
-        AutoConfig.register("apriel2", HFApriel2Config, exist_ok=True)
-
-        # Prefer our config classes even when the checkpoint directory contains
-        # `configuration_*.py` and vLLM is started with `--trust-remote-code`.
-        # vLLM's HFConfigParser checks its own registry first, so this prevents
-        # loading an older config implementation from the checkpoint export.
-        try:
-            from vllm.transformers_utils.config import _CONFIG_REGISTRY
-
-            _CONFIG_REGISTRY["apriel2_text"] = HFApriel2TextConfig
-            _CONFIG_REGISTRY["apriel2"] = HFApriel2Config
-        except Exception:
-            pass
-    except Exception:
-        # Best-effort only; vLLM can still proceed with the generic config.
-        pass
+    # Register config convertor (only apriel2_text, not apriel2 with vision encoder)
+    MODEL_ARCH_CONFIG_CONVERTORS["apriel2_text"] = Apriel2TextModelArchConfigConvertor
 
     # Register model class
-    # Note: some exported checkpoints may list "Apriel2ForConditionalGeneration"
-    # in config.json's "architectures". vLLM's model selection is driven by that
-    # field, so we alias it to the same vLLM implementation for text-only usage.
-    for arch in ("Apriel2ForCausalLM", "Apriel2ForConditionalGeneration"):
-        ModelRegistry.register_model(
-            arch,
-            "fast_llm_external_models.apriel2.vllm:Apriel2ForCausalLM",
-        )
+    ModelRegistry.register_model(
+        "Apriel2ForCausalLM",
+        "fast_llm_external_models.apriel2.vllm:Apriel2ForCausalLM",
+    )
