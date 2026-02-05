@@ -121,7 +121,7 @@ def fused_softmax_base(
 
 
 @torch.compile
-def _fused_reverse_kl_base(
+def _fused_reverse_kl_base_from_distribution(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch, vocab)
     grad_output: float | None,
@@ -161,7 +161,7 @@ def _fused_reverse_kl_base(
 
 
 @torch.compile
-def _fused_cross_entropy_base(
+def _fused_cross_entropy_base_from_distribution(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch, vocab)
     grad_output: float | None,
@@ -302,7 +302,7 @@ def fused_entropy_loss_forward_backward(
             group,
         )
     elif entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl):
-        per_sample_loss, grad = _fused_cross_entropy_base(
+        per_sample_loss, grad = _fused_cross_entropy_base_from_distribution(
             logits,
             target,
             grad_output,
@@ -313,7 +313,7 @@ def fused_entropy_loss_forward_backward(
             return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
         )
     elif entropy_loss_type == EntropyLossType.reverse_kl:
-        per_sample_loss, grad = _fused_reverse_kl_base(
+        per_sample_loss, grad = _fused_reverse_kl_base_from_distribution(
             logits,
             target,
             grad_output,
