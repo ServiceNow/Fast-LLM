@@ -146,6 +146,7 @@ def triton_predicted_logits_from_distribution(
     target_logits_scale_factor: tl_constexpr = 1.0,
     logits_scale_factor: tl_constexpr = 1.0,
     unscaled_probabilities: tl_constexpr = False,  # Skip division by sum_exp_logits in the logits case.
+    return_kl_loss: tl.constexpr = False,
 ):
     for col_offset in tl.static_range(0, n_cols, block_size):
         col_offsets = tl_arange(col_offset, col_offset + block_size)
@@ -169,10 +170,14 @@ def triton_predicted_logits_from_distribution(
                 target_max_logits = tl.max(target_logits, 0)
                 target_exp_logits = tl.exp(target_logits - target_max_logits)
                 target_sum_exp_logits = tl.sum(target_exp_logits, 0)
-                predicted_logits = tl.sum(tl.where(mask, target_exp_logits * logits, 0))
+                # entropy = sum(logits*exp_logits)/sum_exp_logits - log_sum_exp_logits
+                # `log_sum_exp_logits` term and division by `sum_exp_logits` kept for later,
+                logits_shifted = logits - target_logits if return_kl_loss else logits
+                predicted_logits = tl.sum(tl.where(mask, target_exp_logits * logits_shifted, 0))
             else:
                 target = tl.load(target_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
-                predicted_logits = tl.sum(tl.where(mask, target * logits, 0))
+                logits_shifted = logits - tl.log(target) if return_kl_loss else logits
+                predicted_logits = tl.sum(tl.where(mask, target * logits_shifted, 0))
                 target_max_logits = None
                 target_sum_exp_logits = None
         else:
@@ -186,18 +191,22 @@ def triton_predicted_logits_from_distribution(
                 target_sum_exp_logits = tl.sum(target_exp_logits, 0) + target_sum_exp_logits * tl.exp(
                     target_max_logits - target_new_max_logits
                 )
+                logits_shifted = logits - target_logits if return_kl_loss else logits
                 predicted_logits = predicted_logits * tl.exp(target_max_logits - target_new_max_logits) + tl.sum(
-                    tl.where(mask, target_exp_logits * logits, 0)
+                    tl.where(mask, target_exp_logits * logits_shifted, 0)
                 )
                 target_max_logits = target_new_max_logits
             else:
-                predicted_logits += tl.sum(tl.where(mask, target * logits, 0))
+                logits_shifted = logits - tl.log(target) if return_kl_loss else logits
+                predicted_logits += tl.sum(tl.where(mask, target * logits_shifted, 0))
 
     if from_logits:
         target = target_exp_logits
         if not unscaled_probabilities:
             predicted_logits /= target_sum_exp_logits
             target /= target_sum_exp_logits
+            if return_kl_loss:
+                predicted_logits = predicted_logits + tl.log(target_sum_exp_logits) + target_max_logits
 
     return predicted_logits, exp_logits, sum_exp_logits, max_logits, target_sum_exp_logits, target_max_logits, target
 
@@ -219,6 +228,7 @@ def triton_cross_entropy_from_distribution_forward_parallel_kernel(
     from_logits: tl_constexpr = True,
     logits_scale_factor: tl_constexpr = 1.0,
     target_logits_scale_factor: tl_constexpr = 1.0,
+    return_kl_loss: tl.constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -240,6 +250,7 @@ def triton_cross_entropy_from_distribution_forward_parallel_kernel(
             logits_scale_factor=logits_scale_factor,
             target_logits_scale_factor=target_logits_scale_factor,
             unscaled_probabilities=True,
+            return_kl_loss=return_kl_loss,
         )
     )
     if predicted_logits_ptr is not None:
@@ -275,6 +286,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     grad_logits_stride_0: tl_constexpr = None,
     logits_scale_factor: tl_constexpr = 1.0,
     target_logits_scale_factor: tl_constexpr = 1.0,
+    return_kl_loss: tl.constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -303,6 +315,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
                 from_logits=from_logits,
                 logits_scale_factor=logits_scale_factor,
                 target_logits_scale_factor=target_logits_scale_factor,
+                return_kl_loss=return_kl_loss,
             )
         )
     else:
@@ -390,7 +403,12 @@ def _cross_entropy_loss_from_distribution(
     loss_mask: torch.Tensor | None,
     sum_exp_logits: torch.Tensor,
     max_logits: torch.Tensor,
+    target_sum_exp_logits: torch.Tensor | None,
+    target_max_logits: torch.Tensor | None,
+    return_kl_loss: bool = False,
 ) -> torch.Tensor:
+    if return_kl_loss:
+        predicted_logits = predicted_logits + target_sum_exp_logits.log() + target_max_logits
     per_sample_losses = sum_exp_logits.log() + max_logits - predicted_logits
     if loss_mask is not None:
         per_sample_losses = torch.where(loss_mask.flatten(), per_sample_losses, 0)
@@ -417,7 +435,7 @@ def triton_cross_entropy_forward_backward(
     TODO: Better handling of `grad_output = None`
     """
     assert TritonConfig.TRITON_ENABLED
-    Assert.eq(entropy_loss_type, EntropyLossType.cross_entropy)
+    Assert.incl(entropy_loss_type, (EntropyLossType.cross_entropy, EntropyLossType.forward_kl))
     # TODO: Improve assumptions.
     assert logits.is_contiguous()
     assert target.is_contiguous()
@@ -500,6 +518,7 @@ def triton_cross_entropy_forward_backward(
                 target_stride_0=target.stride(-2),
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
+                return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
                 **kwargs,
                 **backward_kwargs,
             )
@@ -526,6 +545,7 @@ def triton_cross_entropy_forward_backward(
                 target_stride_0=target.stride(-2),
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
+                return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
                 **kwargs,
                 **backward_kwargs,
             )
@@ -541,7 +561,16 @@ def triton_cross_entropy_forward_backward(
                 target_max_logits = None
             torch.distributed.all_reduce(predicted_logits, op=torch.distributed.ReduceOp.SUM, group=group)
 
-            loss = _cross_entropy_loss_from_distribution(predicted_logits, loss_mask, sum_exp_logits, max_logits)
+            loss = _cross_entropy_loss_from_distribution(
+                predicted_logits,
+                loss_mask,
+                sum_exp_logits,
+                max_logits,
+                target_sum_exp_logits=target_sum_exp_logits,
+                target_max_logits=target_max_logits,
+                return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl
+                and target_format == TargetFormat.logits,
+            )
             triton_cross_entropy_from_distribution_forward_backward_kernel[(n_rows,)](
                 logits,
                 target,

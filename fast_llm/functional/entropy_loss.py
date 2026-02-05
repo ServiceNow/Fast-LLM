@@ -183,7 +183,7 @@ def _fused_cross_entropy_base_from_distribution(
     # KL loss = mean(log(sum_exp_logits) - sum(probabilities * (logits - log_probabilities))
     if return_kl_loss:
         if target_format == TargetFormat.logits:
-            target_log_probability = target_logits_norm - sum_exp_target_logits.log().unsqueeze(-1)
+            target_log_probability = target_logits_norm
         else:
             target_log_probability = torch.log(target)
         logits_norm = logits_norm - target_log_probability
@@ -194,6 +194,8 @@ def _fused_cross_entropy_base_from_distribution(
         all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
+    if return_kl_loss and target_format == TargetFormat.logits:
+        per_sample_loss = per_sample_loss - sum_exp_target_logits.log()
 
     if grad_output is None:
         grad = None

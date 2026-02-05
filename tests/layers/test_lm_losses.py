@@ -168,7 +168,7 @@ def _test_entropy_loss(
         group=group,
     )
 
-    if entropy_loss_type != EntropyLossType.cross_entropy or not triton_available:
+    if entropy_loss_type == EntropyLossType.reverse_kl or not triton_available:
         # Triton implementation only supports cross-entropy.
         return
     assert TritonConfig.TRITON_ENABLED
@@ -219,7 +219,7 @@ def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, los
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size"), _LOSS_PARAMETERS
 )
-@pytest.mark.parametrize("target_format", (TargetFormat.logits,))
+@pytest.mark.parametrize("target_format", TargetFormat)
 @pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
 def test_entropy_loss(
     batch_shape,
