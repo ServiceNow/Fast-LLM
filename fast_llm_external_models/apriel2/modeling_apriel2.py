@@ -19,27 +19,49 @@ from transformers.models.llama.modeling_llama import eager_attention_forward
 from transformers.models.mistral.modeling_mistral import MistralMLP, MistralRMSNorm, apply_rotary_pos_emb
 from transformers.processing_utils import Unpack
 from transformers.utils import logging
-from transformers.utils.import_utils import (
-    is_causal_conv1d_available,
-    is_mamba_ssm_available,
-    is_torch_flex_attn_available,
-)
 
 from .configuration_apriel2 import Apriel2Config, Apriel2TextConfig
 
-# GDN implementation - matches Fast-LLM's gdn.py exactly
+# =============================================================================
+# Kernel implementation flags (for debugging vLLM vs FLA/mamba_ssm differences)
+# =============================================================================
+USE_VLLM_CONV = False
+USE_VLLM_GDN_OPS = False
+USE_VLLM_GATED_NORM = False
+USE_VLLM_MAMBA_OPS = False  # Not yet implemented in vLLM wrapper
+
+# Causal conv1d
 try:
-    from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+    if USE_VLLM_CONV:
+        from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn
+    else:
+        from causal_conv1d import causal_conv1d_fn
+    # causal_conv1d_update always from causal_conv1d (vLLM's has different signature)
+    from causal_conv1d import causal_conv1d_update
+except ImportError:
+    causal_conv1d_fn = None
+    causal_conv1d_update = None
+
+# GDN ops (chunk_gated_delta_rule, fused_recurrent_gated_delta_rule)
+try:
+    if USE_VLLM_GDN_OPS:
+        from vllm.model_executor.layers.fla.ops import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+    else:
+        from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 except ImportError:
     chunk_gated_delta_rule = None
     fused_recurrent_gated_delta_rule = None
 
+# Gated RMSNorm
 try:
-    from fla.modules.fused_norm_gate import rms_norm_gated
+    if USE_VLLM_GATED_NORM:
+        from vllm.model_executor.layers.fla.ops.layernorm_guard import rmsnorm_fn as rms_norm_gated
+    else:
+        from fla.modules.fused_norm_gate import rms_norm_gated
 except ImportError:
     rms_norm_gated = None
 
-# KDA implementation - matches Fast-LLM's kda.py
+# KDA ops
 try:
     from fla.ops.kda import chunk_kda, fused_recurrent_kda
     from fla.ops.kda.gate import fused_kda_gate
@@ -48,25 +70,16 @@ except ImportError:
     fused_recurrent_kda = None
     fused_kda_gate = None
 
-
+# Mamba/SSM ops
 try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
-    from causal_conv1d import causal_conv1d_update as _causal_conv1d_update
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+    if USE_VLLM_MAMBA_OPS:
+        raise ImportError("vLLM mamba ops not yet wrapped")
+    else:
+        from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+        from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except ImportError:
-    _causal_conv1d_fn = None
-    _causal_conv1d_update = None
     selective_scan_fn = None
     selective_state_update = None
-
-
-is_fast_path_available = is_mamba_ssm_available() and is_causal_conv1d_available()
-
-if is_torch_flex_attn_available():
-    from torch.nn.attention.flex_attention import BlockMask
-else:
-    BlockMask = torch.Tensor
 
 logger = logging.get_logger(__name__)
 
@@ -520,10 +533,10 @@ class CausalConv1d(nn.Conv1d):
         activation: str = "silu",
         **kwargs,
     ):
-        if not is_fast_path_available:
+        if causal_conv1d_fn is None:
             raise ImportError(
-                "CausalConv1d requires CUDA kernels from causal_conv1d and mamba_ssm. "
-                "Install with: pip install causal-conv1d mamba-ssm"
+                "CausalConv1d requires CUDA kernels from causal_conv1d. "
+                "Install with: pip install causal-conv1d"
             )
         # Remove padding from kwargs since we handle it ourselves
         kwargs.pop("padding", None)
@@ -564,6 +577,55 @@ class CausalConv1d(nn.Conv1d):
         batch_size, dim, seq_len = x.shape
         state_len = self.kernel_size[0] - 1
 
+        if USE_VLLM_CONV:
+            # vLLM expects x as [dim, total_tokens]
+            # x shape: [batch, dim, seq]
+            # x_flat[:, t] should equal x[batch_for_t, :, seq_for_t]
+            # permute to [dim, batch, seq], then reshape to [dim, batch*seq]
+            x_flat = x.permute(1, 0, 2).reshape(dim, batch_size * seq_len).contiguous()
+
+            # Create conv_states buffer: [batch, dim, state_len]
+            # vLLM requires stride(1) == 1 (dim dimension contiguous)
+            # Create as [batch, state_len, dim] contiguous, then transpose to get right strides
+            conv_states = x.new_zeros(batch_size, state_len, dim).transpose(1, 2)
+
+            # Create query_start_loc: cumulative sequence lengths
+            # For batch_size sequences each of length seq_len
+            query_start_loc = torch.arange(
+                0, batch_size * seq_len + 1, seq_len,
+                dtype=torch.int32, device=x.device
+            )
+
+            # has_initial_state: all False (no prior state)
+            has_initial_state = torch.zeros(batch_size, dtype=torch.bool, device=x.device)
+
+            # cache_indices: identity mapping
+            cache_indices = torch.arange(batch_size, dtype=torch.int32, device=x.device)
+
+            # Call vLLM's causal_conv1d_fn
+            out_flat = causal_conv1d_fn(
+                x_flat,
+                self._weight,
+                self.bias,
+                conv_states,
+                query_start_loc,
+                cache_indices=cache_indices,
+                has_initial_state=has_initial_state,
+                activation=self._activation,
+            )
+
+            # Convert back: [dim, total_tokens] -> [batch, dim, seq]
+            # out_flat shape: [dim, batch*seq]
+            # reshape to [dim, batch, seq], then permute to [batch, dim, seq]
+            out = out_flat.reshape(dim, batch_size, seq_len).permute(1, 0, 2)
+
+            if return_final_state:
+                # conv_states was updated in-place by vLLM's implementation
+                # Return it in the expected format: [batch, dim, state_len]
+                return out, conv_states
+            return out
+
+        # FLA/causal_conv1d path below
         # Edge case: seq_len==1 with return_final_state
         # CUDA kernel limitation: return_final_states requires channel-last layout,
         # which is impossible when seq_len==1. Handle via update() with zero-init state.
@@ -573,7 +635,7 @@ class CausalConv1d(nn.Conv1d):
                 # Create channel-last state: stride(1) == 1
                 conv_state = x.new_zeros(batch_size, state_len, dim).transpose(1, 2)
             # Use update() which handles single tokens efficiently
-            out = _causal_conv1d_update(
+            out = causal_conv1d_update(
                 x.squeeze(2),  # [batch, dim, 1] -> [batch, dim]
                 conv_state,
                 self._weight,
@@ -596,7 +658,7 @@ class CausalConv1d(nn.Conv1d):
         else:
             final_state = None
 
-        out = _causal_conv1d_fn(
+        out = causal_conv1d_fn(
             x,
             self._weight,
             bias=self.bias,
@@ -633,7 +695,7 @@ class CausalConv1d(nn.Conv1d):
         Returns:
             Output tensor [batch, dim]
         """
-        return _causal_conv1d_update(
+        return causal_conv1d_update(
             x,
             conv_state,
             self._weight,
@@ -1089,12 +1151,6 @@ class Apriel2Mamba(nn.Module):
         **kwargs,
     ):
         """Forward pass for Mamba."""
-        # Check for CUDA when using fast path
-        if is_fast_path_available and "cuda" not in self.in_proj.weight.device.type:
-            raise RuntimeError(
-                "Mamba with CUDA kernels requires CUDA device. Current device: " + str(self.in_proj.weight.device)
-            )
-
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
 
@@ -1281,15 +1337,10 @@ class Apriel2Mamba(nn.Module):
         return ssm_state, conv_state
 
 
-def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
-    """L2 normalization matching Fast-LLM's implementation."""
-    return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
-
-
 class GatedRMSNormalization(nn.Module):
     """
     Gated RMS normalization layer matching Fast-LLM's implementation.
-    Uses fla.modules.fused_norm_gate.rms_norm_gated (required).
+    Uses fla.modules.fused_norm_gate.rms_norm_gated or vLLM's rmsnorm_fn.
 
     Args:
         hidden_size: Size of the hidden dimension
@@ -1301,24 +1352,38 @@ class GatedRMSNormalization(nn.Module):
         super().__init__()
         if rms_norm_gated is None:
             raise ImportError(
-                "GatedRMSNormalization requires rms_norm_gated from fla library. " "Install with: pip install fla-core"
+                "GatedRMSNormalization requires rms_norm_gated. "
+                "Install fla-core or ensure vLLM is available."
             )
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
         self.activation = activation
 
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        return rms_norm_gated(
-            input_,
-            gate,
-            self.weight,
-            None,
-            activation=self.activation,
-            eps=self.eps,
-            residual=None,
-            prenorm=False,
-            residual_in_fp32=False,
-        )
+        if USE_VLLM_GATED_NORM:
+            # vLLM's rmsnorm_fn signature: (x, weight, bias, z, eps, group_size, norm_before_gate)
+            return rms_norm_gated(
+                input_,
+                self.weight,
+                None,  # bias
+                z=gate,
+                eps=self.eps,
+                group_size=None,
+                norm_before_gate=True,
+            )
+        else:
+            # FLA's rms_norm_gated signature
+            return rms_norm_gated(
+                input_,
+                gate,
+                self.weight,
+                None,
+                activation=self.activation,
+                eps=self.eps,
+                residual=None,
+                prenorm=False,
+                residual_in_fp32=False,
+            )
 
 
 class Apriel2GatedDeltaNet(nn.Module):
@@ -1391,6 +1456,45 @@ class Apriel2GatedDeltaNet(nn.Module):
                 "GatedDeltaNet requires the fla library for optimized kernels. " "Install with: pip install fla-core"
             )
 
+    _debug_enabled = False  # Set to True for debugging
+    _debug_layer = False  # num_tokens <= 10
+    _debug_state = False  # Debug recurrent state
+    _debug_output = False  # Debug output hidden states during decode
+
+    def _debug_tensor(self, name: str, t: torch.Tensor):
+        if not self._debug_enabled:
+            return
+        if t is None:
+            print(f"[TF-GDN layer={self.layer_idx}] {name}: None")
+            return
+        try:
+            flat = t.flatten()[:8]
+            vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
+            print(f"[TF-GDN layer={self.layer_idx}] {name}: shape={t.shape}, dtype={t.dtype}, "
+                  f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
+                  f"first8=[{vals}]")
+        except Exception as e:
+            print(f"[TF-GDN layer={self.layer_idx}] {name}: ERROR accessing tensor: {e}")
+
+    def _debug_print(self, msg: str):
+        if not self._debug_enabled:
+            return
+        print(f"[TF-GDN layer={self.layer_idx}] {msg}")
+
+    def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
+        """Debug recurrent state with statistics."""
+        if not self._debug_state or state is None:
+            return
+        try:
+            flat = state.flatten()
+            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+            print(f"[TF-GDN L{self.layer_idx}] {name} (seq_len={seq_len}): shape={state.shape}, "
+                  f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
+                  f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
+                  f"first8=[{first8}]")
+        except Exception as e:
+            print(f"[TF-GDN L{self.layer_idx}] {name}: ERROR accessing state: {e}")
+
     def _fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
         """
         Split QKVZ and BA tensors using Fast-LLM's flat layout.
@@ -1436,6 +1540,9 @@ class Apriel2GatedDeltaNet(nn.Module):
         cache_position = kwargs.get("cache_position", None)
         batch_size, seq_len, _ = hidden_states.shape
 
+        self._debug_print(f"===== FORWARD START (batch={batch_size}, seq={seq_len}) =====")
+        self._debug_tensor("hidden_states", hidden_states)
+
         # Get conv and recurrent state from cache if available
         conv_state = None
         recurrent_state = None
@@ -1448,13 +1555,22 @@ class Apriel2GatedDeltaNet(nn.Module):
         use_precomputed_states = (
             past_key_values is not None and conv_state is not None and seq_len == 1 and cache_position is not None
         )
+        self._debug_print(f"use_precomputed_states={use_precomputed_states}")
 
         # Project to QKVZ and BA
         mixed_qkvz = self.in_proj_qkvz(hidden_states)
         mixed_ba = self.in_proj_ba(hidden_states)
+        self._debug_tensor("mixed_qkvz", mixed_qkvz)
+        self._debug_tensor("mixed_ba", mixed_ba)
 
         # Split into components using Fast-LLM's flat layout
         query, key, value, z, beta, alpha = self._fix_query_key_value_ordering(mixed_qkvz, mixed_ba)
+        self._debug_tensor("query (after split)", query)
+        self._debug_tensor("key (after split)", key)
+        self._debug_tensor("value (after split)", value)
+        self._debug_tensor("z (after split)", z)
+        self._debug_tensor("beta (after split)", beta)
+        self._debug_tensor("alpha (after split)", alpha)
 
         # Flatten QKV for convolution (no Z in conv)
         query_flat = query.reshape(batch_size, seq_len, -1)
@@ -1462,10 +1578,15 @@ class Apriel2GatedDeltaNet(nn.Module):
         value_flat = value.reshape(batch_size, seq_len, -1)
         mixed_qkv = torch.cat([query_flat, key_flat, value_flat], dim=-1)
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, conv_dim, seq]
+        mixed_qkv_before_conv = mixed_qkv  # Save for debug
+        self._debug_tensor("mixed_qkv (before conv)", mixed_qkv)
+        self._debug_tensor("conv_weight", self.convolution.weight)
+        self._debug_tensor("conv_bias", self.convolution.bias)
 
         # Apply causal convolution
         if use_precomputed_states:
             # Single token decode - use cached conv state
+            self._debug_print("Using conv.update (decode path)")
             mixed_qkv = self.convolution.update(
                 mixed_qkv.squeeze(2),  # [batch, conv_dim, 1] -> [batch, conv_dim]
                 conv_state,
@@ -1474,6 +1595,7 @@ class Apriel2GatedDeltaNet(nn.Module):
             )  # [batch, conv_dim] -> [batch, conv_dim, 1]
         else:
             # Prefill mode
+            self._debug_print("Using conv.forward (prefill path)")
             use_cache = past_key_values is not None
             if use_cache:
                 mixed_qkv, final_state = self.convolution(mixed_qkv, return_final_state=True)
@@ -1482,25 +1604,49 @@ class Apriel2GatedDeltaNet(nn.Module):
                 mixed_qkv = self.convolution(mixed_qkv)
 
         mixed_qkv = mixed_qkv.transpose(1, 2)  # [batch, seq, conv_dim]
+        self._debug_tensor("mixed_qkv (after conv)", mixed_qkv)
 
         # Split back after convolution
         query_flat, key_flat, value_flat = torch.split(mixed_qkv, (self.key_dim, self.key_dim, self.value_dim), dim=-1)
         query = query_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
         key = key_flat.reshape(batch_size, seq_len, self.key_heads, self.key_head_dim)
         value = value_flat.reshape(batch_size, seq_len, self.value_heads, self.value_head_dim)
+        self._debug_tensor("query (after conv)", query)
+        self._debug_tensor("key (after conv)", key)
+        self._debug_tensor("value (after conv)", value)
 
         # Compute gating - match Fast-LLM exactly
         beta_gate = beta.sigmoid()
         g = -self.A_log.float().exp() * F.softplus(alpha.float() + self.dt_bias)
+        self._debug_tensor("beta_gate", beta_gate)
+        self._debug_tensor("g", g)
+        self._debug_tensor("A_log", self.A_log)
+        self._debug_tensor("dt_bias", self.dt_bias)
 
         # Expand K heads to V heads if grouped query attention
         if self.value_heads_per_key > 1:
             query = query.repeat_interleave(self.value_heads_per_key, dim=2)
             key = key.repeat_interleave(self.value_heads_per_key, dim=2)
+            self._debug_print(f"Expanded q/k heads: {self.key_heads} -> {self.value_heads}")
+            self._debug_tensor("query (after expand)", query)
+            self._debug_tensor("key (after expand)", key)
 
         # Run gated delta rule (FLA kernels required)
+        self._debug_tensor("recurrent_state (initial)", recurrent_state)
         if not use_precomputed_states:
             # Chunked mode for prefill
+            self._debug_print("Using chunk_gated_delta_rule (prefill)")
+            # Debug PREFILL INPUTS before kernel call
+            if self._debug_state:
+                print(f"[TF-GDN L{self.layer_idx}] PREFILL INPUTS:")
+                print(f"  hidden_states: shape={hidden_states.shape}, first8={hidden_states.flatten()[:8].tolist()}")
+                print(f"  mixed_qkv_before_conv: shape={mixed_qkv_before_conv.shape}, first8={mixed_qkv_before_conv.flatten()[:8].tolist()}")
+                print(f"  q: shape={query.shape}, first8={query.flatten()[:8].tolist()}")
+                print(f"  k: shape={key.shape}, first8={key.flatten()[:8].tolist()}")
+                print(f"  v: shape={value.shape}, first8={value.flatten()[:8].tolist()}")
+                print(f"  g: shape={g.shape}, first8={g.flatten()[:8].tolist()}")
+                print(f"  beta: shape={beta_gate.shape}, first8={beta_gate.flatten()[:8].tolist()}")
+                print(f"  initial_state: {recurrent_state}")
             output, last_recurrent_state = chunk_gated_delta_rule(
                 query,
                 key,
@@ -1514,18 +1660,42 @@ class Apriel2GatedDeltaNet(nn.Module):
             # Ensure state is in same dtype as hidden_states (fla kernel may return float32)
             if last_recurrent_state is not None:
                 last_recurrent_state = last_recurrent_state.to(hidden_states.dtype)
+            self._debug_state_stats("PREFILL out_state", last_recurrent_state, seq_len)
         else:
             # Recurrent mode for single token decode
-            output, last_recurrent_state = fused_recurrent_gated_delta_rule(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta_gate,
-                initial_state=recurrent_state,
-                output_final_state=past_key_values is not None,
-                use_qk_l2norm_in_kernel=True,
-            )
+            self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
+            self._debug_state_stats("DECODE in_state", recurrent_state, seq_len)
+            # Debug decode inputs
+            if self._debug_state:
+                print(f"[TF-GDN L{self.layer_idx}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta_gate.flatten()[:4].tolist()}")
+            # vLLM and FLA have different signatures:
+            # - vLLM: inplace_final_state (default True, set False to avoid ssm_state_indices requirement)
+            # - FLA: output_final_state
+            if USE_VLLM_GDN_OPS:
+                output, last_recurrent_state = fused_recurrent_gated_delta_rule(
+                    query,
+                    key,
+                    value,
+                    g=g,
+                    beta=beta_gate,
+                    initial_state=recurrent_state,
+                    inplace_final_state=False,
+                    use_qk_l2norm_in_kernel=True,
+                )
+            else:
+                output, last_recurrent_state = fused_recurrent_gated_delta_rule(
+                    query,
+                    key,
+                    value,
+                    g=g,
+                    beta=beta_gate,
+                    initial_state=recurrent_state,
+                    output_final_state=past_key_values is not None,
+                    use_qk_l2norm_in_kernel=True,
+                )
+            self._debug_state_stats("DECODE out_state", last_recurrent_state, seq_len)
+
+        self._debug_tensor("output (after FLA)", output)
 
         # Update recurrent state in cache
         if past_key_values is not None:
@@ -1535,12 +1705,44 @@ class Apriel2GatedDeltaNet(nn.Module):
         z_shape_og = z.shape
         output = output.reshape(-1, output.shape[-1])
         z_flat = z.reshape(-1, z.shape[-1])
+        self._debug_tensor("output (before norm)", output)
+        self._debug_tensor("z_flat (for norm)", z_flat)
+        # Debug last token before norm (reshaped has tokens * heads rows)
+        batch_size, num_tokens = hidden_states.shape[:2]
+        if self._debug_layer and num_tokens > 0:
+            num_heads = self.value_heads
+            last_token_start = (num_tokens - 1) * num_heads
+            last_out = output[last_token_start:last_token_start+1, :8]
+            last_z = z_flat[last_token_start:last_token_start+1, :8]
+            print(f"[TF-GDN layer={self.layer_idx}] output before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_out.flatten().float().tolist())}]")
+            print(f"[TF-GDN layer={self.layer_idx}] z before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_z.flatten().float().tolist())}]")
+        self._debug_tensor("norm.weight", self.norm.weight)
+        self._debug_print(f"norm.eps={self.norm.eps}, norm.activation={self.norm.activation}")
         output = self.norm(output, z_flat)
+        self._debug_tensor("output (after norm)", output)
+        # Debug last token after norm
+        if self._debug_layer and num_tokens > 0:
+            last_out_after = output[last_token_start:last_token_start+1, :8]
+            print(f"[TF-GDN layer={self.layer_idx}] output after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_out_after.flatten().float().tolist())}]")
         output = output.reshape(z_shape_og)
         output = output.reshape(output.shape[0], output.shape[1], -1)
 
         # Output projection
         output = self.out_proj(output)
+        self._debug_tensor("output (final)", output)
+        # Show last token specifically
+        if self._debug_layer and output.dim() == 3:
+            last_token = output[0, -1, :8]
+            vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
+            print(f"[TF-GDN layer={self.layer_idx}] output (last token): last_token_first8=[{vals}]")
+        # Debug output hidden states during decode
+        # Get decode step from cache
+        decode_step = past_key_values.get_seq_length() if past_key_values is not None else 0
+        if self._debug_output and use_precomputed_states and output.dim() == 3:
+            flat = output.flatten()
+            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
+            print(f"[TF-GDN L{self.layer_idx}] STEP={decode_step} OUTPUT hs: mean={output.float().mean().item():.6f}, std={output.float().std().item():.6f}, first8=[{first8}]")
+        self._debug_print("===== FORWARD END =====")
 
         return (output,)
 
@@ -2115,6 +2317,21 @@ class Apriel2Block(nn.Module):
         else:
             raise ValueError(f"Unknown normalization type: {norm_type}")
 
+    _debug_layer = False  # Set to True to debug layer outputs
+
+    def _debug_tensor(self, name: str, t: torch.Tensor, show_last=False):
+        if not self._debug_layer or t is None:
+            return
+        if show_last:
+            # Show last token
+            last = t[0, -1, :8]
+            vals = ", ".join(f"{v:.6f}" for v in last.float().tolist())
+            print(f"[TF Layer {self.layer_idx}] {name}: shape={t.shape}, last_token_first8=[{vals}]")
+        else:
+            flat = t.flatten()[:8]
+            vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
+            print(f"[TF Layer {self.layer_idx}] {name}: shape={t.shape}, first8=[{vals}]")
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -2126,8 +2343,14 @@ class Apriel2Block(nn.Module):
         position_embeddings=None,
         **kwargs,
     ) -> tuple:
+        num_tokens = hidden_states.size(1)
+        self._debug_layer = False  # Disabled for testing
+
+        self._debug_tensor("input hidden_states", hidden_states)
+
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        self._debug_tensor("after input_layernorm", hidden_states)
 
         mixer_outputs = self.mixer(
             hidden_states,
@@ -2140,13 +2363,23 @@ class Apriel2Block(nn.Module):
             **kwargs,
         )
         hidden_states = mixer_outputs[0]
+        self._debug_tensor("mixer output", hidden_states)
+
         hidden_states = residual + hidden_states
+        self._debug_tensor("after residual add 1", hidden_states)
 
         # MLP
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        self._debug_tensor("after post_attention_layernorm", hidden_states)
+
         hidden_states = self.mlp(hidden_states)
+        self._debug_tensor("after mlp", hidden_states)
+
         hidden_states = residual + hidden_states
+        self._debug_tensor("after residual add 2 (final)", hidden_states)
+        # Also show last token for final layer comparison
+        self._debug_tensor("after residual add 2 (last token)", hidden_states, show_last=True)
 
         outputs = (hidden_states,)
         if output_attentions:
@@ -2411,7 +2644,23 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
         )
 
         # Apply final normalization
+        # Debug final norm
+        batch_size, seq_len = hidden_states.shape[:2]
+        _debug_final = False  # seq_len <= 10
+        if _debug_final:
+            # Show LAST token (to match vLLM)
+            last_token = hidden_states[0, -1, :8]
+            vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
+            print(f"[TF Final] hidden_states (before norm): shape={hidden_states.shape}, last_token_first8=[{vals}]")
+            print(f"[TF Final] norm.weight: first8=[{', '.join(f'{v:.6f}' for v in self.norm.weight.flatten()[:8].float().tolist())}]")
+            print(f"[TF Final] norm.variance_epsilon={self.norm.variance_epsilon}")
+
         hidden_states = self.norm(hidden_states)
+
+        if _debug_final:
+            last_token = hidden_states[0, -1, :8]
+            vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
+            print(f"[TF Final] hidden_states (after norm): shape={hidden_states.shape}, last_token_first8=[{vals}]")
 
         # Add final hidden state if requested
         if output_hidden_states:
@@ -2494,9 +2743,26 @@ class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
 
         hidden_states = outputs.last_hidden_state
 
+        # Debug LM head input
+        batch_size, seq_len = hidden_states.shape[:2]
+        _debug_lm_head = False  # seq_len <= 10
+        if _debug_lm_head:
+            # Show LAST token's first 8 features (to match vLLM which only passes last token)
+            last_token_hs = hidden_states[0, -1, :8]
+            vals = ", ".join(f"{v:.6f}" for v in last_token_hs.float().tolist())
+            print(f"[TF LM Head] input hidden_states: shape={hidden_states.shape}, last_token_first8=[{vals}]")
+            print(f"[TF LM Head] lm_head.weight: shape={self.lm_head.weight.shape}, first8=[{', '.join(f'{v:.6f}' for v in self.lm_head.weight.flatten()[:8].float().tolist())}]")
+
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
+
+        if _debug_lm_head:
+            # Get last token logits
+            last_logits = logits[0, -1]
+            top_vals, top_idx = last_logits.topk(5)
+            print(f"[TF LM Head] logits shape={logits.shape}")
+            print(f"[TF LM Head] last token top-5 logits: {[(idx.item(), val.item()) for idx, val in zip(top_idx, top_vals)]}")
 
         loss = None
         if labels is not None:
