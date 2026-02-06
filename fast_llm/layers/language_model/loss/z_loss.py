@@ -23,7 +23,9 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         return (
-            triton_z_loss_forward_backward if TritonConfig.enabled(logits.device) else fused_z_loss_forward_backward
+            triton_z_loss_forward_backward
+            if TritonConfig.enabled(logits.device, self._config.use_triton)
+            else fused_z_loss_forward_backward
         )(
             logits,
             self._get_loss_mask(kwargs, split_index),
