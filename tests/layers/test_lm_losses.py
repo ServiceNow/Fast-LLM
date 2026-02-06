@@ -12,7 +12,7 @@ from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
-from fast_llm.functional.triton.cross_entropy import triton_entropy_loss_forward_backward
+from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import z_loss, z_loss_forward_backward

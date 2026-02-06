@@ -4,7 +4,7 @@ import torch
 
 from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
-from fast_llm.functional.triton.cross_entropy import triton_entropy_loss_forward_backward
+from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.layers.language_model.loss.config import (
     LanguageModelDistillationLossConfig,
     LanguageModelLabelEntropyLossConfig,
