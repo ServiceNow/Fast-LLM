@@ -2,7 +2,9 @@ import typing
 
 import torch
 
+from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_softmax_base
+from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
@@ -20,7 +22,9 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        return z_loss_forward_backward(
+        return (
+            triton_z_loss_forward_backward if TritonConfig.enabled(logits.device) else fused_z_loss_forward_backward
+        )(
             logits,
             self._get_loss_mask(kwargs, split_index),
             grad_output=self._get_grad_output(kwargs),
@@ -44,7 +48,7 @@ def z_loss(
 
 
 @torch.compile
-def z_loss_forward_backward(
+def fused_z_loss_forward_backward(
     logits: torch.Tensor,
     loss_mask: torch.Tensor | None,
     grad_output: float | None,

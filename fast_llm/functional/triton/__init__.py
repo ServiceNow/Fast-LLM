@@ -38,3 +38,4 @@ elif triton_interpret:
 
 else:
     tl_arange = tl.arange
+    tl_full = tl.full

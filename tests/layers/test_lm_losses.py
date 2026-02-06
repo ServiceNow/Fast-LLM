@@ -13,9 +13,10 @@ from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
+from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
-from fast_llm.layers.language_model.loss.z_loss import z_loss, z_loss_forward_backward
+from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
 from tests.utils.subtest import DistributedTestContext
@@ -193,7 +194,9 @@ def _test_entropy_loss(
     )
 
 
-def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, group=None):
+def _test_z_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, group=None
+):
     logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.logits, batch_shape, dtype)
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
@@ -202,7 +205,7 @@ def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, los
         loss_mask,
         logits_scale_factor=logits_scale_factor,
     )
-    out_fused, grad_fused = z_loss_forward_backward(
+    out_fused, grad_fused = fused_z_loss_forward_backward(
         split_op(logits, group, -1),
         loss_mask,
         grad_output,
@@ -214,6 +217,25 @@ def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, los
         out_ref,
         grad_output is not None,
         grad_fused,
+        grad_ref,
+        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        group=group,
+    )
+    if not triton_available:
+        return
+    out_triton, grad_triton = triton_z_loss_forward_backward(
+        split_op(logits, group, -1),
+        loss_mask,
+        grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        block_size=block_size,
+    )
+    _compare_losses_and_grads(
+        out_triton,
+        out_ref,
+        grad_output is not None,
+        grad_triton,
         grad_ref,
         threshold=1e-5 if data_type == DataType.float32 else 1e-4,
         group=group,
@@ -257,7 +279,7 @@ def test_entropy_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size"), _LOSS_PARAMETERS
 )
 def test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size):
-    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype)
+    _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size)
 
 
 @pytest.mark.skip(reason="DPO loss is broken")
@@ -309,6 +331,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         logits_scale_factor,
                         loss_masking,
                         dtype,
+                        block_size,
                         test_context.group,
                     )
 

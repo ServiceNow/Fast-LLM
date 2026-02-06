@@ -636,7 +636,7 @@ def _rescale_sum_exp_logits(
     return sum_exp_logits * (local_max_logits - max_logits).exp()
 
 
-def _parallel_sum_exp_logits(
+def parallel_sum_exp_logits(
     sum_exp_logits: torch.Tensor,
     local_max_logits: torch.Tensor,
     group: torch.distributed.ProcessGroup | None,
@@ -758,7 +758,7 @@ def triton_entropy_loss_forward_backward(
                 col_min=n_cols * group.rank(),
                 **kwargs,
             )
-            max_logits, sum_exp_logits = _parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
+            max_logits, sum_exp_logits = parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
             torch.distributed.all_reduce(partial_losses, op=torch.distributed.ReduceOp.SUM, group=group)
             loss = _cross_entropy_loss_from_labels(partial_losses, target, sum_exp_logits, max_logits)
             if grad_output is not None:
@@ -827,11 +827,10 @@ def triton_entropy_loss_forward_backward(
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
                 **kwargs,
-                **backward_kwargs,
             )
-            max_logits, sum_exp_logits = _parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
+            max_logits, sum_exp_logits = parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
             if target_format == TargetFormat.logits:
-                target_max_logits, target_sum_exp_logits = _parallel_sum_exp_logits(
+                target_max_logits, target_sum_exp_logits = parallel_sum_exp_logits(
                     target_sum_exp_logits, local_target_max_logits, group
                 )
                 if entropy_loss_type != EntropyLossType.reverse_kl:
