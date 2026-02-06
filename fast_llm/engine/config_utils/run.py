@@ -101,7 +101,7 @@ class ExperimentConfig(RunnableConfig):
     def get_run(self, distributed: "Distributed") -> "Run":
         from fast_llm.functional.config import TritonConfig
 
-        TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels  # and distributed.config.use_cuda
+        TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels
         TritonConfig.TRITON_LINEAR = self.run.triton_linear_kernels
         run = Run(config=self, distributed=distributed)
         set_global_variables(not self.run.torch_dynamo_enable)

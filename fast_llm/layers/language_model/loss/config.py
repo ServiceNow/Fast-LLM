@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType
+from fast_llm.functional.config import EntropyLossType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
@@ -77,11 +77,10 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
     )
 
     @property
@@ -100,11 +99,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
-    )
     reference_model: str = Field(
         default="teacher",
         desc="Name of the reference model for knowledge distillation.",
@@ -115,6 +109,11 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         hint=FieldHint.optional,
         desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
+    )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
     )
 
     @property

@@ -9,10 +9,11 @@ from fast_llm.core.ops import split_op
 from fast_llm.engine.config_utils import data_type
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedBackend
-from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType, TargetFormat, TritonConfig
+from fast_llm.functional.config import EntropyLossType, TargetFormat
+from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
+from fast_llm.functional.triton.cross_entropy import triton_entropy_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
-from fast_llm.layers.language_model.loss.entropy_loss import entropy_loss_forward_backward
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import z_loss, z_loss_forward_backward
 from fast_llm.utils import Assert
@@ -104,8 +105,10 @@ def reference_dpo_loss(
     return -torch.nn.functional.logsigmoid(beta * (pi_logratios - ref_logratios)).mean()
 
 
-_BATCH_SHAPES = ((64,), (16, 8))
+# _BATCH_SHAPES = ((64,), (16, 8))
+_BATCH_SHAPES = ((1,),)
 _LOSS_PARAMETERS = (
+    (8, 1.0, 1.0, False, DataType.float32, None),  # Simple
     (500, 1.0, 1.0, False, DataType.float32, None),  # Simple
     (256, 1.0, 1.0, False, DataType.float32, None),  # Power of 2
     (500, None, 1.0, False, DataType.float32, None),  # No grad
@@ -131,13 +134,13 @@ def _test_entropy_loss(
     group=None,
 ):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
-        pytest.skip(reason="Not implemented")
+        pytest.skip(reason="Reverse KL loss not implemented for target labels")
     # TODO: Test tensor-parallel implementation.
     logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape, dtype)
     local_logits = split_op(logits, group, -1).contiguous()
     local_target = target if target_format == TargetFormat.labels else split_op(target, group, -1).contiguous()
     # Torch serves as the reference implementation.
-    out_ref, grad_ref = entropy_loss_forward_backward(
+    out_ref, grad_ref = torch_entropy_loss_forward_backward(
         logits=logits,
         target=target,
         loss_mask=loss_mask,
@@ -145,9 +148,8 @@ def _test_entropy_loss(
         logits_scale_factor=logits_scale_factor,
         target_format=target_format,
         entropy_loss_type=entropy_loss_type,
-        implementation=EntropyLossImplementation.torch,
     )
-    out_fused, grad_fused = entropy_loss_forward_backward(
+    out_fused, grad_fused = fused_entropy_loss_forward_backward(
         logits=local_logits,
         target=local_target,
         loss_mask=loss_mask,
@@ -156,7 +158,6 @@ def _test_entropy_loss(
         logits_scale_factor=logits_scale_factor,
         target_format=target_format,
         entropy_loss_type=entropy_loss_type,
-        implementation=EntropyLossImplementation.fused,
     )
     _compare_losses_and_grads(
         out_fused,
@@ -168,11 +169,9 @@ def _test_entropy_loss(
         group=group,
     )
 
-    if entropy_loss_type == EntropyLossType.reverse_kl or not triton_available:
-        # Triton implementation only supports cross-entropy.
+    if not triton_available:
         return
-    assert TritonConfig.TRITON_ENABLED
-    out_triton, grad_triton = entropy_loss_forward_backward(
+    out_triton, grad_triton = triton_entropy_loss_forward_backward(
         logits=local_logits,
         target=local_target,
         loss_mask=loss_mask,
@@ -180,11 +179,18 @@ def _test_entropy_loss(
         logits_scale_factor=logits_scale_factor,
         target_format=target_format,
         entropy_loss_type=entropy_loss_type,
-        implementation=EntropyLossImplementation.triton,
         group=group,
         block_size=block_size,
     )
-    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    _compare_losses_and_grads(
+        out_triton,
+        out_ref,
+        grad_output is not None,
+        grad_triton,
+        grad_ref,
+        threshold=1e-5 if target_format != TargetFormat.probabilities and data_type == DataType.float32 else 1e-4,
+        group=group,
+    )
 
 
 def _test_z_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, group=None):

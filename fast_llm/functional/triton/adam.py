@@ -8,7 +8,7 @@ import torch
 from torch.optim.adamw import adamw  # noqa
 
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
 
 
 @triton_jit()
@@ -37,7 +37,7 @@ def triton_adam_kernel(
 
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
-    offsets = block_start + tl.arange(0, block_size)
+    offsets = block_start + tl_arange(0, block_size)
     mask = offsets < numel
 
     params = tl.load(params_ptr + offsets, mask=mask)
@@ -75,7 +75,7 @@ def triton_adam(
     epsilon: float,
     use_triton=True,
 ) -> None:
-    if not use_triton or (use_triton is None and TritonConfig.TRITON_ENABLED):
+    if not TritonConfig.enabled(params.device, use_triton):
         if noop_flag.item() == 0:
             return adamw(
                 [params],
