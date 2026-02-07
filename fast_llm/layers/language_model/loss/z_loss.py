@@ -21,6 +21,7 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         return (
             triton_z_loss_forward_backward
@@ -32,6 +33,7 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             logits_scale_factor=self._logits_scale_factor,
+            grad_logits=grad_logits,
         )
 
 
@@ -53,7 +55,8 @@ def z_loss(
 def fused_z_loss_forward_backward(
     logits: torch.Tensor,
     loss_mask: torch.Tensor | None,
-    grad_output: float | None,
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -70,12 +73,14 @@ def fused_z_loss_forward_backward(
         per_sample_loss = per_sample_loss * loss_mask
     loss = per_sample_loss.mean()
 
-    if grad_output is None:
-        grad = None
-    else:
+    if grad_output is not None:
         grad_base = 2 * grad_output * (log_sum_exp_logits / sum_exp_logits)
         if loss_mask is not None:
             grad_base = grad_base * loss_mask
         grad = (grad_base.unsqueeze(-1) * exp_logits).to(logits.dtype)
+        if grad_logits is None:
+            grad_logits = grad
+        else:
+            grad_logits.add_(grad)
 
-    return loss, grad
+    return loss, grad_logits

@@ -1,4 +1,5 @@
 import typing
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -83,6 +84,13 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         hint=FieldHint.expert,
     )
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `label`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
+
     @property
     def loss_class(self) -> "type[LanguageModelLabelEntropyLoss]":
         from fast_llm.layers.language_model.loss.entropy_loss import LanguageModelLabelEntropyLoss
@@ -115,6 +123,13 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Enable triton implementation. Default: use if available.",
         hint=FieldHint.expert,
     )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `distillation`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
 
     @property
     def loss_class(self) -> "type[LanguageModelDistillationLoss]":

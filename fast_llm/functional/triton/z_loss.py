@@ -22,6 +22,7 @@ def triton_z_loss_forward_backward_kernel(
     grad_logits_ptr=None,
     grad_logits_stride_0: tl_constexpr = None,
     logits_scale_factor: tl_constexpr = 1.0,
+    accumulate: tl_constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -31,7 +32,7 @@ def triton_z_loss_forward_backward_kernel(
         # This entry is masked, ignore.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
-        if grad_losses is not None:
+        if grad_losses is not None and not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
                 tl.store(
@@ -66,15 +67,18 @@ def triton_z_loss_forward_backward_kernel(
                 if logits_scale_factor != 1.0:
                     logits *= logits_scale_factor
                 exp_logits = tl.exp(logits - max_logits)
-            tl.store(
-                grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, exp_logits * grad_losses, mask=mask
-            )
+            grad_logits = exp_logits * grad_losses
+            grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
+            if accumulate:
+                grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
+            tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
 
 
 def triton_z_loss_forward_backward(
     logits: torch.Tensor,
     loss_mask: torch.Tensor | None,
-    grad_output: float | None,
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
     block_size: int | None = None,
@@ -96,16 +100,18 @@ def triton_z_loss_forward_backward(
         "block_size": block_size,
         "num_warps": num_warps,
     }
-    grad_logits = None if grad_output is None else torch.empty_like(logits)
-    backward_kwargs = (
-        {}
-        if grad_output is None
-        else {
+    if grad_output is None:
+        backward_kwargs = {}
+    else:
+        accumulate = grad_logits is not None
+        grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
+
+        backward_kwargs = {
             "grad_logits_ptr": grad_logits,
             "grad_losses": grad_output / n_rows,
             "grad_logits_stride_0": grad_logits.stride(-2),
+            "accumulate": accumulate,
         }
-    )
     losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
     if group is None:
         triton_z_loss_forward_backward_kernel[(n_rows,)](

@@ -278,12 +278,13 @@ def fused_entropy_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,) or (*batch, vocab)
     loss_mask: torch.Tensor | None,  # (*batch,)
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    entropy_loss_type: EntropyLossType,
-    group: ProcessGroup | None = None,
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
+    group: torch.distributed.ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
     temperature: float = 1.0,
+    target_format: TargetFormat = TargetFormat.labels,
+    entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -335,5 +336,9 @@ def fused_entropy_loss_forward_backward(
         if loss_mask is not None:
             grad = grad * loss_mask.unsqueeze(-1)
         grad = grad.to(logits.dtype)
+        if grad_logits is None:
+            grad_logits = grad
+        else:
+            grad_logits.add_(grad)
 
-    return loss, grad
+    return loss, grad_logits

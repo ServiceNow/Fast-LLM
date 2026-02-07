@@ -111,10 +111,26 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
     grad_logits_stride_0: tl_constexpr = None,
     col_min: tl_constexpr = 0,
     logits_scale_factor: tl_constexpr = 1.0,
+    accumulate: tl_constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
     logits_ptr = logits_ptr + block_idx * logits_stride_0
+
+    label_idx = tl.load(labels_ptr + block_idx)
+    if label_idx < 0:
+        # This entry is masked, ignore.
+        if losses_ptr is not None:
+            tl.store(losses_ptr + block_idx, 0)
+        if grad_losses is not None and not accumulate:
+            for col_offset in tl.static_range(0, n_cols, block_size):
+                col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
+                tl.store(
+                    grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, 0, mask=col_offsets < n_cols
+                )
+        return
+
+    label_idx -= col_min
 
     if max_logits_ptr is None or sum_exp_logits_ptr is None:
         exp_logits, sum_exp_logits, max_logits, col_offsets, mask = triton_fused_softmax_base(
@@ -123,8 +139,6 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
     else:
         max_logits = tl.load(max_logits_ptr + block_idx)
         sum_exp_logits = tl.load(sum_exp_logits_ptr + block_idx)
-
-    label_idx = tl.load(labels_ptr + block_idx) - col_min
 
     if losses_ptr is not None:
         if label_idx < 0 or label_idx >= n_cols:
@@ -138,9 +152,7 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
         tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
-        if label_idx < -col_min:
-            grad_losses = 0.0
-        elif logits_scale_factor != 1.0:
+        if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
         # Run in reverse order to maximize input and cache reuse.
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
@@ -158,9 +170,11 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
                 grad_logits = grad_base
             else:
                 grad_logits = tl.where(col_offsets == label_idx, grad_base - 1.0, grad_base)
-            tl.store(
-                grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits * grad_losses, mask=mask
-            )
+            grad_logits *= grad_losses
+            grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
+            if accumulate:
+                grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
+            tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
 
 
 @triton_jit()
@@ -315,6 +329,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     logits_scale_factor: tl_constexpr = 1.0,
     target_logits_scale_factor: tl_constexpr = 1.0,
     return_kl_loss: tl.constexpr = False,
+    accumulate: tl_constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -325,7 +340,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         # This entry is masked, ignore.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
-        if grad_losses is not None:
+        if grad_losses is not None and not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
                 tl.store(
@@ -391,7 +406,10 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
                     target = tl.load(target_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
 
             grad_logits = grad_losses * (exp_logits / sum_exp_logits - target)
-            tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
+            grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
+            if accumulate:
+                grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
+            tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
 
 
 @triton_jit()
@@ -424,9 +442,6 @@ def triton_reverse_kl_forward_from_distribution(
             sum_exp_logits=sum_exp_logits,
             logits_scale_factor=logits_scale_factor,
         )
-
-        # print("sum_exp_logits", sum_exp_logits)
-        # print("max_logits", new_max_logits)
         if from_logits:
             # log_target excludes the log_sum_exp term to be added later
             log_target, _, target_sum_exp_logits, target_new_max_logits, _, _ = triton_fused_softmax_iter_base(
@@ -441,20 +456,11 @@ def triton_reverse_kl_forward_from_distribution(
                 mask=mask,
             )
             target = log_target
-            # print("target_sum_exp_logits", target_sum_exp_logits)
-            # print("new_max_logits", target_new_max_logits)
         else:
             target = tl.load(target_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
             log_target = tl.log(target)
         if col_offset == 0:
-            # predicted_log_probability=logits - new_max_logits - tl.log(sum_exp_logits)
-            # target_log_probability=log_target-target_new_max_logits-tl.log(target_sum_exp_logits)
-            # print("predicted_log_probability", predicted_log_probability)
-            # print("target_log_probability", target_log_probability)
-            # print("IUWH", exp_logits * (predicted_log_probability-target_log_probability)/sum_exp_logits)
             loss = tl.sum(tl.where(mask, exp_logits * (logits - log_target), 0))
-            # print("max_logits", new_max_logits)
-            # print("partial_losses", exp_logits * (logits-log_target))
 
         else:
             loss = loss * tl.exp(max_logits - new_max_logits) + tl.sum(
@@ -464,7 +470,6 @@ def triton_reverse_kl_forward_from_distribution(
         if from_logits:
             target_max_logits = target_new_max_logits
 
-    # print("partial_loss", loss)
     if not return_partial_loss:
         loss = loss / sum_exp_logits - tl.log(sum_exp_logits) - max_logits
         if from_logits:
@@ -547,6 +552,7 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
     grad_logits_stride_0: tl_constexpr = None,
     logits_scale_factor: tl_constexpr = 1.0,
     target_logits_scale_factor: tl_constexpr = 1.0,
+    accumulate: tl_constexpr = False,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -557,7 +563,7 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
         # This entry is masked, ignore.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
-        if grad_losses is not None:
+        if grad_losses is not None and not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
                 tl.store(
@@ -584,17 +590,9 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
             target_max_logits = tl.load(target_max_logits_ptr + block_idx)
             target_sum_exp_logits = tl.load(target_sum_exp_logits_ptr + block_idx)
 
-    # print("sum_exp_logits", sum_exp_logits)
-    # print("max_logits", max_logits)
-
-    # if from_logits:
-    #    print("target_sum_exp_logits", target_sum_exp_logits)
-    #    print("target_max_logits", target_max_logits)
-
     if losses_ptr is not None:
         if partial_losses_ptr is not None:
             loss = tl.load(partial_losses_ptr + block_idx)
-            # print("partial_loss", loss)
             loss = loss / sum_exp_logits - tl.log(sum_exp_logits) - max_logits
             if from_logits:
                 loss = loss + tl.log(target_sum_exp_logits) + target_max_logits
@@ -624,7 +622,10 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
             grad_logits = (
                 grad_losses * (predicted_log_probability - target_log_probability - loss) * predicted_probability
             )
-            tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
+            grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
+            if accumulate:
+                grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
+            tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
 
 
 @torch.compile
@@ -687,15 +688,16 @@ def _cross_entropy_loss_from_distribution(
 
 
 def triton_entropy_loss_forward_backward(
-    logits: torch.Tensor,
-    target: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    entropy_loss_type: EntropyLossType,
+    logits: torch.Tensor,  # (*batch, vocab)
+    target: torch.Tensor,  # (*batch,) or (*batch, vocab)
+    loss_mask: torch.Tensor | None,  # (*batch,)
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
     temperature: float = 1.0,
+    target_format: TargetFormat = TargetFormat.labels,
+    entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
     block_size: int | None = None,
     num_warps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -721,18 +723,17 @@ def triton_entropy_loss_forward_backward(
         "block_size": block_size,
         "num_warps": num_warps,
     }
-
-    # TODO: Safe to do inplace?
-    grad_logits = None if grad_output is None else torch.empty_like(logits)
-    backward_kwargs = (
-        {}
-        if grad_output is None
-        else {
+    if grad_output is None:
+        backward_kwargs = {}
+    else:
+        accumulate = grad_logits is not None
+        grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
+        backward_kwargs = {
             "grad_logits_ptr": grad_logits,
             "grad_losses": grad_output / n_rows,
             "grad_logits_stride_0": grad_logits.stride(-2),
+            "accumulate": accumulate,
         }
-    )
     if target_format == TargetFormat.labels:
         assert entropy_loss_type != EntropyLossType.reverse_kl
         if group is None:
