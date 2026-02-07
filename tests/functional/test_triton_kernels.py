@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, ActivationType, TritonConfig
+from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, ActivationType
 from fast_llm.functional.triton.adam import triton_adam
 from fast_llm.functional.triton.mlp import (
     torch_mlp_activation,
@@ -25,71 +25,66 @@ from fast_llm.layers.attention.rotary.rotary import (
     rotary_embeddings_real,
 )
 from fast_llm.utils import Assert, rms_diff
-from tests.utils.utils import requires_cuda
+from tests.utils.utils import requires_cuda, requires_triton
 
 
-@requires_cuda
-def test_triton_fill():
-    assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(425, 549, dtype=torch.bfloat16, device="cuda")
-    triton_fill(x, 32)
+@requires_triton
+def test_triton_fill(testing_device):
+    x = torch.randn(425, 549, dtype=torch.float16, device=testing_device)
+    triton_fill(x, 32, use_triton=True)
     assert x.min().item() == x.max().item() == 32
 
 
-@requires_cuda
-def test_triton_copy():
-    assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(7563, dtype=torch.bfloat16, device="cuda")
+@requires_triton
+def test_triton_copy(testing_device):
+    x = torch.randn(7563, dtype=torch.float32, device=testing_device).to(torch.float16)
     x1 = x.clone()
     y = torch.zeros_like(x)
     Assert.all_different(x, y)
-    triton_copy(x, y)
+    triton_copy(x, y, use_triton=True)
     Assert.all_equal(x, y)
     Assert.all_equal(x, x1)
 
 
-@requires_cuda
-def test_triton_copy_cast():
-    assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(7563, dtype=torch.bfloat16, device="cuda")
+@requires_triton
+def test_triton_copy_cast(testing_device):
+    x = torch.randn(7563, dtype=torch.float32, device=testing_device).to(torch.float16)
     x1 = x.clone()
     y = torch.zeros_like(x, dtype=torch.float32)
     Assert.all_different(x.float(), y)
-    triton_copy(x, y)
+    triton_copy(x, y, use_triton=True)
     Assert.rms_close(x, y, 1e-4)
     Assert.all_equal(x, x1)
 
 
-@requires_cuda
-def test_triton_add():
-    assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(8934, dtype=torch.float32, device="cuda")
+@requires_triton
+def test_triton_add(testing_device):
+    x = torch.randn(8934, dtype=torch.float32, device=testing_device)
     x1 = x.clone()
     y = torch.zeros_like(x)
     y1 = y.clone()
     Assert.all_different(x, y)
-    z = triton_add(x, y)
+    z = triton_add(x, y, use_triton=True)
     z1 = x1 + y1
     Assert.rms_close(z, z1, 1e-5)
     Assert.all_equal(x, x1)
     Assert.all_equal(y, y1)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "num_heads", "head_size"),
-    [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134), (2, 100000, 2, 4)],
+    [(4, 32, 2, 16), (1, 32, 1, 16), (2, 64, 2, 96), (3, 59, 7, 22)],
 )
-def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
-    assert TritonConfig.TRITON_ENABLED
-    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.float32, device="cuda")
+def test_triton_rotary(batch_size, sequence_length, num_heads, head_size, testing_device):
+    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.float32, device=testing_device)
     frequencies = (
         DefaultRotaryConfig()
         .get_layer(TensorDim("", head_size))
         ._get_frequencies(
             sequence_length,
             head_size,
-            device="cuda",
+            device=testing_device,
         )
     )
 
@@ -110,15 +105,14 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size):
     Assert.rms_close(y_real, y_triton, 1e-4)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("zero_centered", [True, False])
-def test_triton_normalization(has_bias, zero_centered):
-    assert TritonConfig.TRITON_ENABLED
-    input_ = torch.randn(4096, 1024, device="cuda", requires_grad=True)
+def test_triton_normalization(has_bias, zero_centered, testing_device):
+    input_ = torch.randn(32, 128, device=testing_device, requires_grad=True)
     output_grad = torch.randn_like(input_)
 
-    weight = torch.randn(1024, device="cuda", requires_grad=True)
+    weight = torch.randn(128, device=testing_device, requires_grad=True)
     weight.grad_buffer = torch.empty_like(weight)
     weight.param_grad_is_zero = True
 
@@ -160,7 +154,7 @@ def test_triton_normalization(has_bias, zero_centered):
         Assert.rms_close(bias_grad0, bias.grad, 1e-3)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
     "activation",
@@ -173,10 +167,9 @@ def test_triton_normalization(has_bias, zero_centered):
     ],
 )
 @pytest.mark.parametrize("recompute", [True, False])
-def test_triton_mlp_activation(gated, activation, recompute):
-    assert TritonConfig.TRITON_ENABLED
-    input_ = torch.randn(1024, 4096 * (2 if gated else 1), device="cuda", requires_grad=True)
-    output_grad = torch.randn(1024, 4096, device="cuda")
+def test_triton_mlp_activation(gated, activation, recompute, testing_device):
+    input_ = torch.randn(32, 128 * (2 if gated else 1), device=testing_device, requires_grad=True)
+    output_grad = torch.randn(32, 128, device=testing_device)
 
     output1, context = triton_mlp_activation_forward(input_, gated, activation)
     input_grad1, output3 = triton_mlp_activation_backward(output_grad, context, recompute)
@@ -190,10 +183,9 @@ def test_triton_mlp_activation(gated, activation, recompute):
         Assert.rms_close(output1, output3, 1e-5)
 
 
-@requires_cuda
-def test_triton_adam():
-    assert TritonConfig.TRITON_ENABLED
-    params = torch.randn(4576427, dtype=torch.float32, device="cuda")
+@requires_triton
+def test_triton_adam(testing_device):
+    params = torch.randn(45764, dtype=torch.float32, device=testing_device)
     grads = torch.randn_like(params)
     exp_avgs = torch.randn_like(params)
     exp_avg_sqs = torch.randn_like(params).abs()
@@ -248,13 +240,14 @@ def test_triton_adam():
     compare(0, 4, Assert.eq, 0)
 
 
+# TODO: Failing with triton interpreter
 @requires_cuda
 @pytest.mark.parametrize(
     ("num_rows_dense", "num_experts", "num_experts_per_token"),
     [(2048, 8, 2), (2048, 6, 2), (2048, 8, 8), (256, 8, 2), (5627, 8, 2)],
 )
-def test_triton_sparse_map(num_rows_dense, num_experts, num_experts_per_token):
-    logits = torch.randn((num_rows_dense, num_experts), device="cuda")
+def test_triton_sparse_map(num_rows_dense, num_experts, num_experts_per_token, testing_device):
+    logits = torch.randn((num_rows_dense, num_experts), device=testing_device)
     _, top_experts = torch.topk(logits, num_experts_per_token, dim=-1)
 
     sparse_map_triton = get_sparse_map(top_experts, num_experts, use_triton=True)

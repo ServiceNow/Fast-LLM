@@ -4,7 +4,7 @@ import torch
 
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, tl_full, triton, triton_jit
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
@@ -23,7 +23,7 @@ def triton_normalization_forward_kernel(
 ):
     # Program dimensions
     row = tl.program_id(0).to(tl.int64)
-    cols = tl.arange(0, block_size)
+    cols = tl_arange(0, block_size)
     mask = cols < n_cols
     offsets = row * n_cols + cols
 
@@ -75,10 +75,10 @@ def triton_normalization_backward_kernel_1(
     block_size_row: tl_constexpr,
 ):
     # row_start = tl.program_id(0)*block_size_row
-    rows = tl.program_id(0) * block_size_row + tl.arange(0, block_size_row)[:, None]
+    rows = tl.program_id(0) * block_size_row + tl_arange(0, block_size_row)[:, None]
     row_mask = rows < n_rows
 
-    cols = tl.arange(0, block_size)[None, :]
+    cols = tl_arange(0, block_size)[None, :]
 
     col_mask = cols < n_cols
     mask = col_mask & row_mask
@@ -140,15 +140,15 @@ def triton_normalization_backward_kernel_2(
     block_size_n: tl_constexpr,
 ):
     pid = tl.program_id(0)
-    cols = pid * block_size_n + tl.arange(0, block_size_n)
-    grad_weight_partial_sum = tl.zeros((block_size_m, block_size_n), dtype=tl.float32)
+    cols = pid * block_size_n + tl_arange(0, block_size_n)
+    grad_weight_partial_sum = tl_full((block_size_m, block_size_n), 0, dtype=tl.float32)
     if has_bias:
-        grad_bias_partial_sum = tl.zeros((block_size_m, block_size_n), dtype=tl.float32)
+        grad_bias_partial_sum = tl_full((block_size_m, block_size_n), 0, dtype=tl.float32)
     col_mask = cols < n_cols
 
     # Partial sums.
     for i in range(0, m, block_size_m):
-        rows = i + tl.arange(0, block_size_m)
+        rows = i + tl_arange(0, block_size_m)
         mask = (rows[:, None] < m) & (cols[None, :] < n_cols)
         offsets = rows[:, None] * n_cols + cols[None, :]
         grad_weight_partial_sum += tl.load(grad_weight_partial_ptr + offsets, mask=mask, other=0.0)

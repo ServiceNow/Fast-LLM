@@ -231,14 +231,14 @@ def load_and_compare_checkpoints(model_testing_config):
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained(
-    model_testing_config, run_test_script_base_path, get_convert_path, load_and_compare_checkpoints
+    model_testing_config, run_test_script_base_path, get_convert_path, load_and_compare_checkpoints, testing_device
 ):
     # Test that loadind a pretrained model from either converted checkpoint always yields the exact same model.
     reference_config = model_testing_config.model_config_class.from_dict(
         yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
     )
     reference_shard = safetensors.torch.load_file(
-        get_convert_path() / "rank_0.safetensors", device="cuda" if torch.cuda.is_available() else "cpu"
+        get_convert_path() / "rank_0.safetensors", device=str(testing_device)
     )[_WEIGHT_SHARD_SAVE_NAME]
     load_and_compare_checkpoints(
         FastLLMCheckpointFormat,
@@ -304,8 +304,7 @@ def test_load_pretrained(
 
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
-def test_huggingface_model(model_testing_config, get_convert_path):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def test_huggingface_model(model_testing_config, get_convert_path, testing_device):
     distributed_update = {("distributed", "use_cuda"): torch.cuda.is_available()}
     if model_testing_config.checkpoint_format is None:
         return
@@ -331,11 +330,11 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         384,
         size=(4, 100),
         dtype=torch.int64,
-        device=device,
+        device=testing_device,
     )
     kwargs = {}
     if model_testing_config.model_type == "multimodal":
-        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(device)
+        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(testing_device)
         kwargs["image_sizes"] = torch.tensor(
             [
                 [20, 20],  # Full image, 25 patches
@@ -373,7 +372,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
     errors = []
     model_as_hf = (
         model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True)
-        .to("cuda" if torch.cuda.is_available() else "cpu")
+        .to(testing_device)
         .eval()
     )
     for name, model in zip(

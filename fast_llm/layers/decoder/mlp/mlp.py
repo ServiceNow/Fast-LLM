@@ -44,7 +44,9 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, self._intermediate_2_dim = self._get_intermediate_dims()
 
-        self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
+        self._activation_fn = (
+            triton_mlp_activation_autograd if TritonConfig.enabled(torch.device("cuda")) else torch_mlp_activation
+        )
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = self._config.layer_1.get_layer(

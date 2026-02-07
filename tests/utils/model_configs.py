@@ -211,6 +211,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "save": True,
                 "show": False,
             },
+            # Triton kernels are extremely slow in interpreter mode.
+            "enable_triton_kernels": torch.cuda.is_available(),
             # Uncomment to enable model debug logging:
             # "model_debug_level": _LOG_LEVEL,
         },

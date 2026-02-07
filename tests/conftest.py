@@ -279,3 +279,8 @@ def pytest_xdist_make_scheduler(config, log):
     # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
     assert config.getvalue("dist") == "load"
     return xdist.scheduler.LoadGroupScheduling(config, log)
+
+
+@pytest.fixture(scope="session")
+def testing_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")

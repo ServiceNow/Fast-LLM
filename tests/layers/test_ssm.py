@@ -85,7 +85,7 @@ def _compare_mixers(
 @pytest.mark.slow
 # Arguments ('seq_idx',) not implemented for torch implementation of 1d convolution.
 @pytest.mark.skipif(not transformers.utils.import_utils.is_causal_conv1d_available(), reason="GDN deps missing")
-def test_gdn():
+def test_gdn(testing_device):
     dtype = torch.bfloat16
 
     NUM_V_HEADS = 4
@@ -103,7 +103,7 @@ def test_gdn():
 
     hf_layer = (
         Apriel2GatedDeltaNet(HIDDEN_SIZE, {**config_common, "norm_eps": 1e-5}, layer_idx=0, dtype=dtype)
-        .to(device="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype)
+        .to(device=testing_device, dtype=dtype)
         .eval()
     )
     fast_llm_config = GatedDeltaNetConfig.from_dict(config_common, {"normalization": {"epsilon": 1e-5}})

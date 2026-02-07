@@ -7,7 +7,7 @@ import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, tl_full, triton, triton_jit
 
 
 @triton_jit()
@@ -19,7 +19,7 @@ def triton_copy_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
-    offsets = block_start + tl.arange(0, block_size)
+    offsets = block_start + tl_arange(0, block_size)
     mask = offsets < numel
     input_ = tl.load(input_ptr + offsets, mask=mask)
     tl.store(out_ptr + offsets, input_, mask=mask)
@@ -28,11 +28,12 @@ def triton_copy_kernel(
 def triton_copy(
     input_: torch.Tensor,
     out: torch.Tensor,
+    use_triton: bool | None = None,
 ) -> torch.Tensor:
     """
     A triton implementation of tensor copying (`torch.Tensor.copy_()`).
     """
-    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
+    if not TritonConfig.enabled(input_.device, use_triton):
         return out.copy_(input_)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()
@@ -53,19 +54,20 @@ def triton_fill_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
-    offsets = block_start + tl.arange(0, block_size)
+    offsets = block_start + tl_arange(0, block_size)
     mask = offsets < numel
-    tl.store(input_ptr + offsets, tl.full((block_size,), value, dtype), mask=mask)
+    tl.store(input_ptr + offsets, tl_full((block_size,), value, dtype), mask=mask)
 
 
 def triton_fill(
     input_: torch.Tensor,
     value: float | int,
+    use_triton: bool | None = None,
 ) -> torch.Tensor:
     """
     A faster triton implementation of tensor copying (`torch.Tensor.fill_()`).
     """
-    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
+    if not TritonConfig.enabled(input_.device, use_triton):
         return input_.fill_(value)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()
@@ -91,7 +93,7 @@ def triton_add_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
-    offsets = block_start + tl.arange(0, block_size)
+    offsets = block_start + tl_arange(0, block_size)
     mask = offsets < numel
     input_ = tl.load(input_ptr + offsets, mask=mask)
     other = tl.load(other_ptr + offsets, mask=mask)
@@ -102,11 +104,12 @@ def triton_add(
     input_: torch.Tensor,
     other: torch.Tensor,
     out: torch.Tensor | None = None,
+    use_triton: bool | None = None,
 ) -> torch.Tensor:
     """
     A faster triton implementation of tensor addition (`torch.Tensor.add()`).
     """
-    if not TritonConfig.TRITON_ENABLED or input_.device.type != "cuda":
+    if not TritonConfig.enabled(input_.device, use_triton):
         return torch.add(input_, other, out=out)
     # TODO: Improve assumptions.
     assert input_.is_contiguous()

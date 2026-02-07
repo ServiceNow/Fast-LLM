@@ -2,7 +2,7 @@ import torch
 
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
 from fast_llm.utils import div
 
 
@@ -25,8 +25,8 @@ def triton_rotary_kernel(
     pid_1 = tl.program_id(axis=1)  # Head index
     position_id = pid_0 % seq_len
 
-    offsets = tl.arange(0, rotary_block_size)
-    head_offsets = pid_1 * head_block_size + tl.arange(0, head_block_size)[:, None]
+    offsets = tl_arange(0, rotary_block_size)
+    head_offsets = pid_1 * head_block_size + tl_arange(0, head_block_size)[:, None]
     input_offsets = stride_0 * (pid_0 // seq_len) + stride_1 * position_id + stride_2 * head_offsets + offsets[None, :]
     input_re_ptr = input_ptr + input_offsets
     input_im_ptr = input_re_ptr + rotary_dim
