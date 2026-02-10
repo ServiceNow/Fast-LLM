@@ -11,7 +11,7 @@ from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageMod
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
-from tests.utils.utils import get_base_model, get_stage
+from tests.utils.utils import get_base_model, get_batch_config, get_stage
 
 SEQUENCE_LENGTH = 200
 BATCH_SIZE = 4
@@ -28,7 +28,6 @@ class LMHeadTestConfig:
     logits_scale_factor: float = 1.0
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
-    sequence_first: bool = False
     loss_masking: bool = False
     prediction_heads: int = 1
     tied_embedding_weight: bool = False
@@ -88,22 +87,14 @@ class LMHeadTestConfig:
     def get_inputs(self) -> tuple[torch.Tensor, dict[str, typing.Any]]:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         input_ = torch.randn(
-            (
-                (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE)
-                if self.sequence_first
-                else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE)
-            ),
+            (BATCH_SIZE * SEQUENCE_LENGTH, HIDDEN_SIZE),
             dtype=(torch.float32 if self.full_precision_residual else self.compute_dtype.torch),
             device=device,
             requires_grad=True,
         )
-        label_shape = (
-            (SEQUENCE_LENGTH + self.prediction_heads - 1, BATCH_SIZE)
-            if self.sequence_first
-            else (BATCH_SIZE, SEQUENCE_LENGTH + self.prediction_heads - 1)
-        )
+        label_shape = (BATCH_SIZE * (SEQUENCE_LENGTH + self.prediction_heads - 1),)
         kwargs: dict[str, typing.Any] = {
-            AttentionKwargs.sequence_first: self.sequence_first,
+            AttentionKwargs.batch_config: get_batch_config(batch_size=BATCH_SIZE, sequence_length=SEQUENCE_LENGTH),
             AttentionKwargs.grad_output: 1.0,
         }
         if self.loss_masking:
@@ -153,28 +144,25 @@ class LMHeadTestConfig:
         losses = {}
 
         if self.actual_label_loss is not False:
-            if self.sequence_first:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    head._prediction_distance : head._prediction_distance + logits.size(0)
+            labels = (
+                kwargs[LanguageModelKwargs.labels]
+                .view(BATCH_SIZE, (SEQUENCE_LENGTH + self.prediction_heads - 1))[
+                    :, head._prediction_distance : head._prediction_distance + SEQUENCE_LENGTH
                 ]
-            else:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    :, head._prediction_distance : head._prediction_distance + logits.size(1)
-                ]
-            label_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2), labels.flatten(), reduction="none"
-            ).mean()
+                .flatten()
+            )
+            label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
             losses["label"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2),
-                torch.softmax(kwargs[f"distillation_logits"].flatten(0, -2), -1),
+                logits,
+                torch.softmax(kwargs[f"distillation_logits"], -1),
                 reduction="none",
             )
             if LanguageModelKwargs.loss_mask in kwargs:
-                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask].flatten()
+                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask]
             distillation_loss = distillation_loss.mean()
             losses["distillation"] = distillation_loss.detach()
             total_loss = total_loss + float(self.distillation_loss) * distillation_loss
@@ -220,7 +208,6 @@ def _add_configs(base_name: str, **kwargs):
 _add_configs("default")
 _add_configs("bfloat16", compute_dtype=DataType.bfloat16)
 _add_configs("full_precision_residual", full_precision_residual=True)
-_add_configs("sequence_first", sequence_first=True)
 _add_configs("logit_scaling", logits_scale_factor=5.0)
 _add_configs("tied_embedding_weight", tied_embedding_weight=True)
 _add_configs("multi_token_prediction", prediction_heads=2)

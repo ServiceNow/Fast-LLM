@@ -88,10 +88,10 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
     _config: ConfigType
 
     def preprocess_meta(
-        self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
+        self, batch_config: GPTBatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
         preprocessed_meta = []
-        for tokens, kwargs in super().preprocess_meta(batch_meta, phase):
+        for tokens, kwargs in super().preprocess_meta(batch_config, phase):
             kwargs[LanguageModelKwargs.token_ids] = tokens
             kwargs[LanguageModelKwargs.mask_inputs] = True
             # TODO: What about sequence data?
@@ -135,13 +135,8 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
                 )
             )
             # Use vision encoder's internal hidden dim (for embeddings/encoder), not the output dim (for adapter)
-            hidden_dims = (
-                (hidden_batch_and_sequence_q_dim, scalar_dim, self.vision_encoder._vision_hidden_dim)
-                if (sequence_first := kwargs[LanguageModelKwargs.sequence_first])
-                else (scalar_dim, hidden_batch_and_sequence_q_dim, self.vision_encoder._vision_hidden_dim)
-            )
+            hidden_dims = (scalar_dim, hidden_batch_and_sequence_q_dim, self.vision_encoder._vision_hidden_dim)
             kwargs[self._vision_encoder_namespace] = {
-                VisionKwargs.sequence_first: sequence_first,
                 VisionKwargs.sequence_k_dim: sequence_k_dim,
                 VisionKwargs.sequence_q_dim: sequence_q_dim,
                 VisionKwargs.hidden_dims: hidden_dims,
@@ -200,17 +195,11 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
         # We need to modify `local_unpadded_size` directly in `preprocessed_meta` since it's the one used by the engine.
         # Unsafe, but only needed for testing.
         # TODO: Doesn't work with gradient accumulation (only sees the last value).
-        hidden_batch_and_sequence_q_dim = kwargs[self._vision_encoder_namespace][VisionKwargs.hidden_dims][
-            0 if kwargs[self._vision_encoder_namespace][VisionKwargs.sequence_first] else 1
-        ]
+        hidden_batch_and_sequence_q_dim = kwargs[self._vision_encoder_namespace][VisionKwargs.hidden_dims][0]
         assert isinstance(hidden_batch_and_sequence_q_dim, PatchSequenceTensorDim)
         PatchSequenceTensorDim.local_unpadded_size = cropped_image_patches.patches.size(0)
 
-        kwargs[LanguageModelKwargs.embedding_map] = (
-            (cropped_image_patches.token_map, cropped_image_patches.sample_map)
-            if kwargs[LanguageModelKwargs.sequence_first]
-            else (cropped_image_patches.sample_map, cropped_image_patches.token_map)
-        )
+        kwargs[LanguageModelKwargs.embedding_map] = (cropped_image_patches.sample_map, cropped_image_patches.token_map)
 
         super().preprocess(kwargs)
 

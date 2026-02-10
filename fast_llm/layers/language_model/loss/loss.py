@@ -8,6 +8,7 @@ from fast_llm.core.ops import split_op
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 
@@ -65,13 +66,11 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     ) -> torch.Tensor | None:
         # MTP shift
         if multi_token_format and self._prediction_heads > 1:
-            sequence_first: bool = kwargs[LanguageModelLossKwargs.sequence_first]
-            sequence_q_length = target.size(1 - sequence_first) + 1 - self._prediction_heads
-            target_slice = slice(self._prediction_distance, self._prediction_distance + sequence_q_length)
-            target = target[target_slice] if sequence_first else target[:, target_slice]
-
-        # Flatten the batch and sequence dimensions.
-        target = target.flatten(0, 1)
+            batch_config: GPTBatchConfig = kwargs[LanguageModelKwargs.batch_config]
+            sequence_q = batch_config.sequence_q_dim.size
+            target = target.unflatten(0, (batch_config.batch_dim.size, sequence_q + self._prediction_heads - 1))[
+                :, self._prediction_distance : self._prediction_distance + sequence_q
+            ].flatten(0, 1)
 
         # Get the local chunk.
         if self._sequence_parallel:

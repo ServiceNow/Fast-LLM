@@ -4,12 +4,16 @@ import typing
 import pytest
 import torch
 
+from fast_llm.config import NoAutoValidate
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import set_model_names
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.functional.triton import triton_available
+from fast_llm.models.gpt.config import GPTBatchConfig
 from tests.utils.global_variables import TEST_RESULTS_PATH
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,18 @@ def get_base_model(config: FastLLMModelConfig):
     base_model = config.get_base_model_config_class().get_base_model(config.base_model, config.distributed)
     base_model.setup(distributed := Distributed(config.distributed))
     return base_model, distributed
+
+
+def get_batch_config(
+    cls: type[BatchConfig] = GPTBatchConfig, distributed_config: DistributedConfig | None = None, **kwargs
+):
+    if distributed_config is None:
+        distributed_config = DistributedConfig()
+    with NoAutoValidate():
+        out = cls(**kwargs)
+    out.setup(distributed_config)
+    out.validate()
+    return out
 
 
 def get_stage(

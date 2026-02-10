@@ -69,7 +69,6 @@ def _compare_mixers(
     sequence_lengths = [[SEQ_LEN] for _ in range(hidden_states.size(0))]
     fast_kwargs = {
         BlockKwargs.device: distributed.device,
-        BlockKwargs.sequence_first: False,
         BlockKwargs.sequence_lengths: sequence_lengths,
         BlockKwargs.hidden_dims: (HIDDEN_SIZE,),
         BlockKwargs.sequence_q_dim: TensorDim("", SEQ_LEN),

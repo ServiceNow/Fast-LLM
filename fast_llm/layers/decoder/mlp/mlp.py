@@ -9,7 +9,6 @@ from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, Tenso
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
-from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -85,16 +84,11 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
             if config.hardware and self._config.recompute_level.recompute_layer_1
             else config
         )
-
-        # Get the layer 2 input dims, accounting for ordering and possible sequence-parallelism.
-        # TODO: Don't rely on kwargs dimensions.
-        if kwargs[AttentionKwargs.sequence_first]:
-            dims = (kwargs[AttentionKwargs.sequence_q_dim], input_.dims[1], self._intermediate_2_dim)
-        else:
-            dims = (input_.dims[0], kwargs[AttentionKwargs.sequence_q_dim], self._intermediate_2_dim)
         # Also adjust the dtype in case of full-precision residual
         layer_2_input = TensorMeta.from_dims(
-            dims, tensor_name="intermediate_1", dtype=self._distributed_config.compute_dtype.torch
+            (input_.dims[0], self._intermediate_2_dim),
+            tensor_name="intermediate_1",
+            dtype=self._distributed_config.compute_dtype.torch,
         )
 
         # TODO: Add marginal compute? (ex. activation, gate + up)
@@ -141,6 +135,7 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         bias = self.layer_2.bias if self._parallel_dim.group else None
         # Use None for dims when output_dim differs from hidden_dim (e.g., adapter projections)
         # to let _debug infer dims from actual tensor shape
-        dims = None if self._output_dim != self._hidden_dim else kwargs.get(BlockKwargs.hidden_dims)
-        self._debug(out, None, dims, kwargs, bias=bias)
+        self._debug(
+            out, None, (kwargs[BlockKwargs.batch_config].hidden_token_dim, self._hidden_dim), kwargs, bias=bias
+        )
         return out, bias

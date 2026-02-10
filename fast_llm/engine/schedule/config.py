@@ -37,6 +37,12 @@ class BatchConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    micro_sequences: int = Field(
+        default=1,
+        desc="Number of sequential splits of the batch + sequence.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
     batch_size: int = Field(
         default=None,
         desc="Global batch size, in samples. May be derived or constrained be other quantities (= micro-batch size * sequential micro-batches * batch-data-parallel).",
@@ -54,11 +60,7 @@ class BatchConfig(Config):
 
     @functools.cached_property
     def num_inputs(self) -> int:
-        return self.sequential_micro_batches * self.micro_batch_splits
-
-    @functools.cached_property
-    def micro_batch_splits(self) -> int:
-        return 1
+        return self.sequential_micro_batches * self.micro_sequences
 
     def _validate(self) -> None:
         # Use the distributed properties to determine the batch size and its breakdown.
@@ -104,7 +106,11 @@ class BatchConfig(Config):
 
         if self._distributed.pipeline_parallel > 1 and self.depth_first_micro_batches > 1:
             raise NotImplementedError("Depth-first pipeline parallelism not yet implemented")
+
         super()._validate()
+
+        if self.micro_sequences > 1 and self.micro_batch_size > 1:
+            raise RuntimeError("Micro-sequences don't make sense with a micro-batch size > 1.")
 
 
 @config_class()

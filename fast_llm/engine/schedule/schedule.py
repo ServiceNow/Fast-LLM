@@ -14,7 +14,6 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
-from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -73,11 +72,11 @@ class Step:
 
     @property
     def micro_batch_split(self) -> int:
-        return self.data_index % self.config.micro_batch_splits
+        return self.data_index % self.config.micro_sequences
 
     @property
     def micro_batch(self) -> int:
-        return self.data_index // self.config.micro_batch_splits
+        return self.data_index // self.config.micro_sequences
 
     @property
     def depth_first_micro_batch(self) -> int:
@@ -166,10 +165,6 @@ class Schedule(abc.ABC):
     def batch_config(self) -> BatchConfig:
         return self._batch_config
 
-    @property
-    def preprocessed_meta(self) -> list[tuple[TensorMeta, dict]]:
-        return self._preprocessed_meta
-
     def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
 
@@ -200,7 +195,7 @@ class Schedule(abc.ABC):
             Assert.in_range(
                 step.data_index,
                 0,
-                self._batch_config.sequential_micro_batches * self._batch_config.micro_batch_splits,
+                self._batch_config.sequential_micro_batches * self._batch_config.micro_sequences,
             )
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
@@ -472,7 +467,7 @@ class Schedule(abc.ABC):
                     step.next_step.meta_kwargs = step.meta_kwargs
 
     def get_data_index(self, micro_batch: int, micro_batch_split: int) -> int:
-        return micro_batch * self._batch_config.micro_batch_splits + micro_batch_split
+        return micro_batch * self._batch_config.micro_sequences + micro_batch_split
 
     def get_data_index_split(
         self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_batch_split: int
@@ -495,7 +490,7 @@ class Schedule(abc.ABC):
         for depth_first_micro_batch in range(self._batch_config.depth_first_micro_batches):
             for stage in range(self._num_stages):
                 for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                    for micro_batch_split in range(self._batch_config.micro_batch_splits):
+                    for micro_batch_split in range(self._batch_config.micro_sequences):
                         steps.append(
                             Step(
                                 config=self._batch_config,
@@ -509,7 +504,7 @@ class Schedule(abc.ABC):
             if self._is_training:
                 for stage in reversed(range(first_grad_stage, self._num_stages)):
                     for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                        for micro_batch_split in reversed(range(self._batch_config.micro_batch_splits)):
+                        for micro_batch_split in reversed(range(self._batch_config.micro_sequences)):
                             steps.append(
                                 Step(
                                     config=self._batch_config,

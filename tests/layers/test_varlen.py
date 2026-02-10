@@ -12,7 +12,7 @@ from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionCo
 from fast_llm.layers.ssm.gdn import _causal_conv1d_available
 from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage
+from tests.utils.utils import get_batch_config, get_stage
 
 
 # TODO: include mamba varlen
@@ -45,21 +45,19 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     """
     Check that Gated Delta Net forward/backward match with and without packing.
     """
-    hidden_size = 32
-    hidden_dim = TensorDim("hidden", hidden_size)
+    hidden_dim = TensorDim("hidden", hidden_size := 32)
     distributed = Distributed(
         distributed_config := DistributedConfig(compute_dtype=DataType.float16, use_cuda=torch.cuda.is_available())
     )
     mixer = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
     stage = get_stage([mixer], distributed)
 
-    batch_size = 2  # cu_seqlens path requires flattened batch
-    seq_len = 15
+    batch_config = get_batch_config(batch_size=(batch_size := 2), sequence_length=(sequence_length := 15))
 
     sequence_lengths = [[6, 9], [4, 1, 10]]
     hidden_states = torch.randn(
         batch_size,
-        seq_len,
+        sequence_length,
         hidden_size,
         device=distributed.device,
         dtype=distributed_config.compute_dtype.torch,
@@ -67,17 +65,14 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     )
 
     kwargs = {
+        BlockKwargs.batch_config: batch_config,
         BlockKwargs.device: distributed.device,
-        BlockKwargs.sequence_first: False,
-        BlockKwargs.hidden_dims: (hidden_dim,),
+        BlockKwargs.sequence_k_dim: TensorDim("", sequence_length),
     }
 
     kwargs_packed = {
         **kwargs,
         BlockKwargs.sequence_lengths: sequence_lengths,
-        BlockKwargs.sequence_length: seq_len,
-        BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
-        BlockKwargs.sequence_k_dim: TensorDim("", seq_len),
     }
     mixer.preprocess(kwargs_packed)
 
@@ -92,13 +87,11 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     out_refs = []
     for i in range(batch_size):
         for seq in torch.split(hidden_states[i], sequence_lengths[i], dim=0):
-            seq_len_ = len(seq)
+            sequence_length_ = len(seq)
             kwargs_seq = {
-                **kwargs,
-                BlockKwargs.sequence_lengths: [[seq_len_]],
-                BlockKwargs.sequence_length: seq_len_,
-                BlockKwargs.sequence_q_dim: TensorDim("", seq_len_),
-                BlockKwargs.sequence_k_dim: TensorDim("", seq_len_),
+                BlockKwargs.batch_config: get_batch_config(sequence_length=sequence_length_),
+                BlockKwargs.sequence_lengths: [[sequence_length_]],
+                BlockKwargs.sequence_k_dim: TensorDim("", sequence_length_),
             }
             mixer.preprocess(kwargs_seq)
             out, context = stage.forward(seq.unsqueeze(0), kwargs_seq)

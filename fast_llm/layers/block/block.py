@@ -84,17 +84,17 @@ class DebugLayer:
         if dims is None:
             dims = tuple(f"dim_{i}" for i in range(tensor.ndim))
         hidden_dims = {}
-        if BlockKwargs.hidden_dims in kwargs:
-            for dim in kwargs[BlockKwargs.hidden_dims]:
-                hidden_dims[dim.name] = dim
-        if BlockKwargs.sequence_q_dim in kwargs:
-            hidden_dims[kwargs[BlockKwargs.sequence_q_dim].name] = kwargs[BlockKwargs.sequence_q_dim]
+        # if BlockKwargs.hidden_dims in kwargs:
+        #    for dim in kwargs[BlockKwargs.hidden_dims]:
+        #        hidden_dims[dim.name] = dim
+        # if BlockKwargs.sequence_q_dim in kwargs:
+        #    hidden_dims[kwargs[BlockKwargs.sequence_q_dim].name] = kwargs[BlockKwargs.sequence_q_dim]
         return TensorMeta.from_dims(
             tuple(
                 (
                     dim
                     if isinstance(dim, TensorDim)
-                    else hidden_dims[dim] if dim in hidden_dims else TensorDim(dim, tensor.size(i))
+                    else hidden_dims[dim]  # if dim in hidden_dims else TensorDim(dim, tensor.size(i))
                 )
                 for i, dim in enumerate(dims)
             ),

@@ -171,9 +171,6 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         inner_projection = self.in_proj(input_)
         dt = self.dt_proj(self.dt_in_proj(input_))
         # Standardize to (batch, sequence, local_inner_projection)
-        if kwargs[BlockKwargs.sequence_first]:
-            inner_projection = inner_projection.transpose(0, 1)
-            dt = dt.transpose(0, 1)
 
         sequence_length = inner_projection.size(1)
 
@@ -245,9 +242,6 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
-        if kwargs[BlockKwargs.sequence_first]:
-            # TODO: Is contiguous needed?
-            y = y.transpose(0, 1).contiguous()
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         out, bias = self.out_proj(y)

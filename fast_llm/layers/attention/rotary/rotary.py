@@ -90,10 +90,10 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
     _tensor_cache_max_sequence_length: int = -1
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[AttentionKwargs.sequence_length], kwargs[AttentionKwargs.device])
+        self._create_tensors(kwargs[AttentionKwargs.batch_config].sequence_length, kwargs[AttentionKwargs.device])
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
-            :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
+            :, sequence_k - kwargs[AttentionKwargs.batch_config].sequence_q_dim.size : sequence_k
         ]
         kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 

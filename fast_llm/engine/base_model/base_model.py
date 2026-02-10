@@ -8,6 +8,7 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.tensor import ParameterMeta, TensorMeta
 
 if typing.TYPE_CHECKING:
@@ -174,7 +175,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
     def preprocess_batch(
         self,
         batch: typing.Any,
-        preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
+        batch_config: BatchConfig | None = None,
         *,
         phase: PhaseType,
         iteration: int,

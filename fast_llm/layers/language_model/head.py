@@ -16,7 +16,6 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
-from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LM_HEAD_LOSS_NAME,
@@ -168,7 +167,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             ln_output = self.final_norm(input_)
             # Transformers expect normalized outputs for the last transformer layer,
             # so we add the norm output to the hidden states.
-            self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
+            self._debug(
+                ln_output,
+                "final_norm",
+                (kwargs[LanguageModelKwargs.batch_config].hidden_token_dim, self._hidden_dim),
+                kwargs,
+            )
         loss, ln_output_grad = self._logits_loss_forward_backward(ln_output.detach(), kwargs, losses)
         if ln_output_grad is None:
             return loss, None
@@ -189,11 +193,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             logits = logits.detach()
             if kwargs.get("global_logits"):
                 if self._vocab_parallel:
-                    logits = gather_op(logits, self._parallel_dim.group, 2)
+                    logits = gather_op(logits, self._parallel_dim.group, 1)
                 elif self._sequence_parallel_logits:
-                    logits = gather_op(
-                        logits, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-                    )
+                    logits = gather_op(logits, self._parallel_dim.group, 0)
             kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = (
                 logits.detach()
             )
@@ -265,18 +267,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
-
-        sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
-        if LanguageModelKwargs.hidden_dims in kwargs:
-            batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
-            dims = (
-                (sequence_dim, batch_dim, self._vocab_dim)
-                if kwargs[LanguageModelKwargs.sequence_first]
-                else (batch_dim, sequence_dim, self._vocab_dim)
-            )
-        else:
-            dims = None
-        self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
+        self._debug(
+            logits,
+            "logits",
+            (kwargs[LanguageModelKwargs.batch_config].hidden_token_dim, self._hidden_dim),
+            kwargs,
+            scale=self._config.logits_scale_factor,
+        )
 
         if return_logits:
             return logits, None

@@ -31,7 +31,7 @@ class BlockDimNames:
 
 
 class BlockKwargs:
-    sequence_first = "sequence_first"
+    batch_config = "batch_config"
     hidden_dims = "hidden_dims"
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"

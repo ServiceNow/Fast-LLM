@@ -7,9 +7,12 @@ from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.conversion.config import (
@@ -43,12 +46,6 @@ class GPTBatchConfig(BatchConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    micro_sequence_length: int = Field(
-        default=None,
-        desc="Number of tokens in a micro-sequence (must divide the sequence length).",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0),
-    )
     use_loss_masking_spans: bool = Field(
         default=False,
         desc="Read loss masking spans from the dataset.",
@@ -70,15 +67,61 @@ class GPTBatchConfig(BatchConfig):
     )
 
     def _validate(self) -> None:
-        if self.micro_sequence_length is None:
-            with self._set_implicit_default():
-                self.micro_sequence_length = self.sequence_length
         super()._validate()
+        Assert.multiple(self.sequence_length, self.micro_sequences)
 
     @functools.cached_property
-    def micro_batch_splits(self) -> int:
-        assert self._validated
-        return div(self.sequence_length, self.micro_sequence_length)
+    def micro_sequence_length(self) -> int:
+        return div(self.sequence_length, self.micro_sequences)
+
+    @functools.cached_property
+    def batch_dim(self) -> TensorDim:
+        return TensorDim(
+            BlockDimNames.batch,
+            self.micro_batch_size * self._distributed.batch_data_parallel,
+            self._distributed.get_distributed_dim(DistributedDimNames.batch_data),
+        )
+
+    @functools.cached_property
+    def sequence_q_dim(self) -> TensorDim:
+        # TODO: Calculate hidden dims elsewhere?
+        return TensorDim(
+            "sequence_q",
+            self.micro_sequence_length,
+            self._distributed.get_distributed_dim(DistributedDimNames.sequence_data),
+        )
+
+    @functools.cached_property
+    def sequence_k_dims(self) -> list[TensorDim]:
+        return [
+            TensorDim("sequence_k", sequence_k)
+            for sequence_k in range(
+                self.sequence_q_dim.size * (self._distributed.sequence_data_rank + 1),
+                self.sequence_length,
+                self.micro_sequence_length,
+            )
+        ]
+
+    @functools.cached_property
+    def token_dim(self) -> TensorDim:
+        return TensorDim(
+            "token",
+            self.batch_dim.global_size * self.sequence_q_dim.global_size,
+            self._distributed.get_distributed_dim(DistributedDimNames.data),
+        )
+
+    @functools.cached_property
+    def hidden_token_dim(self) -> TensorDim:
+        # The token dimension as appears in hidden states, i.e. with possible sequence-tensor-parallel split.
+        return (
+            TensorDim(
+                "token_tp",
+                self.token_dim.global_size,
+                self._distributed.get_distributed_dim(DistributedDimNames.tensor_and_data),
+            )
+            if self._distributed.sequence_tensor_parallel
+            else self.token_dim
+        )
 
 
 @config_class()

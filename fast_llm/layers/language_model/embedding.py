@@ -8,9 +8,11 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -27,11 +29,6 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     # Ensure the layer is on its own stage.
     layer_count: float = 1000.0
     _config: ConfigType
-
-    # Preprocessing
-    _rotary_embedding_frequencies: torch.Tensor
-    _position_ids: torch.Tensor
-    _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
         self,
@@ -154,7 +151,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
-                kwargs[LanguageModelKwargs.hidden_dims],
+                (kwargs[LanguageModelKwargs.batch_config].hidden_token_dim, self._hidden_dim),
                 tensor_name=f"{self.module_name} output",
                 dtype=self._residual_dtype,
             )
@@ -167,8 +164,6 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             # TODO: Support multiple encoders.
             # TODO: Support pipeline-parallel.
             token_ids = kwargs.get(LanguageModelKwargs.token_ids)
-            # Drop the placeholder batch dimension, remove patch padding.
-            input_ = input_.squeeze(int(kwargs[LanguageModelKwargs.sequence_first]))
 
         out = self._forward(
             input_,
@@ -178,7 +173,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             kwargs.get(LanguageModelKwargs.mask_inputs),
             embedding_map,
         )
-        self._debug(out, None, kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
+        self._debug(out, None, (kwargs[LanguageModelKwargs.batch_config].hidden_token_dim, self._hidden_dim), kwargs)
         return out
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
@@ -188,29 +183,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if not self._config.position_embeddings.enabled:
             return
-        self._create_position_embeddings(kwargs[LanguageModelKwargs.sequence_length], self._distributed.device)
-        sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
-        sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-        if not self._config.cross_document_position_embeddings:
-            position_ids = torch.stack(
-                [
-                    torch.cat([torch.arange(x) for x in sample_lens])
-                    for sample_lens in kwargs[LanguageModelKwargs.sequence_lengths]
-                ]
-            ).to(self._distributed.device, dtype=torch.int64)
-            position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
-            if kwargs[LanguageModelKwargs.sequence_first]:
-                position_ids = position_ids.transpose(0, 1)
-            kwargs[LanguageModelKwargs.position_ids] = position_ids
+        # TODO: Move to data preprocessing.
+        if self._config.cross_document_position_embeddings:
+            batch_config: GPTBatchConfig = kwargs[LanguageModelKwargs.batch_config]
+            sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
+            sequence_q = batch_config.sequence_q_dim.size
+            kwargs[LanguageModelKwargs.position_ids] = torch.arange(
+                sequence_k - sequence_q, sequence_k, device=self._distributed.device, dtype=torch.int64
+            ).repeat(batch_config.batch_dim.size)
         else:
-            kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
-                sequence_k - sequence_q : sequence_k
-            ].unsqueeze(int(kwargs[LanguageModelKwargs.sequence_first]))
-
-    def _create_position_embeddings(self, sequence_length: int, device: torch.device) -> None:
-        if sequence_length <= self._tensor_cache_max_sequence_length:
-            return
-        self._tensor_cache_max_sequence_length = sequence_length
-
-        Assert.leq(sequence_length, self._config.num_position_embeddings)
-        self._position_ids = torch.arange(0, sequence_length, device=device, dtype=torch.int64)
+            preprocess_for_varlen(kwargs, self._distributed.device, return_position_ids=True)

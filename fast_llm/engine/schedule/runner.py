@@ -335,7 +335,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             if not preprocessed:
                 micro_batch_data = self._multi_stage.base_model.preprocess_batch(
                     micro_batch_data,
-                    context.schedule.preprocessed_meta,
+                    context.schedule.batch_config,
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,
@@ -346,7 +346,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     micro_batch=micro_batch,
                     micro_batch_split=micro_batch_split,
                     num_micro_batches=batch_config.sequential_micro_batches,
-                    micro_batch_splits=batch_config.micro_batch_splits,
+                    micro_batch_splits=batch_config.micro_sequences,
                 )
                 data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
                 if self._stages_owned[0]:

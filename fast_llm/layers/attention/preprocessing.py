@@ -25,7 +25,9 @@ def preprocess_for_varlen(
     """
 
     # TODO: ====== Fix (need to know how much first sequence was cropped) ======
-    Assert.eq(kwargs[MixerKwargs.sequence_k_dim].global_size, kwargs[MixerKwargs.sequence_q_dim].global_size)
+    Assert.eq(
+        kwargs[MixerKwargs.sequence_k_dim].global_size, kwargs[MixerKwargs.batch_config].sequence_q_dim.global_size
+    )
 
     sequence_lengths = [
         sequence_length
