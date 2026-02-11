@@ -12,7 +12,6 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.autograd import AuxiliaryLoss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
@@ -94,11 +93,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
-        logit_dims = (
-            kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,)
-            if BlockKwargs.hidden_dims in kwargs
-            else None
-        )
+        hidden_token_dim = kwargs[BlockKwargs.hidden_token_dim]
+        logit_dims = (hidden_token_dim, self._top_expert_dim)
         self._debug(logits, "Router logits", logit_dims, kwargs)
 
         # Apply z_loss if applicable
@@ -130,7 +126,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         self._debug(top_experts, "router_top_experts", logit_dims, kwargs)
 
         out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
-        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+        self._debug(out, None, (hidden_token_dim, self._hidden_dim), kwargs)
         return out, None
 
     def _forward_dropless(
@@ -241,24 +237,14 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         )
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        if kwargs[AttentionKwargs.sequence_first]:
-            sequence_dim, batch_dim, hidden_dim = input_.dims
-        else:
-            batch_dim, sequence_dim, hidden_dim = input_.dims
-
-        # Applying the tokens per expert on the batch dim so the super() call works as intended.
-        moe_batch_dim = TensorDim(
-            f"moe_{batch_dim.name}", batch_dim.global_size * self._config.experts_per_token, batch_dim.parallel_dim
+        token_dim, hidden_dim = input_.dims
+        # Applying the tokens per expert on the token dim so the super() call works as intended.
+        moe_token_dim = TensorDim(
+            f"moe_{token_dim.name}", token_dim.global_size * self._config.experts_per_token, token_dim.parallel_dim
         )
-
-        if kwargs[AttentionKwargs.sequence_first]:
-            dims = sequence_dim, moe_batch_dim, hidden_dim
-        else:
-            dims = moe_batch_dim, sequence_dim, hidden_dim
-
-        # Also adjust the dtype in case of full-precision residual
-        moe_input = TensorMeta.from_dims(dims, tensor_name=f"moe_{input_.tensor_name}", dtype=input_.dtype)
-
+        moe_input = TensorMeta.from_dims(
+            (moe_token_dim, hidden_dim), tensor_name=f"moe_{input_.tensor_name}", dtype=input_.dtype
+        )
         return super().get_compute_usage(moe_input, kwargs, config) + self.router.get_compute_usage(input_, config)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:

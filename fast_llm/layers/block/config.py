@@ -31,10 +31,11 @@ class BlockDimNames:
 
 
 class BlockKwargs:
-    sequence_first = "sequence_first"
-    hidden_dims = "hidden_dims"
+    batch_dim = "batch_dim"
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
+    token_dim = "token_dim"
+    hidden_token_dim = "hidden_token_dim"
     # TODO: These are confusing
     sequence_length = "sequence_length"
     sequence_lengths = "sequence_lengths"

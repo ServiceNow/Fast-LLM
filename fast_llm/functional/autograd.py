@@ -62,8 +62,8 @@ def grad_is_context(grad_output: torch.Tensor, context: torch.Tensor) -> torch.T
 
 class AuxiliaryLoss(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_: torch.Tensor, aux_loss: torch.Tensor, grad: float) -> torch.Tensor:  # noqa
-        ctx.grad = torch.full_like(aux_loss, grad)
+    def forward(ctx, input_: torch.Tensor, aux_loss: torch.Tensor, grad: float | None) -> torch.Tensor:  # noqa
+        ctx.grad = None if grad is None else torch.full_like(aux_loss, grad)
         return input_
 
     @staticmethod
