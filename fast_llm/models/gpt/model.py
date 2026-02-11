@@ -250,7 +250,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 kwargs[BlockKwargs.output_hidden_states].append(re.compile(r"head\..*logits.*$"))
             else:
                 labels_begin = tokens_begin + 1
-                labels_end = tokens_end + self._config.head.max_prediction_distance
+                labels_end = tokens_end + self._config.head.prediction_heads
                 labels = batch.tokens.crop(labels_begin, labels_end).tokens
 
                 if batch.loss_masking_spans is not None:

@@ -7,12 +7,14 @@ from fast_llm.engine.base_model.base_model import Layer, LayerWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, MultiTokenPredictionConfig
-from fast_llm.layers.language_model.head import LanguageModelHeadBase
+from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelHeadConfig
+from fast_llm.layers.language_model.head import LanguageModelHead
 
 
-class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModelHeadBase[ConfigType]):
+class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[ConfigType]):
     _config: ConfigType
 
     def __init__(
@@ -24,6 +26,7 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModel
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        block_config: DecoderBlockConfig | None = None,
     ):
         super().__init__(
             config,
@@ -32,9 +35,12 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModel
             lr_scale=lr_scale,
             peft=peft,
         )
+        self._enabled = self._config.prediction_heads > 1
+        if self._enabled:
+            assert block_config is not None
         self.blocks = torch.nn.ModuleList(
             [
-                self._config.block.get_layer(
+                block_config.get_layer(
                     self._distributed_config,
                     self._hidden_dim,
                     lr_scale=self._lr_scale,
@@ -43,26 +49,21 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModel
                     # The previous blocks return a stack of shared_hidden and transformer_output.
                     return_input=index < self._config.prediction_heads - 1,
                 )
-                for index in range(self._config.prediction_heads)
+                for index in range(1, self._config.prediction_heads)
             ]
         )
         self.heads = torch.nn.ModuleList(
             [
-                self._config.head.get_layer(
+                LanguageModelHead(
+                    self._config,
                     distributed_config,
                     embeddings_config,
                     hidden_dim=hidden_dim,
                     lr_scale=lr_scale,
                     peft=peft,
                     prediction_distance=index,
-                    prediction_heads=self._config.prediction_heads,
-                    loss_coefficient=(
-                        1.0
-                        if self._config.prediction_loss_coefficient is None
-                        else self._config.prediction_loss_coefficient[index]
-                    ),
                 )
-                for index in range(self._config.prediction_heads)
+                for index in range(1, self._config.prediction_heads)
             ]
         )
 
@@ -70,8 +71,11 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModel
     def _layers_with_namespace(self) -> list[Layer]:
         # Wrap all blocks in a namespace using the unique module name of the first one.
         # This needs to be in a property because `module_name` is set after `__init__`.
-        namespace = self.blocks[0].module_name
-        return [LayerWithNamespace(sublayer, namespace) for layer in self.blocks for sublayer in layer.get_layers()]
+        return [
+            LayerWithNamespace(sublayer, self.blocks[0].module_name)
+            for layer in self.blocks
+            for sublayer in layer.get_layers()
+        ]
 
     def get_layers(self) -> list[Layer]:
         return [
@@ -84,9 +88,13 @@ class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModel
         return sum((head.get_output_weights() for head in self.heads), [])
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        self._layers_with_namespace[0].preprocess(kwargs)
+        if self._enabled:
+            self._layers_with_namespace[0].preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.blocks[0].get_loss_definitions(count=count * self._config.prediction_heads) + [
-            loss_definition for head in self.heads for loss_definition in head.get_loss_definitions(count=count)
-        ]
+        return (
+            self.blocks[0].get_loss_definitions(count=count * (self._config.prediction_heads - 1))
+            + [loss_definition for head in self.heads for loss_definition in head.get_loss_definitions(count=count)]
+            if self._enabled
+            else []
+        )
