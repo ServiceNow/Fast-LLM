@@ -47,7 +47,7 @@ class DebugLayer:
         if bias is not None:
             assert tensor is not None
             tensor = tensor + bias
-        meta = self._get_meta(tensor, name, dims, kwargs)
+        meta = self._get_meta(tensor, name, dims)
 
         if output_hidden_state:
             kwargs[BlockKwargs.hidden_states][name] = (meta, tensor)
@@ -68,7 +68,7 @@ class DebugLayer:
                     "",
                     tensor,
                     level=level,
-                    meta=self._get_meta(tensor, name + f"{name}.grad", dims, kwargs),
+                    meta=self._get_meta(tensor, name + f"{name}.grad", dims),
                     **logging_kwargs,
                 )
 
@@ -76,26 +76,13 @@ class DebugLayer:
         self,
         tensor: torch.Tensor | None,
         name: str,
-        dims: tuple[TensorDim | str, ...] | None,
-        kwargs: dict[str, typing.Any],
-    ) -> TensorMeta | None:
-        if tensor is None:
-            return None
+        dims: tuple[TensorDim | str | None, ...] | None,
+    ) -> TensorMeta:
         if dims is None:
             dims = tuple(f"dim_{i}" for i in range(tensor.ndim))
-        hidden_dims = {}
-        if BlockKwargs.hidden_dims in kwargs:
-            for dim in kwargs[BlockKwargs.hidden_dims]:
-                hidden_dims[dim.name] = dim
-        if BlockKwargs.sequence_q_dim in kwargs:
-            hidden_dims[kwargs[BlockKwargs.sequence_q_dim].name] = kwargs[BlockKwargs.sequence_q_dim]
         return TensorMeta.from_dims(
             tuple(
-                (
-                    dim
-                    if isinstance(dim, TensorDim)
-                    else hidden_dims[dim] if dim in hidden_dims else TensorDim(dim, tensor.size(i))
-                )
+                (dim if isinstance(dim, TensorDim) else TensorDim(f"dim_{i}" if dim is None else dim, tensor.size(i)))
                 for i, dim in enumerate(dims)
             ),
             tensor_name=name,

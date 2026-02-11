@@ -235,6 +235,7 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         rotary_fn = triton_rotary_autograd_ if TritonConfig.enabled(query.device) else rotary_embeddings_real
+        print("AAAAA", query.shape, kwargs[AttentionKwargs.rotary_freq_q].shape)
         query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
         key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
         return query, key

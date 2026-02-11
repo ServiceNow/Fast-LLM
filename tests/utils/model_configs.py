@@ -314,6 +314,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=1.5,
 )
 
 update_and_add_testing_config(
@@ -333,6 +334,7 @@ update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    compare_factor=1.5,
 )
 
 update_and_add_testing_config(
@@ -360,6 +362,7 @@ update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    compare_factor=1.0,
 )
 del MODEL_CONFIGS["starcoder_2"].config_dict["model"]["base_model"]["embeddings"]["num_position_embeddings"]
 
@@ -394,6 +397,7 @@ update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=1.0,
 )
 
 update_and_add_testing_config(
