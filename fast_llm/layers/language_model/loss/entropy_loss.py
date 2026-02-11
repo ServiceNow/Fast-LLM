@@ -53,7 +53,6 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        print("logits", logits.shape)
         return (
             triton_entropy_loss_forward_backward
             if TritonConfig.enabled(logits.device, self._config.use_triton)

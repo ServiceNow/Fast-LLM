@@ -19,7 +19,6 @@ from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.config import EventType, MockEvent, MockStream, ScheduleConfig, StepType, StreamType
 from fast_llm.engine.schedule.schedule import Schedule, Step
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
 
@@ -406,15 +405,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             self._record_event(context, EventType.compute_wait_pipe, step)
 
     def _forward(self, context: BatchContext, step: Step) -> None:
-        print(
-            "IASINBUI",
-            step,
-            (
-                context.batch[step.data_index].get(BlockKwargs.grad_output)
-                if step.data_index in context.batch
-                else "PPPPP"
-            ),
-        )
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
             context.batch[step.data_index],
