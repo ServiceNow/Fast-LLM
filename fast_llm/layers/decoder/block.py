@@ -179,7 +179,6 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         scaled_activation_loss = self._config.distillation_loss_weight * loss
 
         # Backward hook
-        print(kwargs[BlockKwargs.grad_output])
         hidden_states = AuxiliaryLoss.apply(hidden_states, scaled_activation_loss, kwargs.get(BlockKwargs.grad_output))
 
         # Logging

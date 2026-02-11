@@ -330,7 +330,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         if (past_key_values := kwargs.get(AttentionKwargs.past_key_values)) is not None:
             # Clear the lists so tensors can be de-allocated
-            # TODO: ===== Check =====
             key_value = torch.cat((past_key_values.pop(0), key_value), dim=1)
 
         if (presents := kwargs.get(AttentionKwargs.presents)) is not None:
@@ -340,11 +339,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # Manually add the gradients from later micro-sequences.
             key_value = AttachGrad.apply(key_value, present)
 
-        # TODO: ===== Check =====
         key_value = key_value[:, : kwargs[AttentionKwargs.sequence_k_dim].size]
         key, value = key_value.split(self._local_head_groups * self._config.head_size, dim=-1)
 
-        # TODO: ===== Expand batch seq dim =====
         query = query.view(*query.shape[:2], self._local_heads, self._config.head_size)
         key = key.view(*key.shape[:2], self._local_head_groups, self._config.head_size)
         value = value.view(*value.shape[:2], self._local_head_groups, self._config.head_size)
