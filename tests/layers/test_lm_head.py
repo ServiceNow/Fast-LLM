@@ -47,6 +47,7 @@ class LMHeadTestConfig:
             "normalization": {"type": "rms_norm"},
             "logits_scale_factor": self.logits_scale_factor,
             "cross_entropy_splits": self.num_splits,
+            "prediction_heads": self.prediction_heads,
         }
         losses = {}
         if self.label_loss is not False:
@@ -69,15 +70,7 @@ class LMHeadTestConfig:
                 "base_model": {
                     "decoder": {"num_blocks": 0},
                     "embeddings": {"vocab_size": VOCAB_SIZE, "full_precision_residual": self.full_precision_residual},
-                    "head": (
-                        head_config
-                        if self.prediction_heads == 1
-                        else {
-                            "type": "multi_token_prediction",
-                            "head": head_config,
-                            "prediction_heads": self.prediction_heads,
-                        }
-                    ),
+                    "head": head_config,
                     "hidden_size": HIDDEN_SIZE,
                     "tied_embedding_weight": self.tied_embedding_weight,
                 },
@@ -246,8 +239,9 @@ def test_lm_head(test_config: LMHeadTestConfig):
         else None
     )
 
-    for prediction_distance, head in enumerate(model.head.heads):
+    for prediction_distance in range(model_config.base_model.head.prediction_heads):
         # Prepare the LM head
+        head = model.head if prediction_distance == 0 else model.multi_token_prediction.heads[prediction_distance - 1]
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
         is_duplicate = test_config.tied_embedding_weight or prediction_distance > 0

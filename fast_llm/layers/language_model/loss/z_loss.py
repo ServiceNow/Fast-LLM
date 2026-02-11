@@ -10,12 +10,6 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # TODO: Support vocab_parallel
-        if self._vocab_parallel:
-            raise NotImplementedError()
-
     def forward_backward(
         self,
         logits: "torch.Tensor",

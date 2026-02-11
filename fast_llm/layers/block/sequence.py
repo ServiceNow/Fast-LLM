@@ -24,6 +24,7 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_last_layer_input: bool = False,
     ):
         super().__init__(
             config,
@@ -40,8 +41,13 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
                     hidden_dim,
                     lr_scale=self._lr_scale,
                     peft=self._peft,
+                    **(
+                        {"return_input": True}
+                        if return_last_layer_input and block_index == self._config.num_blocks - 1
+                        else {}
+                    ),
                 )
-                for _ in range(self._config.num_blocks)
+                for block_index in range(self._config.num_blocks)
             ]
         )
 
@@ -75,6 +81,7 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        return_last_layer_input: bool = False,
     ):
         super().__init__(
             config,
@@ -90,8 +97,13 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
                     hidden_dim,
                     lr_scale=self._lr_scale,
                     peft=self._peft,
+                    **(
+                        {"return_input": True}
+                        if return_last_layer_input and block_index == self._config.num_blocks - 1
+                        else {}
+                    ),
                 )
-                for name in self._config.expanded_pattern
+                for block_index, name in enumerate(self._config.expanded_pattern)
             ]
         )
 
