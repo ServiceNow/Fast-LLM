@@ -11,8 +11,13 @@ from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs, TransformerSubLayerName
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
+import logging
+
+logger = logging.getLogger(__name__)
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
+
+
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -130,6 +135,15 @@ class Attention(torch.nn.Module):
         self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
         self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
         self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
+
+        # Log if llama scaling is enabled
+        if self._config.rotary.enabled:
+            beta = self._config.rotary.llama_4_scaling_beta
+            if beta is not None and beta != 0.0:
+                logger.info(
+                    f"Layer {layer_index}: Llama 4 scaling enabled with beta={beta}, "
+                    f"original_context_length={self._config.rotary.original_context_length}"
+                )
 
     def _attn_fused(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
@@ -360,6 +374,32 @@ class Attention(torch.nn.Module):
             query = rotary_fn(query, kwargs[self._transformer_kwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[self._transformer_kwargs.rotary_freq_k])
 
+            # Apply Llama 4 / Ministral3 position-dependent query scaling if configured
+            # scale = 1 + beta * log(1 + floor(position / original_max_position_embeddings))
+            # For varlen attention, scaling is applied later after reshaping to token-major order
+            beta = self._config.rotary.llama_4_scaling_beta
+            if beta is not None and beta != 0.0:
+                # Only apply here for non-varlen; varlen is handled after reshape below
+                if kwargs.get(self._transformer_kwargs.cu_seqlens_q) is None:
+                    seq_q = query.size(1)
+                    seq_k = kwargs[self._transformer_kwargs.sequence_k_dim].size
+                    if seq_q > 0 and seq_k >= seq_q:
+                        orig_max = float(self._config.rotary.original_context_length)
+                        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is not None:
+                            cache_position_q = torch.cat([
+                                torch.arange(int(seq_len), device=query.device, dtype=torch.float32)
+                                for sample_lens in sequence_lengths
+                                for seq_len in sample_lens
+                            ])[seq_k - seq_q : seq_k]
+                        else:
+                            # Non-packed: global positions [seq_k - seq_q, seq_k)
+                            cache_position_q = torch.arange(
+                                seq_k - seq_q, seq_k, device=query.device, dtype=torch.float32
+                            )
+                        scale = 1.0 + float(beta) * torch.log1p(torch.floor(cache_position_q / orig_max))
+                        # query shape: (batch, seq_q, heads, kv_channels)
+                        query = query * scale.to(query.dtype).view(1, seq_q, 1, 1)
+
         window_size = self._decide_window_size()
 
         if self._use_flash_attention:
@@ -370,6 +410,22 @@ class Attention(torch.nn.Module):
                     query = query.view(-1, query.size(-2), query.size(-1))
                     key = key.view(-1, key.size(-2), key.size(-1))
                     value = value.view(-1, value.size(-2), value.size(-1))
+
+                    beta = self._config.rotary.llama_4_scaling_beta if self._config.rotary.enabled else None
+                    if beta is not None and beta != 0.0:
+                        orig_max = float(self._config.rotary.original_context_length)
+                        # cu_seqlens_q has shape [num_docs + 1] with cumulative lengths
+                        doc_lengths = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).tolist()
+                        total_tokens = query.size(0)
+                        if doc_lengths and total_tokens > 0:
+                            cache_position_q = torch.cat([
+                                torch.arange(doc_len, device=query.device, dtype=torch.float32)
+                                for doc_len in doc_lengths
+                            ])
+                            Assert.eq(cache_position_q.size(0), total_tokens, msg="Position count must match token count")
+                            scale = 1.0 + float(beta) * torch.log1p(torch.floor(cache_position_q / orig_max))
+                            # query is now (total_tokens, heads, kv_channels)
+                            query = query * scale.to(query.dtype).view(-1, 1, 1)
                     input_ = _flash_attn_varlen_func(
                         query,
                         key,

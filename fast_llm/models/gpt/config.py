@@ -63,6 +63,18 @@ class LlavaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     vision_name: typing.ClassVar[str] = "pixtral"
     text_name: typing.ClassVar[str] = "mistral"
 
+# class Mistral3GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+#     name: typing.ClassVar[str] = "mistral3"
+#     # Using default values for vision and text models. Can be overridden in the config
+#     vision_name: typing.ClassVar[str] = "pixtral"
+#     text_name: typing.ClassVar[str] = "mistral"
+
+
+class Mistral3GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mistral3"
+    # Using default values for vision and text models. Can be overridden in the config
+    vision_name: typing.ClassVar[str] = "pixtral"
+    text_name: typing.ClassVar[str] = "mistral"
 
 class PixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "pixtral"
@@ -151,6 +163,7 @@ class GPTModelConfig(FastLLMModelConfig):
         MTPLlamaGPTHuggingfaceCheckpointFormat,
         LlavaGPTHuggingfaceCheckpointFormat,
         PixtralGPTHuggingfaceCheckpointFormat,
+        Mistral3GPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod

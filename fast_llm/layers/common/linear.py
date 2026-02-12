@@ -50,6 +50,7 @@ class LinearBase(LinearLike):
         transposed_weight: bool = False,
         auto_bias_grad_accumulation: bool = False,
         lr_scale: float | None | tuple[float | None, ...] = None,
+        allow_no_grad: bool = False,
     ):
         super().__init__()
         self._transposed_weight = transposed_weight
@@ -61,6 +62,7 @@ class LinearBase(LinearLike):
             init_method=weight_init_method,
             auto_grad_accumulation=False,
             lr_scale=lr_scale,
+            allow_no_grad=allow_no_grad,
         )
         if bias:
             self.bias = ParameterMeta.from_dims(
@@ -69,6 +71,7 @@ class LinearBase(LinearLike):
                 weight_decay=False,
                 auto_grad_accumulation=auto_bias_grad_accumulation,
                 lr_scale=lr_scale,
+                allow_no_grad=allow_no_grad,
             )
         else:
             self.bias = None
@@ -93,6 +96,7 @@ class Linear(LinearBase):
         bias_init_method=init_zeros_,
         transposed_weight: bool = False,
         lr_scale: float | None | tuple[float | None, ...] = None,
+        allow_no_grad: bool = False,
     ):
         assert in_dim.parallel_dim is None
         assert out_dim.parallel_dim is None
@@ -104,6 +108,7 @@ class Linear(LinearBase):
             bias_init_method=bias_init_method,
             transposed_weight=transposed_weight,
             lr_scale=lr_scale,
+            allow_no_grad=allow_no_grad,
         )
 
     def forward_only(

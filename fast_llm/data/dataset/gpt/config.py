@@ -79,6 +79,9 @@ class GPTSamplingParameters(SamplingParameters):
     max_image_size: int | None = None
     image_break_token: int | None = None
     image_end_token: int | None = None
+    # Spatial merge size for patch merger. Reduces tokens by spatial_merge_size^2.
+    # Set to 1 (default) for no merging (Llava), 2 for Mistral3.
+    spatial_merge_size: int = 1
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1

@@ -1,0 +1,78 @@
+training:
+  train_iters: 1000
+  num_workers: 1
+  logs:
+    interval: 1
+  checkpoint:
+    interval: 1000
+    keep: 1
+  test_iters: 0
+  export:  
+    format:
+      name: mistral3
+      vision_name: pixtral
+      text_name: mistral
+    interval: 2000
+  wandb:  
+    project_name: mistral-7b-cpt
+    group_name: test
+    entity_name: akshaykalkunte
+batch:
+  micro_batch_size: 1
+  sequence_length: 32768
+  batch_size: 32
+  max_image_size: 1540
+  cross_document_attention: no
+data:
+  tokenizer: {}
+  fim: {}
+  truncate_documents: False
+  datasets:
+    training:
+      type: file
+      path: /mnt/core_llm2/data/1_19_26_14b_small_joint_sft/final_data_config.yaml
+optimizer:  
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+  learning_rate:  
+    base: 5.0e-06
+    minimum: 5.0e-07
+    decay_iterations: 1000
+    decay_style: cosine
+    warmup_iterations: 100
+pretrained:
+  format: mistral3
+  path: /mnt/core_llm2/shruthan/models/Ministral-3-8B-Base-2512
+  model_weights: yes
+  load_config: model
+model:
+  base_model:
+    transformer:
+      rotary:
+        llama_4_scaling_beta: 0.1
+        original_context_length: 16384
+      use_flash_attention: yes
+    vision_encoder:
+      image_break_token: 12
+      image_end_token: 13
+      patch_size: 14
+      adapter_size: 4096
+      spatial_merge_size: 2
+      transformer:
+        type: image_encoder
+        mlp_lr_scale: 1.0e-12
+        router_lr_scale: 1.0e-12
+        attention_lr_scale: 1.0e-12
+      conv_lr_scale: 1.0e-12
+    cross_entropy_impl: fused
+  multi_stage:
+    zero_stage: 3
+  distributed:
+    training_dtype: bf16
+    timeout: 3600
+    tensor_parallel: 8
+    sequence_tensor_parallel: True
+
+run:
+  experiment_dir: /mnt/core_llm2/shruthan/experiments/mistrall_small_mm_test_2

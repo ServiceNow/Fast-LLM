@@ -144,22 +144,30 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         if image_sizes:
+            # Use effective patch size for resize to ensure dimensions are compatible with patch merging
+            effective_patch_size = self._parameters.patch_size * self._parameters.spatial_merge_size
             image_token_sizes = []
             for i, sizes in enumerate(image_sizes):
+                resized_dims = [
+                    get_resize_dims(
+                        *size,
+                        self._parameters.max_image_size,
+                        self._parameters.max_image_size,
+                        effective_patch_size,
+                    )
+                    for size in sizes
+                ]
+                # Post-merge token count (for LLM sequence length check)
                 image_token_sizes.append(
                     sum(
                         get_num_image_tokens(
-                            *get_resize_dims(
-                                *size,
-                                self._parameters.max_image_size,
-                                self._parameters.max_image_size,
-                                self._parameters.patch_size,
-                            ),
+                            *dims,
                             self._parameters.patch_size,
                             image_break=self._parameters.image_break_token is not None,
                             image_end=self._parameters.image_end_token is not None,
+                            spatial_merge_size=self._parameters.spatial_merge_size,
                         )
-                        for size in sizes
+                        for dims in resized_dims
                     )
                 )
             image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
@@ -169,24 +177,20 @@ class GPTSampledIndexedDataset(SampledDataset):
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
 
-        # Calculate basic stats.
+        # Calculate basic stats and filter documents.
+        long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
         if not self._truncate_documents:
             assert _extension_available, (
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
             ignored_documents = long_docs_filter.sum()
             if ignored_documents:
                 log_main_rank(
-                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
+                    f" > {ignored_documents.item()}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
             tokens_per_epoch = (document_sizes[~long_docs_filter] + image_token_sizes[~long_docs_filter]).sum().item()
-            if tokens_per_epoch == 0:
-                raise RuntimeError(
-                    f" > No documents shorter than {self._parameters.sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
-                )
 
         # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
         # but in case of truncations we also include those last labels in the following sample,
@@ -304,7 +308,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._parameters.use_preference_loss_spans:
             yaml_data["unshuffled_tokens"] = 0  # not used, ignore
 
-            # index of all documents less than seq length long
+            # index of all documents that pass both length and patch count filters
             doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
             self._doc_length_filtered_indicies.save(doc_length_filtered_indicies.numpy(force=self._config.gpu))
 
@@ -493,25 +497,32 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             text_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
 
-            resized_image_lengths = [
-                get_resize_dims(
-                    *image_length,
-                    self._parameters.max_image_size,
-                    self._parameters.max_image_size,
-                    self._parameters.patch_size,
-                )
-                for image_length in image_lengths
-            ]
-            image_sizes = [
-                get_num_image_tokens(
-                    *image_length,
-                    self._parameters.patch_size,
-                    image_break=self._parameters.image_break_token is not None,
-                    image_end=self._parameters.image_end_token is not None,
-                )
-                for image_length in resized_image_lengths
-            ]
-            image_tokens = sum(image_sizes)
+            # Calculate image tokens if there are images in this document
+            if len(image_lengths) > 0:
+                # Use effective patch size for resize to ensure dimensions are compatible with patch merging
+                effective_patch_size = self._parameters.patch_size * self._parameters.spatial_merge_size
+                resized_image_lengths = [
+                    get_resize_dims(
+                        *image_length,
+                        self._parameters.max_image_size,
+                        self._parameters.max_image_size,
+                        effective_patch_size,
+                    )
+                    for image_length in image_lengths
+                ]
+                image_sizes = [
+                    get_num_image_tokens(
+                        *image_length,
+                        self._parameters.patch_size,
+                        image_break=self._parameters.image_break_token is not None,
+                        image_end=self._parameters.image_end_token is not None,
+                        spatial_merge_size=self._parameters.spatial_merge_size,
+                    )
+                    for image_length in resized_image_lengths
+                ]
+                image_tokens = sum(image_sizes)
+            else:
+                image_tokens = 0
             document_size = text_size + image_tokens
 
             if not self._truncate_documents:
@@ -560,8 +571,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                         text_part = sample.token_ids[start_pos:im_position]
                         if self._parameters.image_break_token is not None:
                             height, width = resized_image_lengths[idx]
-                            num_patches_h = div(height, self._parameters.patch_size)
-                            num_patches_w = div(width, self._parameters.patch_size)
+                            # Use effective_patch_size for token positions (post-merge dimensions)
+                            num_patches_h = div(height, effective_patch_size)
+                            num_patches_w = div(width, effective_patch_size)
                             image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
                             # account for break tokens after each row
                             for row in range(num_patches_h - 1):

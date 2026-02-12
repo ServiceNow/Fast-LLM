@@ -15,6 +15,7 @@ class VisionEncoderDimNames:
     adapter_size = "vision_adapter_size"
     patch_size = "vision_patch_size"
     kv_channels = "vision_kv_channels"
+    merging_layer_in_channels = "merging_layer_in_channels"
 
 
 class VisionEncoderKwargs:
@@ -35,6 +36,9 @@ class VisionEncoderKwargs:
     hidden_dims = "vit_hidden_dims"
     image_patches_meta = "vit_image_patches_meta"
     out_channels = "vit_out_channels"
+    spatial_merge_size = "spatial_merge_size"
+    adapter_norm_eps = "adapter_norm_eps"
+    adapter_bias = "adapter_bias"
 
 
 @config_class()
@@ -120,7 +124,7 @@ class VisionEncoderConfig(BaseModelConfig):
         hint=FieldHint.core,
     )
     adapter_bias: bool = Field(
-        default=True,
+        default=False,
         desc="Whether to use bias in the adapter linear layer.",
         hint=FieldHint.optional,
     )
@@ -150,12 +154,25 @@ class VisionEncoderConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    spatial_merge_size: int = Field(
+        default=1,
+        desc="Spatial merge size for the patch merger. Merges spatial_merge_size^2 patches into 1. "
+             "Set to 1 to disable patch merging (Llava). Set to 2 for Mistral3.",
+        hint=FieldHint.core,
+    )
+    adapter_norm_eps: float = Field(
+        default=1e-5,
+        desc="Epsilon for the RMSNorm layer in the adapter. Only used when spatial_merge_size > 1.",
+        hint=FieldHint.optional,
+    )
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.adapter_size, self.adapter_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
+        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.merging_layer_in_channels, self.transformer.hidden_size * self.spatial_merge_size**2))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.in_channels, 3))
+
         self.transformer.setup_tensor_space(tensor_space)
 
     @property

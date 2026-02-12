@@ -49,12 +49,13 @@ class PatchConv(Layer):
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
         micro_batch_size = kwargs[TransformerKwargs.micro_batch_size]
-        sequence_length = kwargs[TransformerKwargs.sequence_length]
         out_channels = kwargs[VisionEncoderKwargs.out_channels]
-        reshape_dims = (micro_batch_size, sequence_length, out_channels)
         group = self._tensor_space.distributed.tensor_group
         input_ = torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self.stride)
         patch_embeddings = self.norm(input_.flatten(1))
+        # Use actual number of patches from conv output, not LLM sequence length
+        num_patches = patch_embeddings.size(0) // micro_batch_size
+        reshape_dims = (micro_batch_size, num_patches, out_channels)
         patch_embeddings = patch_embeddings.view(reshape_dims)
         if self._sequence_parallel:
             patch_embeddings = patch_embeddings.permute(1, 0, 2).contiguous()

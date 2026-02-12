@@ -153,7 +153,7 @@ class RotaryConfig(BaseModelConfig):
         default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
     )
     original_context_length: int = Field(
-        default=8192, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
+        default=16384, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
     )
     attention_factor: None | float = Field(
         default=None,
@@ -168,6 +168,13 @@ class RotaryConfig(BaseModelConfig):
     beta_slow: float = Field(
         default=1.0,
         desc="Beta-slow for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+    llama_4_scaling_beta: float | None = Field(
+        default=None,
+        desc="Llama 4 / Ministral3 attention scaling beta. When set, applies position-dependent "
+             "query scaling: scale = 1 + beta * log(1 + floor(position / original_context_length)). "
+             "This scaling increases attention magnitude for longer sequences.",
         hint=FieldHint.feature,
     )
 

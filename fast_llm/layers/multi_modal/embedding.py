@@ -38,23 +38,32 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         """
         Forward pass for the multi-modal embedding layer.
         Args:
-            input_: The input tensor (image embeddings).
+            input_: The input tensor (image embeddings after patch merging).
+                    Shape: (max_patches, batch, hidden) - patches first, matches original design
             tokens: The tokenized text input.
             position_ids: The position ids for the text input.
             image_positions: The positions of the image tokens in the input.
-            image_sizes: The sizes of the images in the input.
+            image_sizes: The sizes of the images in the input (in pixels, after resize).
         Returns:
             The combined embeddings for text and images.
         """
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
+
+        # Compute effective patch size accounting for patch merging
+        # When spatial_merge_size > 1, patches are merged, reducing token count
+        effective_patch_size = (
+            self._config.vision_encoder.patch_size * self._config.vision_encoder.spatial_merge_size
+        )
+
         if self._sequence_parallel:
             micro_seqlen = input_.size(0)
             patch_start_offset = self._distributed_config.tensor_rank * micro_seqlen
             patch_end_offset = (self._distributed_config.tensor_rank + 1) * micro_seqlen
         else:
             patch_start_offset = 0
-            patch_end_offset = input_.size(0)
+            patch_end_offset = input_.size(0)  # patches dimension is dim 0 (patches, batch, hidden)
+
         if self._parallel_embeddings:
             token_mask = (tokens >= self._vocab_start_index) * (tokens < self._vocab_end_index)
             masked_tokens = (tokens - self._vocab_start_index) * token_mask
@@ -67,12 +76,14 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
-                    num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
+                    # Use effective patch size for merged patch count
+                    num_patches = get_num_patches(*size, effective_patch_size)
                     if image_embedding_offset + num_patches < patch_start_offset:
+                        image_embedding_offset += num_patches
                         continue
                     if self._config.vision_encoder.image_break_token is not None:
-                        patch_height = div(size[0], self._config.vision_encoder.patch_size)
-                        patch_width = div(size[1], self._config.vision_encoder.patch_size)
+                        patch_height = div(size[0], effective_patch_size)
+                        patch_width = div(size[1], effective_patch_size)
                         for row in range(patch_height):
                             row_start_src = image_embedding_offset + row * patch_width
                             row_start_dst = position + row * (patch_width + 1)
@@ -83,18 +94,19 @@ class MultiModalEmbedding(LanguageModelEmbedding):
 
                             input_start_index = max(row_start_src, patch_start_offset) - patch_start_offset
                             input_end_index = min(row_start_src + patch_width, patch_end_offset) - patch_start_offset
-                            embeddings_start_index = row_start_dst - max(patch_start_offset - row_start_src, 0)
+                            embeddings_start_index = row_start_dst + max(patch_start_offset - row_start_src, 0)
                             embeddings_end_index = (
                                 row_start_dst + patch_width - max(row_start_src + patch_width - patch_end_offset, 0)
                             )
-                            # row_end_src = min(row_start_src + patch_width, patch_end_offset)
+                            # input_ shape: (patches, batch, hidden) - always patches first
                             if self._sequence_parallel:
                                 embeddings[embeddings_start_index:embeddings_end_index, sample_idx] = input_[
                                     input_start_index:input_end_index, sample_idx
                                 ]
                             else:
+                                # input_ shape: (patches, batch, hidden) - always patches first from VisionAdapter
                                 embeddings[sample_idx, embeddings_start_index:embeddings_end_index] = input_[
-                                    sample_idx, input_start_index:input_end_index
+                                    input_start_index:input_end_index, sample_idx
                                 ]
                     else:
                         input_start_index = max(image_embedding_offset, patch_start_offset) - patch_start_offset
@@ -108,9 +120,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                         embeddings[sample_idx, embedding_start_index:embedding_end_index] = input_[
                             input_start_index:input_end_index, sample_idx
                         ]
-                        # embeddings[sample_idx, position : position + num_patches] = input_[
-                        #     sample_idx, image_embedding_offset : image_embedding_offset + num_patches
-                        # ]
                     image_embedding_offset += num_patches
                     if image_embedding_offset > patch_end_offset:
                         break
@@ -132,21 +141,24 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
-                    num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
+                    # Use effective patch size for merged patch count
+                    num_patches = get_num_patches(*size, effective_patch_size)
                     if self._config.vision_encoder.image_break_token is not None:
-                        patch_height = div(size[0], self._config.vision_encoder.patch_size)
-                        patch_width = div(size[1], self._config.vision_encoder.patch_size)
+                        patch_height = div(size[0], effective_patch_size)
+                        patch_width = div(size[1], effective_patch_size)
 
                         for row in range(patch_height):
                             row_start_src = image_embedding_offset + row * patch_width
                             row_start_dst = position + row * (patch_width + 1)
 
+                            # input_ shape: (patches, batch, hidden)
                             embeddings[sample_idx, row_start_dst : row_start_dst + patch_width] = input_[
-                                sample_idx, row_start_src : row_start_src + patch_width
+                                row_start_src : row_start_src + patch_width, sample_idx
                             ]
                     else:
+                        # input_ shape: (patches, batch, hidden)
                         embeddings[sample_idx, position : position + num_patches] = input_[
-                            sample_idx, image_embedding_offset : image_embedding_offset + num_patches
+                            image_embedding_offset : image_embedding_offset + num_patches, sample_idx
                         ]
                     # Move to the next image in the input tensor
                     image_embedding_offset += num_patches

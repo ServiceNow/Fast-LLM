@@ -40,6 +40,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                     "max_image_size": self._config.batch.max_image_size,
                     "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
                     "image_end_token": self._config.model.base_model.vision_encoder.image_end_token,
+                    "spatial_merge_size": self._config.model.base_model.vision_encoder.spatial_merge_size,
                 }
             )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

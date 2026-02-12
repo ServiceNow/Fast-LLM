@@ -240,6 +240,7 @@ class RMSNorm(torch.nn.Module):
         weight_init_method=None,
         zero_centered: bool = False,
         lr_scale: float | None = None,
+        allow_no_grad: bool = False,
     ):
         super().__init__()
         assert hidden_dim.parallel_dim is None
@@ -274,6 +275,7 @@ class RMSNorm(torch.nn.Module):
             weight_decay=False,
             auto_grad_accumulation=True,
             lr_scale=lr_scale,
+            allow_no_grad=allow_no_grad,
         )
         self.normalized_shape = self.weight.shape
 

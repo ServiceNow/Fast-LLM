@@ -15,7 +15,6 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import (
-    LossKwargs,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
     logging,
@@ -761,7 +760,7 @@ class MTPLlamaModel(LlamaPreTrainedModel):
         return causal_mask
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
+class KwargsForCausalLM(FlashAttentionKwargs): ...
 
 
 class MTPLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):

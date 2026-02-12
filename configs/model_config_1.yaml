@@ -1,0 +1,62 @@
+training:
+  checkpoint:
+    interval: 350
+    keep: 1
+  export:
+    format: mistral
+    interval: 350
+  logs:
+    interval: 10
+  num_workers: 8
+  test_iters: 0
+  train_iters: 1050
+  wandb:
+    entity_name: akshaykalkunte
+    group_name: test
+    project_name: mistral-7b-cpt
+pretrained:
+  format: mistral
+  load_config: model
+  model_weights: true
+  path: /mnt/core_llm2/shruthan/models/Ministral-3-14B-Base-2512-decoder
+batch:
+  batch_size: 8
+  cross_document_attention: false
+  micro_batch_size: 1
+  sequence_length: 16384
+  use_loss_masking_spans: true
+data:
+  datasets:
+    training:
+      path: /mnt/core_llm2/data/2_1_26_ministral_14b_mm_sft/fastllm_text_downsampled/fast_llm_config.yaml
+      type: file
+  fim: {}
+  tokenizer: {}
+  truncate_documents: false
+model:
+  base_model:
+    cross_entropy_impl: fused
+    transformer:
+      rotary:
+        llama_4_scaling_beta: 0.1
+        original_context_length: 16384
+        theta: 1000000000.0
+      use_flash_attention: true
+  distributed:
+    sequence_tensor_parallel: true
+    tensor_parallel: 8
+    timeout: 3600
+    training_dtype: bf16
+  multi_stage:
+    zero_stage: 3
+optimizer:
+  beta_1: 0.9
+  beta_2: 0.95
+  learning_rate:
+    base: 1.0e-05
+    decay_iterations: 1050
+    decay_style: cosine
+    warmup_iterations: 35
+  weight_decay: 0.1
+run:
+  experiment_dir: /mnt/core_llm2/shruthan/experiments/2_4_26_ministral_14b_small_text_sft_w_llama_1

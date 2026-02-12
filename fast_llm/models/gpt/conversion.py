@@ -1,6 +1,8 @@
 import abc
 import dataclasses
+import json
 import logging
+import pathlib
 import typing
 
 import torch
@@ -37,6 +39,7 @@ from fast_llm.models.gpt.config import (
     LlavaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    Mistral3GPTHuggingfaceCheckpointFormat,
     MTPLlamaGPTHuggingfaceCheckpointFormat,
     PixtralGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
@@ -794,6 +797,15 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 
     @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        # Load raw JSON directly instead of using transformers.AutoConfig
+        # This preserves the nested text_config/vision_config structure
+        # that transformers might transform when loading multimodal configs
+        config_path = pathlib.Path(directory) / "config.json"
+        with open(config_path, "r") as f:
+            return json.load(f)
+
+    @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         cfg_dict = cls._load_config(config.path)
         kwargs = {}
@@ -921,7 +933,271 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         )
         return converters
 
+class Mistral3HuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = Mistral3GPTHuggingfaceCheckpointFormat
 
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        # Skip Llava's converters, call grandparent
+        converters = super(LlavaHuggingfaceCheckpointHandler, cls)._create_config_converters()
+        return converters + [
+            ConstantExportParamConverter(
+                export_names=(("architectures",),),
+                export_value=["Mistral3ForConditionalGeneration"]
+            ),
+            MappedConfigParamConverter(
+                fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
+                export_names=(("projector_hidden_act",),),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "spatial_merge_size"),),
+                export_names=(("spatial_merge_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "adapter_bias"),),
+                export_names=(("multimodal_projector_bias",),),
+            ),
+        ]
+
+    @classmethod
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+        # Use parent's implementation
+        metadata = super()._load_metadata(config)
+
+        cfg_dict = cls._load_config(config.path)
+        base_model_dict = metadata.config.base_model.to_dict()
+        config_updated = False
+
+        # Extract adapter_norm_eps from vision_config.rms_norm_eps
+        if "vision_config" in cfg_dict and "rms_norm_eps" in cfg_dict["vision_config"]:
+            base_model_dict["vision_encoder"]["adapter_norm_eps"] = cfg_dict["vision_config"]["rms_norm_eps"]
+            config_updated = True
+
+        # Extract Llama 4 attention scaling parameters from text_config.rope_parameters
+        # These are used for Ministral3's position-dependent query scaling
+        text_config = cfg_dict.get("text_config", {})
+        rope_parameters = text_config.get("rope_parameters", {})
+        if "llama_4_scaling_beta" in rope_parameters:
+            if "rotary" not in base_model_dict["transformer"]:
+                base_model_dict["transformer"]["rotary"] = {}
+            base_model_dict["transformer"]["rotary"]["llama_4_scaling_beta"] = rope_parameters["llama_4_scaling_beta"]
+            config_updated = True
+        if "original_max_position_embeddings" in rope_parameters:
+            if "rotary" not in base_model_dict["transformer"]:
+                base_model_dict["transformer"]["rotary"] = {}
+            base_model_dict["transformer"]["rotary"]["original_context_length"] = rope_parameters["original_max_position_embeddings"]
+            config_updated = True
+
+        if config_updated:
+            metadata = CheckpointMetadata(
+                fast_llm_version=metadata.fast_llm_version,
+                model=metadata.model,
+                format=metadata.format,
+                config=cls._model_class.from_dict({"base_model": base_model_dict}),
+                shards=metadata.shards,
+            )
+
+        return metadata
+
+    def _create_weight_converters(self):
+        """
+        Override to use Mistral3's projector structure instead of Llava's.
+        
+        Llava projector (handled by PixtralHuggingfaceCheckpointHandler):
+            multi_modal_projector.linear_1.weight/bias
+            multi_modal_projector.linear_2.weight/bias
+
+        Mistral3 projector:
+            multi_modal_projector.norm.weight
+            multi_modal_projector.patch_merger.merging_layer.weight
+            multi_modal_projector.linear_1.weight  (no bias)
+            multi_modal_projector.linear_2.weight  (no bias)
+        """
+        # Get vision handler and create converters WITHOUT the projector
+        vision_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.vision_name)
+        vision_handler = vision_handler_cls(self._model)
+        
+        # Get base vision converters (conv, norm, transformer layers)
+        # We need to replicate the logic but exclude the projector part
+        converters = self._create_vision_encoder_converters(vision_handler)
+        
+        # Add Mistral3-specific projector converters
+        num_vision_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
+        adapter_layer_idx = num_vision_layers + 1  # +1 for conv layer at index 0
+        converters.extend(self._create_projector_weight_converters(adapter_layer_idx))
+
+        # Add text/language model converters
+        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.text_name)
+        text_handler = text_handler_cls(self._model)
+        converters.extend(
+            text_handler._create_weight_converters(
+                hf_base_prefix="language_model.",
+                offset=vision_handler.num_layers
+            )
+        )
+
+        return converters
+
+    def _create_vision_encoder_converters(self, vision_handler) -> list[WeightConverter]:
+        """
+        Create converters for vision encoder (conv + transformer layers) WITHOUT the projector.
+        """
+        from fast_llm.layers.common.config import NormalizationType
+        
+        converters = []
+        hf_base_prefix = "vision_tower."
+        offset = 0
+
+        # Conv layer
+        converters.append(WeightConverter(f"layers.{offset}.weight", f"{hf_base_prefix}patch_conv.weight"))
+        if self._model.config.base_model.vision_encoder.conv_bias:
+            converters.append(WeightConverter(f"layers.{offset}.bias", f"{hf_base_prefix}patch_conv.bias"))
+        
+        # Pre-norm
+        converters.append(WeightConverter(f"layers.{offset}.norm.weight", f"{hf_base_prefix}ln_pre.weight"))
+        if self._model.config.base_model.vision_encoder.patch_norm.type == NormalizationType.layer_norm:
+            converters.append(WeightConverter(f"layers.{offset}.norm.bias", f"{hf_base_prefix}ln_pre.bias"))
+
+        # Vision transformer layers
+        num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
+        for i in range(num_layers):
+            converters += vision_handler._create_vision_transformer_layer_converters(
+                i, offset + 1, hf_base_prefix
+            )
+
+        return converters
+
+    def _create_projector_weight_converters(self, adapter_layer_idx: int) -> list[WeightConverter]:
+        """
+        Create weight converters for Mistral3's multi-modal projector.
+
+        Args:
+            adapter_layer_idx: The layer index for the adapter in fast_llm's layer stack
+        """
+        hf_prefix = "multi_modal_projector."
+        fast_llm_prefix = f"layers.{adapter_layer_idx}."
+
+        converters = [
+            # RMSNorm
+            WeightConverter(
+                f"{fast_llm_prefix}norm.weight",
+                f"{hf_prefix}norm.weight",
+            ),
+            # Patch merger (no bias)
+            WeightConverter(
+                f"{fast_llm_prefix}patch_merger.merging_layer.weight",
+                f"{hf_prefix}patch_merger.merging_layer.weight",
+            ),
+            # Linear 1 (no bias in Mistral3)
+            WeightConverter(
+                f"{fast_llm_prefix}layer_1.weight",
+                f"{hf_prefix}linear_1.weight",
+            ),
+            # Linear 2 (no bias in Mistral3)
+            WeightConverter(
+                f"{fast_llm_prefix}layer_2.weight",
+                f"{hf_prefix}linear_2.weight",
+            ),
+        ]
+
+        return converters
+# class Mistral3HuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
+#     format: typing.ClassVar[type[CheckpointFormat]] = Mistral3GPTHuggingfaceCheckpointFormat
+
+#     @classmethod
+#     def _create_config_converters(cls) -> list[ParamConverter]:
+#         # Skip Llava's converters, call grandparent
+#         converters = super(LlavaHuggingfaceCheckpointHandler, cls)._create_config_converters()
+#         return converters + [
+#             ConstantExportParamConverter(
+#                 export_names=(("architectures",),),
+#                 export_value=["Mistral3ForConditionalGeneration"]
+#             ),
+#             MappedConfigParamConverter(
+#                 fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
+#                 export_names=(("projector_hidden_act",),),
+#                 fast_llm_value=ActivationType.from_hf_name,
+#                 export_value=lambda activation_type: activation_type.hf_name,
+#             ),
+#             RenameParamConverter(
+#                 fast_llm_names=(("vision_encoder", "spatial_merge_size"),),
+#                 export_names=(("spatial_merge_size",),),
+#             ),
+#             RenameParamConverter(
+#                 fast_llm_names=(("vision_encoder", "adapter_bias"),),
+#                 export_names=(("multimodal_projector_bias",),),
+#             ),
+#         ]
+
+#     @classmethod
+#     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+#         # Use parent's implementation
+#         metadata = super()._load_metadata(config)
+        
+#         # Extract adapter_norm_eps from vision_config.rms_norm_eps
+#         cfg_dict = cls._load_config(config.path)
+#         if "vision_config" in cfg_dict and "rms_norm_eps" in cfg_dict["vision_config"]:
+#             # Update the config with adapter_norm_eps
+#             base_model_dict = metadata.config.base_model.to_dict()
+#             base_model_dict["vision_encoder"]["adapter_norm_eps"] = cfg_dict["vision_config"]["rms_norm_eps"]
+#             metadata = CheckpointMetadata(
+#                 fast_llm_version=metadata.fast_llm_version,
+#                 model=metadata.model,
+#                 format=metadata.format,
+#                 config=cls._model_class.from_dict({"base_model": base_model_dict}),
+#                 shards=metadata.shards,
+#             )
+        
+#         return metadata
+
+#     def _create_weight_converters(self):
+#         # Get all converters from parent (vision tower + language model)
+#         converters = super()._create_weight_converters()
+
+#         # Add Mistral3-specific projector converters
+#         converters.extend(self._create_projector_weight_converters())
+
+#         return converters
+
+#     def _create_projector_weight_converters(self) -> list[WeightConverter]:
+#         """
+#         Mistral3 projector weights (differs from Llava by adding norm + patch_merger):
+
+#         Llava:
+#             model.multi_modal_projector.linear_1.weight/bias
+#             model.multi_modal_projector.linear_2.weight/bias
+
+#         Mistral3:
+#             model.multi_modal_projector.norm.weight
+#             model.multi_modal_projector.patch_merger.merging_layer.weight
+#             model.multi_modal_projector.linear_1.weight  (no bias)
+#             model.multi_modal_projector.linear_2.weight  (no bias)
+#         """
+#         hf_prefix = "multi_modal_projector."
+#         # TODO: verify this path matches your fast_llm model's state_dict
+#         fast_llm_prefix = "layers.vision_adapter."
+
+#         return [
+#             WeightConverter(
+#                 fast_llm_name=f"{fast_llm_prefix}norm.weight",
+#                 export_name=f"{hf_prefix}norm.weight",
+#             ),
+#             WeightConverter(
+#                 fast_llm_name=f"{fast_llm_prefix}patch_merger.merging_layer.weight",
+#                 export_name=f"{hf_prefix}patch_merger.merging_layer.weight",
+#             ),
+#             WeightConverter(
+#                 fast_llm_name=f"{fast_llm_prefix}layer_1.weight",
+#                 export_name=f"{hf_prefix}linear_1.weight",
+#             ),
+#             WeightConverter(
+#                 fast_llm_name=f"{fast_llm_prefix}layer_2.weight",
+#                 export_name=f"{hf_prefix}linear_2.weight",
+#             ),
+#         ]
+    
 class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = MixtralGPTHuggingfaceCheckpointFormat
 
@@ -1056,5 +1332,6 @@ class AutoGPTHuggingfaceCheckpointHandler(
         MTPLlamaGPTHuggingfaceCheckpointFormat.name: MTPLlamaHuggingfaceCheckpointHandler,
         LlavaGPTHuggingfaceCheckpointFormat.name: LlavaHuggingfaceCheckpointHandler,
         PixtralGPTHuggingfaceCheckpointFormat.name: PixtralHuggingfaceCheckpointHandler,
+        Mistral3GPTHuggingfaceCheckpointFormat.name: Mistral3HuggingfaceCheckpointHandler,
         # MultiModalGPTHuggingfaceCheckpointFormat.name: MultiModalHuggingfaceCheckpointHandler
     }

@@ -16,17 +16,41 @@ from fast_llm.utils import div
 def get_num_patches(height: int, width: int, patch_size: int) -> tuple[int, int]:
     """
     Calculate the number of patches in height and width dimensions.
+    This returns the number of patches from the vision encoder BEFORE any merging.
     """
     return div(height, patch_size) * div(width, patch_size)
 
 
-def get_num_image_tokens(height: int, width: int, patch_size: int, image_break: bool, image_end: bool) -> int:
+def get_num_image_tokens(
+    height: int,
+    width: int,
+    patch_size: int,
+    image_break: bool,
+    image_end: bool,
+    spatial_merge_size: int = 1,
+) -> int:
     """
-    Calculate the number of image tokens.
-    If image_break is True, we consider 1 additional token after every row of patches.
+    Calculate the number of image tokens that will be embedded in the text sequence.
+    
+    When spatial_merge_size > 1, the patch merger reduces the number of vision tokens
+    by merging spatial_merge_size^2 patches into 1. The effective patch size for
+    token counting becomes patch_size * spatial_merge_size.
+    
+    Args:
+        height: Image height in pixels
+        width: Image width in pixels
+        patch_size: Base patch size from vision encoder
+        image_break: If True, add 1 token after every row of patches
+        image_end: If True, add 1 token at the end of the image
+        spatial_merge_size: Spatial merge factor (1 = no merging, 2 = merge 4 patches into 1)
+    
+    Returns:
+        Number of image tokens including any break/end tokens
     """
-    height_patches = div(height, patch_size)
-    width_patches = div(width, patch_size)
+    # The effective patch size accounts for patch merging
+    effective_patch_size = patch_size * spatial_merge_size
+    height_patches = div(height, effective_patch_size)
+    width_patches = div(width, effective_patch_size)
     num_tokens = height_patches * width_patches
     if image_break:
         num_tokens += height_patches
@@ -138,16 +162,18 @@ class VisionPreprocessor(Preprocessor):
         max_image_size = kwargs.get(VisionEncoderKwargs.max_image_size)
         im_width = kwargs.get(VisionEncoderKwargs.max_image_size)
         patch_size = kwargs[VisionEncoderKwargs.patch_size]
+        # Use effective patch size for resize to ensure dimensions are compatible with patch merging
+        effective_patch_size = patch_size * self._config.spatial_merge_size
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
         image_sizes = [
-            [get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=patch_size) for im in ims]
+            [get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=effective_patch_size) for im in ims]
             for ims in images
         ]
         kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
         images = [
             [
                 normalize(
-                    resize(image, max_image_size, im_width, patch_size).to(
+                    resize(image, max_image_size, im_width, effective_patch_size).to(
                         dtype=self._tensor_space.distributed_config.training_dtype.torch
                     )
                     / kwargs[VisionEncoderKwargs.image_rescale_factor],
@@ -170,6 +196,28 @@ class VisionPreprocessor(Preprocessor):
         cu_seqlens = [0]
         max_seqlen = -1
         kwargs.get(TransformerKwargs.sequence_first)
+        
+        # Calculate the max patches needed across all samples in the batch
+        # Vision sequence length is based on pre-merge patches, not LLM text tokens
+        max_patches_in_batch = 0
+        for sample_sizes in image_sizes:
+            sample_patches = sum(get_num_patches(*size, patch_size) for size in sample_sizes)
+            if sample_patches > max_patches_in_batch:
+                max_patches_in_batch = sample_patches
+        
+        # When sequence parallelism is enabled, vision_sequence_length must be divisible by tensor_parallel
+        # to allow splitting patches across workers
+        tensor_parallel = self._distributed_config.tensor_parallel
+        if self._distributed_config.sequence_tensor_parallel and tensor_parallel > 1:
+            # Round up to nearest multiple of tensor_parallel
+            min_patches = tensor_parallel
+            if max_patches_in_batch > 0:
+                vision_sequence_length = ((max_patches_in_batch + tensor_parallel - 1) // tensor_parallel) * tensor_parallel
+            else:
+                vision_sequence_length = min_patches
+        else:
+            vision_sequence_length = max(max_patches_in_batch, 1)  # At least 1 for padding tensor
+        
         for idx, (imgs, sizes, positions) in enumerate(zip(images, image_sizes, image_positions)):
             # add an empty tensor for clean concatenation in case of no images
             seq_patches = [
@@ -186,6 +234,7 @@ class VisionPreprocessor(Preprocessor):
                     patch_size=patch_size,
                     image_break=self._config.image_break_token is not None,
                     image_end=self._config.image_end_token is not None,
+                    spatial_merge_size=self._config.spatial_merge_size,
                 )
                 # set labels for image patches to -100
                 labels[idx, max(position - 1, 0) : position + num_tokens - 1] = -100
@@ -202,10 +251,10 @@ class VisionPreprocessor(Preprocessor):
                         ]
                     )
                 )
-            padding_size = kwargs[TransformerKwargs.sequence_length] - sample_cu_seqlen
+            padding_size = vision_sequence_length - sample_cu_seqlen
             if padding_size > max_seqlen:
                 max_seqlen = padding_size
-            cu_seqlens.append(kwargs[TransformerKwargs.sequence_length] * (idx + 1))
+            cu_seqlens.append(vision_sequence_length * (idx + 1))
             patches.append(
                 torch.cat(
                     [
@@ -236,7 +285,7 @@ class VisionPreprocessor(Preprocessor):
                     ]
                 )
             )
-            assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
+            assert patches[-1].size(0) == vision_sequence_length
         patches = torch.cat(patches)
         patch_position_ids = torch.cat(patch_position_ids)
         kwargs[VisionEncoderKwargs.image_patches] = patches

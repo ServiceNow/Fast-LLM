@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
+from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel import (
@@ -1433,7 +1433,7 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         return causal_mask
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
+class KwargsForCausalLM(FlashAttentionKwargs): ...
 
 
 class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
