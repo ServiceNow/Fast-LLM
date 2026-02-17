@@ -229,20 +229,23 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._runner.setup(distributed, self._optimizer)
         # Setup the datasets.
         log_main_rank("Preparing datasets...")
+        sampling_parameters = {}
+        preprocessing_configs = {}
+        for phase, datasets in self._samples_per_split.items():
+            for dataset_name, samples in datasets.items():
+                sampling_parameters[dataset_name] = self._get_sampling_parameters({"num_samples": samples})
+                preprocessing_configs[dataset_name] = self._get_preprocessing_config(phase)
+        for eval_sampling_params in self._evaluator_runner.get_sampling_parameters():
+            sampling_parameters[eval_sampling_params.dataset_name] = self._get_sampling_parameters(
+                {"num_samples": eval_sampling_params.num_samples}
+            )
+            preprocessing_configs[eval_sampling_params.dataset_name] = self._get_preprocessing_config(
+                PhaseType.inference
+            )
         self._data.setup(
             distributed,
-            {
-                dataset_name: self._get_sampling_parameters({"num_samples": samples})
-                for datasets in self._samples_per_split.values()
-                for dataset_name, samples in datasets.items()
-            }
-            | {
-                eval_sampling_params.dataset_name: self._get_sampling_parameters(
-                    {"num_samples": eval_sampling_params.num_samples}
-                )
-                for eval_sampling_params in self._evaluator_runner.get_sampling_parameters()
-            },
-            self._get_preprocessing_config(),
+            sampling_parameters,
+            preprocessing_configs,
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
@@ -269,7 +272,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     ) -> SamplingParameters | dict[str, typing.Any]:
         return parameters if _return_dict else SamplingParameters(**parameters)
 
-    def _get_preprocessing_config(self, *, _return_dict: bool = False) -> PreprocessingConfig | dict[str, typing.Any]:
+    def _get_preprocessing_config(
+        self, phase: PhaseType, *, _return_dict: bool = False
+    ) -> PreprocessingConfig | dict[str, typing.Any]:
         return {} if _return_dict else NullPreprocessingConfig()
 
     @property

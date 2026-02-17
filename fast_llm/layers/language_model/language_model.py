@@ -4,11 +4,12 @@ import typing
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
+from fast_llm.utils import safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,14 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         if self.multi_token_prediction is not None:
             layers += self.multi_token_prediction.get_layers()
         return layers
+
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            self.embeddings.get_preprocessing_config(phase),
+            self.decoder.get_preprocessing_config(phase),
+            self.head.get_preprocessing_config(phase),
+            {} if self.multi_token_prediction is None else self.multi_token_prediction.get_preprocessing_config(phase),
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?

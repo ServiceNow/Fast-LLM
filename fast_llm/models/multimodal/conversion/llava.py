@@ -56,7 +56,6 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         out = super().import_config(config)
         out["rotary"]["type"] = "default_2d"
         out["causal"] = False
-        out["cross_document_attention"] = False
         return out
 
     @classmethod
@@ -66,7 +65,6 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         Assert.is_(type(config.rotary), Rotary2DConfig)
         assert not config.add_linear_biases
         assert not config.causal
-        assert not config.cross_document_attention
         Assert.eq(config.head_groups, config.heads)
         return {
             "num_attention_heads": config.heads,

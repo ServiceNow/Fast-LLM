@@ -8,10 +8,9 @@ from einops import rearrange
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
@@ -370,13 +369,8 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         return output
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        preprocess_for_varlen(
-            kwargs,
-            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-            return_cu_seqlens=True,
-            return_seq_idx=True,
-        )
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return {"return_cumulative_sequence_lengths": True, "return_document_index": True}
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()

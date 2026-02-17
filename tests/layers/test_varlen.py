@@ -20,14 +20,13 @@ from tests.utils.utils import get_stage
 @pytest.mark.parametrize(
     "config",
     [
-        AttentionConfig(heads=4, head_groups=2, head_size=16, cross_document_attention=False),
+        AttentionConfig(heads=4, head_groups=2, head_size=16),
         pytest.param(
             MambaConfig(
                 d_inner=128,
                 d_xb=64,
                 state_size=16,
                 dt_rank=8,
-                cross_document_attention=False,
             ),
             marks=pytest.mark.skip("Mamba varlen kernel not available"),
         ),
@@ -73,7 +72,6 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
         **kwargs,
         BlockKwargs.sequence_lengths: sequence_lengths,
         BlockKwargs.sequence_length: seq_len,
-        BlockKwargs.batch_dim: TensorDim("", batch_size),
         BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
         BlockKwargs.sequence_k_dim: TensorDim("", seq_len),
     }

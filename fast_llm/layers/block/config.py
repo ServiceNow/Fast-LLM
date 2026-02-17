@@ -35,6 +35,7 @@ class BlockKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     token_dim = "token_dim"
+    num_tokens = "num_tokens"
     hidden_token_dim = "hidden_token_dim"
     # TODO: These are confusing
     sequence_length = "sequence_length"

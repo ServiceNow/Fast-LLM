@@ -9,6 +9,7 @@ from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.sample.abstract import Batch
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -17,7 +18,7 @@ if typing.TYPE_CHECKING:
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
     _sampling_parameters: dict[str, SamplingParameters]
-    _preprocessing: PreprocessingConfig
+    _preprocessing: dict[str, PreprocessingConfig]
     _cache_directory: pathlib.Path | None
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
@@ -29,10 +30,11 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         self,
         distributed: "Distributed",
         sampling_parameters: dict[str, SamplingParameters],
-        preprocessing: PreprocessingConfig,
+        preprocessing: dict[str, PreprocessingConfig],
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
+        Assert.eq(sampling_parameters.keys(), preprocessing.keys())
         self._distributed = distributed
         self._sampling_parameters = sampling_parameters
         self._preprocessing = preprocessing

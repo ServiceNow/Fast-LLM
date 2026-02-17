@@ -32,6 +32,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
     _datasets: dict[str, SampledDataset]
     _sampling_parameters: dict[str, SamplingParameters]
+    _preprocessing: dict[str, LanguageModelPreprocessingConfig]
     _is_setup: bool = False
 
     def __init__(
@@ -49,7 +50,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self,
         distributed: "Distributed",
         sampling_parameters: dict[str, SamplingParameters],
-        preprocessing: LanguageModelPreprocessingConfig,
+        preprocessing: dict[str, LanguageModelPreprocessingConfig],
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
@@ -84,7 +85,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 sampling = GPTSamplingData(
                     config=self._config.sampling,
                     parameters=sampling_parameters,
-                    preprocessing=preprocessing,
+                    preprocessing=self._preprocessing[dataset_name],
                     cache_directory=self._cache_directory,
                     distributed=distributed,
                     dataset_name=dataset_name,

@@ -93,6 +93,11 @@ class PatchSample(Sample):
             [],
         )
 
+    def to_device_(self, device: "torch.device | str"):
+        self.patches = self.patches.to(device, non_blocking=True)
+        self.token_map = self.token_map.to(device, non_blocking=True)
+        self.positions = self.positions.to(device, non_blocking=True)
+
 
 class PatchBatch(Batch):
     def __init__(

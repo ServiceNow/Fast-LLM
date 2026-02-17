@@ -7,10 +7,9 @@ import torch
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -167,7 +166,7 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         assert _mamba_available
 
         sequence_length = kwargs[BlockKwargs.sequence_q_dim].size
-        token_shape = (kwargs[BlockKwargs.batch_dim].size, kwargs[BlockKwargs.sequence_q_dim].size)
+        token_shape = (1, kwargs[BlockKwargs.sequence_q_dim].size)
         # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
         inner_projection = self.in_proj(input_).unflatten(0, token_shape)
         dt = self.dt_proj(self.dt_in_proj(input_)).unflatten(0, token_shape)
@@ -250,14 +249,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         # TODO: Implement.
         raise NotImplementedError()
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
         if not self._config.cross_document_attention:
             assert (
                 _mamba_varlen_available
             ), f"Varlen mamba requires custom mamba installation from `https://github.com/jxiw/varlen_mamba`"
-            preprocess_for_varlen(
-                kwargs,
-                kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-                return_seq_idx=True,
-                return_position_ids=True,
-            )
+        return {"return_position_index": True, "return_document_index": True}

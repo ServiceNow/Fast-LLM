@@ -53,7 +53,6 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
             "head_size": config["head_size"],
             "add_linear_biases": config["add_linear_biases"],
             "causal": config["causal"],
-            "cross_document_attention": config["cross_document_attention"],
         }
 
     @classmethod
@@ -74,7 +73,7 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
             "head_size": config.head_size,
             "add_linear_biases": config.add_linear_biases,
             "causal": config.causal,
-            "cross_document_attention": config.cross_document_attention,
+            "cross_document_attention": False,
             "rotary": {
                 "type": rotary_type,
                 "theta": config.rotary.theta,

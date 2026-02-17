@@ -240,7 +240,6 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                             "heads": 8,
                             "head_groups": 8,
                             "head_size": 32,
-                            # "cross_document_attention":False,
                         },
                         "mlp": {
                             "layer_1": {"weight": init_1},
@@ -711,7 +710,6 @@ update_and_add_testing_config(
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
         ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
-        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
         # Pixtal doesn't support GQA
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
     },
@@ -932,7 +930,6 @@ update_and_add_testing_config(
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
         ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
-        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "cross_document_attention"): False,
         # Pixtral doesn't support GQA
         ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
     },

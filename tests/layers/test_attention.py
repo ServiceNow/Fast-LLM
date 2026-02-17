@@ -8,10 +8,9 @@ from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.utils import Assert
 
 
-@pytest.mark.parametrize("cross_document_attention", (True, False))
 @pytest.mark.parametrize(("causal", "window_size"), ((True, None), (True, 50), (False, None)))
 @pytest.mark.skipif(not _flash_available, reason="Flash attention not available")
-def test_attention_implementations(cross_document_attention: bool, causal: bool, window_size: int | None):
+def test_attention_implementations(causal: bool, window_size: int | None):
     """
     Check that the flash and backup attention implementation give the same result.
     """
@@ -21,7 +20,6 @@ def test_attention_implementations(cross_document_attention: bool, causal: bool,
         heads=4,
         head_groups=2,
         window_size=window_size,
-        cross_document_attention=cross_document_attention,
         causal=causal,
     ).get_layer(
         DistributedConfig(compute_dtype="bfloat16"),

@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
@@ -88,8 +87,6 @@ class LMHeadTestConfig:
         )
         label_shape = (BATCH_SIZE * (SEQUENCE_LENGTH + self.prediction_heads - 1),)
         kwargs: dict[str, typing.Any] = {
-            AttentionKwargs.batch_dim: TensorDim("batch", BATCH_SIZE),
-            AttentionKwargs.sequence_q_dim: TensorDim("sequence_q", SEQUENCE_LENGTH),
             AttentionKwargs.grad_output: 1.0,
         }
         if self.loss_masking:

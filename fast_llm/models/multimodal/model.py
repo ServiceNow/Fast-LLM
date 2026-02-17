@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.core.distributed import all_gather_scalar
 from fast_llm.data.sample.language_model import LanguageModelBatch
-from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.attention.config import AttentionKwargs
@@ -133,7 +133,6 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
             )
             kwargs[self._vision_encoder_namespace] = {
                 VisionKwargs.sequence_length: kwargs[VisionKwargs.sequence_length],
-                VisionKwargs.batch_dim: scalar_dim,
                 VisionKwargs.sequence_q_dim: token_dim,
                 VisionKwargs.sequence_k_dim: token_dim,
                 VisionKwargs.token_dim: token_dim,

@@ -29,6 +29,9 @@ class Sample(abc.ABC):
     def get_padding(self, size: int) -> typing.Self:
         pass
 
+    def to_device_(self, device: "torch.device | str"):
+        pass
+
 
 class Batch(abc.ABC):
     # TODO: Relate to `BatchConfig`?

@@ -120,12 +120,6 @@ class AttentionConfig(MixerConfig):
         desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
         hint=FieldHint.feature,
     )
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Allow for cross-document attention.",
-        doc="Disable to prevent attention between tokens belonging to different documents.",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         super()._validate()

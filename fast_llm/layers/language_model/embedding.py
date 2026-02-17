@@ -7,8 +7,7 @@ from fast_llm.core.ops import gather, reduce_forward, split
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
@@ -179,15 +178,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         # TODO: Add marginal compute? (embeddings)
         return 0
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        if not self._config.position_embeddings.enabled:
-            return
-        # TODO: Move to data preprocessing.
-        if self._config.cross_document_position_embeddings:
-            sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-            sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
-            kwargs[LanguageModelKwargs.position_ids] = torch.arange(
-                sequence_k - sequence_q, sequence_k, device=self._distributed.device, dtype=torch.int64
-            ).repeat(kwargs[LanguageModelKwargs.batch_dim].size)
-        else:
-            preprocess_for_varlen(kwargs, self._distributed.device, return_position_ids=True)
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        out = {"vocab_size": self.embeddings.vocab_size}
+        if self._config.position_embeddings.enabled:
+            out["return_position_index"] = True
+        return out

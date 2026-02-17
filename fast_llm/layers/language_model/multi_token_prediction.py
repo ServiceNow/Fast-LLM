@@ -6,7 +6,7 @@ import torch
 from fast_llm.engine.base_model.base_model import Layer, LayerWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
@@ -86,6 +86,10 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
 
     def get_output_weights(self) -> list[torch.Tensor]:
         return sum((head.get_output_weights() for head in self.heads), [])
+
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        if self._enabled:
+            self._layers_with_namespace[0].get_preprocessing_config(phase)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if self._enabled:
