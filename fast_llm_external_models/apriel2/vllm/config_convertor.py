@@ -27,7 +27,9 @@ class Apriel2TextModelArchConfigConvertor(ModelArchConfigConvertorBase):
         """Find the first attention block config.
 
         Handles both regular and stochastic mixer types. For stochastic mixers,
-        looks up the main_mixer_name to find the attention config.
+        always returns the attention sub-mixer config regardless of
+        main_mixer_name, since vLLM needs attention head parameters
+        (heads, head_groups, head_size) for KV cache and FlashInfer setup.
         """
         decoder = getattr(self.hf_text_config, "decoder", {})
         decoder_type = decoder.get("type", "fixed")
@@ -37,8 +39,7 @@ class Apriel2TextModelArchConfigConvertor(ModelArchConfigConvertorBase):
             mixer = block.get("mixer", {})
             mixer_type = mixer.get("type", "attention")
             if mixer_type == "stochastic":
-                main_mixer_name = mixer.get("main_mixer_name", "attention")
-                return mixer.get("mixers", {}).get(main_mixer_name, {})
+                return mixer.get("mixers", {}).get("attention", {})
             elif mixer_type == "attention":
                 return mixer
         elif decoder_type == "pattern":
