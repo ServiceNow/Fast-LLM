@@ -5,9 +5,9 @@ import torch
 
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
-from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
 from tests.data.test_preparator import COMMON_DATASET_LENGTH
@@ -41,7 +41,7 @@ TOKEN_PREFERENCE_SPANS = {
 @pytest.mark.slow
 def test_gpt_data_with_spans():
     _, config, hf_path, preprocessing = get_test_dataset_with_preference_spans()
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
+    dataset: MemmapDataset[LanguageModelDocument] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
         preprocessing
     )
 

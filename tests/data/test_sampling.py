@@ -5,8 +5,8 @@ import torch
 from fast_llm.data.dataset.config import SamplingParameters, ShufflingType
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.token import TokenDocument
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -40,7 +40,7 @@ def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     sampled = get_dataset_config(
-        dataset_config := config, GPTDatasetFromFileConfig[LanguageModelSample]
+        dataset_config := config, GPTDatasetFromFileConfig[LanguageModelDocument]
     ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
 
@@ -54,17 +54,19 @@ def test_gpt_sampled():
     )
 
 
-class SimpleGPTIndexedDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
+class SimpleGPTIndexedDataset[DocumentType: LanguageModelDocument](IndexedDataset[DocumentType]):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
         self._samples = samples
 
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    ) -> DocumentType:
         if end is None:
             end = len(self._samples[index])
-        return LanguageModelSample(TokenSample(torch.tensor(self._samples[index][begin:end], dtype=torch.int64)))
+        return LanguageModelDocument(
+            tokens=TokenDocument(tokens=torch.tensor(self._samples[index][begin:end], dtype=torch.int64))
+        )
 
     def __len__(self) -> int:
         return len(self._samples)

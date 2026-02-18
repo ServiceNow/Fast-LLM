@@ -3,9 +3,9 @@ import pytest
 
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
-from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
 from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_SAMPLES, COMMON_DATASET_TEXT
@@ -39,7 +39,7 @@ TOKEN_LOSS_MASKING_SPANS = {
 @pytest.mark.slow
 def test_gpt_data_with_loss_masking_spans():
     _, config, hf_path, preprocessing = get_test_dataset_with_loss_masking_spans()
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
+    dataset: MemmapDataset[LanguageModelDocument] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
         preprocessing
     )
 
@@ -83,10 +83,9 @@ def test_gpt_data_with_loss_masking_spans():
 def test_gpt_data_with_missing_loss_masking_spans():
     path, config, hf_path, _ = get_common_test_dataset()
     _, _, _, preprocessing = get_test_dataset_with_loss_masking_spans(config_only=True)
-    with pytest.warns(match="The model uses loss masking spans"):
-        dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
+    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
 
     for index in COMMON_DATASET_SAMPLES:
         document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
         Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
-        Assert.eq(document.loss_masking_spans.ranges, [])
+        Assert.none(document.loss_masking_spans)

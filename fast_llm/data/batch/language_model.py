@@ -3,14 +3,14 @@ import typing
 
 import torch
 
-from fast_llm.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig, MicroBatch, PreprocessedBatch
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 
 
 @dataclasses.dataclass
-class LanguageModelBatchNew:
+class LanguageModelMicroBatch(MicroBatch):
     tokens: torch.Tensor
     token_dim: TensorDim
     hidden_token_dim: TensorDim
@@ -27,8 +27,7 @@ class LanguageModelBatchNew:
     max_length_k: torch.Tensor | None = None
     document_index: torch.Tensor | None = None
     position_index: torch.Tensor | None = None
-    chosen_spans: list[tuple[int, int]] | None = None
-    rejected_spans: list[tuple[int, int]] | None = None
+    # TODO: ====== Preference spans? ======
 
     def to_device_(self, device: torch.device):
         self.tokens = self.tokens.to(device, non_blocking=True)
@@ -45,24 +44,37 @@ class LanguageModelBatchNew:
         if self.position_index is not None:
             self.position_index = self.position_index.to(device, non_blocking=True)
 
+
+@dataclasses.dataclass
+class LanguageModelPreprocessedBatch(PreprocessedBatch):
+    micro_batches: list[LanguageModelMicroBatch]
+
     @classmethod
     def from_documents(
         cls,
+        documents: list[LanguageModelDocument],
+        *,
         config: LanguageModelBatchPreprocessingConfig,
         distributed_config: DistributedConfig,
-        documents: list[LanguageModelSample],
         device: torch.device | None = None,
-    ) -> list[typing.Self]:
-        num_tokens = sum(len(document) for document in documents)
-        padding = config.batch.sequence_length + config.predicted_tokens - num_tokens
-        sample = LanguageModelSample.from_documents(documents + [documents[0].get_padding(padding)])
-        # sample.tokens.lengths
-        # lengths = [len(document) for document in documents]
-        # num_tokens = sum(lengths)
+    ) -> typing.Self:
+        batch = LanguageModelBatch.from_documents(
+            documents, pad_to_size=config.batch.sequence_length + config.predicted_tokens
+        )
+        return cls.from_batch(batch, config=config, distributed_config=distributed_config, device=device)
 
+    @classmethod
+    def from_batch(
+        cls,
+        batch: LanguageModelBatch,
+        *,
+        config: LanguageModelBatchPreprocessingConfig,
+        distributed_config: DistributedConfig,
+        device: torch.device | None = None,
+    ) -> typing.Self:
         if device is None:
-            device = sample.tokens.tokens.device
-        sample.to_device_(device)
+            device = batch.tokens.tokens.device
+        batch.to_device_(device)
 
         token_dim = TensorDim(
             "token",
@@ -88,19 +100,16 @@ class LanguageModelBatchNew:
         ):
             sequence_k = sequence_k_past + token_dim.size
             sequence_k_dim = TensorDim("sequence_k", sequence_k)
-            cropped_sample = sample.crop(sequence_k_past, sequence_k)
+            cropped_sample = batch.crop(sequence_k_past, sequence_k)
 
-            # document_lengths, cumulative_lengths_q, cumulative_lengths_k, first_document_index, remaining_tokens = crop_lengths(
-            #    sample.tokens.lengths, sequence_k_past, sequence_k_past + token_dim.size)
-
-            micro_batch = LanguageModelBatchNew(
-                tokens=sample.tokens.tokens[sequence_k_past:sequence_k],
+            micro_batch = LanguageModelMicroBatch(
+                tokens=batch.tokens.tokens[sequence_k_past:sequence_k],
                 token_dim=token_dim,
                 hidden_token_dim=hidden_token_dim,
                 sequence_k_dim=sequence_k_dim,
-                num_tokens=min(sequence_k, num_tokens) - sequence_k_past,
+                num_tokens=min(sequence_k, batch.num_tokens) - sequence_k_past,
                 sequence_length=config.batch.sequence_length,
-                document_lengths=sample.tokens.lengths,
+                document_lengths=batch.tokens.lengths,
             )
             if config.return_cumulative_sequence_lengths:
                 micro_batch.cumulative_lengths_q, micro_batch.cumulative_lengths_k = (
@@ -112,19 +121,16 @@ class LanguageModelBatchNew:
                 micro_batch.document_index = cropped_sample.tokens.get_document_index()
             if config.return_position_index:
                 micro_batch.position_index = cropped_sample.tokens.get_position_index()
-            if config.use_preference_spans:
-                micro_batch.chosen_spans = cropped_sample.chosen_spans.ranges
-                micro_batch.rejected_spans = cropped_sample.rejected_spans.ranges
 
             for prediction_distance in range(1, config.predicted_tokens + 1):
                 label_begin = sequence_k_past + prediction_distance
                 label_end = sequence_k + prediction_distance
-                label_tokens = sample.tokens.crop(label_begin, label_end)
+                label_tokens = batch.tokens.crop(label_begin, label_end)
                 labels = label_tokens.tokens.clone()
 
                 # Apply loss masking spans.
-                if config.use_loss_masking_spans:
-                    for span_begin, span_end in sample.loss_masking_spans.crop(label_begin, label_end).ranges:
+                if config.use_loss_masking_spans and batch.loss_masking_spans is not None:
+                    for span_begin, span_end in batch.loss_masking_spans.crop(label_begin, label_end).ranges:
                         labels[span_begin:span_end] = -100
 
                 # Mask cross-document predictions.
@@ -141,4 +147,4 @@ class LanguageModelBatchNew:
                     micro_batch.prediction_masks.append(labels > 0)
 
             micro_batches.append(micro_batch)
-        return micro_batches
+        return LanguageModelPreprocessedBatch(micro_batches=micro_batches)

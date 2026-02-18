@@ -5,10 +5,10 @@ import numpy as np
 import torch
 
 from fast_llm.data.dataset.indexed import IndexedDataset
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.range import RangeDocument
+from fast_llm.data.document.token import TokenDocument
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.range import RangeSample
-from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -25,7 +25,7 @@ MEMMAP_DTYPES = {
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[SampleType]):
+class LegacyMemmapDataset[DocumentType: LanguageModelDocument](IndexedDataset[DocumentType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -153,7 +153,7 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> SampleType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         if end is None:
             end = self.get_document_size(index)
         sample_size = self._document_sizes[index].item()
@@ -175,29 +175,29 @@ class LegacyMemmapDataset[SampleType: LanguageModelSample](IndexedDataset[Sample
             assert self._spans is not None
             if hasattr(self, "_spans"):
                 # Convert to in range format (begin, end).
-                sample_spans = RangeSample(
-                    [(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()], sample_size
+                sample_spans = RangeDocument(
+                    ranges=[(begin_, last_ + 1) for begin_, last_ in self._spans[index].tolist()]
                 ).crop(begin, end)
             else:
-                sample_spans = RangeSample([], end - begin)
+                sample_spans = RangeDocument(ranges=[])
         else:
             sample_spans = None
 
         if self._preprocessing.use_preference_spans:
             # Convert to in range format (begin, end).
-            chosen_spans = RangeSample(
+            chosen_spans = RangeDocument(
                 [(self._chosen_spans[index][0].item(), self._chosen_spans[index][1].item() + 1)],
                 sample_size,
             ).crop(begin, end)
-            rejected_spans = RangeSample(
+            rejected_spans = RangeDocument(
                 [(self._rejected_spans[index][0].item(), self._rejected_spans[index][1].item() + 1)],
                 sample_size,
             ).crop(begin, end)
         else:
             chosen_spans = rejected_spans = None
 
-        return LanguageModelSample(
-            tokens=TokenSample(token_ids),
+        return LanguageModelDocument(
+            tokens=TokenDocument(token_ids),
             loss_masking_spans=sample_spans,
             chosen_spans=chosen_spans,
             rejected_spans=rejected_spans,

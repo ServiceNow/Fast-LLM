@@ -4,11 +4,11 @@ import torch
 
 from fast_llm.data.dataset.abstract import SamplableDataset
 from fast_llm.data.dataset.config import SamplingData, SamplingParameters
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
 from fast_llm.utils import Assert, padded_cumsum
 
 
-class IndexedDataset[SampleType: Sample](SamplableDataset[SampleType]):
+class IndexedDataset[DocumentType: Document](SamplableDataset[DocumentType]):
     """
     A dataset containing a list of samples.
     TODO: Move sampling responsibility here?
@@ -31,7 +31,7 @@ class IndexedDataset[SampleType: Sample](SamplableDataset[SampleType]):
     @abc.abstractmethod
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    ) -> DocumentType:
         pass
 
     def __len__(self) -> int:
@@ -55,12 +55,12 @@ class IndexedDataset[SampleType: Sample](SamplableDataset[SampleType]):
         return SampledIndexedDataset(self, sampling)
 
 
-class DatasetSlice[SampleType: Sample](IndexedDataset[SampleType]):
+class DatasetSlice[DocumentType: Document](IndexedDataset[DocumentType]):
 
     def __init__(
         self,
         name: str,
-        dataset: IndexedDataset[SampleType],
+        dataset: IndexedDataset[DocumentType],
         begin: int | None = None,
         end: int | None = None,
     ):
@@ -86,7 +86,7 @@ class DatasetSlice[SampleType: Sample](IndexedDataset[SampleType]):
 
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    ) -> DocumentType:
         """
         Get the sample (document) with the given index (in the dataset slice),
         optionally subsampled to a specific offset (starting point) and maximum length
@@ -102,12 +102,12 @@ class DatasetSlice[SampleType: Sample](IndexedDataset[SampleType]):
         return self._name
 
 
-class ConcatenatedDataset[SampleType: Sample](IndexedDataset[SampleType]):
+class ConcatenatedDataset[DocumentType: Document](IndexedDataset[DocumentType]):
 
     def __init__(
         self,
         name: str,
-        datasets: list[IndexedDataset[SampleType]],
+        datasets: list[IndexedDataset[DocumentType]],
     ):
         self._name = name
         self._datasets = datasets
@@ -134,7 +134,7 @@ class ConcatenatedDataset[SampleType: Sample](IndexedDataset[SampleType]):
 
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    ) -> DocumentType:
         dataset = torch.searchsorted(self._dataset_splits[1:], index, side="right")
         return self._datasets[dataset].get_document(
             index - self._dataset_splits[dataset].item(), begin, end, parameters

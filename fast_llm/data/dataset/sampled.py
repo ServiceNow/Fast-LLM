@@ -11,7 +11,7 @@ import yaml
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -66,14 +66,14 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
+class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A sampled dataset.
     """
 
     def __init__(
         self,
-        indexed_dataset: IndexedDataset[SampleType],
+        indexed_dataset: IndexedDataset[DocumentType],
         sampling: SamplingData,
     ):
         self._indexed_dataset = indexed_dataset
@@ -126,17 +126,17 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes > self._parameters.sequence_length + 1
+            long_docs_filter = document_sizes > self._parameters.total_length
             ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
-                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
+                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.total_length} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
             tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
             if tokens_per_epoch == 0:
                 raise RuntimeError(
-                    f" > No documents shorter than {self._parameters.sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
+                    f" > No documents shorter than {self._parameters.total_length} tokens found in dataset {self._indexed_dataset.name}."
                 )
 
         # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
@@ -148,10 +148,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 / tokens_per_epoch
             )
         else:
-            num_epochs = math.ceil(
-                ((self._parameters.sequence_length + self._parameters.extra_tokens) * self._parameters.num_samples)
-                / tokens_per_epoch
-            )
+            num_epochs = math.ceil((self._parameters.total_length * self._parameters.num_samples) / tokens_per_epoch)
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -320,14 +317,12 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         else:
             # TODO: dynamically handle int64 or int32 in CPP
             out = build_padded_token_cumsum(
-                sizes.cpu().numpy(), (self._parameters.sequence_length + 1), TOKEN_CUMSUM_RATE, offset
+                sizes.cpu().numpy(), self._parameters.total_length, TOKEN_CUMSUM_RATE, offset
             )
             num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(
-                    np.searchsorted(
-                        out, self._parameters.num_samples * (self._parameters.sequence_length + 1), side="right"
-                    ),
+                    np.searchsorted(out, self._parameters.num_samples * self._parameters.total_length, side="right"),
                     0,
                     None,
                 )
@@ -337,7 +332,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __len__(self) -> int:
         return self._parameters.num_samples
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> list[DocumentType]:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -347,13 +342,10 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
-        sample_length = (
-            self._parameters.sequence_length
-            if self._truncate_documents
-            else self._parameters.sequence_length + self._parameters.extra_tokens
+        token_start = index * (
+            self._parameters.sequence_length if self._truncate_documents else self._parameters.total_length
         )
-        token_start = index * sample_length
-        token_end = token_start + self._parameters.sequence_length + self._parameters.extra_tokens
+        token_end = token_start + self._parameters.total_length
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
@@ -369,7 +361,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         token_count = token_start_array[token_start_cumsum_index].item()
 
-        documents: list[SampleType] = []
+        documents: list[DocumentType] = []
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -380,16 +372,15 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             document_size = self._indexed_dataset.get_document_size(document_index)
 
             if not self._truncate_documents:
-                if document_size > self._parameters.sequence_length + 1:
+                if document_size > self._parameters.total_length:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
-                tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
+                tokens_in_sample = token_count % self._parameters.total_length
+                if document_size + tokens_in_sample > self._parameters.total_length:
                     # Document belongs to the next sample, need to account for padding.
-                    padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
+                    padding_size = self._parameters.total_length - tokens_in_sample
                     if token_count > token_start:
-                        documents.append(documents[-1].get_padding(padding_size))
                         Assert.eq(token_count + padding_size, token_end)
                         break
                     else:
@@ -413,8 +404,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
-
-        return documents[0].from_documents(documents)
+        return documents
 
     @property
     def name(self) -> str:

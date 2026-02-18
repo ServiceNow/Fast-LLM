@@ -4,13 +4,13 @@ import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingData
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
 from fast_llm.utils import Assert, normalize_probabilities
 
 logger = logging.getLogger(__name__)
 
 
-class BlendedDataset[SampleType: Sample](SampledDataset[SampleType]):
+class BlendedDataset[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A blended sampling of multiple sampled datasets, where each dataset is sampled with the provided probability.
     The sampling order of each dataset is respected, but there is no strict guarantee
@@ -21,7 +21,7 @@ class BlendedDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __init__(
         self,
         name: str,
-        datasets: list[SampledDataset[SampleType]],
+        datasets: list[SampledDataset[DocumentType]],
         weights: list[float],
         sampling_config: SamplingData,
     ):
@@ -35,7 +35,7 @@ class BlendedDataset[SampleType: Sample](SampledDataset[SampleType]):
     def __len__(self) -> int:
         return self._num_samples
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> list[DocumentType]:
         """
         Blending is typically done in one of the following iterative way (ex. in Megatron datasets):
         ```python
@@ -56,6 +56,7 @@ class BlendedDataset[SampleType: Sample](SampledDataset[SampleType]):
         sampled = self._get_sampled(index)
         # Then get the present sample.
         dataset_index = self._get_next_dataset(index, sampled)
+        # TODO: ====== Can we mix documents from multiple datasets? ======
         return self._datasets[dataset_index][sampled[dataset_index].item()]
 
     def _get_sampled(self, num_samples: int) -> torch.Tensor:

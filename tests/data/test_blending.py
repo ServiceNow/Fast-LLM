@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from fast_llm.data.dataset.config import BlendedDatasetConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.data.common import (
     compare_sampled_dataset,
@@ -114,7 +114,7 @@ def test_gpt_blended():
             "datasets": [config, alt_config],
             "weights": [0.75, 0.25],
         },
-        BlendedDatasetConfig[LanguageModelSample],
+        BlendedDatasetConfig[LanguageModelDocument],
     ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
@@ -142,7 +142,7 @@ def test_gpt_blended_mixed():
             ],
             "weights": [0.6, 0.4],
         },
-        BlendedDatasetConfig[LanguageModelSample],
+        BlendedDatasetConfig[LanguageModelDocument],
     ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 

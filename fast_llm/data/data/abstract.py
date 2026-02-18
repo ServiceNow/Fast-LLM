@@ -3,10 +3,10 @@ import pathlib
 import typing
 
 from fast_llm.config import Configurable
+from fast_llm.data.batch.config import PreprocessedBatch
 from fast_llm.data.data.config import DataConfig
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import Batch
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
@@ -54,5 +54,6 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         num_workers: int,
         prefetch_factor: int | None = None,
         timeout: float = 60,
-    ) -> typing.Iterator[Batch]:
+        preprocess: bool = True,
+    ) -> typing.Iterator[PreprocessedBatch]:
         pass

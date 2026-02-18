@@ -9,9 +9,6 @@ Tests the actual preprocess_batch code path in fast_llm/models/gpt/model.py
 import torch
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.data.sample.language_model import LanguageModelBatch
-from fast_llm.data.sample.range import RangeBatch
-from fast_llm.data.sample.token import TokenBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, GPTModelConfig

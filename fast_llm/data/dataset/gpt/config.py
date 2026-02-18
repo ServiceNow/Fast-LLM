@@ -16,7 +16,7 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.fim import GPTFimDataset
     from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
-    from fast_llm.data.sample.language_model import LanguageModelSample
+    from fast_llm.data.document.language_model import LanguageModelDocument
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -30,7 +30,7 @@ class GPTSamplingData(SamplingData):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
-class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType]):
+class GPTRandomDatasetConfig[DocumentType: LanguageModelDocument](SampledDatasetConfig[DocumentType]):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
         default="dummy",
@@ -38,14 +38,14 @@ class GPTRandomDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConf
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: GPTSamplingData) -> "GPTRandomSampledDataset[SampleType]":
+    def build_and_sample(self, sampling: GPTSamplingData) -> "GPTRandomSampledDataset[DocumentType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
 
-        return GPTRandomSampledDataset[SampleType](sampling, self.name)
+        return GPTRandomSampledDataset[DocumentType](sampling, self.name)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
-class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDatasetConfig[SampleType]):
+class GPTDatasetFromFileConfig[DocumentType: LanguageModelDocument](SamplableDatasetConfig[DocumentType]):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
         default=None,
@@ -53,22 +53,22 @@ class GPTDatasetFromFileConfig[SampleType: LanguageModelSample](SamplableDataset
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
         config = self._load_config()
         return config.build_and_sample(sampling)
 
-    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
+    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
         config = self._load_config()
         assert isinstance(config, SamplableDatasetConfig)
         return config.build(preprocessing)
 
-    def _load_config(self) -> SampledDatasetConfig[SampleType]:
+    def _load_config(self) -> SampledDatasetConfig[DocumentType]:
         assert self.path.is_file(), f"File {self.path} does not exist."
         config = yaml.safe_load(self.path.open("r"))
         if config.keys() == {"config", "metadata"}:
             # Newer format with metadata
             config = config["config"]
-        return SampledDatasetConfig[SampleType].from_dict(self._convert_paths(config))
+        return SampledDatasetConfig[DocumentType].from_dict(self._convert_paths(config))
 
     def _convert_paths(self, config):
         # Recursively convert paths relative to `self.path.parent` to make them relative to cwd.
@@ -159,14 +159,14 @@ class FimConfig(Config):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "fim"})
-class GPTFimSampledDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType], FimConfig):
+class GPTFimSampledDatasetConfig[DocumentType: LanguageModelDocument](SampledDatasetConfig[DocumentType], FimConfig):
     """
     Configuration for FIM.
     """
 
     _abstract: typing.ClassVar[bool] = False
 
-    dataset: SampledDatasetConfig[SampleType] = Field(
+    dataset: SampledDatasetConfig[DocumentType] = Field(
         default=None,
         desc="The dataset to wrap with fim.",
         hint=FieldHint.core,
@@ -175,14 +175,14 @@ class GPTFimSampledDatasetConfig[SampleType: LanguageModelSample](SampledDataset
     def build_and_sample(
         self,
         sampling: GPTSamplingData,
-    ) -> "GPTFimDataset[SampleType]":
+    ) -> "GPTFimDataset[DocumentType]":
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return GPTFimDataset[SampleType](self, self.dataset.build_and_sample(sampling), sampling)
+        return GPTFimDataset[DocumentType](self, self.dataset.build_and_sample(sampling), sampling)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
-class GPTTestSlowDatasetConfig[SampleType: LanguageModelSample](SampledDatasetConfig[SampleType]):
+class GPTTestSlowDatasetConfig[DocumentType: LanguageModelDocument](SampledDatasetConfig[DocumentType]):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
     """
@@ -195,8 +195,8 @@ class GPTTestSlowDatasetConfig[SampleType: LanguageModelSample](SampledDatasetCo
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
         assert sampling.distributed.config.world_size > 1
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
-        return GPTRandomDatasetConfig[SampleType]().build_and_sample(sampling)
+        return GPTRandomDatasetConfig[DocumentType]().build_and_sample(sampling)

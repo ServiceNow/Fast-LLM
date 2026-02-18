@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from fast_llm.config import NoAutoValidate
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -12,6 +13,7 @@ from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfig, S
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.dataset.sampled import SampledIndexedDataset
+from fast_llm.data.document.language_model import LanguageModelBatch
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -86,17 +88,27 @@ def get_test_data_and_compare_samples(
 
     assert "sampling" not in config
     config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
-    data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
-    data.setup(distributed, sampling_parameters, preprocessing, cache_directory)
     with NoAutoValidate():
         batch_config = GPTBatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
+    preprocessing = LanguageModelBatchPreprocessingConfig.from_dict(
+        preprocessing, {"batch": batch_config, "type": None}
+    )
+    data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
+    data.setup(
+        distributed,
+        sampling_parameters,
+        {dataset_name: preprocessing for dataset_name in samples_per_dataset},
+        cache_directory,
+    )
     tokens = {
         phase: torch.stack(
             [
-                batch.tokens.tokens[0]
-                for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)
+                batch.tokens.tokens
+                for batch in data.get_iterator(
+                    batch_config, phase, consumed_samples=0, num_workers=0, preprocess=False
+                )
             ]
         )
         for phase, samples in samples_per_dataset.items()
@@ -128,7 +140,12 @@ def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list
     # for i in range(len(expected_samples)):
     #     print(i, sampled[i].tokens.tokens.tolist())
     Assert.eq(len(sampled), len(expected_samples))
-    Assert.all_equal(torch.stack([sampled[i].tokens.tokens for i in range(len(expected_samples))]), expected_samples)
+    Assert.all_equal(
+        torch.stack(
+            [LanguageModelBatch.from_documents(sampled[i]).tokens.tokens for i in range(len(expected_samples))]
+        ),
+        expected_samples,
+    )
 
 
 def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_samples: list[list[int]] | None = None):
@@ -163,7 +180,9 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
         all_tokens[index * sampled._parameters.sequence_length : (index + 1) * sampled._parameters.sequence_length + 1]
         for index in range(sampled._parameters.num_samples)
     ]
-    token_ids = torch.stack([sampled[i].tokens.tokens for i in range(len(sampled))]).to(torch.int64)
+    token_ids = torch.stack(
+        [LanguageModelBatch.from_documents(sampled[i]).tokens.tokens for i in range(len(sampled))]
+    ).to(torch.int64)
     Assert.all_equal(token_ids, validate_samples)
     if expected_samples is not None:
         Assert.all_equal(token_ids, expected_samples)

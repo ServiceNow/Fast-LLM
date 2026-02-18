@@ -1,7 +1,7 @@
 import logging
 import typing
 
-from fast_llm.batch.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.batch.language_model import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.engine.distributed.config import PhaseType

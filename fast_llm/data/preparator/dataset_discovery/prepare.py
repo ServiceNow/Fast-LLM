@@ -11,7 +11,7 @@ from collections import defaultdict
 
 import yaml
 
-from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.dataset_discovery.config import DatasetDiscoveryConfig
 

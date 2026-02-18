@@ -4,7 +4,6 @@ import typing
 import torch
 
 from fast_llm.core.distributed import all_gather_scalar
-from fast_llm.data.sample.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner

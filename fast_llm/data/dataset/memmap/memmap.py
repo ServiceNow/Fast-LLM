@@ -7,18 +7,17 @@ import torch
 
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import (
-    MemmapIndexDatasetReaderConfig,
-    MemmapIndexedDatasetReader,
-    MemmapWriter,
-    Sample,
+from fast_llm.data.dataset.memmap.abstract import MemmapIndexedDatasetReader, MemmapWriter
+from fast_llm.data.dataset.memmap.config import MemmapIndexDatasetReaderConfig
+from fast_llm.data.document.abstract import (
+    Document,
 )
+from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 
 FILE_HEADER = b"fast_llm_prepared_dataset"
 
 
-class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
+class MemmapDataset[DocumentType: Document](IndexedDataset[DocumentType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset.
     """
@@ -28,12 +27,6 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
         """
         Read the MemmapIndexDatasetReaderConfig from a memmap file.
         """
-        # Import reader configs to register them in the dynamic class registry
-        from fast_llm.data.sample.language_model import LanguageModelReaderConfig  # noqa: F401
-        from fast_llm.data.sample.patch import PatchReaderConfig  # noqa: F401
-        from fast_llm.data.sample.range import RangeReaderConfig  # noqa: F401
-        from fast_llm.data.sample.token import TokenReaderConfig  # noqa: F401
-
         path = pathlib.Path(path) if isinstance(path, str) else path
         with path.open("rb") as stream:
             # Verify file type.
@@ -78,7 +71,7 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
 
     def get_document(
         self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    ) -> DocumentType:
         if end is None:
             end = self._reader.get_document_size(index)
         return self._reader.get_document(index, begin, end)
@@ -108,11 +101,11 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
     def write_dataset(
         cls,
         path: pathlib.Path,
-        documents: typing.Iterable[Sample],
+        documents: typing.Iterable[Document],
         writer_class: type[MemmapWriter],
         preprocessing_config: PreprocessingConfig | None = None,
     ) -> MemmapIndexDatasetReaderConfig:
-        # TODO: Match `writer_class` with `SampleType`?
+        # TODO: Match `writer_class` with `DocumentType`?
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as stream:
             # Write the file type header.

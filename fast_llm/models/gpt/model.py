@@ -5,7 +5,7 @@ import typing
 
 import torch
 
-from fast_llm.batch.language_model import LanguageModelBatchNew
+from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
@@ -42,7 +42,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def preprocess_batch(
         self,
-        batches: list[LanguageModelBatchNew],
+        batch: LanguageModelPreprocessedBatch,
         *,
         phase: PhaseType,
         iteration: int,
@@ -55,17 +55,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         reference_preprocessed_batches = {}
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_batches[name] = reference_model.fast_llm_model.base_model.preprocess_batch(
-                batches,
+                batch,
                 phase=PhaseType.inference,
                 iteration=iteration,
             )
 
         preprocessed = []
         presents = None
-        for micro_sequence_index, batch in enumerate(batches):
+        for micro_sequence_index, micro_sequence in enumerate(batch.micro_batches):
             pasts = presents
-            presents = None if micro_sequence_index == len(batches) - 1 else []
-            batch.to_device_(self._distributed.device)
+            presents = None if micro_sequence_index == len(batch) - 1 else []
+            micro_sequence.to_device_(self._distributed.device)
             kwargs: dict[str, typing.Any] = {
                 LanguageModelKwargs.phase: phase,
                 AttentionKwargs.past_key_values: pasts,
@@ -74,22 +74,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 LanguageModelKwargs.device: self._distributed.device,
                 LanguageModelKwargs.output_hidden_states: [],
                 LanguageModelKwargs.hidden_states: {},
-                LanguageModelKwargs.token_dim: batch.token_dim,
-                LanguageModelKwargs.hidden_token_dim: batch.hidden_token_dim,
-                LanguageModelKwargs.sequence_k_dim: batch.sequence_k_dim,
-                LanguageModelKwargs.num_tokens: batch.num_tokens,
-                LanguageModelKwargs.sequence_length: batch.sequence_length,
-                LanguageModelKwargs.sequence_lengths: batch.document_lengths,
-                LanguageModelKwargs.labels: batch.labels,
-                LanguageModelKwargs.loss_mask: batch.prediction_masks,
-                AttentionKwargs.cu_seqlens_q: batch.cumulative_lengths_q,
-                AttentionKwargs.cu_seqlens_k: batch.cumulative_lengths_k,
-                AttentionKwargs.max_seqlen_q: batch.max_length_q,
-                AttentionKwargs.max_seqlen_k: batch.max_length_k,
-                LanguageModelKwargs.seq_idx: batch.document_index,
-                LanguageModelKwargs.position_ids: batch.position_index,
-                LanguageModelKwargs.chosen_spans: batch.chosen_spans,
-                LanguageModelKwargs.rejected_spans: batch.rejected_spans,
+                LanguageModelKwargs.token_dim: micro_sequence.token_dim,
+                LanguageModelKwargs.hidden_token_dim: micro_sequence.hidden_token_dim,
+                LanguageModelKwargs.sequence_k_dim: micro_sequence.sequence_k_dim,
+                LanguageModelKwargs.num_tokens: micro_sequence.num_tokens,
+                LanguageModelKwargs.sequence_length: micro_sequence.sequence_length,
+                LanguageModelKwargs.sequence_lengths: micro_sequence.document_lengths,
+                LanguageModelKwargs.labels: micro_sequence.labels,
+                LanguageModelKwargs.loss_mask: micro_sequence.prediction_masks,
+                AttentionKwargs.cu_seqlens_q: micro_sequence.cumulative_lengths_q,
+                AttentionKwargs.cu_seqlens_k: micro_sequence.cumulative_lengths_k,
+                AttentionKwargs.max_seqlen_q: micro_sequence.max_length_q,
+                AttentionKwargs.max_seqlen_k: micro_sequence.max_length_k,
+                LanguageModelKwargs.seq_idx: micro_sequence.document_index,
+                LanguageModelKwargs.position_ids: micro_sequence.position_index,
+                LanguageModelKwargs.chosen_spans: micro_sequence.chosen_spans,
+                LanguageModelKwargs.rejected_spans: micro_sequence.rejected_spans,
             }
             if extra_kwargs is not None:
                 Assert.empty(kwargs.keys() & extra_kwargs.keys())
@@ -112,7 +112,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
                 }
             self.preprocess(kwargs)
-            preprocessed.append((batch.tokens, kwargs))
+            preprocessed.append((micro_sequence.tokens, kwargs))
 
         return preprocessed
 

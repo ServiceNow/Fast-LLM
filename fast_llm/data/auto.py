@@ -6,8 +6,15 @@ from fast_llm.data.dataset.config import (  # isort: skip
     BlendedDatasetConfig,
     ConcatenatedDatasetConfig,
     DatasetSliceConfig,
-    MemmapDatasetConfig,
     SampledDatasetUpdateConfig,
+)
+from fast_llm.data.dataset.memmap.config import (  # isort: skip
+    LanguageModelReaderConfig,
+    MemmapDatasetConfig,
+    NullReaderConfig,
+    PatchReaderConfig,
+    RangeReaderConfig,
+    TokenReaderConfig,
 )
 from fast_llm.data.dataset.gpt.config import (  # isort: skip
     GPTDatasetFromFileConfig,
@@ -16,4 +23,3 @@ from fast_llm.data.dataset.gpt.config import (  # isort: skip
 )
 from fast_llm.data.preparator.dataset_discovery.config import DatasetDiscoveryConfig  # isort: skip
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig  # isort: skip
-from fast_llm.data.sample.abstract import NullReaderConfig  # isort: skip

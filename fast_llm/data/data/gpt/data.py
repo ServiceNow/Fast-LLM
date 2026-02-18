@@ -1,3 +1,4 @@
+import functools
 import logging
 import pathlib
 import typing
@@ -7,6 +8,8 @@ import torch
 import torch.utils.data
 
 from fast_llm.core.distributed import safe_barrier
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.data_loader import SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
@@ -14,8 +17,7 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.monitor import DatasetMonitor
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.sample.language_model import LanguageModelBatch
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -32,7 +34,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
     _datasets: dict[str, SampledDataset]
     _sampling_parameters: dict[str, SamplingParameters]
-    _preprocessing: dict[str, LanguageModelPreprocessingConfig]
+    _preprocessing: dict[str, LanguageModelBatchPreprocessingConfig]
     _is_setup: bool = False
 
     def __init__(
@@ -50,7 +52,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self,
         distributed: "Distributed",
         sampling_parameters: dict[str, SamplingParameters],
-        preprocessing: dict[str, LanguageModelPreprocessingConfig],
+        preprocessing: dict[str, LanguageModelBatchPreprocessingConfig],
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
@@ -105,7 +107,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         num_workers: int,
         prefetch_factor: int | None = None,
         timeout: float = 60,
-    ) -> typing.Iterator[LanguageModelBatch]:
+        preprocess: bool = True,
+    ) -> typing.Iterator[LanguageModelPreprocessedBatch]:
         assert self._is_setup
 
         # Some dataset names may come from phases and are capitalized,
@@ -130,7 +133,26 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
-                collate_fn=LanguageModelBatch.from_samples,
+                collate_fn=functools.partial(self._collate_fn, dataset_name=dataset_name, preprocess=preprocess),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
         )
+
+    def _collate_fn(
+        self,
+        documents: list[list[LanguageModelDocument]],
+        dataset_name: str,
+        preprocess: bool = True,
+    ) -> LanguageModelPreprocessedBatch | LanguageModelBatch:
+        documents = [document for documents_ in documents for document in documents_]
+        config = self._preprocessing[dataset_name]
+        if preprocess:
+            return LanguageModelPreprocessedBatch.from_documents(
+                documents,
+                config=config,
+                distributed_config=self._distributed_config,
+            )
+        else:
+            return LanguageModelBatch.from_documents(
+                documents, pad_to_size=config.batch.sequence_length + config.predicted_tokens
+            )

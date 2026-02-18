@@ -5,7 +5,6 @@ import torch
 import transformers.modeling_outputs
 
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
-from fast_llm.data.sample.patch import PatchBatch
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelConfig, HuggingfaceGPTModelForCausalLM
 from fast_llm.models.multimodal.config import MultiModalModelConfig

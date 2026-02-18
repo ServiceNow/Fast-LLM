@@ -3,9 +3,10 @@ import json
 import datasets
 import pytest
 
-from fast_llm.data.dataset.config import BlendedDatasetConfig, MemmapDatasetConfig, SamplingParameters
+from fast_llm.data.dataset.config import BlendedDatasetConfig, SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
-from fast_llm.data.dataset.memmap import MemmapDataset
+from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig

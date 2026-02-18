@@ -11,14 +11,15 @@ import yaml
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import MemmapDatasetConfig, SampledDatasetConfig
+from fast_llm.data.dataset.config import SampledDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER, LegacyMemmapDataset
+from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.token import TokenDocument
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
@@ -48,8 +49,8 @@ def get_megatron_test_dataset(prefix: pathlib.Path = MEGATRON_DATASET_PREFIX):
         hf_dataset = datasets.load_from_disk(hf_path)["train"]
         tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
         samples = [
-            LanguageModelSample(
-                TokenSample((tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16))
+            LanguageModelDocument(
+                TokenDocument((tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16))
             )
             for document in hf_dataset
         ]
@@ -116,14 +117,14 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "megatron"})
-class MegatronDatasetConfig[SampleType: LanguageModelSample](MemmapDatasetConfig[SampleType]):
+class MegatronDatasetConfig[DocumentType: LanguageModelDocument](MemmapDatasetConfig[DocumentType]):
     _abstract: typing.ClassVar[bool] = False
     path: str = Field(
         desc="Dataset path (prefix).",
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "LegacyMemmapDataset[SampleType]":
+    def build(self, preprocessing: PreprocessingConfig) -> "LegacyMemmapDataset[DocumentType]":
         return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path, preprocessing)
 
 
@@ -135,7 +136,7 @@ class MegatronMemmapDataset(LegacyMemmapDataset):
     def write_dataset(
         cls,
         prefix: pathlib.Path | str,
-        documents: typing.Iterable[LanguageModelSample],
+        documents: typing.Iterable[LanguageModelDocument],
     ) -> None:
         # Initialize metadata
         dtype = None
@@ -192,7 +193,7 @@ class MegatronMemmapDataset(LegacyMemmapDataset):
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
 
 
-class MegatronSampledIndexedDataset(SampledDataset):
+class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](SampledDataset[DocumentType]):
     """
     A GPT sampled dataset that exactly matches Megatron-LM, for testing purposes.
     Minimalistic implementation, implements only the required features.
@@ -231,20 +232,18 @@ class MegatronSampledIndexedDataset(SampledDataset):
     def __len__(self) -> int:
         return self._num_samples
 
-    def __getitem__(self, idx: int) -> typing.Any:
+    def __getitem__(self, idx: int) -> list[DocumentType]:
         shuffled_idx = self._shuffle_idx[idx]
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        return LanguageModelSample.from_documents(
-            [
-                self._indexed_dataset.get_document(
-                    self._doc_idx[doc].item(),
-                    begin=(doc == doc_f) * offset_f,
-                    end=offset_l + 1 if doc == doc_l else None,
-                )
-                for doc in range(doc_f, doc_l + 1)
-            ]
-        )
+        return [
+            self._indexed_dataset.get_document(
+                self._doc_idx[doc].item(),
+                begin=(doc == doc_f) * offset_f,
+                end=offset_l + 1 if doc == doc_l else None,
+            )
+            for doc in range(doc_f, doc_l + 1)
+        ]
 
     @property
     def name(self) -> str:

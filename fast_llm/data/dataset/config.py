@@ -9,8 +9,8 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
+from fast_llm.data.document.abstract import Document
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import Sample
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -69,6 +69,10 @@ class SamplingParameters:
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
 
+    @functools.cached_property
+    def total_length(self) -> int:
+        return self.sequence_length + self.extra_tokens
+
 
 @dataclasses.dataclass(kw_only=True)
 class SamplingData:
@@ -99,37 +103,37 @@ class SamplingData:
 
 
 @config_class()
-class DatasetConfig[SampleType: Sample](Config):
+class DatasetConfig[DocumentType: Document](Config):
     _abstract: typing.ClassVar[bool] = True
 
 
 @config_class(registry=True)
-class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
+class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
         raise NotImplementedError()
 
 
 @config_class()
-class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
+class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
         return self.build(sampling.preprocessing).sample(sampling)
 
 
 @config_class()
-class IndexedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
+class IndexedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
+    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[DocumentType]":
         raise NotImplementedError()
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "concatenated"})
-class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+class ConcatenatedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
     """
     Concatenate multiple indexed datasets as if they were one.
     TODO: Make a post-sampling version? (staged training)
@@ -141,7 +145,7 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[IndexedDatasetConfig[SampleType]] = Field(
+    datasets: list[IndexedDatasetConfig[DocumentType]] = Field(
         default_factory=list,
         desc="The datasets to concatenate.",
         hint=FieldHint.core,
@@ -155,7 +159,7 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "slice"})
-class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
     """
     Use a fraction of an indexed dataset, specified by the range (begin, end).
     Typically used to subsample a dataset, or to reserve part of the dataset for validation and/or testing.
@@ -165,7 +169,7 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
     """
 
     _abstract = False
-    dataset: IndexedDatasetConfig[SampleType] = Field(
+    dataset: IndexedDatasetConfig[DocumentType] = Field(
         default=None,
         desc="The dataset to split.",
         hint=FieldHint.core,
@@ -186,7 +190,7 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
 
         dataset = self.dataset.build(preprocessing)
         size = len(dataset)
-        return DatasetSlice[SampleType](
+        return DatasetSlice[DocumentType](
             f"{dataset.name}_{self.begin}_{self.end}",
             dataset,
             round(self.begin * size),
@@ -195,7 +199,7 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "sampled"})
-class SampledDatasetUpdateConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
+class SampledDatasetUpdateConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
     """
     Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
     Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
@@ -206,24 +210,24 @@ class SampledDatasetUpdateConfig[SampleType: Sample](SampledDatasetConfig[Sample
         desc="Optional override to sampling configuration parameters.",
         hint=FieldHint.core,
     )
-    dataset: SampledDatasetConfig[SampleType] = Field(
+    dataset: SampledDatasetConfig[DocumentType] = Field(
         desc="The dataset to sample from.",
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, data: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, data: SamplingData) -> SampledDataset[DocumentType]:
         return self.dataset.build_and_sample(data.update_config(self.sampling))
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "blended"})
-class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
+class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
     _abstract = False
     name: str = Field(
         default="blended",
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[SampledDatasetConfig[SampleType]] = Field(
+    datasets: list[SampledDatasetConfig[DocumentType]] = Field(
         default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
@@ -243,7 +247,7 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
     def build_and_sample(
         self,
         sampling: SamplingData,
-    ) -> SampledDataset[SampleType]:
+    ) -> SampledDataset[DocumentType]:
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
@@ -264,37 +268,9 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
         # Blend the datasets.
-        return BlendedDataset[SampleType](
+        return BlendedDataset[DocumentType](
             self.name,
             sampled_datasets,
             self.weights,
             sampling,
         )
-
-
-@config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
-    _abstract: typing.ClassVar[bool] = False
-    path: pathlib.Path = Field(
-        default=None,
-        desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
-        hint=FieldHint.core,
-    )
-
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
-        name = str(self.path).replace("/", "__")
-        if self.path.is_file():
-            from fast_llm.data.dataset.memmap import MemmapDataset
-
-            return MemmapDataset[SampleType](name, self.path, preprocessing)
-        elif self.path.with_suffix(".bin").is_file() and self.path.with_suffix(".idx").is_file():
-            logger.warning(
-                "Using the legacy memmap dataset format."
-                " This format is deprecated and will be removed in a future release."
-                " Please recreate the dataset in the new memmap format."
-            )
-            from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
-
-            return LegacyMemmapDataset[SampleType](name, self.path, preprocessing)
-        else:
-            raise FileNotFoundError(self.path)
