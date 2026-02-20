@@ -5,6 +5,7 @@ import typing
 
 import torch
 
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
@@ -138,8 +139,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
-    # TODO: Can we drop class?
-    pass
+    def get_preprocessing_config(
+        self,
+        phase: PhaseType,
+    ) -> LanguageModelBatchPreprocessingConfig:
+        return LanguageModelBatchPreprocessingConfig(phase=phase, **self._base_model.get_preprocessing_config(phase))
 
 
 class GPTInferenceRunner(InferenceRunner):

@@ -17,8 +17,7 @@ class EvaluatorConfigBase(Config):
         self,
         name: str,
         batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
+        num_workers: int,
     ) -> "Evaluator":
         pass
 
@@ -46,18 +45,15 @@ class LossEvaluatorConfig(EvaluatorConfig):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
-    dataset_name: str | None = Field(default=None)
-
     def get_evaluator(
         self,
         name: str,
         batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
+        num_workers: int,
     ) -> "LossEvaluator":
         from fast_llm.engine.evaluation.evaluator import LossEvaluator
 
-        return LossEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+        return LossEvaluator(name, self, batch_config, num_workers)
 
 
 @config_class(dynamic_type={EvaluatorConfig: "lm_eval"})
@@ -113,9 +109,8 @@ class LmEvalEvaluatorConfig(EvaluatorConfig):
         self,
         name: str,
         batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
+        num_workers: int,
     ) -> "EvaluatorLmEval":
         from fast_llm.engine.evaluation.lm_eval.evaluator import LmEvalEvaluator
 
-        return LmEvalEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+        return LmEvalEvaluator(name, self, batch_config, num_workers)

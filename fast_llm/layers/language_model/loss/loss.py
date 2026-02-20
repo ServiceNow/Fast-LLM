@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
 from fast_llm.utils import Assert
@@ -47,6 +47,9 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return {}
+
     @property
     def name(self) -> str:
         return self._name
@@ -61,16 +64,8 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
         *,
-        multi_token_format: bool = False,
         sequence_parallel: bool = True,
     ) -> torch.Tensor | None:
-        # MTP shift
-        if multi_token_format and self._prediction_heads > 1:
-            sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-            target = target.unflatten(
-                0, (kwargs[LanguageModelKwargs.batch_dim].size, sequence_q + self._prediction_heads - 1)
-            )[:, self._prediction_distance : self._prediction_distance + sequence_q].flatten(0, 1)
-
         # Get the local chunk.
         if sequence_parallel and self._sequence_parallel:
             target = split_op(target, self._parallel_dim.group, 0)
@@ -93,9 +88,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return grad_output
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
-        return self._prepare_target(
-            kwargs[LanguageModelLossKwargs.labels], kwargs, split_index, multi_token_format=True
-        )
+        return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], kwargs, split_index)
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)

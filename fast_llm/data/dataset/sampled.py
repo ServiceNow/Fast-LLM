@@ -106,7 +106,7 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             self._yaml_path = base_path.with_suffix(".yaml")
 
             # Sample or validate the dataset of a given rank.
-            if sampling.distributed.config.rank == sampling.get_next_rank():
+            if sampling.distributed_config.rank == sampling.get_next_rank():
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `Data`.

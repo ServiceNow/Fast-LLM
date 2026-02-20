@@ -149,7 +149,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         preprocessed: bool = False,
     ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
         assert self._is_setup
-        assert schedule._schedule_config is self._config  # Noqa
+        assert schedule._config is self._config  # Noqa
         if schedule.phase.is_training:
             assert self._support_training
 
@@ -335,7 +335,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             if not preprocessed:
                 micro_batch_data = self._multi_stage.base_model.preprocess_batch(
                     micro_batch_data,
-                    context.schedule.preprocessed_meta,
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,

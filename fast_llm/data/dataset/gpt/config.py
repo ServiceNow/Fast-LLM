@@ -196,7 +196,7 @@ class GPTTestSlowDatasetConfig[DocumentType: LanguageModelDocument](SampledDatas
     )
 
     def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
-        assert sampling.distributed.config.world_size > 1
-        if sampling.distributed.config.rank == 0:
+        assert sampling.distributed_config.world_size > 1
+        if sampling.distributed_config.rank == 0:
             time.sleep(self.sleep)
         return GPTRandomDatasetConfig[DocumentType]().build_and_sample(sampling)

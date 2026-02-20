@@ -5,6 +5,7 @@ import typing
 import torch.nn
 
 from fast_llm.config import Configurable
+from fast_llm.data.batch.config import PreprocessedBatch
 from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -175,15 +176,9 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         self._reference_models: dict[str, "InferenceRunner"] = {}
 
     @abc.abstractmethod
-    def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
-        # TODO Remove (Move batch splitting elsewhere)
-        pass
-
-    @abc.abstractmethod
     def preprocess_batch(
         self,
-        batch: typing.Any,
-        preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
+        batch: PreprocessedBatch,
         *,
         phase: PhaseType,
         iteration: int,

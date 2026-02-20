@@ -1,10 +1,11 @@
+import abc
 import dataclasses
 import functools
 import logging
 import typing
 
-from fast_llm.config import Field, config_class
-from fast_llm.data.document.abstract import Document
+from fast_llm.config import Configurable, Field, FieldUpdate, config_class
+from fast_llm.data.document.abstract import Batch, Document
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
@@ -22,15 +23,18 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class BatchPreprocessingConfig(PreprocessingConfig):
-    pass
+    batch: BatchConfig = Field()
+    phase: PhaseType = Field(default=PhaseType.inference)
+
+    def get_batch_meta(self) -> "PreprocessedBatch":
+        raise NotImplementedError()
 
 
 @config_class()
-class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig):
+class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, BatchPreprocessingConfig):
     _abstract = False
     # TODO: Duplicate `use_loss_masking_spans`, `use_preference_spans`
-    batch: GPTBatchConfig = Field()
-    phase: PhaseType = Field(default=PhaseType.inference)
+    batch: GPTBatchConfig = FieldUpdate()
     predicted_tokens: int = Field(default=1)
     return_cumulative_sequence_lengths: bool = Field(default=False)
     return_max_sequence_lengths: bool = Field(default=False)
@@ -43,9 +47,27 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig):
         Assert.custom(isinstance, self.image_patches, (ImagePatchConfig, NullPreprocessingConfig))
         Assert.custom(isinstance, self.tokenizer, (TokenizerConfig, NullPreprocessingConfig))
 
+    def get_batch_meta(self) -> "PreprocessedBatch":
+        from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
+        from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
+        from fast_llm.data.document.token import TokenDocument
+
+        device = torch.device("meta")
+        tokens = torch.empty(self.total_length, dtype=torch.int64, device=device)
+        batch = LanguageModelBatch.from_documents([LanguageModelDocument(tokens=TokenDocument(tokens=tokens))])
+        return LanguageModelPreprocessedBatch.from_batch(batch, config=self, device=device)
+
     @functools.cached_property
     def use_image_patches(self) -> bool:
         return isinstance(self.image_patches, ImagePatchConfig)
+
+    @functools.cached_property
+    def total_length(self) -> int:
+        return self.batch.sequence_length + self.predicted_tokens
+
+    @functools.cached_property
+    def distributed(self) -> DistributedConfig:
+        return self.batch.distributed
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, LanguageModelPreprocessingConfig)
@@ -64,21 +86,37 @@ class MicroBatch:
     pass
 
 
-@dataclasses.dataclass
-class PreprocessedBatch:
-    micro_batches: list[MicroBatch]
+class PreprocessedBatch[ConfigType: BatchPreprocessingConfig, MicroBatchType: MicroBatch](Configurable[ConfigType]):
+    def __init__(self, config: ConfigType, micro_batches: list[MicroBatchType]):
+        super().__init__(config)
+        self._micro_batches = micro_batches
 
+    @property
+    def micro_batches(self) -> list[MicroBatch]:
+        return self._micro_batches
 
-@config_class(registry=True)
-class BatchPreprocessingConfig(PreprocessingConfig):
-    batch: BatchConfig = Field()
+    def __len__(self) -> int:
+        return len(self._micro_batches)
+
+    def __getitem__(self, idx: int) -> MicroBatchType:
+        return self._micro_batches[idx]
 
     @classmethod
+    @abc.abstractmethod
     def from_documents(
         cls,
-        config: BatchPreprocessingConfig,
-        distributed_config: DistributedConfig,
         documents: list[Document],
+        config: BatchPreprocessingConfig,
+        device: "torch.device | None" = None,
+    ) -> typing.Self:
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def from_batch(
+        cls,
+        batch: Batch,
+        config: BatchPreprocessingConfig,
         device: "torch.device | None" = None,
     ) -> typing.Self:
         pass

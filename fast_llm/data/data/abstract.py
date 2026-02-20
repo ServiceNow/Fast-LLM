@@ -3,13 +3,10 @@ import pathlib
 import typing
 
 from fast_llm.config import Configurable
-from fast_llm.data.batch.config import PreprocessedBatch
+from fast_llm.data.batch.config import BatchPreprocessingConfig, PreprocessedBatch
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.config import SamplingParameters
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
-from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -17,32 +14,28 @@ if typing.TYPE_CHECKING:
 
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
-    _sampling_parameters: dict[str, SamplingParameters]
-    _preprocessing: dict[str, PreprocessingConfig]
+    # _sampling_parameters: dict[str, SamplingParameters]
+    # _preprocessing: dict[str, PreprocessingConfig]
     _cache_directory: pathlib.Path | None
+    _is_setup: bool = False
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
         super().__init__(config)
         self._distributed_config = distributed_config
 
     # TODO: Improve interface
-    def setup(
-        self,
-        distributed: "Distributed",
-        sampling_parameters: dict[str, SamplingParameters],
-        preprocessing: dict[str, PreprocessingConfig],
-        cache_directory: pathlib.Path,
-        timeout: float | None = None,
-    ) -> None:
-        Assert.eq(sampling_parameters.keys(), preprocessing.keys())
-        self._distributed = distributed
-        self._sampling_parameters = sampling_parameters
-        self._preprocessing = preprocessing
+    def setup(self, cache_directory: pathlib.Path) -> None:
         self._cache_directory = cache_directory
+        self._is_setup = True
 
-    @property
-    def distributed(self):
-        return self._distributed
+    @abc.abstractmethod
+    def sample_dataset(
+        self,
+        dataset_name: str,
+        config: BatchPreprocessingConfig,
+        num_samples: int,
+    ) -> None:
+        pass
 
     @abc.abstractmethod
     def get_iterator(

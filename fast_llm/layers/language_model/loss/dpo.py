@@ -2,6 +2,7 @@ import typing
 
 import torch
 
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.layers.language_model.loss.config import LanguageModelDPOLossConfig, LanguageModelLossKwargs
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss, loss_forward_backward
 
@@ -17,6 +18,9 @@ class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModel
             raise NotImplementedError()
         if self._vocab_parallel:
             raise NotImplementedError()
+
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return {"use_preference_spans": True}
 
     def forward_backward(
         self,

@@ -32,7 +32,8 @@ from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.training.trainer import Trainer, TrainingEvaluator
+    from fast_llm.engine.evaluation.evaluator import Evaluator
+    from fast_llm.engine.training.trainer import Trainer
 
 
 @config_class()
@@ -163,12 +164,9 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase, IntervalConfig):
         self,
         name: str,
         batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
-    ) -> "TrainingEvaluator":
-        from fast_llm.engine.training.trainer import TrainingEvaluator
-
-        return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+        num_workers: int,
+    ) -> "Evaluator":
+        return self.evaluator.get_evaluator(name, batch_config, num_workers)
 
 
 @config_class()
@@ -287,12 +285,6 @@ class TrainingConfig(Config):
     wandb: WandbConfig = Field(desc="Configuration for Wandb.", hint=FieldHint.core)
     train_iters: int = Field(
         default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
-    )
-    test_iters: int = Field(
-        default=0,
-        desc="Number of iterations for the test phase at the end of training. Setting to 0 will disable the test phase.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
     )
     num_workers: int = Field(
         default=2,

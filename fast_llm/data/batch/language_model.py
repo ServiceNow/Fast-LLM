@@ -6,7 +6,7 @@ import torch
 from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig, MicroBatch, PreprocessedBatch
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedDimNames
 
 
 @dataclasses.dataclass
@@ -46,30 +46,27 @@ class LanguageModelMicroBatch(MicroBatch):
 
 
 @dataclasses.dataclass
-class LanguageModelPreprocessedBatch(PreprocessedBatch):
-    micro_batches: list[LanguageModelMicroBatch]
+class LanguageModelPreprocessedBatch[
+    ConfigType: LanguageModelBatchPreprocessingConfig, MicroBatchType: LanguageModelMicroBatch
+](PreprocessedBatch[ConfigType, MicroBatchType]):
+    def __init__(self, config: LanguageModelBatchPreprocessingConfig, micro_batches: list[MicroBatchType]):
+        super().__init__(config, micro_batches)
 
     @classmethod
     def from_documents(
         cls,
         documents: list[LanguageModelDocument],
-        *,
-        config: LanguageModelBatchPreprocessingConfig,
-        distributed_config: DistributedConfig,
+        config: ConfigType,
         device: torch.device | None = None,
     ) -> typing.Self:
-        batch = LanguageModelBatch.from_documents(
-            documents, pad_to_size=config.batch.sequence_length + config.predicted_tokens
-        )
-        return cls.from_batch(batch, config=config, distributed_config=distributed_config, device=device)
+        batch = LanguageModelBatch.from_documents(documents, pad_to_size=config.total_length)
+        return cls.from_batch(batch, config=config, device=device)
 
     @classmethod
     def from_batch(
         cls,
         batch: LanguageModelBatch,
-        *,
-        config: LanguageModelBatchPreprocessingConfig,
-        distributed_config: DistributedConfig,
+        config: ConfigType,
         device: torch.device | None = None,
     ) -> typing.Self:
         if device is None:
@@ -79,21 +76,21 @@ class LanguageModelPreprocessedBatch(PreprocessedBatch):
         token_dim = TensorDim(
             "token",
             config.batch.micro_sequence_length,
-            distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
+            config.distributed.get_distributed_dim(DistributedDimNames.sequence_data),
         )
         hidden_token_dim = (
             (
                 "token_tp",
                 token_dim.global_size,
-                distributed_config.get_distributed_dim(DistributedDimNames.tensor_and_data),
+                config.distributed.get_distributed_dim(DistributedDimNames.tensor_and_data),
             )
-            if distributed_config.sequence_tensor_parallel
+            if config.distributed.sequence_tensor_parallel
             else token_dim
         )
         micro_batches = []
         for micro_sequence_index, sequence_k_past in enumerate(
             range(
-                token_dim.size * distributed_config.sequence_data_rank,
+                token_dim.size * config.distributed.sequence_data_rank,
                 config.batch.sequence_length,
                 token_dim.global_size,
             )
@@ -147,4 +144,4 @@ class LanguageModelPreprocessedBatch(PreprocessedBatch):
                     micro_batch.prediction_masks.append(labels > 0)
 
             micro_batches.append(micro_batch)
-        return LanguageModelPreprocessedBatch(micro_batches=micro_batches)
+        return cls(micro_batches=micro_batches, config=config)

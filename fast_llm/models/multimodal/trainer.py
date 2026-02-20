@@ -1,6 +1,7 @@
 import logging
 import typing
 
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.models.gpt.trainer import GPTTrainer
 from fast_llm.models.multimodal.config import MultiModalTrainerConfig
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 class MultiModalTrainer[ConfigType: MultiModalTrainerConfig](GPTTrainer[ConfigType]):
     def _get_preprocessing_config(
         self, *, _return_dict: bool = False
-    ) -> LanguageModelPreprocessingConfig | dict[str, typing.Any]:
+    ) -> LanguageModelBatchPreprocessingConfig | dict[str, typing.Any]:
         out = super()._get_preprocessing_config(_return_dict=True)
         out["image_patches"] = {
             "type": "image_patch",

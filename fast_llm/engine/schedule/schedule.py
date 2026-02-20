@@ -1,7 +1,7 @@
-import abc
 import dataclasses
 import functools
 import logging
+import math
 import typing
 import warnings
 
@@ -10,11 +10,12 @@ import torch
 import torch.utils
 import torch.utils.data
 
+from fast_llm.config import Configurable
+from fast_llm.data.batch.config import PreprocessedBatch
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
-from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -117,18 +118,19 @@ class Step:
         return self.stage if self.type_ == StepType.forward else 2 * num_stages - 1 - self.stage
 
 
-class Schedule(abc.ABC):
+class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def __init__(
         self,
+        config: ConfigType,
+        *,
         multi_stage: MultiStageModel,
-        batch_config: BatchConfig,
-        schedule_config: ScheduleConfig,
+        batch_meta: PreprocessedBatch,
         distributed_config: DistributedConfig,
         phase: PhaseType,
     ):
+        super().__init__(config)
         self._multi_stage = multi_stage
-        self._batch_config = batch_config
-        self._schedule_config = schedule_config
+        self._batch_config = batch_meta.config.batch
         self._distributed_config = distributed_config
         self._num_stages = len(self._multi_stage.stages)
         self._phase = phase
@@ -138,9 +140,10 @@ class Schedule(abc.ABC):
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
-        self._preprocessed_meta = self._multi_stage.base_model.preprocess_meta(
-            self._batch_config,
+        self._preprocessed_meta = self._multi_stage.base_model.preprocess_batch(
+            batch_meta,
             phase=self._phase,
+            iteration=0,
         )
 
         self._steps, self._first_grad_stage = self._create_steps()
@@ -155,7 +158,7 @@ class Schedule(abc.ABC):
         self._setup_throttle_steps()
         self._setup_metas()
 
-        if self._schedule_config.debug_schedule:
+        if self._config.debug_schedule:
             logger.info(f"{self._phase.value} schedule:\n{self._steps}")
 
     @property
@@ -165,10 +168,6 @@ class Schedule(abc.ABC):
     @property
     def batch_config(self) -> BatchConfig:
         return self._batch_config
-
-    @property
-    def preprocessed_meta(self) -> list[tuple[TensorMeta, dict]]:
-        return self._preprocessed_meta
 
     def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
@@ -281,7 +280,7 @@ class Schedule(abc.ABC):
             for step in device_steps:
                 buffer_index = weight_buffer_indices[step.stage]
                 if buffer_contents.get(buffer_index) != step.stage:
-                    if self._schedule_config.data_overlap and self._distributed_config.use_cuda:
+                    if self._config.data_overlap and self._distributed_config.use_cuda:
                         step.restore_step = device_steps[buffer_last_used.get(buffer_index, -1) + 1]
                         step.restore_event = torch.cuda.Event()
                     else:
@@ -378,7 +377,7 @@ class Schedule(abc.ABC):
                     launch_step.recv_launch.append(recv_step)
                     send_step.send_to = launch_step
                     recv_step.recv_step = launch_step
-                    if self._schedule_config.pipeline_overlap and self._distributed_config.use_cuda:
+                    if self._config.pipeline_overlap and self._distributed_config.use_cuda:
                         recv_step.recv_event = torch.cuda.Event()
 
     def _validate_send_recv_steps(self) -> None:
@@ -449,12 +448,12 @@ class Schedule(abc.ABC):
             raise RuntimeError(f"Cannot find valid timeline for {self}, \nStatuses:{msg}")
 
     def _setup_throttle_steps(self) -> None:
-        if not self._schedule_config.throttle_cpu or not self._distributed_config.use_cuda:
+        if not self._config.throttle_cpu or not self._distributed_config.use_cuda:
             return
         for device_steps in self._device_steps:
             for i, step in enumerate(device_steps):
-                if i >= self._schedule_config.throttle_cpu_delay and i % self._schedule_config.throttle_cpu_rate == 0:
-                    throttle_step = device_steps[i - self._schedule_config.throttle_cpu_delay]
+                if i >= self._config.throttle_cpu_delay and i % self._config.throttle_cpu_rate == 0:
+                    throttle_step = device_steps[i - self._config.throttle_cpu_delay]
                     throttle_step.throttle_event = torch.cuda.Event()
                     step.throttle_step = throttle_step
 
@@ -548,3 +547,10 @@ class Schedule(abc.ABC):
     @functools.cached_property
     def compute_usage(self) -> tuple[int | None, int | None]:
         return self.get_compute_usage(True, False), self.get_compute_usage(True, True)
+
+    def get_compute_metrics(self, time_per_iteration: float) -> dict[str, float]:
+        model_compute, hardware_compute = self.compute_usage
+        return {
+            "model_tflops": math.nan if model_compute is None else model_compute / time_per_iteration,
+            "hardware_tflops": math.nan if hardware_compute is None else hardware_compute / time_per_iteration,
+        }

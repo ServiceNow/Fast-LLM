@@ -223,8 +223,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self._phase_seeds_shifts = {
             PhaseType.training: self._config.train_seed_shift,
             PhaseType.validation: self._config.valid_seed_shift,
-            PhaseType.test: self._config.test_seed_shift,
-            PhaseType.inference: self._config.test_seed_shift,
+            PhaseType.inference: self._config.inference_seed_shift,
         }
 
         self.set_step(0, PhaseType.training)

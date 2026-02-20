@@ -92,13 +92,11 @@ _METRIC_FORMATS_KEYS = {
     PhaseType.training: _TRAINING_METRIC_FORMAT_KEYS,
     PhaseType.validation: _VALIDATION_METRIC_FORMAT_KEYS,
     PhaseType.inference: _VALIDATION_METRIC_FORMAT_KEYS,
-    PhaseType.test: _VALIDATION_METRIC_FORMAT_KEYS,
 }
 _METRIC_FORMATS = {
     PhaseType.training: _TRAINING_METRIC_FORMATS,
     PhaseType.validation: _VALIDATION_METRIC_FORMATS,
     PhaseType.inference: _VALIDATION_METRIC_FORMATS,
-    PhaseType.test: _VALIDATION_METRIC_FORMATS,
 }
 
 

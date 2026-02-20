@@ -11,11 +11,11 @@ from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, c
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.document.abstract import Document
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
-    from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,7 @@ class SamplingData:
     config: SamplingConfig
     parameters: SamplingParameters
     cache_directory: pathlib.Path | None
-    # TODO: This prevents the sampling config from being pickled in multiprocessing.
-    distributed: "Distributed"
+    distributed_config: DistributedConfig
     dataset_name: str
     preprocessing: PreprocessingConfig
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
@@ -99,7 +98,7 @@ class SamplingData:
 
     def get_next_rank(self) -> int:
         # Counter that loops over ranks to try to distribute workloads evenly between ranks.
-        return next(self._rank_counter()) % self.distributed.config.world_size
+        return next(self._rank_counter()) % self.distributed_config.world_size
 
 
 @config_class()

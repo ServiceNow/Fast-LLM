@@ -43,14 +43,14 @@ class BatchConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    _distributed: DistributedConfig = Field(
+    distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",
         hint=FieldHint.setup,
     )
 
     def setup(self, distributed_config: DistributedConfig) -> None:
-        self._distributed = distributed_config
+        self.distributed = distributed_config
 
     @functools.cached_property
     def num_inputs(self) -> int:
@@ -73,19 +73,19 @@ class BatchConfig(Config):
                 if self.micro_batch_size is None:
                     self.micro_batch_size = 1
                 self.batch_size = (
-                    self.micro_batch_size * self.sequential_micro_batches * self._distributed.batch_data_parallel
+                    self.micro_batch_size * self.sequential_micro_batches * self.distributed.batch_data_parallel
                 )
             elif self.micro_batch_size is None:
                 self.micro_batch_size = div(
-                    self.batch_size, self.sequential_micro_batches * self._distributed.batch_data_parallel
+                    self.batch_size, self.sequential_micro_batches * self.distributed.batch_data_parallel
                 )
         else:
             self.sequential_micro_batches = div(
-                self.batch_size, self.micro_batch_size * self._distributed.batch_data_parallel
+                self.batch_size, self.micro_batch_size * self.distributed.batch_data_parallel
             )
             if self.depth_first_micro_batches is None:
                 if self.breadth_first_micro_batches is None:
-                    if self._distributed.pipeline_parallel > 1:
+                    if self.distributed.pipeline_parallel > 1:
                         self.depth_first_micro_batches = 1
                         self.breadth_first_micro_batches = self.sequential_micro_batches
                     else:
@@ -102,7 +102,7 @@ class BatchConfig(Config):
                     self.sequential_micro_batches, self.breadth_first_micro_batches * self.depth_first_micro_batches
                 )
 
-        if self._distributed.pipeline_parallel > 1 and self.depth_first_micro_batches > 1:
+        if self.distributed.pipeline_parallel > 1 and self.depth_first_micro_batches > 1:
             raise NotImplementedError("Depth-first pipeline parallelism not yet implemented")
         super()._validate()
 

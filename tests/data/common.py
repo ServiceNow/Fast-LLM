@@ -50,7 +50,7 @@ def get_sampling_data(
         ),
         preprocessing=preprocessing,
         cache_directory=cache_directory,
-        distributed=distributed,
+        distributed_config=DistributedConfig(use_cuda=torch.cuda.is_available()),
         dataset_name=phase.value,
     )
 
@@ -74,17 +74,11 @@ def get_test_data_and_compare_samples(
     preprocessing: LanguageModelPreprocessingConfig,
 ) -> GPTData:
     distributed_config = DistributedConfig(seed=87522, use_cuda=torch.cuda.is_available())
-    distributed = Distributed(distributed_config)
     if isinstance(samples_per_dataset, int):
-        samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
-
-    sampling_parameters = {
-        dataset_name: SamplingParameters(num_samples=num_samples, sequence_length=sequence_length)
-        for dataset_name, num_samples in samples_per_dataset.items()
-    }
+        samples_per_dataset = {PhaseType.training.value: samples_per_dataset}
 
     if isinstance(expected_samples, list):
-        expected_samples = {PhaseType.training.value.lower(): expected_samples}
+        expected_samples = {PhaseType.training.value: expected_samples}
 
     assert "sampling" not in config
     config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
@@ -96,12 +90,9 @@ def get_test_data_and_compare_samples(
         preprocessing, {"batch": batch_config, "type": None}
     )
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
-    data.setup(
-        distributed,
-        sampling_parameters,
-        {dataset_name: preprocessing for dataset_name in samples_per_dataset},
-        cache_directory,
-    )
+    data.setup(cache_directory)
+    for dataset_name, num_samples in samples_per_dataset.items():
+        data.sample_dataset(dataset_name, preprocessing, num_samples)
     tokens = {
         phase: torch.stack(
             [

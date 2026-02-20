@@ -11,30 +11,18 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import allreduce_scalar, safe_barrier
 from fast_llm.data.data.abstract import Data
-from fast_llm.data.dataset.config import SamplingParameters
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.evaluation.evaluator import (
-    EvaluationMetrics,
-    Evaluator,
-    EvaluatorRunner,
-    EvaluatorSamplingParameters,
-    TrainingProgress,
-)
 from fast_llm.engine.multi_stage.config import StageMode
-from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import (
     TrainerConfig,
     TrainingCheckpointBaseConfig,
     TrainingCheckpointConfig,
-    TrainingEvaluatorConfig,
 )
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, log_memory_usage
@@ -43,99 +31,26 @@ from fast_llm.utils import Assert, Interrupter, get_and_reset_memory_usage_mib
 logger = logging.getLogger(__name__)
 
 
-class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigType]):
-    evaluator: Evaluator
-
-    def __init__(
-        self,
-        name: str,
-        eval_config: TrainingEvaluatorConfig,
-        batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
-    ):
-        super().__init__(name, eval_config, batch_config, data_load_num_proc, train_iters)
-
-        self._train_iters = 0 if self._train_iters is None else self._train_iters
-
-        self.evaluator = eval_config.evaluator.get_evaluator(name, batch_config, data_load_num_proc, train_iters)
-
-    def setup(
-        self,
-        distributed: Distributed,
-        run: Run,
-        multi_stage: FastLLMModel,
-        runner: ScheduleRunner,
-        data: Data,
-        phase: PhaseType,
-    ) -> None:
-        self.evaluator.setup(
-            distributed,
-            run,
-            multi_stage,
-            runner,
-            data,
-            phase,
-        )
-
-    def run(
-        self,
-        training_progress: TrainingProgress | None = None,
-        run_index: int | None = None,
-    ) -> EvaluationMetrics:
-        # Run index must be None because it is defined here to be passed to actual evaluator
-        assert run_index is None
-
-        # Training progress can be None as it can be run in a training
-        #  run without training, just evaluation
-        if training_progress is None:
-            done = True
-            completed_steps = 0
-        else:
-            done = training_progress.done
-            completed_steps = training_progress.completed_steps
-
-        if (done and self.config.enabled()) or self.config.enabled(completed_steps):
-            return self.evaluator.run(training_progress, run_index=self._config.get_run_count(completed_steps - 1))
-        else:
-            return EvaluationMetrics()
-
-    def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
-        name_samples = self.evaluator.get_sampling_parameters()
-        if name_samples is None:
-            return None
-        run_count = self._config.get_run_count(
-            self._train_iters,
-            # There may be an extra evaluation after the last training step.s
-            not self._config.enabled(self._train_iters),
-        )
-        return EvaluatorSamplingParameters(name_samples.dataset_name, name_samples.num_samples * run_count)
-
-
 class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     # TODO: Generalize data, schedule, logging, etc.
     _is_setup: bool = False
     _distributed: Distributed
     _run: Run
     _wandb: Wandb
-    _optimizer: Optimizer
+    _optimizer: Optimizer | None
 
     _completed_steps: int
-
-    _is_evaluation_only: bool
-
-    _evaluator_runner: EvaluatorRunner
 
     def __init__(self, config: TrainerConfig):
         super().__init__(config)
 
-        self._is_evaluation_only = config.training.train_iters == 0
+        self._do_train = config.training.train_iters > 0
 
         self._data = self._get_data()
         log_main_rank("Creating model...")
         self._multi_stage = self._config.model.get_model_class()(
             self._config.model,
-            optimizer_state_names=self._config.optimizer.state_names() if not self._is_evaluation_only else (),
+            optimizer_state_names=self._config.optimizer.state_names() if self._do_train else (),
         )
         self._reference_models = {}
         for name, reference_config in self._config.reference_models.items():
@@ -152,47 +67,22 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         )
         self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
 
-        if not self._is_evaluation_only:
-            steps_per_split = {
-                PhaseType.training: {PhaseType.training.value.lower(): self._config.training.train_iters},
-                PhaseType.test: {PhaseType.test.value.lower(): self._config.training.test_iters},
-            }
+        if self._do_train:
+            self._training_samples = self._config.batch.batch_size * self._config.training.train_iters
+            self._preprocessing_config = self._multi_stage.get_preprocessing_config(PhaseType.training)
+            self._schedule = Schedule(
+                config=self._config.schedule,
+                multi_stage=self._multi_stage,
+                batch_meta=self._preprocessing_config.get_batch_meta(),
+                distributed_config=self._config.model.distributed,
+                phase=PhaseType.training,
+            )
 
-            self._samples_per_split = {
-                phase: {
-                    dataset_name: self._config.batch.batch_size * steps
-                    for dataset_name, steps in datasets.items()
-                    if steps > 0
-                }
-                for phase, datasets in steps_per_split.items()
-            }
-            # Prune empty phases.
-            self._samples_per_split = {k: v for k, v in self._samples_per_split.items() if len(v) > 0}
-
-            # Setup the schedules
-            self._schedule = {
-                phase: {
-                    dataset_name: Schedule(
-                        multi_stage=self._multi_stage,
-                        batch_config=self._config.batch,
-                        schedule_config=self._config.schedule,
-                        distributed_config=self._config.model.distributed,
-                        phase=phase,
-                    )
-                    for dataset_name in datasets
-                }
-                for phase, datasets in self._samples_per_split.items()
-            }
-        else:
-            self._samples_per_split = {}
-
-        self._evaluator_runner = EvaluatorRunner(
-            evaluator_configs=self._config.training.evaluators,
-            batch_config=self._config.batch,
-            data_load_num_proc=self._config.training.num_workers,
-            train_iters=self._config.training.train_iters,
-            wandb_config=self._config.training.wandb,
-        )
+        self._evaluators = {
+            name: config.get_evaluator(name, self._config.batch, self._config.training.num_workers)
+            for name, config in self._config.training.evaluators.items()
+            if config.enabled()
+        }
 
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed
@@ -204,18 +94,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         # Setup the model.
         with torch.no_grad():
             log_main_rank("Setting up model...")
-            self._multi_stage.setup(
-                distributed, mode=StageMode.inference if self._is_evaluation_only else StageMode.training
-            )
+            self._multi_stage.setup(distributed, mode=StageMode.training if self._do_train else StageMode.inference)
             for name, reference_model in self._reference_models.items():
                 log_main_rank(f"Setting up `{name}` reference model...")
                 reference_model.fast_llm_model.setup(distributed, StageMode.inference)
                 reference_model.setup()
 
         # Setup the optimizer.
-        if self._is_evaluation_only:
-            self._optimizer = None
-        else:
+        if self._do_train:
             param_groups, grads_for_norm = self._multi_stage.get_param_groups(ParamGroup)
             self._optimizer = self._config.optimizer.optimizer_cls(
                 self._config.optimizer,
@@ -223,43 +109,31 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 grads_for_norm=grads_for_norm,
                 distributed=self._distributed,
             )
+        else:
+            self._optimizer = None
 
         # Setup the schedules.
         with torch.no_grad():
             self._runner.setup(distributed, self._optimizer)
         # Setup the datasets.
         log_main_rank("Preparing datasets...")
-        sampling_parameters = {}
-        preprocessing_configs = {}
-        for phase, datasets in self._samples_per_split.items():
-            for dataset_name, samples in datasets.items():
-                sampling_parameters[dataset_name] = self._get_sampling_parameters({"num_samples": samples})
-                preprocessing_configs[dataset_name] = self._get_preprocessing_config(phase)
-        for eval_sampling_params in self._evaluator_runner.get_sampling_parameters():
-            sampling_parameters[eval_sampling_params.dataset_name] = self._get_sampling_parameters(
-                {"num_samples": eval_sampling_params.num_samples}
-            )
-            preprocessing_configs[eval_sampling_params.dataset_name] = self._get_preprocessing_config(
-                PhaseType.inference
-            )
-        self._data.setup(
-            distributed,
-            sampling_parameters,
-            preprocessing_configs,
-            None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
-            timeout=self._config.training.timeout,
+
+        self._data.setup(None if run.experiment_directory is None else run.experiment_directory / "dataset_cache")
+        self._data.sample_dataset(
+            PhaseType.training,
+            self._preprocessing_config,
+            self._training_samples,
         )
 
-        # Must be called with all arguments set up
-        self._evaluator_runner.setup(
-            distributed=self._distributed,
-            run=self._run,
-            multi_stage=self._multi_stage,
-            runner=self._runner,
-            data=self._data,
-            wandb=self._wandb,
-            phase=PhaseType.inference if self._is_evaluation_only else PhaseType.validation,
-        )
+        for evaluator in self._evaluators.values():
+            run_count = self._config.training.evaluators[name].get_count(self._config.training.train_iters)
+            # There may be an extra evaluation after the last training step.
+            if not self._config.training.evaluators[name].enabled(self._config.training.train_iters):
+                run_count += 1
+            evaluator.setup(multi_stage=self._multi_stage, runner=self._runner, data=self._data, run_count=run_count)
+
+        # Make sure everyone is done before continuing.
+        safe_barrier(distributed.world_group, "data_preparation", self._config.training.timeout)
 
         self._is_setup = True
 
@@ -267,15 +141,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def _get_data(self) -> Data:
         pass
 
-    def _get_sampling_parameters(
-        self, parameters: dict[str, typing.Any], *, _return_dict: bool = False
-    ) -> SamplingParameters | dict[str, typing.Any]:
-        return parameters if _return_dict else SamplingParameters(**parameters)
-
-    def _get_preprocessing_config(
-        self, phase: PhaseType, *, _return_dict: bool = False
-    ) -> PreprocessingConfig | dict[str, typing.Any]:
-        return {} if _return_dict else NullPreprocessingConfig()
+    def _get_completion_metrics(self) -> dict[str, int | float]:
+        assert self._is_setup
+        return {
+            "total_steps": self._config.training.train_iters,
+            "completed_steps": self._completed_steps,
+            "consumed_samples": self._consumed_samples,
+            "consumed_tokens": self._consumed_tokens,
+            "percent_done": 100 * self._completed_steps / self._config.training.train_iters,
+        }
 
     @property
     def _consumed_samples(self) -> int:
@@ -299,44 +173,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
         self._run.save_logged_tensors("init")
 
-        if self._is_evaluation_only:
-            assert len(self._samples_per_split) == 0
-
-        if PhaseType.training in self._samples_per_split:
-            done = self._completed_steps >= self._config.training.train_iters
-            if done:
-                metrics = {}
-                log_main_rank("Training already completed, nothing to do ...")
-            else:
-                done, metrics = self._train()
+        if not self._do_train:
+            self._run_evaluators(True, {})
+        elif self._completed_steps >= self._config.training.train_iters:
+            log_main_rank("Training already completed, nothing to do ...")
         else:
-            metrics = {}
-            done = True
-            self._evaluator_runner.run(
-                metrics=metrics,
-                # This is set to ensure that evaluators like lm_eval log results at the correct step if a checkpoint was loaded.
-                training_progress=TrainingProgress(
-                    done=done,
-                    completed_steps=self._completed_steps,
-                    consumed_samples=self._consumed_samples,
-                    consumed_tokens=self._consumed_tokens,
-                ),
-            )
-
-        if done and PhaseType.test in self._samples_per_split:
-            log_main_rank(lambda: f"Running test phase ...")
-            test_iterator = self._get_data_iterator(PhaseType.test.value.lower())
-            metrics_key = PhaseType.test.value
-            metrics[metrics_key] = self._evaluate_loss(
-                data_iterator=test_iterator,
-                phase=PhaseType.test,
-                num_iters=self._config.training.test_iters,
-            )
-            formatted_metrics = format_metrics(metrics[metrics_key], self._loss_definitions, PhaseType.test)
-            log_main_rank(formatted_metrics)
-            self._wandb.alert("Testing results", formatted_metrics, "WARN")
-            # TODO: This may erase some metrics.
-            self._wandb.log_metrics(self._completed_steps, metrics, commit=True)
+            self._train()
 
     def _train(self) -> tuple[bool, dict[PhaseType, dict[str, typing.Any]]]:
         # Tracking loss.
@@ -356,8 +198,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
-
-        has_test_phase = PhaseType.test in self._samples_per_split
 
         log_main_rank("Training ...")
 
@@ -380,7 +220,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 #   (Also preprocessing adds overhead)
                 reduced_losses, update_successful, train_metrics = self._runner.run_step(
                     train_iterator,
-                    self._schedule[PhaseType.training][PhaseType.training.value.lower()],
+                    self._schedule,
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )
@@ -410,34 +250,21 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        model_compute, hardware_compute = self._schedule[PhaseType.training][
-                            PhaseType.training.value.lower()
-                        ].compute_usage
-                        model_tflops = math.nan if model_compute is None else model_compute / time_per_iteration
-                        hardware_tflops = (
-                            math.nan if hardware_compute is None else hardware_compute / time_per_iteration
-                        )
-
                         metrics_key = PhaseType.training.value
                         metrics[metrics_key] = {
-                            "train_iters": self._config.training.train_iters,
                             "batch_size": self._config.batch.batch_size,
-                            "iteration": self._completed_steps,
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
                             },
-                            "consumed_samples": self._consumed_samples,
-                            "consumed_tokens": self._consumed_tokens,
+                            **self._get_completion_metrics(),
                             "step_time_ms": time_per_iteration * 1000,
                             "step_time_average_ms": average_time_per_iteration * 1000,
                             "remaining_time": remaining_time,
                             "completion_time": time.time() + remaining_time,
-                            "percent_done": 100 * self._completed_steps / self._config.training.train_iters,
                             "skipped_iters": skipped_iters,
                             "nan_iters": nan_iters,
-                            "model_tflops": model_tflops,
-                            "hardware_tflops": hardware_tflops,
+                            **self._schedule.get_compute_metrics(time_per_iteration),
                             "tokens_per_sec_per_gpu": (
                                 (self._config.batch.sequence_length * self._config.batch.batch_size)
                                 / self._config.model.distributed.world_size
@@ -469,21 +296,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 stop = done or self._config.training.shutdown.enabled(self._completed_steps)
 
                 # Evaluation
-                # TODO: Adjust valid iterator length.
-                self._evaluator_runner.run(
-                    metrics=metrics,
-                    training_progress=TrainingProgress(
-                        done=done,
-                        completed_steps=self._completed_steps,
-                        consumed_samples=self._consumed_samples,
-                        consumed_tokens=self._consumed_tokens,
-                    ),
-                )
+                self._run_evaluators(done, metrics)
 
                 if is_main_rank() and metrics:
-                    self._wandb.log_metrics(self._completed_steps, metrics, commit=not (done and has_test_phase))
-
-                stop = done or self._config.training.shutdown.enabled(self._completed_steps)
+                    self._wandb.log_metrics(self._completed_steps, metrics, commit=True)
 
                 if self._config.training.export.enabled(None if done else self._completed_steps):
                     self._save_checkpoint(self._config.training.export, metrics)
@@ -523,14 +339,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
                 self._multi_stage.load_checkpoint(self._config.pretrained)
             else:
-                if self._is_evaluation_only:
+                if not self._do_train:
                     raise ValueError(
                         "Evaluation mode, model need to be trained first or pretrained checkpoint is provided for loading"
                     )
                 log_main_rank(f"Initializing training state from scratch...")
                 self._multi_stage.initialize_weights()
 
-            if not self._is_evaluation_only:
+            if self._do_train:
                 self._optimizer.reset_state()
             self._completed_steps = 0
         else:
@@ -608,7 +424,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
         assert metadata is not None
-        if not self._is_evaluation_only:
+        if self._do_train:
             self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
@@ -636,3 +452,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             iteration = -1
         iteration = self._run.broadcast_int(iteration)
         return iteration if iteration >= 0 else None
+
+    def _run_evaluators(self, done: bool, metrics: dict[str, typing.Any] | None = None) -> None:
+        for name, evaluator in self._evaluators.items():
+            if self._config.training.evaluators[name].enabled(None if done else self._completed_steps):
+                evaluator.run(
+                    run_index=self._config.get_run_count(self._completed_steps - 1),
+                    metrics=(evaluator_metrics := self._get_completion_metrics()),
+                )
+                if metrics is not None:
+                    if "evaluations" not in metrics:
+                        metrics["evaluations"] = {}
+                    metrics["evaluations"][name] = evaluator_metrics

@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.block.block import Block
@@ -23,7 +23,7 @@ from fast_llm.layers.language_model.config import (
 )
 from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             * (input_.global_shape if config.global_ else input_).numel()
             * (self._vocab_dim.global_size if config.global_ else self._vocab_dim.size)
         )
+
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return safe_merge_dicts([loss.get_preprocessing_config(phase) for loss in self.losses])
 
     def get_output_weights(self) -> list[torch.Tensor]:
         return [self.output_weights]

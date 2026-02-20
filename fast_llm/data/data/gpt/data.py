@@ -1,13 +1,11 @@
 import functools
 import logging
-import pathlib
 import typing
 import warnings
 
 import torch
 import torch.utils.data
 
-from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.data.data.abstract import Data
@@ -20,7 +18,6 @@ from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
@@ -33,9 +30,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
 
     _datasets: dict[str, SampledDataset]
-    _sampling_parameters: dict[str, SamplingParameters]
+    # _sampling_parameters: dict[str, SamplingParameters]
     _preprocessing: dict[str, LanguageModelBatchPreprocessingConfig]
-    _is_setup: bool = False
 
     def __init__(
         self,
@@ -47,56 +43,46 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Should be `setup` before use.
         """
         super().__init__(config, distributed_config)
+        self._datasets = {}
+        self._preprocessing = {}
 
-    def setup(
+    def sample_dataset(
         self,
-        distributed: "Distributed",
-        sampling_parameters: dict[str, SamplingParameters],
-        preprocessing: dict[str, LanguageModelBatchPreprocessingConfig],
-        cache_directory: pathlib.Path,
-        timeout: float | None = None,
+        dataset_name: str,
+        config: LanguageModelBatchPreprocessingConfig,
+        num_samples: int,
     ) -> None:
-        """
-        Load the datasets, and prepare or load the samplings.
-        This may take a while and a significant amount of cpu memory.
-        """
-        super().setup(distributed, sampling_parameters, preprocessing, cache_directory)
+        assert self._is_setup
+        Assert.gt(num_samples, 0)
+        if dataset_name not in self._config.datasets:
+            raise ValueError(f"Dataset {dataset_name} not found.")
+        if dataset_name in self._datasets:
+            raise ValueError(f"Dataset {dataset_name} is already sampled.")
 
-        # Check and raise an error if a used dataset is not defined.
-        for dataset_name in self._sampling_parameters.keys():
-            if dataset_name not in self._config.datasets:
-                raise ValueError(f"Dataset {dataset_name} not found.")
-
-        # Check and warn if there are defined datasets that are not used.
-        unused_datasets = self._config.datasets.keys() - self._sampling_parameters.keys()
-        if unused_datasets:
-            warnings.warn(
-                f"The following datasets are defined but not used: {', '.join(unused_datasets)}. "
-                "Ensure this is intentional, or update the configuration accordingly."
-            )
-
-        log_main_rank(f"Preparing dataset. This may take several minutes.")
+        log_main_rank(f"Sampling dataset {dataset_name}. This may take several minutes.")
 
         if self._cache_directory is None:
             # TODO: Avoid this
-            warnings.warn(f"Using the dataset directory for the index cache.")
+            warnings.warn(f"The index cache will be saved in the dataset directory.")
 
-        self._datasets = {}
-        for dataset_name, sampling_parameters in self._sampling_parameters.items():
-            if sampling_parameters.num_samples > 0:
-                sampling = GPTSamplingData(
-                    config=self._config.sampling,
-                    parameters=sampling_parameters,
-                    preprocessing=self._preprocessing[dataset_name],
-                    cache_directory=self._cache_directory,
-                    distributed=distributed,
-                    dataset_name=dataset_name,
-                )
-                dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
-                self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+        sampling_parameters = SamplingParameters(
+            sequence_length=config.batch.sequence_length,
+            num_samples=num_samples,
+            truncate_documents=config.batch.truncate_documents,
+            extra_tokens=config.predicted_tokens,
+        )
 
-        safe_barrier(self._distributed.world_group, "data_preparation", timeout)
-        self._is_setup = True
+        sampling = GPTSamplingData(
+            config=self._config.sampling,
+            parameters=sampling_parameters,
+            preprocessing=config,
+            cache_directory=self._cache_directory,
+            distributed_config=self._distributed_config,
+            dataset_name=dataset_name,
+        )
+        self._preprocessing[dataset_name] = config
+        dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
+        self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
     def get_iterator(
         self,
@@ -116,8 +102,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         dataset_name = dataset_name.lower()
 
         Assert.incl(dataset_name, self._datasets)
-        sampling_parameters = self._sampling_parameters[dataset_name]
-        Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
         return iter(
@@ -126,9 +110,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,
-                    micro_batch_size=batch_config.micro_batch_size,
-                    data_rank=self._distributed.config.batch_data_rank,
-                    data_parallel=self._distributed.config.batch_data_parallel,
+                    micro_batch_size=self._preprocessing[dataset_name].batch.micro_batch_size,
+                    data_rank=self._distributed_config.batch_data_rank,
+                    data_parallel=self._distributed_config.batch_data_parallel,
                 ),
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
@@ -145,14 +129,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         preprocess: bool = True,
     ) -> LanguageModelPreprocessedBatch | LanguageModelBatch:
         documents = [document for documents_ in documents for document in documents_]
-        config = self._preprocessing[dataset_name]
         if preprocess:
-            return LanguageModelPreprocessedBatch.from_documents(
-                documents,
-                config=config,
-                distributed_config=self._distributed_config,
-            )
+            return LanguageModelPreprocessedBatch.from_documents(documents, self._preprocessing[dataset_name])
         else:
-            return LanguageModelBatch.from_documents(
-                documents, pad_to_size=config.batch.sequence_length + config.predicted_tokens
-            )
+            return LanguageModelBatch.from_documents(documents, self._preprocessing[dataset_name].total_length)

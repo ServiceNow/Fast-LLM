@@ -41,10 +41,9 @@ MAX_SEED = 2**64
 
 
 class PhaseType(enum.StrEnum):
-    training = "Training"
-    validation = "Validation"
-    test = "Test"
-    inference = "Inference"
+    training = "training"
+    validation = "validation"
+    inference = "inference"
 
     @property
     def is_training(self) -> bool:
@@ -277,7 +276,7 @@ class DistributedConfig(Config):
     valid_seed_shift: int = Field(
         default=_BIG_PRIMES[9], desc="Seed shift for extra randomness.", hint=FieldHint.optional
     )
-    test_seed_shift: int = Field(
+    inference_seed_shift: int = Field(
         default=_BIG_PRIMES[10], desc="Seed shift for extra randomness.", hint=FieldHint.optional
     )
     # (slower, uses more memory, mainly for debug)
