@@ -2821,6 +2821,16 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             vllm_config=vllm_config,
             prefix=maybe_prefix(prefix, "model"),
         )
+        decoder_cfg = getattr(config, "decoder", {})
+        # We need to remap weights whenever we rely on predefined mapping and loadiong from a supernet checkpoint
+        if isinstance(decoder_cfg, dict) and decoder_cfg.get("type") == "pattern":
+            pattern = decoder_cfg.get("pattern", [])
+            substr = {}
+            for l, m_name in enumerate(pattern):
+                substr[f"model.decoder.blocks.{l}.mixer.mixers.{m_name}"] = f"model.layers.{l}.mixer"
+            # Fall through for non-mixer weights (mlp, norm, etc.)
+            substr["model.decoder.blocks."] = "model.layers."
+            self.hf_to_vllm_mapper = WeightsMapper(orig_to_new_substr=substr)
 
         if get_pp_group().is_last_rank:
             self.lm_head = ParallelLMHead(
