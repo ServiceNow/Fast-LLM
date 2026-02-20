@@ -10,11 +10,11 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss, loss_for
 class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModelLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._num_splits > 1:
             raise NotImplementedError()
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._vocab_parallel:
             raise NotImplementedError()

@@ -93,7 +93,7 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
         self._create_tensors(kwargs[AttentionKwargs.sequence_length], kwargs[AttentionKwargs.device])
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
-            :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
+            :, sequence_k - kwargs[AttentionKwargs.token_dim].size : sequence_k
         ]
         kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 
@@ -124,9 +124,9 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
         # We preform the calculation in high precision because it matters for rotary embeddings.
         positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
         angles = torch.outer(positions, self._get_angle_scales(head_size, device))
-        frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+        frequencies = torch.polar(torch.ones_like(angles), angles)[:, None, :].to(torch.complex64)
         frequencies = convert_rotary_complex_to_real(
-            torch.view_as_real(frequencies).flatten(-2), head_size, 3
+            torch.view_as_real(frequencies).flatten(-2), head_size, 2
         ).contiguous()
         return frequencies
 
@@ -223,9 +223,9 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
             self._frequencies.T.unsqueeze(1),
             out=angles.view(-1, 2, self._head_size // 4).permute(1, 0, 2),
         )
-        frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+        frequencies = torch.polar(torch.ones_like(angles), angles)[:, None, :].to(torch.complex64)
         frequencies = convert_rotary_complex_to_real(
-            torch.view_as_real(frequencies).flatten(-2), self._head_size, 3
+            torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
         ).contiguous()
         # TODO: Support different q and k frequencies.
         kwargs[AttentionKwargs.rotary_freq_q] = frequencies

@@ -48,6 +48,8 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, Ba
         Assert.custom(isinstance, self.tokenizer, (TokenizerConfig, NullPreprocessingConfig))
 
     def get_batch_meta(self) -> "PreprocessedBatch":
+        import torch
+
         from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
         from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
         from fast_llm.data.document.token import TokenDocument
@@ -92,7 +94,7 @@ class PreprocessedBatch[ConfigType: BatchPreprocessingConfig, MicroBatchType: Mi
         self._micro_batches = micro_batches
 
     @property
-    def micro_batches(self) -> list[MicroBatch]:
+    def micro_batches(self) -> list[MicroBatchType]:
         return self._micro_batches
 
     def __len__(self) -> int:

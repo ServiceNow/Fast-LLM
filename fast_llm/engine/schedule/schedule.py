@@ -144,6 +144,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             batch_meta,
             phase=self._phase,
             iteration=0,
+            device=None,
         )
 
         self._steps, self._first_grad_stage = self._create_steps()

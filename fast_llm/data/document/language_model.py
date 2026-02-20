@@ -72,12 +72,6 @@ class LanguageModelBatch(LanguageModelDocument, Batch):
 
     def to_device_(self, device: "torch.device | str"):
         self.tokens.to_device_(device)
-        if self.loss_masking_spans is not None:
-            self.loss_masking_spans.to_device_(device)
-        if self.chosen_spans is not None:
-            self.chosen_spans.to_device_(device)
-        if self.rejected_spans is not None:
-            self.rejected_spans.to_device_(device)
         if self.image_patches is not None:
             self.image_patches.to_device_(device)
 

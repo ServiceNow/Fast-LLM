@@ -121,7 +121,11 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             kwargs_meta[BlockKwargs.output_hidden_states] = [re.compile(pattern) for pattern in output_hidden_states]
 
         ((input_, kwargs),) = self.fast_llm_base_model.preprocess_batch(
-            batch, [(input_meta, kwargs_meta)], phase=PhaseType.inference, iteration=iteration
+            batch,
+            [(input_meta, kwargs_meta)],
+            phase=PhaseType.inference,
+            iteration=iteration,
+            device=self.fast_llm_model.distributed.device,
         )
 
         if past_key_values is not None:

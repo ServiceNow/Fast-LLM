@@ -16,6 +16,7 @@ from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
+from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.models.gpt.config import GPTBatchConfig
@@ -75,7 +76,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         sampling = GPTSamplingData(
             config=self._config.sampling,
             parameters=sampling_parameters,
-            preprocessing=config,
+            # Conversion needed to avoid pickling issues.
+            preprocessing=LanguageModelPreprocessingConfig.from_dict(config, {"type": "language_model"}, strict=False),
             cache_directory=self._cache_directory,
             distributed_config=self._distributed_config,
             dataset_name=dataset_name,

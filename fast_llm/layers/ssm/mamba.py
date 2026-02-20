@@ -165,8 +165,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        sequence_length = kwargs[BlockKwargs.sequence_q_dim].size
-        token_shape = (1, kwargs[BlockKwargs.sequence_q_dim].size)
+        sequence_length = kwargs[BlockKwargs.token_dim].size
+        token_shape = (1, sequence_length)
+        # TODO: ====== Keep flat ======
         # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
         inner_projection = self.in_proj(input_).unflatten(0, token_shape)
         dt = self.dt_proj(self.dt_in_proj(input_)).unflatten(0, token_shape)

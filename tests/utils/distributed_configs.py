@@ -112,7 +112,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         name="bf16",
         compare="simple",
         # Also tests parallel data loader.
-        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=2"],
+        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=1"],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),

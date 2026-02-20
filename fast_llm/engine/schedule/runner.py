@@ -344,6 +344,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         "num_micro_batches": batch_config.sequential_micro_batches,
                         "micro_batch_splits": batch_config.micro_batch_splits,
                     },
+                    device=self._distributed.device,
                 )
             for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
                 kwargs.update(micro_batch_split=micro_batch_split)

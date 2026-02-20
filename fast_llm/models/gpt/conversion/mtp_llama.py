@@ -41,10 +41,10 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         return super().get_converters(config, exported_config) + [
             cls.normalization_converter_class.get_converters(
                 config.head.normalization,
-                f"multi_token_prediction.heads.{prediction_distance - 1}.final_norm",
-                f"model.mtp_norms.{prediction_distance}",
+                f"multi_token_prediction.heads.{prediction_distance - 2}.final_norm",
+                f"model.mtp_norms.{prediction_distance-1}",
             )
-            for prediction_distance in range(1, config.prediction_heads)
+            for prediction_distance in range(2, config.prediction_heads + 1)
         ]
 
 

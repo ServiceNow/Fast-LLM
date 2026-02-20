@@ -4,11 +4,8 @@ import math
 import pathlib
 import typing
 
-import torch
-
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig
-from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
@@ -16,6 +13,9 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
 if typing.TYPE_CHECKING:
+    import torch
+
+    from fast_llm.data.dataset.indexed import IndexedDataset
     from fast_llm.data.dataset.memmap.abstract import (
         MemmapIndexedDatasetReader,
         MemmapReader,
@@ -201,6 +201,8 @@ class PatchReaderConfig(PatchReaderBaseConfig, MemmapReaderConfig):
 
     @property
     def _expected_buffer_size(self) -> int:
+        import torch
+
         return (
             self.num_patches * self.patch_size * self.data_type.torch.itemsize
             + ((1 + self.grid_dims) * self.num_patches + self.num_patch_groups + 2 * self.num_documents + 2)
@@ -255,6 +257,8 @@ class RangeReaderConfig(RangeReaderBaseConfig, MemmapReaderConfig):
 
     @property
     def _expected_buffer_size(self) -> int:
+        import torch
+
         return self.num_ranges * torch.int32.itemsize * 2 + (self.num_documents + 1) * torch.int32.itemsize
 
     def get_metadata(self) -> dict[str, typing.Any]:

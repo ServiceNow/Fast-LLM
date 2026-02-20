@@ -18,7 +18,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         distributed_config: DistributedConfig,
         *,
         name: str,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
         num_splits: int = 1,
@@ -26,7 +26,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         weight: float = 1.0,
     ):
         super().__init__(config)
-        Assert.in_range(prediction_distance, 0, prediction_heads)
+        Assert.in_range_incl(prediction_distance, 1, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
         self._name = name
@@ -88,11 +88,17 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return grad_output
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
-        return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], kwargs, split_index)
+        return self._prepare_target(
+            kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1], kwargs, split_index
+        )
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-        return None if loss_mask is None else self._prepare_target(loss_mask, kwargs, split_index)
+        return (
+            None
+            if loss_mask is None
+            else self._prepare_target(loss_mask[self._prediction_distance - 1], kwargs, split_index)
+        )
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
         Assert.incl(

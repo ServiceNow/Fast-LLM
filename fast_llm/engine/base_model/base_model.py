@@ -184,6 +184,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
+        device: torch.device | None,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass

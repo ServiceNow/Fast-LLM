@@ -47,9 +47,9 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
                     peft=self._peft,
                     # The last block only returns the model output.
                     # The previous blocks return a stack of shared_hidden and transformer_output.
-                    return_input=index < self._config.prediction_heads - 1,
+                    return_input=prediction_distance < self._config.prediction_heads,
                 )
-                for index in range(1, self._config.prediction_heads)
+                for prediction_distance in range(2, self._config.prediction_heads + 1)
             ]
         )
         self.heads = torch.nn.ModuleList(
@@ -61,9 +61,9 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
                     hidden_dim=hidden_dim,
                     lr_scale=lr_scale,
                     peft=peft,
-                    prediction_distance=index,
+                    prediction_distance=prediction_distance,
                 )
-                for index in range(1, self._config.prediction_heads)
+                for prediction_distance in range(2, self._config.prediction_heads + 1)
             ]
         )
 
@@ -88,8 +88,7 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
         return sum((head.get_output_weights() for head in self.heads), [])
 
     def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        if self._enabled:
-            self._layers_with_namespace[0].get_preprocessing_config(phase)
+        return self._layers_with_namespace[0].get_preprocessing_config(phase) if self._enabled else {}
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if self._enabled:

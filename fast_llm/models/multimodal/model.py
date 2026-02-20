@@ -151,9 +151,16 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
+        device: torch.device | None,
     ) -> list[tuple[torch.Tensor, dict]]:
         preprocessed = super().preprocess_batch(
-            batch, preprocessed_meta, phase=phase, iteration=iteration, metrics=metrics, extra_kwargs=extra_kwargs
+            batch,
+            preprocessed_meta,
+            phase=phase,
+            iteration=iteration,
+            metrics=metrics,
+            extra_kwargs=extra_kwargs,
+            device=device,
         )
         # TODO: Support micro-sequences.
         assert len(preprocessed) == 1, "Micro-sequences not supported for MultiModalModel."

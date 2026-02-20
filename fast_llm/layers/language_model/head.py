@@ -47,7 +47,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         hidden_dim: TensorDim,
         lr_scale: float | None,
         peft: PeftConfig | None,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         loss_coefficient: float = 1.0,
     ):
         super().__init__(
@@ -57,9 +57,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             lr_scale=lr_scale,
             peft=peft,
         )
-        Assert.in_range(prediction_distance, 0, self._config.prediction_heads)
+        Assert.in_range_incl(prediction_distance, 1, self._config.prediction_heads)
         self._prediction_distance = prediction_distance
-        self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
+        self._is_last_head = self._prediction_distance == self._config.prediction_heads
 
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -89,7 +89,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         loss_coefficient = (
             1.0
             if self._config.prediction_loss_coefficient is None
-            else self._config.prediction_loss_coefficient[self._prediction_distance]
+            else self._config.prediction_loss_coefficient[self._prediction_distance - 1]
         )
         self.losses = torch.nn.ModuleList(
             [
@@ -117,7 +117,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         )
 
     def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        return safe_merge_dicts([loss.get_preprocessing_config(phase) for loss in self.losses])
+        return safe_merge_dicts(*(loss.get_preprocessing_config(phase) for loss in self.losses))
 
     def get_output_weights(self) -> list[torch.Tensor]:
         return [self.output_weights]
@@ -295,7 +295,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         ]
 
     def _get_full_loss_name(self, name) -> str:
-        return name if self._prediction_distance == 0 else f"{name}_{self._prediction_distance}"
+        return name if self._prediction_distance == 1 else f"{name}_{self._prediction_distance}"
 
     @functools.cached_property
     def _total_loss_name(self) -> str:

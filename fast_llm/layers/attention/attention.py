@@ -11,7 +11,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
@@ -185,7 +184,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         query = (
             query.unflatten(1, (self._local_head_groups, self._local_heads_per_group))
             .transpose(0, 1)
-            .view(self._local_head_groups, sq * self._local_heads_per_group, self._config.head_size)
+            .reshape(self._local_head_groups, sq * self._local_heads_per_group, self._config.head_size)
         )
         # sk, head_group, head_size -> head_group, head_size, sk
         key = key.movedim(0, 2)
@@ -353,7 +352,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: ====== Account for varlen =======
-        sequence_q_dim: TensorDim = kwargs[AttentionKwargs.sequence_q_dim]
+        sequence_q_dim: TensorDim = kwargs[AttentionKwargs.token_dim]
         sequence_k_dim: TensorDim = kwargs[AttentionKwargs.sequence_k_dim]
 
         if config.global_:
@@ -406,11 +405,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         )
 
     def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        out = {}
-        if self._implementation == AttentionImplementation.flash:
-            out["return_cumulative_sequence_lengths"] = True
-            out["return_max_sequence_lengths"] = True
-        return out
+        return (
+            {
+                "return_cumulative_sequence_lengths": True,
+                "return_max_sequence_lengths": True,
+            }
+            if self._implementation == AttentionImplementation.flash
+            else {"return_document_index": True}
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._rotary.preprocess(kwargs)
@@ -420,7 +422,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
-        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
+        sequence_q = kwargs[AttentionKwargs.token_dim].size
         if self._config.causal:
             if (
                 sequence_length := kwargs[AttentionKwargs.sequence_length]
@@ -436,15 +438,12 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
                 if self._config.window_size is not None:
                     self._backup_attention_mask.triu_(-self._config.window_size + 1)
-            attention_mask = self._backup_attention_mask[
-                None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-            ]
+            attention_mask = self._backup_attention_mask[None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
         else:
             attention_mask = None
 
-        preprocess_for_varlen(kwargs, device, return_seq_idx=True)
-        document_mask = (kwargs[AttentionKwargs.seq_idx][:, None, :] == kwargs[AttentionKwargs.seq_idx][:, :, None])[
-            :, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+        document_mask = (kwargs[AttentionKwargs.seq_idx][None, :] == kwargs[AttentionKwargs.seq_idx][:, None])[
+            None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]
         if attention_mask is None:
             attention_mask = document_mask

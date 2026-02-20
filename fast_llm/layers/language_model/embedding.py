@@ -179,7 +179,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         return 0
 
     def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        out = {"vocab_size": self.embeddings.vocab_size}
+        out = {"vocab_size": self._config.vocab_size}
         if self._config.position_embeddings.enabled:
             out["return_position_index"] = True
         return out

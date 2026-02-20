@@ -49,16 +49,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
+        device: torch.device | None,
     ) -> list[tuple[torch.Tensor, dict]]:
-        # TODO Move batch splitting elsewhere, align interface with LayerBase
-        assert self._is_setup
-
         reference_preprocessed_batches = {}
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_batches[name] = reference_model.fast_llm_model.base_model.preprocess_batch(
                 batch,
                 phase=PhaseType.inference,
                 iteration=iteration,
+                device=device,
             )
 
         preprocessed = []
@@ -66,13 +65,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         for micro_sequence_index, micro_sequence in enumerate(batch.micro_batches):
             pasts = presents
             presents = None if micro_sequence_index == len(batch) - 1 else []
-            micro_sequence.to_device_(self._distributed.device)
+            if device is not None:
+                micro_sequence.to_device_(device)
             kwargs: dict[str, typing.Any] = {
                 LanguageModelKwargs.phase: phase,
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 LanguageModelKwargs.iteration: iteration,
-                LanguageModelKwargs.device: self._distributed.device,
+                LanguageModelKwargs.device: device,
                 LanguageModelKwargs.output_hidden_states: [],
                 LanguageModelKwargs.hidden_states: {},
                 LanguageModelKwargs.token_dim: micro_sequence.token_dim,
@@ -87,10 +87,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 AttentionKwargs.cu_seqlens_k: micro_sequence.cumulative_lengths_k,
                 AttentionKwargs.max_seqlen_q: micro_sequence.max_length_q,
                 AttentionKwargs.max_seqlen_k: micro_sequence.max_length_k,
-                LanguageModelKwargs.seq_idx: micro_sequence.document_index,
+                AttentionKwargs.seq_idx: micro_sequence.document_index,
                 LanguageModelKwargs.position_ids: micro_sequence.position_index,
-                LanguageModelKwargs.chosen_spans: micro_sequence.chosen_spans,
-                LanguageModelKwargs.rejected_spans: micro_sequence.rejected_spans,
             }
             if extra_kwargs is not None:
                 Assert.empty(kwargs.keys() & extra_kwargs.keys())
@@ -112,7 +110,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     layer_name: tensor
                     for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
                 }
-            self.preprocess(kwargs)
+            if not micro_sequence.is_meta:
+                self.preprocess(kwargs)
             preprocessed.append((micro_sequence.tokens, kwargs))
 
         return preprocessed
@@ -140,10 +139,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     def get_preprocessing_config(
-        self,
-        phase: PhaseType,
+        self, batch: GPTBatchConfig, phase: PhaseType
     ) -> LanguageModelBatchPreprocessingConfig:
-        return LanguageModelBatchPreprocessingConfig(phase=phase, **self._base_model.get_preprocessing_config(phase))
+        return LanguageModelBatchPreprocessingConfig(
+            phase=phase,
+            batch=batch,
+            **self._base_model.get_preprocessing_config(phase),
+        )
 
 
 class GPTInferenceRunner(InferenceRunner):

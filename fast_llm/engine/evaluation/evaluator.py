@@ -87,7 +87,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
     ) -> None:
         super().setup(multi_stage, runner, data, run_count)
 
-        preprocessing_config = self._multi_stage.get_preprocessing_config(PhaseType.validation)
+        preprocessing_config = self._multi_stage.get_preprocessing_config(self._batch_config, PhaseType.validation)
         self._data.sample_dataset(
             self._name, preprocessing_config, run_count * self._config.iterations * self._batch_config.batch_size
         )

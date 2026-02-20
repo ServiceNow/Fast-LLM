@@ -69,7 +69,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         if self._do_train:
             self._training_samples = self._config.batch.batch_size * self._config.training.train_iters
-            self._preprocessing_config = self._multi_stage.get_preprocessing_config(PhaseType.training)
+            self._preprocessing_config = self._multi_stage.get_preprocessing_config(
+                self._config.batch, PhaseType.training
+            )
             self._schedule = Schedule(
                 config=self._config.schedule,
                 multi_stage=self._multi_stage,

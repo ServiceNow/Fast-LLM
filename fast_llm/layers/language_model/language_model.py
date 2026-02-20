@@ -71,7 +71,7 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
             self.embeddings.get_preprocessing_config(phase),
             self.decoder.get_preprocessing_config(phase),
             self.head.get_preprocessing_config(phase),
-            {} if self.multi_token_prediction is None else self.multi_token_prediction.get_preprocessing_config(phase),
+            self.multi_token_prediction.get_preprocessing_config(phase),
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
@@ -79,16 +79,16 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         self.embeddings.preprocess(kwargs)
         self.decoder.preprocess(kwargs)
         self.head.preprocess(kwargs)
-        if self.multi_token_prediction is not None:
-            self.multi_token_prediction.preprocess(kwargs)
+        self.multi_token_prediction.preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
-        losses = (
-            self.embeddings.get_loss_definitions(count)
-            + self.decoder.get_loss_definitions(count)
-            + self.head.get_loss_definitions(count)
+        return sum(
+            (
+                self.embeddings.get_loss_definitions(count),
+                self.decoder.get_loss_definitions(count),
+                self.head.get_loss_definitions(count),
+                self.multi_token_prediction.get_loss_definitions(count),
+            ),
+            [],
         )
-        if self.multi_token_prediction is not None:
-            losses += self.multi_token_prediction.get_loss_definitions(count)
-        return losses
