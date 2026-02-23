@@ -9,10 +9,11 @@ optimized for vLLM inference.
 
 import logging
 import math
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import islice
-from typing import Literal
+from typing import Callable, Literal
 
 import torch
 import triton
@@ -23,8 +24,10 @@ from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from vllm.attention.layer import Attention
 from vllm.compilation.decorators import support_torch_compile
+from vllm.compilation.monitor import cudagraph_capturing_enabled, validate_cudagraph_capturing_enabled
 from vllm.config import CacheConfig, ModelConfig, SpeculativeConfig, VllmConfig, get_current_vllm_config
 from vllm.distributed import divide, get_pp_group, get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
+from vllm.distributed.device_communicators.pynccl_allocator import set_graph_pool_id
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
@@ -60,7 +63,7 @@ from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 from vllm.triton_utils import tl, triton
-from vllm.utils.torch_utils import direct_register_custom_op
+from vllm.utils.torch_utils import current_stream, direct_register_custom_op
 from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
 from vllm.v1.attention.selector import get_mamba_attn_backend
@@ -101,6 +104,103 @@ DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
 DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
 DEBUG_FINAL_NORM = False  # Debug final norm before LM head
 DEBUG_LM_HEAD = False  # Debug LM head input/output
+
+# Per-mixer CUDA graph caching: capture a separate graph per sub-mixer variant
+# per batch size, replayed during decode instead of running the mixer eagerly.
+APRIEL2_MIXER_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_MIXER_CUDA_GRAPHS", "0") == "1"
+
+
+# =============================================================================
+# Per-Mixer CUDA Graph Cache
+# =============================================================================
+
+
+@dataclass
+class MixerGraphEntry:
+    """A captured CUDA graph for one mixer at one batch size."""
+
+    graph: torch.cuda.CUDAGraph
+    input_ptr: int  # hidden_states.data_ptr() at capture time
+    output_ptr: int  # output.data_ptr() at capture time
+
+
+class MixerGraphCache:
+    """Per-mixer, per-batch-size CUDA graph cache for stochastic mixers.
+
+    Each entry is keyed by (mixer_name, num_tokens). Capture happens during
+    vLLM's capture_model() phase (when cudagraph_capturing_enabled is True
+    and NCCL is in graph-safe mode). Replay happens during normal decode.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, int], MixerGraphEntry] = {}
+        # Use a PRIVATE graph pool to avoid fragmenting vLLM's global pool.
+        # The global pool is shared with piecewise graph pieces; interleaving
+        # our ~5000 mixer captures with vLLM's piece captures degrades
+        # piecewise replay performance ~2x due to pool fragmentation.
+        self._graph_pool = torch.cuda.graph_pool_handle()
+
+    def has(self, mixer_name: str, num_tokens: int) -> bool:
+        return (mixer_name, num_tokens) in self._entries
+
+    def capture(
+        self,
+        mixer_name: str,
+        num_tokens: int,
+        mixer_fn: Callable,
+        hidden_states: torch.Tensor,
+        output: torch.Tensor,
+        positions: torch.Tensor | None,
+    ) -> None:
+        """Capture a CUDA graph for mixer_fn with the given inputs.
+
+        Must be called during vLLM's capture_model() phase.
+        """
+        validate_cudagraph_capturing_enabled()
+        key = (mixer_name, num_tokens)
+        if key in self._entries:
+            return
+
+        graph = torch.cuda.CUDAGraph()
+        if self._graph_pool is not None:
+            set_graph_pool_id(self._graph_pool)
+
+        with torch.cuda.graph(graph, pool=self._graph_pool, stream=current_stream()):
+            mixer_fn(hidden_states, output, positions=positions)
+
+        self._entries[key] = MixerGraphEntry(
+            graph=graph,
+            input_ptr=hidden_states.data_ptr(),
+            output_ptr=output.data_ptr(),
+        )
+        apriel2_logger.debug(
+            "MixerGraphCache: captured graph for (%s, %d), total=%d",
+            mixer_name,
+            num_tokens,
+            len(self._entries),
+        )
+
+    def replay(
+        self,
+        mixer_name: str,
+        num_tokens: int,
+        hidden_states: torch.Tensor,
+        output: torch.Tensor,
+    ) -> None:
+        """Replay the cached graph. Asserts pointer stability in debug mode."""
+        entry = self._entries[(mixer_name, num_tokens)]
+        if __debug__:
+            assert hidden_states.data_ptr() == entry.input_ptr, (
+                f"MixerGraphCache: hidden_states pointer changed between "
+                f"capture (0x{entry.input_ptr:x}) and replay "
+                f"(0x{hidden_states.data_ptr():x}) for ({mixer_name}, {num_tokens})"
+            )
+            assert output.data_ptr() == entry.output_ptr, (
+                f"MixerGraphCache: output pointer changed between "
+                f"capture (0x{entry.output_ptr:x}) and replay "
+                f"(0x{output.data_ptr():x}) for ({mixer_name}, {num_tokens})"
+            )
+        entry.graph.replay()
 
 
 # =============================================================================
@@ -867,20 +967,111 @@ direct_register_custom_op(
 # =============================================================================
 
 
+def _batch_has_prefill(forward_context: ForwardContext, active_mixer: nn.Module) -> bool:
+    """Return True if this batch contains prefill tokens.
+
+    CUDA graphs captured during decode cannot handle prefill, so we must
+    fall back to eager execution for mixed batches.
+    """
+    from vllm.config.compilation import CUDAGraphMode
+
+    if forward_context.cudagraph_runtime_mode == CUDAGraphMode.NONE:
+        return True  # Profile/warmup run — treat as non-graphable
+
+    attn_meta = forward_context.attn_metadata
+    if isinstance(attn_meta, dict):
+        mixer_prefix = getattr(active_mixer, "prefix", None)
+        if mixer_prefix is not None:
+            meta = attn_meta.get(mixer_prefix)
+            if meta is not None and hasattr(meta, "num_prefills"):
+                return meta.num_prefills > 0
+    return False
+
+
+def _capture_all_mixers_for_num_tokens(
+    stochastic_mixer: "Apriel2StochasticMixer",
+    cache: MixerGraphCache,
+    hidden_states: torch.Tensor,
+    output: torch.Tensor,
+    positions: torch.Tensor | None,
+    num_tokens: int,
+) -> None:
+    """Capture CUDA graphs for ALL sub-mixers at this batch size.
+
+    Called during vLLM's capture_model() phase. All mixers are captured
+    writing into the same ``output`` buffer address so that any mixer's
+    graph can be replayed into the current output on future decode steps.
+
+    After capturing, the active mixer is run eagerly once to leave the
+    correct result in ``output`` for downstream layers.
+    """
+    active_name = stochastic_mixer.active_mixer_name
+
+    for mixer_name, mixer in stochastic_mixer.mixers.items():
+        if cache.has(mixer_name, num_tokens):
+            continue
+
+        # Eager warmup: run the mixer once outside graph capture to trigger
+        # Triton autotuning (which calls cuda.synchronize() internally).
+        # Without this, autotuning during torch.cuda.graph() capture causes
+        # "operation not permitted when stream is capturing".
+        torch.cuda.synchronize()
+        output.zero_()
+        mixer(hidden_states, output, positions=positions)
+
+        torch.cuda.synchronize()
+        output.zero_()
+
+        apriel2_logger.info(
+            "Capturing mixer CUDA graph: layer=%s mixer=%s num_tokens=%d",
+            stochastic_mixer.prefix,
+            mixer_name,
+            num_tokens,
+        )
+        cache.capture(mixer_name, num_tokens, mixer, hidden_states, output, positions)
+
+    # Restore output to the active mixer's result for the outer capture pass
+    torch.cuda.synchronize()
+    stochastic_mixer.mixers[active_name](hidden_states, output, positions=positions)
+
+
 def stochastic_mixer_dispatch(
     hidden_states: torch.Tensor,
     output: torch.Tensor,
     positions: torch.Tensor | None,
     layer_name: str,
 ) -> None:
-    """Dispatch to the active mixer at runtime (escapes torch.compile)."""
+    """Dispatch to the active mixer; capture or replay CUDA graphs when enabled."""
     forward_context: ForwardContext = get_forward_context()
     stochastic_mixer = forward_context.no_compile_layers[layer_name]
+    active_name: str = stochastic_mixer.active_mixer_name
+    active_mixer = stochastic_mixer.mixers[active_name]
+    cache: MixerGraphCache | None = stochastic_mixer._mixer_graph_cache
 
-    # Get the currently active mixer (runtime lookup)
-    active_mixer = stochastic_mixer.mixers[stochastic_mixer.active_mixer_name]
+    if cache is not None:
+        num_tokens = hidden_states.shape[0]
 
-    # Forward through the active mixer
+        # Capture phase: capture graphs for ALL mixers at this batch size.
+        # We must check runtime_mode to avoid capturing during profile_run,
+        # where cudagraph_capturing_enabled is True but cuBLAS hasn't been
+        # lazily initialized yet (CUBLAS_STATUS_NOT_INITIALIZED).
+        # During profile_run, runtime_mode is NONE; during capture_model()
+        # it is PIECEWISE.
+        from vllm.config.compilation import CUDAGraphMode
+
+        runtime_mode = forward_context.cudagraph_runtime_mode
+        if cudagraph_capturing_enabled and runtime_mode is not None and runtime_mode != CUDAGraphMode.NONE:
+            _capture_all_mixers_for_num_tokens(stochastic_mixer, cache, hidden_states, output, positions, num_tokens)
+            return
+
+        # Replay phase: use cached graph if available and batch is decode-only
+        has_prefill = _batch_has_prefill(forward_context, active_mixer)
+        has_cached = cache.has(active_name, num_tokens)
+        if not has_prefill and has_cached:
+            cache.replay(active_name, num_tokens, hidden_states, output)
+            return
+
+    # Eager fallback
     active_mixer(hidden_states, output, positions=positions)
 
 
@@ -2450,6 +2641,9 @@ class Apriel2StochasticMixer(nn.Module):
         # Force PIECEWISE cudagraph mode for stochastic mixers
         # FULL mode captures only active mixer ops, breaking dormant mixer switching
         _force_piecewise_cudagraph_for_stochastic_mixers()
+
+        # Per-mixer CUDA graph cache (populated during capture_model() phase)
+        self._mixer_graph_cache: MixerGraphCache | None = MixerGraphCache() if APRIEL2_MIXER_CUDA_GRAPHS else None
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
