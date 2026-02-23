@@ -132,7 +132,8 @@ DEBUG_LM_HEAD = False  # Debug LM head input/output
 # └──────────────────────────────────────────────────────────────────────┘
 #
 # ┌──────────────────────────────────────────────────────────────────────┐
-# │ Mode 1: Supernet + FULL graphs  (APRIEL2_FULL_CUDA_GRAPHS=1)      │
+# │ Mode 1: Supernet + FULL graphs + weight offload                    │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=1, APRIEL2_OFFLOAD_INACTIVE_MIXERS=1)│
 # │                                             [default]              │
 # ├──────────────────────────────────────────────────────────────────────┤
 # │ vLLM captures the entire forward as one CUDA graph per batch size. │
@@ -140,16 +141,32 @@ DEBUG_LM_HEAD = False  # Debug LM head input/output
 # │ capture it calls the active mixer, baking its GPU kernels into the │
 # │ graph. On replay the same kernels execute.                         │
 # │                                                                    │
-# │ On layout change (set_layer_placements), all captured graphs are   │
-# │ invalidated and re-captured via capture_model() (~5-15 s).         │
+# │ After profile_run(), inactive mixer weights are offloaded to CPU.  │
+# │ This reduces GPU weight memory to ~26.9 GiB (matching Mode 0) and │
+# │ frees ~19 GiB for KV cache. Only parameters are moved — shared    │
+# │ buffers (e.g. RotaryEmbedding cos_sin_cache) stay on GPU.         │
+# │ Offloaded mixers are also removed from nn.ModuleDict to avoid     │
+# │ torch.compile guard invalidation.                                  │
+# │                                                                    │
+# │ On layout change (set_layer_placements):                           │
+# │   1. KV cache is cleared                                          │
+# │   2. Weights are swapped layer by layer (old→CPU, new→GPU)        │
+# │   3. All captured CUDA graphs are invalidated and re-captured      │
+# │      via capture_model() (~5-15 s)                                 │
+# │                                                                    │
+# │   Weights: 26.91 GiB   KV cache: 43.50 GiB   Graphs: 0.07 GiB    │
+# │   Throughput: 516 tok/s                                            │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 1b: Supernet + FULL graphs, no offload                        │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=1, APRIEL2_OFFLOAD_INACTIVE_MIXERS=0)│
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Same as Mode 1 but all mixer weights stay on GPU. This wastes      │
+# │ ~19 GiB on inactive mixers, leaving 1.78× less KV cache.          │
 # │                                                                    │
 # │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: 0.09 GiB    │
 # │   Throughput: ~200 tok/s                                           │
-# │                                                                    │
-# │ All 48×4 = 192 sub-mixer weights are loaded, consuming 19 GiB     │
-# │ more than fixed-layout. The fixed-layout model has 1.78× more KV  │
-# │ cache (43.5 vs 24.5 GiB), allowing far more tokens in-flight —    │
-# │ this is the primary cause of the throughput gap to Mode 0.         │
 # └──────────────────────────────────────────────────────────────────────┘
 #
 # ┌──────────────────────────────────────────────────────────────────────┐
@@ -187,14 +204,16 @@ DEBUG_LM_HEAD = False  # Debug LM head input/output
 #
 # Summary (H100 80 GB, all-attention layout, 10 concurrent reqs, 16k output, prompt length 1):
 #
-#   Mode │ Supernet │ FULL │ Per-mixer subgraph │ Weights │ KV cache │ Graphs │ tok/s
-#   ─────┼──────────┼──────┼────────────────────┼─────────┼──────────┼────────┼──────
-#     0  │    no    │  on  │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  583
-#     1  │   yes    │  on  │         -          │ 45.9 Gi │ 24.5 Gi  │ 0.1 Gi │ ~200
-#     2  │   yes    │ off  │        on          │ 45.9 Gi │ 24.5 Gi  │ 2.4 Gi │ ~155
-#     3  │   yes    │ off  │        off         │ 45.9 Gi │ 24.5 Gi  │  ~0 Gi │ ~151
+#   Mode │ Supernet │ FULL │ Offload │ Per-mixer subgraph │ Weights │ KV cache │ Graphs │ tok/s
+#   ─────┼──────────┼──────┼─────────┼────────────────────┼─────────┼──────────┼────────┼──────
+#     0  │    no    │  on  │    -    │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  583
+#     1  │   yes    │  on  │   on    │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  516
+#    1b  │   yes    │  on  │  off    │         -          │ 45.9 Gi │ 24.5 Gi  │ 0.1 Gi │ ~200
+#     2  │   yes    │ off  │  off    │        on          │ 45.9 Gi │ 24.5 Gi  │ 2.4 Gi │ ~155
+#     3  │   yes    │ off  │  off    │        off         │ 45.9 Gi │ 24.5 Gi  │  ~0 Gi │ ~151
 #
 #   FULL = APRIEL2_FULL_CUDA_GRAPHS
+#   Offload = APRIEL2_OFFLOAD_INACTIVE_MIXERS
 #   Per-mixer subgraph = APRIEL2_MIXER_CUDA_GRAPHS
 #
 # Note: CUDA graph capture is essential for linear mixers (GDN, KDA).
@@ -204,6 +223,29 @@ DEBUG_LM_HEAD = False  # Debug LM head input/output
 # =============================================================================
 APRIEL2_FULL_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_FULL_CUDA_GRAPHS", "1") == "1"
 APRIEL2_MIXER_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_MIXER_CUDA_GRAPHS", "0") == "1"
+
+# Offload inactive mixer weights to CPU after profile_run(). Frees ~19 GiB
+# GPU memory for KV cache. On layout switch, weights are swapped layer by layer.
+# Note: cannot offload during load_weights() because torch.compile captures all
+# parameters as graph inputs — profile_run() would crash with CPU tensors.
+# Default: enabled with FULL CUDA graphs (layout is fixed per graph capture).
+APRIEL2_OFFLOAD_INACTIVE_MIXERS: bool = (
+    os.environ.get("APRIEL2_OFFLOAD_INACTIVE_MIXERS", "1" if APRIEL2_FULL_CUDA_GRAPHS else "0") == "1"
+)
+
+
+def _move_module_device(module: nn.Module, device: torch.device) -> None:
+    """Move a module's weight parameters to a device.
+
+    Uses param.data assignment (not module.to()) to preserve vLLM's
+    BasevLLMParameter metadata (_weight_loader attribute).
+
+    Only moves parameters, NOT buffers.  Buffers like RotaryEmbedding's
+    cos_sin_cache are shared across mixer instances (via get_rope() LRU cache).
+    Moving them would corrupt the active mixer's shared state.
+    """
+    for param in module.parameters():
+        param.data = param.data.to(device, non_blocking=True)
 
 
 # =============================================================================
@@ -2748,13 +2790,36 @@ class Apriel2StochasticMixer(nn.Module):
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
-        if name not in self.mixers:
+        if name not in self._mixer_names:
             raise ValueError(f"Unknown mixer '{name}'. Available: {self._mixer_names}")
         self.active_mixer_name = name
 
     def get_active_mixer(self) -> str:
         """Get the name of the currently active mixer."""
         return self.active_mixer_name
+
+    def offload_inactive_mixers(self) -> int:
+        """Move inactive mixer weights to CPU. Returns bytes freed.
+
+        Also removes offloaded mixers from self.mixers (nn.ModuleDict) and
+        stores them in self._offloaded_mixers (plain dict).  This is critical:
+        torch.compile/dynamo sets guards on every parameter it sees in the
+        module tree.  If offloaded params stay in the tree with device='cpu',
+        a subsequent forward triggers guard failure → re-trace → crash.
+        Hiding them from the module tree avoids the issue entirely.
+        """
+        freed = 0
+        device_cpu = torch.device("cpu")
+        self._offloaded_mixers: dict[str, nn.Module] = {}
+        to_offload = [name for name in self.mixers if name != self.active_mixer_name]
+        for name in to_offload:
+            mixer = self.mixers[name]
+            for param in mixer.parameters():
+                freed += param.data.nbytes
+            _move_module_device(mixer, device_cpu)
+            self._offloaded_mixers[name] = mixer
+            del self.mixers[name]
+        return freed
 
     def forward(
         self,
@@ -3198,6 +3263,28 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         )
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
+    def offload_inactive_mixers(self) -> int:
+        """Offload all inactive mixer weights to CPU.
+
+        Cannot run inside load_weights() because torch.compile captures ALL
+        parameters as compiled graph inputs — profile_run() would crash trying
+        to pass CPU tensors to the GPU graph. Instead, this is called from the
+        monkey-patched Worker.determine_available_memory() AFTER profile_run().
+
+        Returns:
+            Total bytes freed on GPU.
+        """
+        total_freed = 0
+        for layer in self.model.layers:
+            if isinstance(layer, Apriel2StochasticDecoderLayer):
+                total_freed += layer.mixer.offload_inactive_mixers()
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        freed_gib = total_freed / (1024**3)
+        logger.info(f"Offloaded inactive mixer weights to CPU: freed {freed_gib:.2f} GiB GPU memory")
+        return total_freed
+
     def set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         """Set the active mixer for each stochastic layer.
 
@@ -3346,10 +3433,59 @@ def _patch_worker_for_placement_switching():
         model_runner.capture_model()
         logger.info("CUDA graph re-capture complete")
 
+    def _swap_mixer_weights(worker, placement: list[str]) -> None:
+        """Swap mixer weights between GPU and CPU for placement change.
+
+        For each layer where the active mixer changes:
+        1. Offload old active → CPU, remove from ModuleDict, store in _offloaded_mixers
+        2. Load new active from _offloaded_mixers → GPU, add to ModuleDict
+        Done layer by layer to avoid transient OOM.
+        """
+        model = worker.get_model()
+        device_gpu = torch.device("cuda")
+        device_cpu = torch.device("cpu")
+        loaded = 0
+        offloaded = 0
+
+        for layer_idx, new_mixer_name in enumerate(placement):
+            if layer_idx >= len(model.model.layers):
+                break
+            layer = model.model.layers[layer_idx]
+            if not isinstance(layer, Apriel2StochasticDecoderLayer):
+                continue
+
+            stochastic = layer.mixer
+            old_mixer_name = stochastic.active_mixer_name
+            if old_mixer_name == new_mixer_name:
+                continue
+
+            # 1. Offload old active → CPU, hide from module tree
+            old_mixer = stochastic.mixers[old_mixer_name]
+            _move_module_device(old_mixer, device_cpu)
+            del stochastic.mixers[old_mixer_name]
+            stochastic._offloaded_mixers[old_mixer_name] = old_mixer
+            offloaded += 1
+
+            # 2. Load new active from offloaded → GPU, restore to module tree
+            new_mixer = stochastic._offloaded_mixers.pop(new_mixer_name)
+            _move_module_device(new_mixer, device_gpu)
+            stochastic.mixers[new_mixer_name] = new_mixer
+            loaded += 1
+
+        if loaded or offloaded:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            logger.info(f"Weight swap: offloaded {offloaded} mixers to CPU, " f"loaded {loaded} mixers to GPU")
+
     def _set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         # Clear KV cache BEFORE changing placement to prevent reading stale data
         # written by a different mixer type (which could cause NaN errors)
         _clear_kv_cache(self)
+
+        # Swap weights before changing active mixer (needs old active_mixer_name)
+        if APRIEL2_OFFLOAD_INACTIVE_MIXERS:
+            _swap_mixer_weights(self, placement)
+
         result = self.get_model().set_layer_placements(placement)
         # Re-capture CUDA graphs with the new layout baked in
         if APRIEL2_FULL_CUDA_GRAPHS and result:
@@ -3358,6 +3494,33 @@ def _patch_worker_for_placement_switching():
 
     def _get_mixer_names(self) -> tuple[str, ...]:
         return self.get_model().get_mixer_names()
+
+    # -- Weight offloading: patch determine_available_memory ---------------
+    # torch.compile captures ALL parameters as graph inputs. If we offload
+    # during load_weights(), profile_run() crashes (CPU tensors in GPU graph).
+    # Instead, offload AFTER profile_run() but adjust available memory upward.
+
+    if APRIEL2_OFFLOAD_INACTIVE_MIXERS:
+        _orig_determine_available_memory = Worker.determine_available_memory
+
+        @torch.inference_mode()
+        def _determine_available_memory_with_offload(self) -> int:
+            result = _orig_determine_available_memory(self)
+
+            # Offload inactive mixer weights to CPU
+            freed = self.get_model().offload_inactive_mixers()
+            if freed > 0:
+                self.available_kv_cache_memory_bytes += freed
+                self.model_runner.model_memory_usage -= freed
+                result = int(self.available_kv_cache_memory_bytes)
+                logger.info(
+                    "Adjusted available KV cache memory: +%.2f GiB from weight offloading",
+                    freed / (1024**3),
+                )
+
+            return result
+
+        Worker.determine_available_memory = _determine_available_memory_with_offload
 
     Worker.get_layer_placements = _get_layer_placements
     Worker.set_layer_placements = _set_layer_placements
