@@ -105,8 +105,104 @@ DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
 DEBUG_FINAL_NORM = False  # Debug final norm before LM head
 DEBUG_LM_HEAD = False  # Debug LM head input/output
 
-# Per-mixer CUDA graph caching: capture a separate graph per sub-mixer variant
-# per batch size, replayed during decode instead of running the mixer eagerly.
+# =============================================================================
+# CUDA Graph Modes for Stochastic Mixers
+# =============================================================================
+#
+# The Apriel2StochasticMixer wraps multiple sub-mixers (attention, GDN, KDA)
+# per layer and routes to the active one at runtime. This interacts with
+# vLLM's CUDA graph capture in several modes, controlled by env vars.
+#
+# Benchmark setup: 10 concurrent requests, all-attention layout, prompt
+# length 1, max generation length 16k, REST backend, no warmup after
+# local vLLM launch, single H100 80GB.
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 0: Fixed-layout FULL graphs (baseline, no supernet)           │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Serve a checkpoint with a predefined layout (single mixer per      │
+# │ layer). Standard vLLM FULL CUDA graph capture — no stochastic      │
+# │ dispatch involved.                                                 │
+# │                                                                    │
+# │   Weights: 26.91 GiB   KV cache: 43.50 GiB   Graphs: 0.10 GiB    │
+# │   Throughput: 583 tok/s                                           │
+# │                                                                    │
+# │ This is the upper bound — all mixer weights are collapsed into one │
+# │ per layer, leaving maximum memory for KV cache.                    │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 1: Supernet + FULL graphs  (APRIEL2_FULL_CUDA_GRAPHS=1)      │
+# │                                             [default]              │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ vLLM captures the entire forward as one CUDA graph per batch size. │
+# │ stochastic_mixer_dispatch is NOT a graph-splitting op: during      │
+# │ capture it calls the active mixer, baking its GPU kernels into the │
+# │ graph. On replay the same kernels execute.                         │
+# │                                                                    │
+# │ On layout change (set_layer_placements), all captured graphs are   │
+# │ invalidated and re-captured via capture_model() (~5-15 s).         │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: 0.09 GiB    │
+# │   Throughput: ~200 tok/s                                           │
+# │                                                                    │
+# │ All 48×4 = 192 sub-mixer weights are loaded, consuming 19 GiB     │
+# │ more than fixed-layout. The fixed-layout model has 1.78× more KV  │
+# │ cache (43.5 vs 24.5 GiB), allowing far more tokens in-flight —    │
+# │ this is the primary cause of the throughput gap to Mode 0.         │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 2: Supernet + PIECEWISE + per-mixer sub-graphs                │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=0, APRIEL2_MIXER_CUDA_GRAPHS=1) │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ stochastic_mixer_dispatch is a graph-splitting op → vLLM forces    │
+# │ PIECEWISE mode. At each dispatch point, a separate small CUDA      │
+# │ graph is cached per (mixer, batch_size) and replayed.              │
+# │                                                                    │
+# │ No re-capture needed on layout change (dispatch selects mixer at   │
+# │ runtime), but creates ~5k graphs causing GPU memory pressure.      │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: 2.43 GiB    │
+# │   Capture time: ~45 s                                              │
+# │   Throughput: ~155 tok/s                                           │
+# │                                                                    │
+# │ WARNING: Not recommended. The graph memory further reduces         │
+# │ available KV cache and capture overhead is substantial.            │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 3: Supernet + PIECEWISE + eager dispatch                      │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=0, APRIEL2_MIXER_CUDA_GRAPHS=0) │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Same as Mode 2 but mixer forward runs fully eagerly (no per-mixer  │
+# │ graph caching). Graph breaks at every dispatch, Python selects the │
+# │ active mixer each step.                                            │
+# │                                                                    │
+# │ No re-capture needed on layout change.                             │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: ~0 GiB        │
+# │   Throughput: 151 tok/s                                           │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# Summary (H100 80 GB, all-attention layout, 10 concurrent reqs, 16k output, prompt length 1):
+#
+#   Mode │ Supernet │ FULL │ Per-mixer subgraph │ Weights │ KV cache │ Graphs │ tok/s
+#   ─────┼──────────┼──────┼────────────────────┼─────────┼──────────┼────────┼──────
+#     0  │    no    │  on  │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  583
+#     1  │   yes    │  on  │         -          │ 45.9 Gi │ 24.5 Gi  │ 0.1 Gi │ ~200
+#     2  │   yes    │ off  │        on          │ 45.9 Gi │ 24.5 Gi  │ 2.4 Gi │ ~155
+#     3  │   yes    │ off  │        off         │ 45.9 Gi │ 24.5 Gi  │  ~0 Gi │ ~151
+#
+#   FULL = APRIEL2_FULL_CUDA_GRAPHS
+#   Per-mixer subgraph = APRIEL2_MIXER_CUDA_GRAPHS
+#
+# Note: CUDA graph capture is essential for linear mixers (GDN, KDA).
+# They will be slower than attention in Mode 3 (eager dispatch) but
+# can be faster than attention in Mode 1 (FULL graphs).
+#
+# =============================================================================
+APRIEL2_FULL_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_FULL_CUDA_GRAPHS", "1") == "1"
 APRIEL2_MIXER_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_MIXER_CUDA_GRAPHS", "0") == "1"
 
 
@@ -1097,17 +1193,19 @@ direct_register_custom_op(
     fake_impl=stochastic_mixer_dispatch_fake,
 )
 
-# Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks
-# This allows dynamic dispatch at runtime even with CUDA graphs enabled
-try:
-    from vllm.config.compilation import CompilationConfig, CUDAGraphMode
+# Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks.
+# Only needed in PIECEWISE mode — in FULL mode the dispatch is transparent to
+# graph capture (the active mixer's kernels get baked into the full graph).
+if not APRIEL2_FULL_CUDA_GRAPHS:
+    try:
+        from vllm.config.compilation import CompilationConfig, CUDAGraphMode
 
-    _stochastic_op = "vllm::stochastic_mixer_dispatch"
-    if _stochastic_op not in CompilationConfig._attention_ops:
-        CompilationConfig._attention_ops.append(_stochastic_op)
-        logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
-except ImportError:
-    logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
+        _stochastic_op = "vllm::stochastic_mixer_dispatch"
+        if _stochastic_op not in CompilationConfig._attention_ops:
+            CompilationConfig._attention_ops.append(_stochastic_op)
+            logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
+    except ImportError:
+        logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
 
 
 def _force_piecewise_cudagraph_for_stochastic_mixers():
@@ -2638,12 +2736,15 @@ class Apriel2StochasticMixer(nn.Module):
             raise ValueError(f"Duplicate layer name: {prefix}")
         compilation_config.static_forward_context[prefix] = self
 
-        # Force PIECEWISE cudagraph mode for stochastic mixers
-        # FULL mode captures only active mixer ops, breaking dormant mixer switching
-        _force_piecewise_cudagraph_for_stochastic_mixers()
-
-        # Per-mixer CUDA graph cache (populated during capture_model() phase)
-        self._mixer_graph_cache: MixerGraphCache | None = MixerGraphCache() if APRIEL2_MIXER_CUDA_GRAPHS else None
+        if APRIEL2_FULL_CUDA_GRAPHS:
+            # FULL mode: the entire forward (including dispatch) is captured as
+            # one CUDA graph. On layout change, graphs are re-captured.
+            # No per-mixer cache needed — vLLM's CUDAGraphWrapper handles it.
+            self._mixer_graph_cache: MixerGraphCache | None = None
+        else:
+            # PIECEWISE mode: force graph break at dispatch, mixer runs eagerly
+            _force_piecewise_cudagraph_for_stochastic_mixers()
+            self._mixer_graph_cache = MixerGraphCache() if APRIEL2_MIXER_CUDA_GRAPHS else None
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
@@ -3204,11 +3305,56 @@ def _patch_worker_for_placement_switching():
 
         logger.info("Cleared KV cache tensors for placement switch")
 
+    def _clear_piecewise_wrappers(module: nn.Module) -> None:
+        """Recursively clear all piecewise CUDAGraphWrapper entries."""
+        from vllm.compilation.cuda_graph import CUDAGraphWrapper
+
+        for val in module.__dict__.values():
+            if isinstance(val, CUDAGraphWrapper):
+                val.concrete_cudagraph_entries.clear()
+            elif isinstance(val, nn.Module):
+                _clear_piecewise_wrappers(val)
+        for child in module.children():
+            _clear_piecewise_wrappers(child)
+
+    def _recapture_cuda_graphs(worker) -> None:
+        """Invalidate and re-capture CUDA graphs after layout change.
+
+        In FULL CUDA graph mode, the captured graphs contain GPU kernels for
+        the previous layout. After changing mixer assignments, we must
+        re-capture to bake in the new layout's kernels.
+        """
+        model_runner = getattr(worker, "model_runner", None)
+        if model_runner is None:
+            return
+
+        from vllm.compilation.cuda_graph import CUDAGraphWrapper
+
+        # 1. Clear outer FULL wrapper entries
+        model = model_runner.model
+        if isinstance(model, CUDAGraphWrapper):
+            num_cleared = len(model.concrete_cudagraph_entries)
+            model.concrete_cudagraph_entries.clear()
+            logger.info(f"Cleared {num_cleared} FULL CUDA graph entries")
+
+        # 2. Clear inner piecewise wrapper entries (for FULL_AND_PIECEWISE mode)
+        inner_model = model.unwrap() if isinstance(model, CUDAGraphWrapper) else model
+        _clear_piecewise_wrappers(inner_model)
+
+        # 3. Re-capture for all batch sizes
+        logger.info("Re-capturing CUDA graphs for new layout...")
+        model_runner.capture_model()
+        logger.info("CUDA graph re-capture complete")
+
     def _set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         # Clear KV cache BEFORE changing placement to prevent reading stale data
         # written by a different mixer type (which could cause NaN errors)
         _clear_kv_cache(self)
-        return self.get_model().set_layer_placements(placement)
+        result = self.get_model().set_layer_placements(placement)
+        # Re-capture CUDA graphs with the new layout baked in
+        if APRIEL2_FULL_CUDA_GRAPHS and result:
+            _recapture_cuda_graphs(self)
+        return result
 
     def _get_mixer_names(self) -> tuple[str, ...]:
         return self.get_model().get_mixer_names()
