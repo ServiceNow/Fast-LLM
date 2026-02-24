@@ -1,0 +1,30 @@
+# Placement config: all-attention, all-sliding_window, every2nd-kda
+#
+# Three placements:
+# 1. all-attention: Full attention (baseline)
+# 2. all-sliding_window: Sliding window attention
+#    (O(n*w) vs O(n²) compute; uses same FlashAttention backend with window mask)
+# 3. every2nd-kda: Alternating attention and KDA (Key-Dependent Attention)
+#
+# Usage:
+#   python thin_supernet.py ~/.cache/huggingface/apriel2-0.5b-dev \
+#       ~/.cache/huggingface/apriel2-0.5b-thinned-attn-kda-swa \
+#       -p examples/placements/all_attn_every2_kda_swa.yaml
+
+placements:
+  # All attention (24 layers) - baseline
+  - [attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention]
+  # All sliding window - expected faster (limited context, same FlashAttention backend)
+  - [sliding_window, sliding_window, sliding_window, sliding_window,
+     sliding_window, sliding_window, sliding_window, sliding_window,
+     sliding_window, sliding_window, sliding_window, sliding_window,
+     sliding_window, sliding_window, sliding_window, sliding_window,
+     sliding_window, sliding_window, sliding_window, sliding_window,
+     sliding_window, sliding_window, sliding_window, sliding_window]
+  # Every 2nd layer is KDA: attn, kda, attn, kda, ...
+  - [attention, kda, attention, kda, attention, kda, attention, kda,
+     attention, kda, attention, kda, attention, kda, attention, kda,
+     attention, kda, attention, kda, attention, kda, attention, kda]

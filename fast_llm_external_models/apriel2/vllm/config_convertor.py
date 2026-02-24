@@ -50,6 +50,10 @@ class Apriel2TextModelArchConfigConvertor(ModelArchConfigConvertorBase):
                 mixer = block.get("mixer", {})
                 if mixer.get("type") == "attention":
                     return mixer
+                if mixer.get("type") == "stochastic":
+                    attn = mixer.get("mixers", {}).get("attention")
+                    if attn:
+                        return attn
         return {}
 
     def get_num_hidden_layers(self) -> int:

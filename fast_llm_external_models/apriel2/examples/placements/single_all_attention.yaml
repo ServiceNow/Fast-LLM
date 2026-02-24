@@ -1,0 +1,7 @@
+# Single placement: all-attention
+# Produces a fixed model with no stochastic mixer; enables FULL cudagraph in vLLM.
+placements:
+  - [attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention]

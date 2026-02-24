@@ -50,23 +50,28 @@ Examples:
 
 import argparse
 import gc
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import torch
 import triton
-
 from vllm import LLM, SamplingParams
 from vllm.config import CompilationConfig
 from vllm.config.compilation import CompilationMode
 
-# Apriel2 model registration is handled automatically via vLLM's plugin system
-# (see fast-llm setup.cfg entry_points for vllm.general_plugins)
+# Ensure Apriel2 config convertor is registered before vLLM loads models
+try:
+    from fast_llm_external_models.apriel2.vllm.config_convertor import register as _register_apriel2
+
+    _register_apriel2()
+except ImportError:
+    pass  # Plugin may be loaded via entry_points if package is installed
 
 
 # Set a triton allocator to avoid "no allocator was set" errors
 def _triton_allocator(size, align, stream):
-    return torch.empty(size, dtype=torch.int8, device='cuda').data_ptr()
+    return torch.empty(size, dtype=torch.int8, device="cuda").data_ptr()
 
 
 triton.set_allocator(_triton_allocator)
@@ -122,7 +127,7 @@ def parse_placement(placement_str: str, num_layers: int) -> list[str]:
         if dash_idx > 5:  # "every" is 5 chars, need at least that plus ordinal
             n_str = placement_str[5:dash_idx]  # Extract "2nd", "3rd", etc.
             n_str = n_str.rstrip("ndrdth")  # Remove ordinal suffix
-            mixer = normalize_mixer_name(placement_str[dash_idx + 1:])  # Extract mixer name
+            mixer = normalize_mixer_name(placement_str[dash_idx + 1 :])  # Extract mixer name
             try:
                 n = int(n_str)
                 placement = []
@@ -195,7 +200,7 @@ def apply_placement_transformers(model, placement: list[str], verbose: bool = Tr
     for layer_idx, mixer_name in enumerate(placement):
         block = blocks[layer_idx]
         # Check if block has a stochastic mixer with main_mixer_name
-        if hasattr(block, 'mixer') and hasattr(block.mixer, 'main_mixer_name'):
+        if hasattr(block, "mixer") and hasattr(block.mixer, "main_mixer_name"):
             block.mixer.main_mixer_name = mixer_name
             applied += 1
 
@@ -218,7 +223,9 @@ def setup_transformers():
     AutoModelForCausalLM.register(Apriel2TextConfig, Apriel2ForCausalLM)
 
 
-def test_coherence_vllm(model_paths: list[str], prompts: list[str], max_tokens: int = 50, placement: str | None = None):
+def test_coherence_vllm(
+    model_paths: list[str], prompts: list[str], max_tokens: int = 50, placement: str | None = None
+):
     """Test generation coherence with vLLM."""
     sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0)
 
@@ -291,7 +298,7 @@ def test_coherence_transformers(model_paths: list[str], prompts: list[str], max_
 
             generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
             # Extract just the generated part (remove prompt)
-            generated_only = generated[len(prompt):]
+            generated_only = generated[len(prompt) :]
             results[model_name][prompt] = generated_only
             print(f"\nPrompt: {prompt!r}")
             print(f"Output: {generated!r}")
@@ -302,7 +309,16 @@ def test_coherence_transformers(model_paths: list[str], prompts: list[str], max_
     return results
 
 
-def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str = "bfloat16", no_compile: bool = False, revision: str | None = None, debug_gdn: bool = False, placement: str | None = None):
+def compare_logits(
+    model_path: str,
+    prompt: str,
+    max_tokens: int = 1,
+    dtype: str = "bfloat16",
+    no_compile: bool = False,
+    revision: str | None = None,
+    debug_gdn: bool = False,
+    placement: str | None = None,
+):
     """Compare logits between vLLM and Transformers."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -312,6 +328,7 @@ def compare_logits(model_path: str, prompt: str, max_tokens: int = 1, dtype: str
     if debug_gdn:
         # vLLM GDN class
         from fast_llm_external_models.apriel2.vllm.modeling_apriel2 import Apriel2GatedDeltaNet as VLLMGatedDeltaNet
+
         VLLMGatedDeltaNet._debug_global_enable = True
         print("GDN debug mode enabled for vLLM")
 
@@ -633,9 +650,15 @@ def compare_comprehensive(
                             if all_match:  # First mismatch
                                 vllm_lp_for_tok = vllm_logprobs.get(vllm_pred_token, None)
                                 vllm_lp_val = vllm_lp_for_tok.logprob if vllm_lp_for_tok else "N/A"
-                                tf_lp_vllm_tok = tf_pos_logprobs[vllm_pred_token].item() if vllm_pred_token and vllm_pred_token < len(tf_pos_logprobs) else "N/A"
+                                tf_lp_vllm_tok = (
+                                    tf_pos_logprobs[vllm_pred_token].item()
+                                    if vllm_pred_token and vllm_pred_token < len(tf_pos_logprobs)
+                                    else "N/A"
+                                )
                                 tf_lp_tf_tok = tf_pos_logprobs[tf_pred_token].item()
-                                print(f"  FIRST MISMATCH at pos {pos}: vLLM tok={vllm_pred_token} (lp={vllm_lp_val}), TF tok={tf_pred_token} (lp={tf_lp_tf_tok:.4f})")
+                                print(
+                                    f"  FIRST MISMATCH at pos {pos}: vLLM tok={vllm_pred_token} (lp={vllm_lp_val}), TF tok={tf_pred_token} (lp={tf_lp_tf_tok:.4f})"
+                                )
                                 print(f"    TF logprob for vLLM's token: {tf_lp_vllm_tok}")
                             all_match = False
 
@@ -661,7 +684,9 @@ def compare_comprehensive(
                 }
                 results.append(result)
 
-                print(f"{actual_tokens:<8} {decode_length:<8} {batch_size:<8} {avg_diff:<12.6f} {max_diff:<12.6f} {match_str:<8}")
+                print(
+                    f"{actual_tokens:<8} {decode_length:<8} {batch_size:<8} {avg_diff:<12.6f} {max_diff:<12.6f} {match_str:<8}"
+                )
 
     # Cleanup
     del llm
@@ -697,8 +722,8 @@ def cmd_compare(args):
             batch_sizes=batch_sizes,
             dtype=args.dtype,
             no_compile=args.no_compile,
-            revision=getattr(args, 'revision', None),
-            placement=getattr(args, 'placement', None),
+            revision=getattr(args, "revision", None),
+            placement=getattr(args, "placement", None),
         )
 
 
@@ -710,22 +735,22 @@ def cmd_coherence(args):
         "Once upon a time, there was a",
     ]
 
-    placement = getattr(args, 'placement', None)
+    placement = getattr(args, "placement", None)
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("COHERENCE TEST: vLLM")
-    print("="*70)
+    print("=" * 70)
     vllm_results = test_coherence_vllm(args.model_paths, prompts, args.max_tokens, placement=placement)
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("COHERENCE TEST: Transformers")
-    print("="*70)
+    print("=" * 70)
     tf_results = test_coherence_transformers(args.model_paths, prompts, args.max_tokens)
 
     # Compare results
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("COMPARISON SUMMARY")
-    print("="*70)
+    print("=" * 70)
     for model_name in vllm_results:
         print(f"\n{model_name}:")
         for prompt in prompts:
@@ -752,20 +777,17 @@ def cmd_coherence(args):
 # 4. Configurable Transformers kernel selection
 # 5. Full parameter space: prompts, prompt_length, decode_length, batch_size, compile, kernels
 
-from dataclasses import dataclass, field
-from itertools import islice
-
 
 # Common placement patterns for sweep testing
 SWEEP_PLACEMENTS = [
     "all-attention",
     "all-gdn",
     "all-kda",
-    "bookend-attn-gdn",   # 2x attn, middle layers gdn, 2x attn
-    "bookend-attn-kda",   # 2x attn, middle layers kda, 2x attn
+    "bookend-attn-gdn",  # 2x attn, middle layers gdn, 2x attn
+    "bookend-attn-kda",  # 2x attn, middle layers kda, 2x attn
     "every2nd-gdn",
     "every2nd-kda",
-    "every2nd-swa",       # sliding window attention
+    "every2nd-swa",  # sliding window attention
     "every4th-gdn",
     "every4th-kda",
     "every4th-swa",
@@ -787,15 +809,15 @@ def resolve_placements(args) -> list[str] | None:
     placements = []
 
     # Check --placement-sweep first (highest priority)
-    if getattr(args, 'placement_sweep', False):
+    if getattr(args, "placement_sweep", False):
         placements.extend(SWEEP_PLACEMENTS)
 
     # Then check --placements (list)
-    if getattr(args, 'placements', None):
+    if getattr(args, "placements", None):
         placements.extend(args.placements)
 
     # Finally check --placement (single, deprecated)
-    if getattr(args, 'placement', None):
+    if getattr(args, "placement", None):
         if placements:
             print("  Warning: --placement is deprecated when using --placements or --placement-sweep")
         else:
@@ -807,6 +829,7 @@ def resolve_placements(args) -> list[str] | None:
 @dataclass
 class TokenComparison:
     """Comparison data for a single token position."""
+
     prompt_idx: int
     position: int  # 0 = prefill (last token), 1+ = decode steps
     vllm_token_id: int
@@ -840,7 +863,7 @@ def load_and_tokenize_prompts(
     from datasets import load_dataset
 
     print(f"Loading C4 dataset (streaming, seed={seed})...")
-    dataset = load_dataset('allenai/c4', 'en', split='train', streaming=True)
+    dataset = load_dataset("allenai/c4", "en", split="train", streaming=True)
 
     # Shuffle with seed for reproducibility
     dataset = dataset.shuffle(seed=seed, buffer_size=10000)
@@ -850,7 +873,7 @@ def load_and_tokenize_prompts(
 
     for sample in dataset:
         samples_checked += 1
-        text = sample['text']
+        text = sample["text"]
 
         # Tokenize and check length
         tokens = tokenizer.encode(text, add_special_tokens=False)
@@ -862,7 +885,10 @@ def load_and_tokenize_prompts(
 
         # Progress every 100 samples
         if samples_checked % 100 == 0:
-            print(f"  Checked {samples_checked} samples, found {len(token_ids_list)}/{num_prompts} valid prompts", end="\r")
+            print(
+                f"  Checked {samples_checked} samples, found {len(token_ids_list)}/{num_prompts} valid prompts",
+                end="\r",
+            )
 
     print(f"  Checked {samples_checked} samples, found {len(token_ids_list)}/{num_prompts} valid prompts")
 
@@ -879,7 +905,6 @@ def set_transformers_kernels(model_path: str, kernel_config: str) -> None:
         model_path: Path to model (to find modeling file)
         kernel_config: 'upstream' or 'vllm'
     """
-    import importlib
     import sys
 
     # The Transformers model uses the local modeling_apriel2.py in the checkpoint
@@ -909,7 +934,7 @@ def set_transformers_kernels(model_path: str, kernel_config: str) -> None:
         print(f"  Set Transformers kernels to: {kernel_config}")
 
         # Clear any cached imports
-        modules_to_remove = [k for k in sys.modules if 'apriel2' in k.lower()]
+        modules_to_remove = [k for k in sys.modules if "apriel2" in k.lower()]
         for mod in modules_to_remove:
             del sys.modules[mod]
 
@@ -920,6 +945,7 @@ def load_vllm_model(
     dtype: str,
     no_compile: bool,
     revision: str | None,
+    enable_chunked_prefill: bool | None = None,
 ) -> "LLM":
     """Load vLLM model.
 
@@ -929,6 +955,8 @@ def load_vllm_model(
         dtype: Data type (bfloat16 or float32).
         no_compile: Whether to disable torch.compile.
         revision: Model revision.
+        enable_chunked_prefill: If False, disable chunked prefill (can fix severe
+            prefill slowdowns with stateful layers like GDN). Default None uses vLLM default.
 
     Returns:
         Loaded LLM instance.
@@ -937,7 +965,7 @@ def load_vllm_model(
     print(f"\nLoading vLLM model ({compile_label}, batch_size={batch_size})...")
     compilation_config = CompilationConfig(mode=CompilationMode.NONE) if no_compile else None
 
-    llm = LLM(
+    llm_kwargs = dict(
         model=model_path,
         revision=revision,
         trust_remote_code=True,
@@ -948,6 +976,9 @@ def load_vllm_model(
         max_num_seqs=batch_size,  # Control max concurrent sequences
         enable_prefix_caching=False,  # Disable for hybrid models
     )
+    if enable_chunked_prefill is not None:
+        llm_kwargs["enable_chunked_prefill"] = enable_chunked_prefill
+    llm = LLM(**llm_kwargs)
 
     return llm
 
@@ -1212,16 +1243,18 @@ def compute_comparisons(
             avg_diff = sum(diffs) / len(diffs) if diffs else 0.0
             max_diff = max(diffs) if diffs else 0.0
 
-            comparisons.append(TokenComparison(
-                prompt_idx=prompt_idx,
-                position=pos,
-                vllm_token_id=vllm_token,
-                tf_token_id=tf_token,
-                token_match=(vllm_token == tf_token),
-                avg_logprob_diff=avg_diff,
-                max_logprob_diff=max_diff,
-                top_k_diffs=diffs,
-            ))
+            comparisons.append(
+                TokenComparison(
+                    prompt_idx=prompt_idx,
+                    position=pos,
+                    vllm_token_id=vllm_token,
+                    tf_token_id=tf_token,
+                    token_match=(vllm_token == tf_token),
+                    avg_logprob_diff=avg_diff,
+                    max_logprob_diff=max_diff,
+                    top_k_diffs=diffs,
+                )
+            )
 
     return comparisons
 
@@ -1250,9 +1283,9 @@ def compute_same_framework_comparisons(
     """
     comparisons = []
 
-    for prompt_idx, (t1, lp1, t2, lp2) in enumerate(zip(
-        model1_tokens, model1_logprobs, model2_tokens, model2_logprobs
-    )):
+    for prompt_idx, (t1, lp1, t2, lp2) in enumerate(
+        zip(model1_tokens, model1_logprobs, model2_tokens, model2_logprobs)
+    ):
         for pos in range(min(len(t1), len(t2), len(lp1), len(lp2))):
             token1 = t1[pos]
             token2 = t2[pos]
@@ -1284,16 +1317,18 @@ def compute_same_framework_comparisons(
             avg_diff = sum(diffs) / len(diffs) if diffs else 0.0
             max_diff = max(diffs) if diffs else 0.0
 
-            comparisons.append(TokenComparison(
-                prompt_idx=prompt_idx,
-                position=pos,
-                vllm_token_id=token1,  # Model 1 token (reusing field name)
-                tf_token_id=token2,    # Model 2 token (reusing field name)
-                token_match=(token1 == token2),
-                avg_logprob_diff=avg_diff,
-                max_logprob_diff=max_diff,
-                top_k_diffs=diffs,
-            ))
+            comparisons.append(
+                TokenComparison(
+                    prompt_idx=prompt_idx,
+                    position=pos,
+                    vllm_token_id=token1,  # Model 1 token (reusing field name)
+                    tf_token_id=token2,  # Model 2 token (reusing field name)
+                    token_match=(token1 == token2),
+                    avg_logprob_diff=avg_diff,
+                    max_logprob_diff=max_diff,
+                    top_k_diffs=diffs,
+                )
+            )
 
     return comparisons
 
@@ -1315,11 +1350,11 @@ def print_stats_report(comparisons: list[TokenComparison], title: str = "Statist
 
     # Overall stats
     all_avg_diffs = np.array([c.avg_logprob_diff for c in comparisons])
-    all_max_diffs = np.array([c.max_logprob_diff for c in comparisons])
+    np.array([c.max_logprob_diff for c in comparisons])
     all_matches = np.array([c.token_match for c in comparisons])
 
     n_total = len(comparisons)
-    n_prompts = len(set(c.prompt_idx for c in comparisons))
+    n_prompts = len({c.prompt_idx for c in comparisons})
     n_positions = len(by_position)
 
     print(f"\nTotal comparisons: {n_total} ({n_prompts} prompts x {n_positions} positions)")
@@ -1347,9 +1382,11 @@ def print_stats_report(comparisons: list[TokenComparison], title: str = "Statist
         position_stats[pos] = stats
 
         pos_label = "prefill" if pos == 0 else f"decode{pos}"
-        print(f"{pos_label:>4} {stats['n']:>6} {100*stats['match_rate']:>7.1f}% "
-              f"{stats['avg_diff_mean']:>10.4f} {stats['avg_diff_p50']:>8.4f} "
-              f"{stats['avg_diff_p95']:>8.4f} {stats['avg_diff_max']:>8.4f}")
+        print(
+            f"{pos_label:>4} {stats['n']:>6} {100*stats['match_rate']:>7.1f}% "
+            f"{stats['avg_diff_mean']:>10.4f} {stats['avg_diff_p50']:>8.4f} "
+            f"{stats['avg_diff_p95']:>8.4f} {stats['avg_diff_max']:>8.4f}"
+        )
 
     # Overall distribution
     print(f"\n--- Overall Avg Logprob Diff Distribution ---")
@@ -1462,13 +1499,17 @@ def cmd_stats(args):
 
         print(f"\n{'#'*70}")
         print(f"# Statistical Comparison: {model_name}")
-        print(f"# Prompts: {args.num_prompts}, prompt_length: {args.prompt_length}, decode_length: {args.decode_length}")
+        print(
+            f"# Prompts: {args.num_prompts}, prompt_length: {args.prompt_length}, decode_length: {args.decode_length}"
+        )
         print(f"# Mode: {mode_label}, TF kernels: {args.tf_kernels}")
         if placements:
-            print(f"# Placements: {len(placements)} ({', '.join(placements[:3])}{'...' if len(placements) > 3 else ''})")
+            print(
+                f"# Placements: {len(placements)} ({', '.join(placements[:3])}{'...' if len(placements) > 3 else ''})"
+            )
         print(f"{'#'*70}")
 
-        revision = getattr(args, 'revision', None)
+        revision = getattr(args, "revision", None)
 
         # Set Transformers kernel configuration
         set_transformers_kernels(model_path, args.tf_kernels)
@@ -1492,24 +1533,26 @@ def cmd_stats(args):
 
             # Run vLLM inference
             vllm_tokens, vllm_logprobs = run_vllm_inference(
-                model_path, token_ids_list, args.decode_length,
-                args.batch_size, args.dtype, args.no_compile, revision, placement_str
+                model_path,
+                token_ids_list,
+                args.decode_length,
+                args.batch_size,
+                args.dtype,
+                args.no_compile,
+                revision,
+                placement_str,
             )
 
             # Run Transformers inference (with same placement if specified)
             tf_tokens, tf_logprobs = run_transformers_inference(
-                model_path, token_ids_list, args.decode_length,
-                args.batch_size, args.dtype, revision, placement_str
+                model_path, token_ids_list, args.decode_length, args.batch_size, args.dtype, revision, placement_str
             )
 
             # Compute comparisons
             comparisons = compute_comparisons(vllm_tokens, vllm_logprobs, tf_tokens, tf_logprobs)
 
             # Print statistics
-            stats = print_stats_report(
-                comparisons,
-                f"Results ({mode_label}, TF={args.tf_kernels})"
-            )
+            stats = print_stats_report(comparisons, f"Results ({mode_label}, TF={args.tf_kernels})")
 
             print(f"\n{'='*70}")
             print(f" SUMMARY: {model_name}")
@@ -1526,7 +1569,7 @@ def cmd_stats(args):
             print(f"  Avg diff (mean): {stats['avg_diff_mean']:.4f}")
             print(f"  Avg diff (p95):  {stats['avg_diff_p95']:.4f}")
             print(f"  Avg diff (max):  {stats['avg_diff_max']:.4f}")
-            if stats['n_outliers'] > 0:
+            if stats["n_outliers"] > 0:
                 print(f"  WARNING: {stats['n_outliers']} outliers detected (avg diff > 1.0)")
             print()
             continue
@@ -1535,9 +1578,7 @@ def cmd_stats(args):
         print(f"\n--- Multi-placement sweep mode ({len(placements)} placements) ---")
 
         # Load vLLM model once
-        llm = load_vllm_model(
-            model_path, args.batch_size, args.dtype, args.no_compile, revision
-        )
+        llm = load_vllm_model(model_path, args.batch_size, args.dtype, args.no_compile, revision)
 
         # Get num_layers from vLLM model
         vllm_placements = llm.collective_rpc("get_layer_placements")
@@ -1617,7 +1658,7 @@ def cmd_compare_placement(args):
     decode_length = args.decode_length
     dtype = args.dtype
     no_compile = args.no_compile
-    revision = getattr(args, 'revision', None)
+    revision = getattr(args, "revision", None)
 
     standalone_name = Path(standalone_path).name
     supernet_name = Path(supernet_path).name
@@ -1691,8 +1732,10 @@ def cmd_compare_placement(args):
         # Compare standalone vs supernet (both Transformers)
         print(f"\n--- Comparing Standalone vs Supernet (Transformers) ---")
         comparisons = compute_same_framework_comparisons(
-            standalone_tf_tokens, standalone_tf_logprobs,
-            supernet_tf_tokens, supernet_tf_logprobs,
+            standalone_tf_tokens,
+            standalone_tf_logprobs,
+            supernet_tf_tokens,
+            supernet_tf_logprobs,
             is_vllm=False,
         )
         stats = print_stats_report(comparisons, "Transformers: Standalone vs Supernet")
@@ -1757,8 +1800,10 @@ def cmd_compare_placement(args):
             # Compare standalone vs supernet (both vLLM)
             print(f"\n--- Comparing Standalone vs Supernet (vLLM) ---")
             comparisons = compute_same_framework_comparisons(
-                standalone_vllm_tokens, standalone_vllm_logprobs,
-                supernet_vllm_tokens, supernet_vllm_logprobs,
+                standalone_vllm_tokens,
+                standalone_vllm_logprobs,
+                supernet_vllm_tokens,
+                supernet_vllm_logprobs,
                 is_vllm=True,
             )
             stats = print_stats_report(comparisons, "vLLM: Standalone vs Supernet")
@@ -1797,11 +1842,13 @@ def cmd_compare_placement(args):
 
 def cmd_logits(args):
     """Run logits comparison test."""
-    revision = getattr(args, 'revision', None)
-    debug_gdn = getattr(args, 'debug_gdn', False)
-    placement = getattr(args, 'placement', None)
+    revision = getattr(args, "revision", None)
+    debug_gdn = getattr(args, "debug_gdn", False)
+    placement = getattr(args, "placement", None)
     for model_path in args.model_paths:
-        compare_logits(model_path, args.prompt, args.max_tokens, args.dtype, args.no_compile, revision, debug_gdn, placement)
+        compare_logits(
+            model_path, args.prompt, args.max_tokens, args.dtype, args.no_compile, revision, debug_gdn, placement
+        )
 
 
 def cmd_all(args):
@@ -1853,7 +1900,9 @@ def main():
     p_compare.add_argument("--decode-lengths", default="1,5,10", help="Comma-separated decode lengths")
     p_compare.add_argument("--batch-sizes", default="1,2,4", help="Comma-separated batch sizes")
     p_compare.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
-    p_compare.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
+    p_compare.add_argument(
+        "--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)"
+    )
     p_compare.add_argument("--revision", default=None, help="Model revision")
     p_compare.add_argument("--placement", default=None, help=placement_help)
     p_compare.set_defaults(func=cmd_compare)
@@ -1867,16 +1916,27 @@ def main():
     p_stats.add_argument("--batch-size", type=int, default=1, help="Batch size for inference")
     p_stats.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
     p_stats.add_argument("--no-compile", action="store_true", help="Disable torch.compile (default: compile enabled)")
-    p_stats.add_argument("--tf-kernels", choices=["upstream", "vllm"], default="upstream",
-                        help="Transformers kernel config: upstream FLA or vLLM forks")
+    p_stats.add_argument(
+        "--tf-kernels",
+        choices=["upstream", "vllm"],
+        default="upstream",
+        help="Transformers kernel config: upstream FLA or vLLM forks",
+    )
     p_stats.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     p_stats.add_argument("--revision", default=None, help="Model revision")
     # Placement arguments - support single, multiple, and sweep modes
-    p_stats.add_argument("--placement", default=None, help=f"(Deprecated) Single placement - use --placements instead. {placement_help}")
-    p_stats.add_argument("--placements", nargs="+", default=None,
-                        help="Placement patterns to test (e.g., all-attention all-gdn every2nd-gdn)")
-    p_stats.add_argument("--placement-sweep", action="store_true",
-                        help=f"Test common placements: {', '.join(SWEEP_PLACEMENTS[:4])}...")
+    p_stats.add_argument(
+        "--placement", default=None, help=f"(Deprecated) Single placement - use --placements instead. {placement_help}"
+    )
+    p_stats.add_argument(
+        "--placements",
+        nargs="+",
+        default=None,
+        help="Placement patterns to test (e.g., all-attention all-gdn every2nd-gdn)",
+    )
+    p_stats.add_argument(
+        "--placement-sweep", action="store_true", help=f"Test common placements: {', '.join(SWEEP_PLACEMENTS[:4])}..."
+    )
     p_stats.set_defaults(func=cmd_stats)
 
     # Compare-placement: standalone vs supernet comparison
@@ -1889,28 +1949,25 @@ def main():
             "placement. If outputs differ significantly, placement switching is broken."
         ),
     )
-    p_compare_placement.add_argument("--standalone", required=True,
-                                     help="Path to standalone model (e.g., /tmp/apriel2-0.5b-every2nd-gdn)")
-    p_compare_placement.add_argument("--supernet", required=True,
-                                     help="Path to supernet model (e.g., /tmp/apriel2-0.5b-dev)")
-    p_compare_placement.add_argument("--placement", required=True,
-                                     help=f"Placement to apply to supernet. {placement_help}")
-    p_compare_placement.add_argument("--framework", choices=["transformers", "vllm", "both"],
-                                     default="both", help="Framework(s) to test")
-    p_compare_placement.add_argument("--num-prompts", type=int, default=32,
-                                     help="Number of prompts to test")
-    p_compare_placement.add_argument("--prompt-length", type=int, default=256,
-                                     help="Number of tokens to prefill")
-    p_compare_placement.add_argument("--decode-length", type=int, default=10,
-                                     help="Number of tokens to decode")
-    p_compare_placement.add_argument("--batch-size", type=int, default=1,
-                                     help="Batch size for vLLM inference")
-    p_compare_placement.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16",
-                                     help="Data type")
-    p_compare_placement.add_argument("--no-compile", action="store_true",
-                                     help="Disable torch.compile for vLLM")
-    p_compare_placement.add_argument("--seed", type=int, default=42,
-                                     help="Random seed for reproducibility")
+    p_compare_placement.add_argument(
+        "--standalone", required=True, help="Path to standalone model (e.g., /tmp/apriel2-0.5b-every2nd-gdn)"
+    )
+    p_compare_placement.add_argument(
+        "--supernet", required=True, help="Path to supernet model (e.g., /tmp/apriel2-0.5b-dev)"
+    )
+    p_compare_placement.add_argument(
+        "--placement", required=True, help=f"Placement to apply to supernet. {placement_help}"
+    )
+    p_compare_placement.add_argument(
+        "--framework", choices=["transformers", "vllm", "both"], default="both", help="Framework(s) to test"
+    )
+    p_compare_placement.add_argument("--num-prompts", type=int, default=32, help="Number of prompts to test")
+    p_compare_placement.add_argument("--prompt-length", type=int, default=256, help="Number of tokens to prefill")
+    p_compare_placement.add_argument("--decode-length", type=int, default=10, help="Number of tokens to decode")
+    p_compare_placement.add_argument("--batch-size", type=int, default=1, help="Batch size for vLLM inference")
+    p_compare_placement.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16", help="Data type")
+    p_compare_placement.add_argument("--no-compile", action="store_true", help="Disable torch.compile for vLLM")
+    p_compare_placement.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     p_compare_placement.add_argument("--revision", default=None, help="Model revision")
     p_compare_placement.set_defaults(func=cmd_compare_placement)
 

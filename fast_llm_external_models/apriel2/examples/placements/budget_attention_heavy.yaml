@@ -1,0 +1,20 @@
+# Placement config: attention-heavy budget
+#
+# Uses mostly full attention with a few efficient layers (gdn) in the middle.
+# For layer placement studies: high-quality, moderate compute budget.
+#
+# Usage:
+#   python thin_supernet.py ~/.cache/huggingface/apriel2-0.5b-dev output/ \
+#       -p examples/placements/budget_attention_heavy.yaml
+
+placements:
+  # 24 layers: attention for first 20, gdn for last 4 (efficient tail)
+  - [attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention,
+     gdn, gdn, gdn, gdn]
+  # Alternative: gdn in middle third
+  - [attention, attention, attention, attention, attention, attention, attention, attention,
+     gdn, gdn, gdn, gdn, gdn, gdn, gdn, gdn,
+     attention, attention, attention, attention, attention, attention, attention, attention]
