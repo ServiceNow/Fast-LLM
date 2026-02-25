@@ -11,9 +11,8 @@ from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
-from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalBatchConfig, MultiModalModelConfig
+from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -86,7 +85,7 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
     _config: ConfigType
 
     def preprocess_meta(
-        self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
+        self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
         preprocessed_meta = []
         for tokens, kwargs in super().preprocess_meta(batch_meta, phase):
@@ -222,4 +221,3 @@ class MultiModalModel[ConfigType: MultiModalModelConfig](GPTModel[ConfigType]):
 
 class MultiModalInferenceRunner(InferenceRunner):
     model_class: typing.ClassVar[type[MultiModalModel]] = MultiModalModel
-    batch_config_class: typing.ClassVar[type[MultiModalBatchConfig]] = MultiModalBatchConfig

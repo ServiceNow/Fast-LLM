@@ -15,21 +15,25 @@ from fast_llm.data.batch.config import PreprocessedBatch
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
-from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
+from fast_llm.engine.schedule.config import ScheduleConfig, StepType
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass()
+@dataclasses.dataclass(kw_only=True)
 class Step:
-    config: BatchConfig
     # The step type (forward or backward).
     type_: StepType
     # Index of the stage to be processed.
     stage: int
-    # Data index (combines micro-batch and micro-sequence)
-    data_index: int
+    # Micro-sequence index
+    micro_batch_split: int
+    # Micro-batch index
+    depth_first_micro_batch: int
+    breadth_first_micro_batch: int
+    # Combined index (micro-batch and micro-sequence)
+    index: int
     pipeline_rank: int = 0
     # Estimated relative duration of the step.
     duration: float = 1.0
@@ -73,27 +77,11 @@ class Step:
     meta_kwargs: dict | None = None
 
     @property
-    def micro_batch_split(self) -> int:
-        return self.data_index % self.config.micro_batch_splits
-
-    @property
-    def micro_batch(self) -> int:
-        return self.data_index // self.config.micro_batch_splits
-
-    @property
-    def depth_first_micro_batch(self) -> int:
-        return self.micro_batch % self.config.depth_first_micro_batches
-
-    @property
-    def breadth_first_micro_batch(self) -> int:
-        return self.micro_batch // self.config.depth_first_micro_batches
-
-    @property
     def map_index(self) -> tuple[StepType, int, int]:
         return (
             self.type_,
             self.stage,
-            self.data_index,
+            self.index,
         )
 
     def __repr__(self) -> str:
@@ -130,13 +118,12 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     ):
         super().__init__(config)
         self._multi_stage = multi_stage
-        self._batch_config = batch_meta.config.batch
         self._distributed_config = distributed_config
         self._num_stages = len(self._multi_stage.stages)
         self._phase = phase
         self._is_training = self._phase.is_training
 
-        if self._batch_config.num_inputs < self._distributed_config.pipeline_parallel:
+        if self._config.num_inputs < self._distributed_config.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
@@ -167,8 +154,8 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return self._phase
 
     @property
-    def batch_config(self) -> BatchConfig:
-        return self._batch_config
+    def samples_per_batch(self) -> int:
+        return self._config.sequential_micro_batches * self._distributed_config.batch_data_parallel
 
     def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
@@ -198,9 +185,9 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         for i, step in enumerate(self._steps):
             Assert.in_range(step.stage, 0, self._num_stages)
             Assert.in_range(
-                step.data_index,
+                step.index,
                 0,
-                self._batch_config.sequential_micro_batches * self._batch_config.micro_batch_splits,
+                self._config.num_inputs,
             )
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
@@ -216,7 +203,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         Assert.custom(all, self._device_steps)
         # Consistency checks
         step_map = self._step_map.copy()
-        for data_index in range(self._batch_config.num_inputs):
+        for data_index in range(self._config.num_inputs):
             for type_ in (StepType.forward, StepType.backward):
                 for stage in range(0 if type_ == StepType.forward else self._first_grad_stage, self._num_stages):
                     assert (
@@ -471,17 +458,6 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     step.next_step.meta_input = step.meta_output
                     step.next_step.meta_kwargs = step.meta_kwargs
 
-    def get_data_index(self, micro_batch: int, micro_batch_split: int) -> int:
-        return micro_batch * self._batch_config.micro_batch_splits + micro_batch_split
-
-    def get_data_index_split(
-        self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_batch_split: int
-    ) -> int:
-        return self.get_data_index(
-            breadth_first_micro_batch * self._batch_config.depth_first_micro_batches + depth_first_micro_batch,
-            micro_batch_split,
-        )
-
     def _create_steps(self) -> tuple[list[Step], int]:
         steps = []
         if self._is_training:
@@ -492,31 +468,39 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 first_grad_stage += 1
         else:
             first_grad_stage = self._num_stages
-        for depth_first_micro_batch in range(self._batch_config.depth_first_micro_batches):
+        for depth_first_micro_batch in range(self._config.depth_first_micro_batches):
             for stage in range(self._num_stages):
-                for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                    for micro_batch_split in range(self._batch_config.micro_batch_splits):
+                for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
+                    for micro_batch_split in range(self._config.micro_batch_splits):
+                        micro_batch = (
+                            breadth_first_micro_batch * self._config.depth_first_micro_batches
+                            + depth_first_micro_batch
+                        )
                         steps.append(
                             Step(
-                                config=self._batch_config,
                                 stage=stage,
-                                data_index=self.get_data_index_split(
-                                    breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
-                                ),
+                                index=micro_batch * self._config.micro_batch_splits + micro_batch_split,
+                                depth_first_micro_batch=depth_first_micro_batch,
+                                breadth_first_micro_batch=breadth_first_micro_batch,
+                                micro_batch_split=micro_batch_split,
                                 type_=StepType.forward,
                             )
                         )
             if self._is_training:
                 for stage in reversed(range(first_grad_stage, self._num_stages)):
-                    for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                        for micro_batch_split in reversed(range(self._batch_config.micro_batch_splits)):
+                    for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
+                        for micro_batch_split in reversed(range(self._config.micro_batch_splits)):
+                            micro_batch = (
+                                breadth_first_micro_batch * self._config.depth_first_micro_batches
+                                + depth_first_micro_batch
+                            )
                             steps.append(
                                 Step(
-                                    config=self._batch_config,
                                     stage=stage,
-                                    data_index=self.get_data_index_split(
-                                        breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
-                                    ),
+                                    index=micro_batch * self._config.micro_batch_splits + micro_batch_split,
+                                    depth_first_micro_batch=depth_first_micro_batch,
+                                    breadth_first_micro_batch=breadth_first_micro_batch,
+                                    micro_batch_split=micro_batch_split,
                                     type_=StepType.backward,
                                 )
                             )

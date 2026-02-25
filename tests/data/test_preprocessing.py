@@ -1,14 +1,11 @@
 import pytest
 import torch
 
-from fast_llm.config import NoAutoValidate
 from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.range import RangeDocument
 from fast_llm.data.document.token import TokenDocument
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 
@@ -38,12 +35,7 @@ def test_preprocessing(tokens, loss_masking_spans):
         )
         for tokens_, loss_masking_spans_ in zip(tokens, loss_masking_spans, strict=True)
     ]
-    with NoAutoValidate():
-        batch_config = GPTBatchConfig(sequence_length=sum(len(document) for document in documents) - 1)
-    batch_config.setup(DistributedConfig())
-    batch_config.validate()
-    config = LanguageModelBatchPreprocessingConfig(batch=batch_config)
-    preprocessed = LanguageModelPreprocessedBatch.from_documents(documents, config)
+    preprocessed = LanguageModelPreprocessedBatch.from_documents(documents, LanguageModelBatchPreprocessingConfig())
 
     Assert.eq(len(preprocessed.micro_batches), 1)
     micro_batch = preprocessed.micro_batches[0]

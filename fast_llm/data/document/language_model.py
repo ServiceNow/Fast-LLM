@@ -32,7 +32,11 @@ class LanguageModelBatch(LanguageModelDocument, Batch):
     chosen_spans: RangeBatch | None = None
     rejected_spans: RangeBatch | None = None
     image_patches: PatchBatch | None = None
-    num_tokens: int  # Number of tokens in the micro-batch excluding padding at the end.
+    num_tokens: int = None  # Number of tokens in the micro-batch excluding padding at the end.
+
+    def __post_init__(self):
+        if self.num_tokens is None:
+            self.num_tokens = len(self.tokens)
 
     @classmethod
     def from_documents(
@@ -62,7 +66,7 @@ class LanguageModelBatch(LanguageModelDocument, Batch):
 
     def crop(self, begin: int, end: int) -> typing.Self:
         return self.__class__(
-            tokens=self.tokens.crop(begin, end),
+            tokens=_crop_optional(self.tokens, begin, end),
             loss_masking_spans=_crop_optional(self.loss_masking_spans, begin, end),
             chosen_spans=_crop_optional(self.chosen_spans, begin, end),
             rejected_spans=_crop_optional(self.rejected_spans, begin, end),
@@ -70,15 +74,24 @@ class LanguageModelBatch(LanguageModelDocument, Batch):
             num_tokens=min(end, self.num_tokens) - begin,
         )
 
-    def to_device_(self, device: "torch.device | str"):
-        self.tokens.to_device_(device)
-        if self.image_patches is not None:
-            self.image_patches.to_device_(device)
+    def to_device(self, device: "torch.device | str"):
+        return self.__class__(
+            tokens=_to_device_optional(self.tokens, device),
+            loss_masking_spans=_to_device_optional(self.loss_masking_spans, device),
+            chosen_spans=_to_device_optional(self.chosen_spans, device),
+            rejected_spans=_to_device_optional(self.rejected_spans, device),
+            image_patches=_to_device_optional(self.image_patches, device),
+            num_tokens=self.num_tokens,
+        )
 
 
 def _merge_optional[T](fn: typing.Callable, args: typing.Iterable) -> T | None:
     return None if any(arg is None for arg in args) else fn(args)
 
 
-def _crop_optional[T: Document](sample: T, begin: int, end: int) -> T | None:
-    return None if sample is None else sample.crop(begin, end)
+def _crop_optional[T: Batch](batch: T, begin: int, end: int) -> T | None:
+    return None if batch is None else batch.crop(begin, end)
+
+
+def _to_device_optional[T: Batch](batch: T, device: "torch.device | str") -> T | None:
+    return None if batch is None else batch.to_device(device)

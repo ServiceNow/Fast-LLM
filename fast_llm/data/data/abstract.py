@@ -6,7 +6,6 @@ from fast_llm.config import Configurable
 from fast_llm.data.batch.config import BatchPreprocessingConfig, PreprocessedBatch
 from fast_llm.data.data.config import DataConfig
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.engine.schedule.config import BatchConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -34,13 +33,11 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         dataset_name: str,
         config: BatchPreprocessingConfig,
         num_samples: int,
-    ) -> None:
+    ) -> PreprocessedBatch:
         pass
 
-    @abc.abstractmethod
     def get_iterator(
         self,
-        batch_config: BatchConfig,
         dataset_name: str,
         *,
         consumed_samples: int,

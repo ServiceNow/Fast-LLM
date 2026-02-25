@@ -184,7 +184,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
         convolution_kwargs = (
-            {} if self._config.cross_document_attention else {"seq_idx": kwargs[MixerKwargs.seq_idx].unsqueeze(0)}
+            {}
+            if self._config.cross_document_attention
+            else {"seq_idx": kwargs[MixerKwargs.document_index_q].unsqueeze(0)}
         )
         if self._config.repeat_kv_before_conv:
             x = self.convolution(

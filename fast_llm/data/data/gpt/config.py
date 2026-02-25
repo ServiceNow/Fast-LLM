@@ -4,7 +4,7 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.config import SampledDatasetConfig
+from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfigBase
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -13,16 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 @config_class()
-class GPTDataConfig(DataConfig):
+class GPTDataConfig(DataConfig, SamplingConfigBase):
     """
-    Configuration for the dataset(s), split and sampling.
-    Currently hard-coded to a GPT dataset.
-    TODO: Extract generalizable content.
+    Configuration for the dataset(s) and its sampling.
     """
 
     _abstract = False
 
-    # TODO: Review field. Move closer to phase definition in training config?
     datasets: dict[str, SampledDatasetConfig["LanguageModelDocument"]] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
@@ -38,4 +35,9 @@ class GPTDataConfig(DataConfig):
         default=MultiprocessingContext.spawn,
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
+    )
+    seed: int = Field(
+        default=784569,
+        desc="Seed for random sampling.",
+        hint=FieldHint.feature,
     )

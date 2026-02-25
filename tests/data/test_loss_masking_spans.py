@@ -1,7 +1,6 @@
 import datasets
 import pytest
 
-from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
@@ -57,7 +56,7 @@ def test_gpt_data_with_loss_masking_spans():
             hf_dataset[index]["text"],
             text_spans=[(begin, last + 1) for begin, last in hf_dataset[index]["loss_masking_spans"]],
         )
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
 
         # Compare tokens and token spans.
         Assert.all_equal(document.tokens.tokens, expected_tokens)
@@ -74,7 +73,7 @@ def test_gpt_data_with_loss_masking_spans():
     for index in DATASET_WITH_SPAN_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
         Assert.eq(hf_dataset[index]["loss_masking_spans"], HF_LOSS_MASKING_SPANS[index])
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_SPAN_SAMPLES[index])
         Assert.eq(document.loss_masking_spans.ranges, TOKEN_LOSS_MASKING_SPANS[index])
 
@@ -86,6 +85,6 @@ def test_gpt_data_with_missing_loss_masking_spans():
     dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
 
     for index in COMMON_DATASET_SAMPLES:
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
         Assert.none(document.loss_masking_spans)

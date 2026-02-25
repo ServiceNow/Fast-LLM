@@ -2,8 +2,7 @@ import enum
 import functools
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, test_field
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 
 class StepType(str, enum.Enum):
@@ -12,103 +11,25 @@ class StepType(str, enum.Enum):
 
 
 @config_class()
-class BatchConfig(Config):
-    micro_batch_size: int = Field(
-        default=None,
-        desc="Size of individual micro-batches, in samples. May be derived or constrained be other quantities.",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
+class ScheduleConfig(Config):
     depth_first_micro_batches: int = Field(
-        default=None,
+        default=1,
         desc="Size of individual micro-batches. May be derived or constrained be other quantities.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
     breadth_first_micro_batches: int = Field(
-        default=None,
+        default=1,
         desc="Size of individual micro-batches. May be derived or constrained be other quantities.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    sequential_micro_batches: int = Field(
-        default=None,
-        desc="Total number of sequential micro-batches. May be derived or constrained be other quantities (= depth-first * breadth-first).",
-        hint=FieldHint.core,
+    micro_batch_splits: int = Field(
+        default=1,
+        desc="Number of splits for each micro-batch.",
+        hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
-    batch_size: int = Field(
-        default=None,
-        desc="Global batch size, in samples. May be derived or constrained be other quantities (= micro-batch size * sequential micro-batches * batch-data-parallel).",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    distributed: DistributedConfig = Field(
-        init=False,
-        desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",
-        hint=FieldHint.setup,
-    )
-
-    def setup(self, distributed_config: DistributedConfig) -> None:
-        self.distributed = distributed_config
-
-    @functools.cached_property
-    def num_inputs(self) -> int:
-        return self.sequential_micro_batches * self.micro_batch_splits
-
-    @functools.cached_property
-    def micro_batch_splits(self) -> int:
-        return 1
-
-    def _validate(self) -> None:
-        # Use the distributed properties to determine the batch size and its breakdown.
-        # Requires post-processed distributed config args
-        if self.batch_size is None or self.micro_batch_size is None:
-            if self.depth_first_micro_batches is None:
-                self.depth_first_micro_batches = 1
-            if self.breadth_first_micro_batches is None:
-                self.breadth_first_micro_batches = 1
-            self.sequential_micro_batches = self.depth_first_micro_batches * self.breadth_first_micro_batches
-            if self.batch_size is None:
-                if self.micro_batch_size is None:
-                    self.micro_batch_size = 1
-                self.batch_size = (
-                    self.micro_batch_size * self.sequential_micro_batches * self.distributed.batch_data_parallel
-                )
-            elif self.micro_batch_size is None:
-                self.micro_batch_size = div(
-                    self.batch_size, self.sequential_micro_batches * self.distributed.batch_data_parallel
-                )
-        else:
-            self.sequential_micro_batches = div(
-                self.batch_size, self.micro_batch_size * self.distributed.batch_data_parallel
-            )
-            if self.depth_first_micro_batches is None:
-                if self.breadth_first_micro_batches is None:
-                    if self.distributed.pipeline_parallel > 1:
-                        self.depth_first_micro_batches = 1
-                        self.breadth_first_micro_batches = self.sequential_micro_batches
-                    else:
-                        self.depth_first_micro_batches = self.sequential_micro_batches
-                        self.breadth_first_micro_batches = 1
-                else:
-                    self.depth_first_micro_batches = div(
-                        self.sequential_micro_batches, self.breadth_first_micro_batches
-                    )
-            elif self.breadth_first_micro_batches is None:
-                self.breadth_first_micro_batches = div(self.sequential_micro_batches, self.depth_first_micro_batches)
-            else:
-                Assert.eq(
-                    self.sequential_micro_batches, self.breadth_first_micro_batches * self.depth_first_micro_batches
-                )
-
-        if self.distributed.pipeline_parallel > 1 and self.depth_first_micro_batches > 1:
-            raise NotImplementedError("Depth-first pipeline parallelism not yet implemented")
-        super()._validate()
-
-
-@config_class()
-class ScheduleConfig(Config):
     pipeline_overlap: bool = Field(
         default=True, desc="Overlap the pipeline-parallel network communication.", hint=FieldHint.testing
     )
@@ -158,6 +79,14 @@ class ScheduleConfig(Config):
         desc="Skip the weight update during training steps. Still runs the forward and backward passes.",
         hint=FieldHint.testing,
     )
+
+    @functools.cached_property
+    def sequential_micro_batches(self) -> int:
+        return self.breadth_first_micro_batches * self.depth_first_micro_batches
+
+    @functools.cached_property
+    def num_inputs(self) -> int:
+        return self.sequential_micro_batches * self.micro_batch_splits
 
 
 class StreamType(str, enum.Enum):

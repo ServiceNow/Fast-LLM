@@ -12,14 +12,12 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.data_loader import SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SamplingParameters
-from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.config import SamplingConfigBase
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -52,7 +50,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         dataset_name: str,
         config: LanguageModelBatchPreprocessingConfig,
         num_samples: int,
-    ) -> None:
+    ) -> LanguageModelPreprocessedBatch:
         assert self._is_setup
         Assert.gt(num_samples, 0)
         if dataset_name not in self._config.datasets:
@@ -66,29 +64,28 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             # TODO: Avoid this
             warnings.warn(f"The index cache will be saved in the dataset directory.")
 
-        sampling_parameters = SamplingParameters(
-            sequence_length=config.batch.sequence_length,
-            num_samples=num_samples,
-            truncate_documents=config.batch.truncate_documents,
-            extra_tokens=config.predicted_tokens,
+        # First create a `SamplingConfigBase` to remove unnecessary entries.
+        sampling_base = SamplingConfigBase.from_dict(self._config, strict=False)
+        sampling = GPTSamplingConfig.from_dict(
+            sampling_base,
+            {
+                "predicted_tokens": config.predicted_tokens,
+                "cache_directory": self._cache_directory,
+                "dataset_name": dataset_name,
+                "preprocessing": config,
+                "world_size": self._distributed_config.world_size,
+                "rank": self._distributed_config.rank,
+            },
         )
 
-        sampling = GPTSamplingData(
-            config=self._config.sampling,
-            parameters=sampling_parameters,
-            # Conversion needed to avoid pickling issues.
-            preprocessing=LanguageModelPreprocessingConfig.from_dict(config, {"type": "language_model"}, strict=False),
-            cache_directory=self._cache_directory,
-            distributed_config=self._distributed_config,
-            dataset_name=dataset_name,
-        )
         self._preprocessing[dataset_name] = config
-        dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
+        dataset = self._config.datasets[dataset_name].build_and_sample(sampling, num_samples, self._config.seed)
         self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+
+        return config.get_batch_meta(self._config.micro_batch_size)
 
     def get_iterator(
         self,
-        batch_config: GPTBatchConfig,
         dataset_name: str,
         *,
         consumed_samples: int,
@@ -112,7 +109,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,
-                    micro_batch_size=self._preprocessing[dataset_name].batch.micro_batch_size,
+                    micro_batch_size=1,
                     data_rank=self._distributed_config.batch_data_rank,
                     data_parallel=self._distributed_config.batch_data_parallel,
                 ),
@@ -131,7 +128,10 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         preprocess: bool = True,
     ) -> LanguageModelPreprocessedBatch | LanguageModelBatch:
         documents = [document for documents_ in documents for document in documents_]
+        pad_to_size = self._config.micro_batch_size + self._preprocessing[dataset_name].predicted_tokens
         if preprocess:
-            return LanguageModelPreprocessedBatch.from_documents(documents, self._preprocessing[dataset_name])
+            return LanguageModelPreprocessedBatch.from_documents(
+                documents, self._preprocessing[dataset_name], pad_to_size
+            )
         else:
-            return LanguageModelBatch.from_documents(documents, self._preprocessing[dataset_name].total_length)
+            return LanguageModelBatch.from_documents(documents, pad_to_size)

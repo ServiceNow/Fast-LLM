@@ -79,12 +79,14 @@ def test_blending(probs):
     num_samples = 100
     from fast_llm.data.dataset.blended import BlendedDataset
 
+    sampling, _, _ = get_sampling_data(num_samples)
     dataset = BlendedDataset(
         "dataset",
         # Use a list of integers as a mock dataset, encoding both indexes in the sample.
         [list(range(i * num_samples, (i + 1) * num_samples)) for i, _ in enumerate(probs)],  # noqa
         probs,
-        get_sampling_data(num_samples),
+        sampling,
+        num_samples,
     )
     probs = normalize_probabilities(probs)
     samples = np.array([dataset[i] for i in range(num_samples)])
@@ -115,7 +117,7 @@ def test_gpt_blended():
             "weights": [0.75, 0.25],
         },
         BlendedDatasetConfig[LanguageModelDocument],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
     # Test in data.
@@ -143,7 +145,7 @@ def test_gpt_blended_mixed():
             "weights": [0.6, 0.4],
         },
         BlendedDatasetConfig[LanguageModelDocument],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
     # Test in data.

@@ -10,7 +10,6 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.functional.triton.pointwise import triton_fill
 from fast_llm.utils import Assert
 
@@ -82,7 +81,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         return model
 
     @abc.abstractmethod
-    def get_preprocessing_config(self, batch: BatchConfig, phase: PhaseType) -> BatchPreprocessingConfig:
+    def get_preprocessing_config(self, phase: PhaseType, micro_batch_splits: int = 1) -> BatchPreprocessingConfig:
         pass
 
     def initialize_weights(self, timeout: float | None = None) -> None:

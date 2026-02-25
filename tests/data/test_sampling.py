@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.config import SamplingParameters, ShufflingType
+from fast_llm.data.dataset.config import ShufflingType
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
@@ -41,7 +41,7 @@ def test_gpt_sampled():
     _, config, _, preprocessing = get_common_test_dataset()
     sampled = get_dataset_config(
         dataset_config := config, GPTDatasetFromFileConfig[LanguageModelDocument]
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
 
     # Test in data.
@@ -59,9 +59,7 @@ class SimpleGPTIndexedDataset[DocumentType: LanguageModelDocument](IndexedDatase
     def __init__(self, samples):
         self._samples = samples
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> DocumentType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         if end is None:
             end = len(self._samples[index])
         return LanguageModelDocument(
@@ -102,7 +100,7 @@ def test_gpt_sample(seed, shuffle):
     # Loop instead of parametrizing for the check below.
     for num_samples in (20, 10, 6, 5, 2, 1):
         sampled = TEST_DATASET.sample(
-            get_sampling_data(
+            *get_sampling_data(
                 num_samples,
                 sequence_length=5,
                 seed=seed,
@@ -168,8 +166,8 @@ def test_gpt_sample_padding():
         )
         if total_tokens == 0:
             with pytest.raises(RuntimeError):
-                dataset.sample(sampling)
+                dataset.sample(*sampling)
         else:
-            sampled = dataset.sample(sampling)
+            sampled = dataset.sample(*sampling)
             for idx in range(len(expected_samples)):
                 Assert.all_equal(sampled[idx].tokens.tokens, np.array(expected_samples[idx]))

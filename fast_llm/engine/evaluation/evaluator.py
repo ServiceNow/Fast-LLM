@@ -6,7 +6,7 @@ import typing
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.batch.config import PreprocessedBatch
+from fast_llm.data.batch.config import BatchPreprocessingConfig, PreprocessedBatch
 from fast_llm.data.data.abstract import Data
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.run import get_run, log_main_rank, run_exists
@@ -14,7 +14,6 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.config import EvaluatorConfig, LossEvaluatorConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.logging import format_metrics
@@ -39,14 +38,12 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
 
     def __init__(
         self,
+        config: ConfigType,
         name: str,
-        eval_config: LossEvaluatorConfig,
-        batch_config: BatchConfig,
         num_workers: int,
     ):
-        super().__init__(eval_config)
+        super().__init__(config)
         self._name = name
-        self._batch_config = batch_config
         self._num_workers = num_workers
 
     @abc.abstractmethod
@@ -76,7 +73,8 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
     _data_iterator: typing.Iterator[PreprocessedBatch] | None = None
     _loss_definitions: list[LossDef]
     _schedule: Schedule
-    _data: Data
+    _preprocessing_config: BatchPreprocessingConfig
+    _batch_size: int
 
     def setup(
         self,
@@ -87,15 +85,17 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
     ) -> None:
         super().setup(multi_stage, runner, data, run_count)
 
-        preprocessing_config = self._multi_stage.get_preprocessing_config(self._batch_config, PhaseType.validation)
+        preprocessing_config = self._multi_stage.get_preprocessing_config(
+            PhaseType.validation, runner.config.micro_batch_splits
+        )
         self._data.sample_dataset(
-            self._name, preprocessing_config, run_count * self._config.iterations * self._batch_config.batch_size
+            self._name, preprocessing_config, run_count * self._config.iterations * self._schedule.samples_per_batch
         )
         # Setup the schedule
         self._schedule = Schedule(
             config=runner.config,
             multi_stage=self._multi_stage,
-            batch_meta=preprocessing_config.get_batch_meta(),
+            batch_meta=preprocessing_config.get_batch_meta(self._data.config.micro_batch_size),
             distributed_config=self._distributed.config,
             phase=PhaseType.validation,
         )
@@ -111,10 +111,9 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         completed_evaluation_steps = max(0, run_index - 1) * self.config.iterations
 
         if self._data_iterator is None:
-            self._data.get_iterator(
-                self._batch_config,
+            self._data_iterator = self._data.get_iterator(
                 self._name,
-                consumed_samples=completed_evaluation_steps * self._batch_config.batch_size,
+                consumed_samples=completed_evaluation_steps * self._schedule.samples_per_batch,
                 num_workers=self._num_workers,
             )
         safe_barrier(self._distributed.world_group, f"{PhaseType.validation} {self._name} begin")
@@ -140,14 +139,12 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
 
         metrics.update(
             {
-                "batch_size": self._batch_config.batch_size,
+                "batch_size": self._batch_size,
                 **{name: (value / self._config.iterations) for name, value in total_losses.items()},
                 "step_time_ms": time_per_iteration * 1000,
                 **self._schedule.get_compute_metrics(time_per_iteration),
                 "tokens_per_sec_per_gpu": (
-                    (self._batch_config.sequence_length * self._batch_config.batch_size)
-                    / self._distributed.config.world_size
-                    / time_per_iteration
+                    self._batch_size / self._distributed.config.world_size / time_per_iteration
                 ),
                 **get_and_reset_memory_usage_mib(),
             }
@@ -163,3 +160,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
                 )
             )
         )
+
+    @property
+    def _batch_size(self) -> int:
+        return self._schedule.samples_per_batch * self._data.config.micro_batch_size

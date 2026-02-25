@@ -36,9 +36,6 @@ from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for 
     EvaluatorsConfig,
 )
 
-if typing.TYPE_CHECKING:
-    import transformers.models.auto.auto_factory
-
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
@@ -96,7 +93,7 @@ class ModelTestingConfig:
     get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
         get_model_test_dataset
     )
-    auto_model_class: type["transformers.models.auto.auto_factory._BaseAutoModelClass"] = (
+    auto_model_class: type[transformers.models.auto.auto_factory._BaseAutoModelClass] = (
         transformers.AutoModelForCausalLM
     )
     requires_cuda: bool = False
@@ -267,8 +264,10 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
                 "use_cuda": torch.cuda.is_available(),
             },
         },
-        "batch": {"batch_size": 8, "sequence_length": 512},
-        "data": {"sampling": {"gpu": torch.cuda.is_available()}},
+        "data": {
+            "micro_batch_size": 512,
+            "gpu": torch.cuda.is_available(),
+        },
         "optimizer": {"learning_rate": {"base": 0.0001}},
     },
     megatron_args=[

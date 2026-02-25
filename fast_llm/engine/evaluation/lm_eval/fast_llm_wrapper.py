@@ -16,7 +16,6 @@ from fast_llm.core.distributed import gather_object, safe_barrier, scatter_objec
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfacePreTrainedModel
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         add_bos_token: bool | None = False,
         prefix_token_id: int | None = None,
         max_length: int | None = None,
-        batch_config: BatchConfig | None = None,
         communication_timeout_sec: float = 600.0,
     ):
         super().__init__()
@@ -86,9 +84,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self._batch_sizes = {}  # Not used dynamically by lm_eval
 
         # NOTE: We can not take batch configuration from inference runner as it has a dummy batch config
-        self._batch_size_per_gpu = batch_config.micro_batch_size if batch_config else 1
+        self._batch_size_per_gpu = 1
 
-        self._batch_size = self._batch_size_per_gpu * self._distributed.config.batch_data_parallel
+        self._batch_size = self._distributed.config.batch_data_parallel
         self._max_batch_size = self._batch_size
 
     @property
@@ -123,10 +121,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if self._tokenizer.model_max_length == 1000000000000000019884624838656:
                 return self._DEFAULT_MAX_LENGTH
             return self._tokenizer.model_max_length
-
-        # finally try to get sequence length from batch config
-        if hasattr(self._model._inference_runner._batch_config, "sequence_length"):
-            return self._model._inference_runner._batch_config.sequence_length
 
         return self._DEFAULT_MAX_LENGTH
 

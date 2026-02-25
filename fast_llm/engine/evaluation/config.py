@@ -1,29 +1,17 @@
-import abc
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.engine.schedule.config import BatchConfig
+from fast_llm.engine.config_utils.interval import IntervalConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLmEval, LossEvaluator
-
-
-@config_class()
-class EvaluatorConfigBase(Config):
-    @abc.abstractmethod
-    def get_evaluator(
-        self,
-        name: str,
-        batch_config: BatchConfig,
-        num_workers: int,
-    ) -> "Evaluator":
-        pass
+    from fast_llm.engine.evaluation.evaluator import Evaluator, LossEvaluator
+    from fast_llm.engine.evaluation.lm_eval.evaluator import LmEvalEvaluator
 
 
 @config_class(registry=True)
-class EvaluatorConfig(EvaluatorConfigBase):
+class EvaluatorConfig(IntervalConfig):
     _abstract: typing.ClassVar[bool] = True
 
     @classmethod
@@ -32,6 +20,13 @@ class EvaluatorConfig(EvaluatorConfigBase):
             # Default subclass.
             return LossEvaluatorConfig._from_dict(default, strict)
         return super()._from_dict(default, strict=strict)
+
+    def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
+        # Number of completed evaluation runs
+        return (self.get_count(training_iterations) + extra_evaluations) if self.enabled() else 0
+
+    def get_evaluator(self, name: str, num_workers: int) -> "Evaluator":
+        raise NotImplementedError()
 
 
 @config_class(dynamic_type={EvaluatorConfig: "loss"})
@@ -45,15 +40,10 @@ class LossEvaluatorConfig(EvaluatorConfig):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
-    def get_evaluator(
-        self,
-        name: str,
-        batch_config: BatchConfig,
-        num_workers: int,
-    ) -> "LossEvaluator":
+    def get_evaluator(self, name: str, num_workers: int) -> "LossEvaluator":
         from fast_llm.engine.evaluation.evaluator import LossEvaluator
 
-        return LossEvaluator(name, self, batch_config, num_workers)
+        return LossEvaluator(self, name, num_workers)
 
 
 @config_class(dynamic_type={EvaluatorConfig: "lm_eval"})
@@ -105,12 +95,7 @@ class LmEvalEvaluatorConfig(EvaluatorConfig):
         "ranks may have no data or post-processing can be slow, exceeding the default 60s timeout.",
     )
 
-    def get_evaluator(
-        self,
-        name: str,
-        batch_config: BatchConfig,
-        num_workers: int,
-    ) -> "EvaluatorLmEval":
+    def get_evaluator(self, name: str, num_workers: int) -> "LmEvalEvaluator":
         from fast_llm.engine.evaluation.lm_eval.evaluator import LmEvalEvaluator
 
-        return LmEvalEvaluator(name, self, batch_config, num_workers)
+        return LmEvalEvaluator(self, name, num_workers)

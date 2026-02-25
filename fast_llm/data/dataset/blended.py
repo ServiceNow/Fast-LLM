@@ -3,14 +3,16 @@ import logging
 import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SamplingData
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.data.document.abstract import Document
 from fast_llm.utils import Assert, normalize_probabilities
 
 logger = logging.getLogger(__name__)
 
 
-class BlendedDataset[DocumentType: Document](SampledDataset[DocumentType]):
+class BlendedDataset[
+    DocumentType: Document,
+](SampledDataset[DocumentType]):
     """
     A blended sampling of multiple sampled datasets, where each dataset is sampled with the provided probability.
     The sampling order of each dataset is respected, but there is no strict guarantee
@@ -23,14 +25,16 @@ class BlendedDataset[DocumentType: Document](SampledDataset[DocumentType]):
         name: str,
         datasets: list[SampledDataset[DocumentType]],
         weights: list[float],
-        sampling_config: SamplingData,
+        config: SamplingConfig,
+        num_samples: int,
     ):
         self._name = name
         assert len(datasets) > 0
         Assert.eq(len(datasets), len(weights))
         self._datasets = datasets
         self._weights = torch.from_numpy(normalize_probabilities(weights, return_array=True))
-        self._num_samples = sampling_config.parameters.num_samples
+        self._config = config
+        self._num_samples = num_samples
 
     def __len__(self) -> int:
         return self._num_samples

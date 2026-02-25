@@ -38,8 +38,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     _run: Run
     _wandb: Wandb
     _optimizer: Optimizer | None
-
     _completed_steps: int
+    _schedule: Schedule
 
     def __init__(self, config: TrainerConfig):
         super().__init__(config)
@@ -67,21 +67,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         )
         self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
 
-        if self._do_train:
-            self._training_samples = self._config.batch.batch_size * self._config.training.train_iters
-            self._preprocessing_config = self._multi_stage.get_preprocessing_config(
-                self._config.batch, PhaseType.training
-            )
-            self._schedule = Schedule(
-                config=self._config.schedule,
-                multi_stage=self._multi_stage,
-                batch_meta=self._preprocessing_config.get_batch_meta(),
-                distributed_config=self._config.model.distributed,
-                phase=PhaseType.training,
-            )
-
         self._evaluators = {
-            name: config.get_evaluator(name, self._config.batch, self._config.training.num_workers)
+            name: config.get_evaluator(name, self._config.training.num_workers)
             for name, config in self._config.training.evaluators.items()
             if config.enabled()
         }
@@ -121,13 +108,24 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         log_main_rank("Preparing datasets...")
 
         self._data.setup(None if run.experiment_directory is None else run.experiment_directory / "dataset_cache")
-        self._data.sample_dataset(
-            PhaseType.training,
-            self._preprocessing_config,
-            self._training_samples,
-        )
+        if self._do_train:
+            preprocessing_config = self._multi_stage.get_preprocessing_config(
+                PhaseType.training, self._config.schedule.micro_batch_splits
+            )
+            self._schedule = Schedule(
+                config=self._config.schedule,
+                multi_stage=self._multi_stage,
+                batch_meta=preprocessing_config.get_batch_meta(self._data.config.micro_batch_size),
+                distributed_config=self._config.model.distributed,
+                phase=PhaseType.training,
+            )
+            self._data.sample_dataset(
+                PhaseType.training,
+                preprocessing_config,
+                self._config.training.train_iters * self._schedule.samples_per_batch,
+            )
 
-        for evaluator in self._evaluators.values():
+        for name, evaluator in self._evaluators.items():
             run_count = self._config.training.evaluators[name].get_count(self._config.training.train_iters)
             # There may be an extra evaluation after the last training step.
             if not self._config.training.evaluators[name].enabled(self._config.training.train_iters):
@@ -148,20 +146,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         return {
             "total_steps": self._config.training.train_iters,
             "completed_steps": self._completed_steps,
-            "consumed_samples": self._consumed_samples,
-            "consumed_tokens": self._consumed_tokens,
+            "consumed_tokens": self._completed_steps * self._batch_size,
             "percent_done": 100 * self._completed_steps / self._config.training.train_iters,
         }
 
     @property
-    def _consumed_samples(self) -> int:
-        assert self._is_setup
-        return self._completed_steps * self._config.batch.batch_size
-
-    @property
-    def _consumed_tokens(self) -> int:
-        assert self._is_setup
-        return self._consumed_samples * self._config.batch.sequence_length
+    def _batch_size(self) -> int:
+        return self._schedule.samples_per_batch * self._data.config.micro_batch_size
 
     def run(self) -> None:
         assert self._is_setup
@@ -254,7 +245,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         )
                         metrics_key = PhaseType.training.value
                         metrics[metrics_key] = {
-                            "batch_size": self._config.batch.batch_size,
+                            "batch_size": self._batch_size,
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
@@ -268,9 +259,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             "nan_iters": nan_iters,
                             **self._schedule.get_compute_metrics(time_per_iteration),
                             "tokens_per_sec_per_gpu": (
-                                (self._config.batch.sequence_length * self._config.batch.batch_size)
-                                / self._config.model.distributed.world_size
-                                / time_per_iteration
+                                self._batch_size / self._config.model.distributed.world_size / time_per_iteration
                             ),
                             "run": self._run.index,
                             **train_metrics,
@@ -322,9 +311,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         self, dataset_name, completed_steps: int = 0, prefetch_factor: int | None = None
     ) -> typing.Iterator[typing.Any]:
         return self._data.get_iterator(
-            self._config.batch,
             dataset_name,
-            consumed_samples=completed_steps * self._config.batch.batch_size,
+            consumed_samples=completed_steps * self._schedule.samples_per_batch,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
             timeout=self._config.training.timeout,
@@ -457,9 +445,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
     def _run_evaluators(self, done: bool, metrics: dict[str, typing.Any] | None = None) -> None:
         for name, evaluator in self._evaluators.items():
-            if self._config.training.evaluators[name].enabled(None if done else self._completed_steps):
+            config = self._config.training.evaluators[name]
+            if config.enabled(None if done else self._completed_steps):
                 evaluator.run(
-                    run_index=self._config.get_run_count(self._completed_steps - 1),
+                    run_index=config.get_run_count(self._completed_steps - 1),
                     metrics=(evaluator_metrics := self._get_completion_metrics()),
                 )
                 if metrics is not None:

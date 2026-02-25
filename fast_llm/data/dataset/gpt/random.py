@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.token import TokenDocument
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
@@ -10,10 +10,11 @@ from fast_llm.engine.config_utils.data_type import get_unsigned_integer_type
 
 
 class GPTRandomSampledDataset[DocumentType: LanguageModelDocument](SampledDataset[DocumentType]):
-    def __init__(self, sampling: GPTSamplingData, name: str):
+    def __init__(self, sampling: GPTSamplingConfig, name: str, num_samples: int, seed: int):
         self._name = name
-        self._seed = sampling.config.seed
-        self._parameters = sampling.parameters
+        self._seed = seed
+        self._config = sampling
+        self._num_samples = num_samples
 
         assert isinstance(sampling.preprocessing, LanguageModelPreprocessingConfig)
         self._vocab_size = sampling.preprocessing.vocab_size
@@ -21,7 +22,7 @@ class GPTRandomSampledDataset[DocumentType: LanguageModelDocument](SampledDatase
         self._dtype = get_unsigned_integer_type(self._vocab_size).torch
 
     def __len__(self) -> int:
-        return self._parameters.num_samples
+        return self._num_samples
 
     def __getitem__(self, index: int) -> list[DocumentType]:
         # TODO: Sample in self._dtype (breaking)
@@ -32,7 +33,7 @@ class GPTRandomSampledDataset[DocumentType: LanguageModelDocument](SampledDatase
                         np.random.RandomState(self._seed + 48576439 + 74593 * index).randint(
                             0,
                             self._vocab_size,
-                            size=(self._parameters.sequence_length + self._parameters.extra_tokens,),
+                            size=(self._config.sample_size,),
                         )
                     ).to(self._dtype),
                 )

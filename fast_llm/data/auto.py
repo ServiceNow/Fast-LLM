@@ -2,11 +2,11 @@
 Import these submodules to ensure classes are added to the dynamic class registry.
 """
 
+from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig  # isort: skip
 from fast_llm.data.dataset.config import (  # isort: skip
     BlendedDatasetConfig,
     ConcatenatedDatasetConfig,
     DatasetSliceConfig,
-    SampledDatasetUpdateConfig,
 )
 from fast_llm.data.dataset.memmap.config import (  # isort: skip
     LanguageModelReaderConfig,

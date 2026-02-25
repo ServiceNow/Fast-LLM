@@ -32,13 +32,6 @@ class DatasetDiscoveryConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
     )
 
-    def _validate(self) -> None:
-        super()._validate()
-        if not self.directory.exists():
-            raise ValueError(f"Directory does not exist: {self.directory}")
-        if not self.directory.is_dir():
-            raise ValueError(f"Path is not a directory: {self.directory}")
-
     @classmethod
     def get_dataset_preparator_class(cls) -> type["DatasetDiscoveryPreparator"]:
         from fast_llm.data.preparator.dataset_discovery.prepare import DatasetDiscoveryPreparator

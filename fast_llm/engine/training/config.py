@@ -22,60 +22,18 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointStateSaveConfigBase,
     DistributedCheckpointFormat,
 )
+from fast_llm.engine.config_utils.interval import IntervalConfig
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase
+from fast_llm.engine.evaluation.config import EvaluatorConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
-from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
+from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.evaluation.evaluator import Evaluator
     from fast_llm.engine.training.trainer import Trainer
-
-
-@config_class()
-class IntervalConfig(Config):
-    # Intervals are a common pattern, so we standardize them with this base class.
-    interval: int | None = Field(
-        default=None,
-        desc="The number of training iterations between each interval. Setting to None will disable.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
-    )
-    offset: int = Field(
-        default=0,
-        desc="Offset for the first interval.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-
-    def _validate(self) -> None:
-        if self.interval:
-            with self._set_implicit_default(None):
-                self.offset %= self.interval
-        super()._validate()
-
-    def enabled(self, iteration: int | None = None) -> bool:
-        return self.interval and (iteration is None or (iteration - self.offset) % self.interval == 0)
-
-    def is_sub_interval(self, other: "IntervalConfig") -> bool:
-        if not self.enabled():
-            return True
-        elif not other.enabled():
-            return False
-        return self.interval % other.interval == 0 and (other.offset % other.interval) == (
-            self.offset % other.interval
-        )
-
-    def assert_sub_interval(self, other: "IntervalConfig") -> None:
-        assert self.is_sub_interval(other), f"{self} is not a sub-interval of {other}"
-
-    def get_count(self, iteration) -> int:
-        # Number of times this interval was enabled after a given iteration.
-        return (iteration - self.offset) // self.interval + 1 if self.enabled() else 0
 
 
 def _validate_script(value: str | list[str]) -> list[str]:
@@ -150,23 +108,6 @@ class WandbConfig(Config):
     group_name: str = Field(default="default", desc="A group name for Wandb", hint=FieldHint.feature)
     project_name: str = Field(default="fast_llm", desc="A project name for Wandb", hint=FieldHint.feature)
     entity_name: str | None = Field(default=None, desc="An entity (user) name for Wandb", hint=FieldHint.feature)
-
-
-@config_class()
-class TrainingEvaluatorConfig(EvaluatorConfigBase, IntervalConfig):
-    evaluator: EvaluatorConfig = Field(desc="Evaluator to run")
-
-    def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
-        # Number of completed evaluation runs
-        return (self.get_count(training_iterations) + extra_evaluations) if self.enabled() else 0
-
-    def get_evaluator(
-        self,
-        name: str,
-        batch_config: BatchConfig,
-        num_workers: int,
-    ) -> "Evaluator":
-        return self.evaluator.get_evaluator(name, batch_config, num_workers)
 
 
 @config_class()
@@ -273,7 +214,7 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    evaluators: dict[str, TrainingEvaluatorConfig] = Field(
+    evaluators: dict[str, EvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
@@ -321,10 +262,6 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         desc="Configuration for the training phases and global properties.",
         hint=FieldHint.core,
     )
-    batch: BatchConfig = Field(
-        desc="Configuration for the training, validation and test batches.",
-        hint=FieldHint.core,
-    )
     schedule: ScheduleConfig = Field(desc="Configuration for the scheduling of each iteration.", hint=FieldHint.core)
     data: DataConfig = Field(
         desc="Configuration for the dataset and model-independent preprocessing.",
@@ -359,10 +296,6 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         for reference_model in self.reference_models.values():
             assert reference_model.model.distributed.reference_config is self.model.distributed
 
-    def _setup(self):
-        super()._setup()
-        self.batch.setup(self.model.distributed)
-
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
         raise NotImplementedError
@@ -382,6 +315,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         return runnable
 
     def _add_reference_distributed_to_pretrained(self, pretrained: PretrainedFastLLMModelConfig):
+        # TODO: ====== Convert to simple method? ======
         old_setup = pretrained._setup
 
         def new_setup():

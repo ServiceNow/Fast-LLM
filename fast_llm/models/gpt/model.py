@@ -11,11 +11,10 @@ from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.language_model import LanguageModel
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert
@@ -61,35 +60,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             )
 
         preprocessed = []
-        presents = None
         for micro_sequence_index, micro_sequence in enumerate(batch.micro_batches):
-            pasts = presents
-            presents = None if micro_sequence_index == len(batch) - 1 else []
             if device is not None:
                 micro_sequence.to_device_(device)
-            kwargs: dict[str, typing.Any] = {
-                LanguageModelKwargs.phase: phase,
-                AttentionKwargs.past_key_values: pasts,
-                AttentionKwargs.presents: presents,
-                LanguageModelKwargs.iteration: iteration,
-                LanguageModelKwargs.device: device,
-                LanguageModelKwargs.output_hidden_states: [],
-                LanguageModelKwargs.hidden_states: {},
-                LanguageModelKwargs.token_dim: micro_sequence.token_dim,
-                LanguageModelKwargs.hidden_token_dim: micro_sequence.hidden_token_dim,
-                LanguageModelKwargs.sequence_k_dim: micro_sequence.sequence_k_dim,
-                LanguageModelKwargs.num_tokens: micro_sequence.num_tokens,
-                LanguageModelKwargs.sequence_length: micro_sequence.sequence_length,
-                LanguageModelKwargs.sequence_lengths: micro_sequence.document_lengths,
-                LanguageModelKwargs.labels: micro_sequence.labels,
-                LanguageModelKwargs.loss_mask: micro_sequence.prediction_masks,
-                AttentionKwargs.cu_seqlens_q: micro_sequence.cumulative_lengths_q,
-                AttentionKwargs.cu_seqlens_k: micro_sequence.cumulative_lengths_k,
-                AttentionKwargs.max_seqlen_q: micro_sequence.max_length_q,
-                AttentionKwargs.max_seqlen_k: micro_sequence.max_length_k,
-                AttentionKwargs.seq_idx: micro_sequence.document_index,
-                LanguageModelKwargs.position_ids: micro_sequence.position_index,
-            }
+            kwargs = micro_sequence.to_kwargs()
+            kwargs[LanguageModelKwargs.iteration] = iteration
             if extra_kwargs is not None:
                 Assert.empty(kwargs.keys() & extra_kwargs.keys())
                 kwargs.update(extra_kwargs)
@@ -139,15 +114,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     def get_preprocessing_config(
-        self, batch: GPTBatchConfig, phase: PhaseType
+        self, phase: PhaseType, micro_batch_splits: int = 1
     ) -> LanguageModelBatchPreprocessingConfig:
         return LanguageModelBatchPreprocessingConfig(
             phase=phase,
-            batch=batch,
+            micro_batch_splits=micro_batch_splits,
+            distributed=self._config.distributed,
             **self._base_model.get_preprocessing_config(phase),
         )
 
 
 class GPTInferenceRunner(InferenceRunner):
     model_class: typing.ClassVar[type[GPTModel]] = GPTModel
-    batch_config_class: typing.ClassVar[type[GPTBatchConfig]] = GPTBatchConfig

@@ -3,7 +3,6 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
@@ -82,7 +81,7 @@ def test_gpt_data_with_spans():
             (token_length_cumsum[4], token_length_cumsum[5]),
         ]
 
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         token_spans = document.chosen_spans.ranges + document.rejected_spans.ranges
 
         # Compare tokens and token spans.
@@ -101,7 +100,7 @@ def test_gpt_data_with_spans():
             DATASET_WITH_PREFERENCE_SPAN_TEXT[index],
         )
 
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
         Assert.eq(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])
 

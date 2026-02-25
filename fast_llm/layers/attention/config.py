@@ -20,7 +20,8 @@ class MixerKwargs(BlockKwargs):
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
-    seq_idx = "seq_idx"
+    document_index_q = "document_index_q"
+    document_index_k = "document_index_k"
     position_ids = "position_ids"
 
 

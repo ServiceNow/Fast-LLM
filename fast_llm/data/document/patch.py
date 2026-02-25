@@ -60,7 +60,10 @@ class PatchBatch(PatchDocument, Batch):
             lengths=filter_lengths(self.lengths, patch_filter),
         )
 
-    def to_device_(self, device: "torch.device | str"):
-        self.patches = self.patches.to(device, non_blocking=True)
-        self.token_map = self.token_map.to(device, non_blocking=True)
-        self.positions = self.positions.to(device, non_blocking=True)
+    def to_device(self, device: "torch.device | str") -> typing.Self:
+        return self.__class__(
+            patches=self.patches.to(device, non_blocking=True),
+            token_map=self.token_map.to(device, non_blocking=True),
+            positions=self.positions.to(device, non_blocking=True),
+            lengths=self.lengths,
+        )

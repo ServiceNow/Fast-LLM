@@ -3,7 +3,7 @@ import json
 import datasets
 import pytest
 
-from fast_llm.data.dataset.config import BlendedDatasetConfig, SamplingParameters
+from fast_llm.data.dataset.config import BlendedDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
@@ -73,7 +73,7 @@ def test_common_prepared_dataset():
     # Check some numerical values.
     for index in COMMON_DATASET_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
 
 

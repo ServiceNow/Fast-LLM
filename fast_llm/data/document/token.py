@@ -1,4 +1,5 @@
 import dataclasses
+import functools
 import typing
 
 import torch
@@ -72,34 +73,46 @@ class TokenBatch(TokenDocument, Batch):
             current_document_begin=current_document_begin,
         )
 
-    def to_device_(self, device: "torch.device | str"):
-        # Also standardize the dtype while we're here.
-        self.tokens = self.tokens.to(device, dtype=torch.int64, non_blocking=True)
-
-    def get_cumulative_lengths(self, device: torch.device | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        cumulative_lengths_q = torch.from_numpy(padded_cumsum(self.lengths)).to(dtype=torch.int32, device=device)
-        cumulative_lengths_k = torch.cat(
-            [self.current_document_begin, cumulative_lengths_q[1:] + self.sequence_k_past]
+    def to_device(self, device: "torch.device | str") -> typing.Self:
+        return self.__class__(
+            tokens=self.tokens.to(device, non_blocking=True),
+            lengths=self.lengths,
+            sequence_k_past=self.sequence_k_past,
+            current_document_begin=self.current_document_begin,
         )
+
+    @functools.cached_property
+    def device(self) -> torch.device:
+        return self.tokens.device
+
+    @functools.cached_property
+    def cumulative_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
+        cumulative_lengths_q = torch.from_numpy(padded_cumsum(self.lengths)).to(dtype=torch.int32, device=self.device)
+        cumulative_lengths_k = cumulative_lengths_q + self.sequence_k_past
+        cumulative_lengths_k[0] = self.current_document_begin
         return cumulative_lengths_q, cumulative_lengths_k
 
-    def get_max_lengths(self, device: torch.device | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    @functools.cached_property
+    def max_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
         max_length_q = max(self.lengths)
-        max_length_k = max(self.max_length_q, self.sequence_k_past + self.lengths[0] - self.current_document_begin)
+        max_length_k = max(max_length_q, self.sequence_k_past + self.lengths[0] - self.current_document_begin)
         return (
-            torch.full((1,), max_length_q, dtype=torch.int32, device=device),
-            torch.full((1,), max_length_k, dtype=torch.int32, device=device),
+            torch.full((1,), max_length_q, dtype=torch.int32, device=self.device),
+            torch.full((1,), max_length_k, dtype=torch.int32, device=self.device),
         )
 
-    def get_document_index(self, device: torch.device | None = None) -> torch.Tensor:
-        return torch.cat(
-            [
-                torch.full((document_length,), i, dtype=torch.int32, device=device)
-                for i, document_length in enumerate(self.lengths)
-            ]
+    @functools.cached_property
+    def document_index(self) -> tuple[torch.Tensor, torch.Tensor]:
+        cumulative_lengths_q, cumulative_lengths_k = self.cumulative_lengths
+        return (
+            torch.searchsorted(cumulative_lengths_q, torch.arange(len(self.tokens)), side="right"),
+            torch.searchsorted(
+                cumulative_lengths_k, torch.arange(self.sequence_k_past + len(self.tokens)), side="right"
+            ),
         )
 
-    def get_position_index(self, device: torch.device | None = None) -> torch.Tensor:
+    @functools.cached_property
+    def position_index(self) -> torch.Tensor:
         return torch.cat(
-            [torch.arange(document_length, dtype=torch.int32, device=device) for document_length in self.lengths]
+            [torch.arange(document_length, dtype=torch.int32, device=self.device) for document_length in self.lengths]
         )

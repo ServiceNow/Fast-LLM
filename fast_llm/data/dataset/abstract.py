@@ -4,7 +4,7 @@ import typing
 from fast_llm.data.document.abstract import Document
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.config import SamplingData
+    from fast_llm.data.dataset.config import SamplingConfig
 
 
 class Dataset[DocumentType: Document](abc.ABC):
@@ -46,5 +46,5 @@ class SampledDataset[DocumentType: Document](Dataset[DocumentType]):
 class SamplableDataset[DocumentType: Document](Dataset[DocumentType]):
 
     @abc.abstractmethod
-    def sample(self, config: "SamplingData") -> SampledDataset[DocumentType]:
+    def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         pass

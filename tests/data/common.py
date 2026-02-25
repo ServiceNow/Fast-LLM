@@ -4,20 +4,17 @@ import typing
 import numpy as np
 import torch
 
-from fast_llm.config import NoAutoValidate
 from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SampledDatasetConfig, SamplingConfig, SamplingParameters, ShufflingType
-from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.config import SampledDatasetConfig, ShufflingType
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.dataset.sampled import SampledIndexedDataset
 from fast_llm.data.document.language_model import LanguageModelBatch
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
-from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
 
 
@@ -32,26 +29,23 @@ def get_sampling_data(
     shuffle: ShufflingType = ShufflingType.epoch,
     truncate_documents=True,
     preprocessing: LanguageModelPreprocessingConfig | None = None,
-) -> GPTSamplingData:
+) -> tuple[GPTSamplingConfig, int, int]:
     # Config with convenient defaults.
-    distributed = Distributed(DistributedConfig(use_cuda=torch.cuda.is_available()))
     if preprocessing is None:
         preprocessing = LanguageModelPreprocessingConfig()
-    return GPTSamplingData(
-        config=SamplingConfig(
-            seed=seed,
+    return (
+        GPTSamplingConfig(
             gpu=gpu,
             shuffle=shuffle,
-        ),
-        parameters=SamplingParameters(
-            num_samples=num_samples,
-            sequence_length=sequence_length,
+            micro_batch_size=sequence_length,
             truncate_documents=truncate_documents,
+            preprocessing=preprocessing,
+            cache_directory=cache_directory,
+            distributed_config=DistributedConfig(use_cuda=torch.cuda.is_available()),
+            dataset_name=phase.value,
         ),
-        preprocessing=preprocessing,
-        cache_directory=cache_directory,
-        distributed_config=DistributedConfig(use_cuda=torch.cuda.is_available()),
-        dataset_name=phase.value,
+        num_samples,
+        seed,
     )
 
 
@@ -80,29 +74,32 @@ def get_test_data_and_compare_samples(
     if isinstance(expected_samples, list):
         expected_samples = {PhaseType.training.value: expected_samples}
 
-    assert "sampling" not in config
-    config["sampling"] = SamplingConfig(seed=seed, gpu=gpu, shuffle=shuffle)
-    with NoAutoValidate():
-        batch_config = GPTBatchConfig(batch_size=1, sequence_length=sequence_length)
-    batch_config.setup(distributed_config)
-    batch_config.validate()
     preprocessing = LanguageModelBatchPreprocessingConfig.from_dict(
-        preprocessing, {"batch": batch_config, "type": None}
+        preprocessing, {"distributed": distributed_config, "type": None}
     )
-    data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
+    data = GPTData(
+        GPTDataConfig.from_dict(
+            config,
+            {
+                "seed": seed,
+                "gpu": gpu,
+                "shuffle": shuffle,
+                "micro_batch_size": sequence_length,
+            },
+        ),
+        distributed_config,
+    )
     data.setup(cache_directory)
     for dataset_name, num_samples in samples_per_dataset.items():
         data.sample_dataset(dataset_name, preprocessing, num_samples)
     tokens = {
-        phase: torch.stack(
+        dataset_name: torch.stack(
             [
                 batch.tokens.tokens
-                for batch in data.get_iterator(
-                    batch_config, phase, consumed_samples=0, num_workers=0, preprocess=False
-                )
+                for batch in data.get_iterator(dataset_name, consumed_samples=0, num_workers=0, preprocess=False)
             ]
         )
-        for phase, samples in samples_per_dataset.items()
+        for dataset_name, samples in samples_per_dataset.items()
     }
     for phase, expected_samples_ in expected_samples.items():
         Assert.all_equal(tokens[phase], expected_samples_)
@@ -143,8 +140,8 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
     """
     Compare `GPTSampledIndexedDataset` sampling against a more basic approach
     """
-    num_tokens = sampled._parameters.num_samples * sampled._parameters.sequence_length + 1
-    all_tokens = np.full(sampled._parameters.num_samples * sampled._parameters.sequence_length + 1, -1, dtype=np.int64)
+    num_tokens = sampled._num_samples * sampled._config.micro_batch_size + 1
+    all_tokens = np.full(sampled._num_samples * sampled._config.micro_batch_size + 1, -1, dtype=np.int64)
     unshuffled_epochs = div(sampled._unshuffled_documents, sampled._documents_per_epoch)
 
     document_sampling = np.tile(
@@ -168,8 +165,8 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
             break
 
     validate_samples = [
-        all_tokens[index * sampled._parameters.sequence_length : (index + 1) * sampled._parameters.sequence_length + 1]
-        for index in range(sampled._parameters.num_samples)
+        all_tokens[index * sampled._config.micro_batch_size : (index + 1) * sampled._config.micro_batch_size + 1]
+        for index in range(sampled._num_samples)
     ]
     token_ids = torch.stack(
         [LanguageModelBatch.from_documents(sampled[i]).tokens.tokens for i in range(len(sampled))]

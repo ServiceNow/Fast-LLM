@@ -286,11 +286,15 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         reduced_losses = {}
-        num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
         for name, losses in context.losses.items():
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_definitions[name].count
+                    loss_count = (
+                        self._loss_definitions[name].count
+                        * self._distributed_config.data_parallel
+                        * context.schedule.config.num_inputs
+                    )
+                    reduced_loss = torch.stack(losses).sum() / loss_count
                     if self._distributed.data_group:
                         all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
@@ -326,11 +330,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _preprocess_data(
         self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
     ) -> typing.Generator[None, None, None]:
-        batch_config = context.schedule.batch_config
         grad_output = (
-            self._optimizer.grad_scale / batch_config.num_inputs if context.schedule.phase.is_training else None
+            self._optimizer.grad_scale / self._config.num_inputs if context.schedule.phase.is_training else None
         )
-        for micro_batch in range(batch_config.sequential_micro_batches):
+        for micro_batch in range(self._config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:
                 micro_batch_data = self._multi_stage.base_model.preprocess_batch(
@@ -341,14 +344,15 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     extra_kwargs={
                         "grad_output": grad_output,
                         "micro_batch": micro_batch,
-                        "num_micro_batches": batch_config.sequential_micro_batches,
-                        "micro_batch_splits": batch_config.micro_batch_splits,
+                        "num_micro_batches": self._config.sequential_micro_batches,
+                        "micro_batch_splits": self._config.micro_batch_splits,
                     },
                     device=self._distributed.device,
                 )
+            Assert.eq(len(micro_batch_data), self._config.micro_batch_splits)
             for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
                 kwargs.update(micro_batch_split=micro_batch_split)
-                data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
+                data_index = micro_batch * self._config.micro_batch_splits + micro_batch_split
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_
                 if context.is_training and self._stages_owned[-1]:
@@ -407,7 +411,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _forward(self, context: BatchContext, step: Step) -> None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
-            context.batch[step.data_index],
+            context.batch[step.index],
             losses=context.losses,
             metrics=context.metrics,
         )
@@ -425,10 +429,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return input_grad
 
     def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
-        if step.data_index not in context.batch:
+        if step.index not in context.batch:
             start_time = time.perf_counter()
 
-            while step.data_index not in context.batch:
+            while step.index not in context.batch:
                 next(context.data_iterator)
 
             data_time = (time.perf_counter() - start_time) * 1000

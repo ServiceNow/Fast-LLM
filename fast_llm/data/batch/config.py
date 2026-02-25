@@ -4,15 +4,13 @@ import functools
 import logging
 import typing
 
-from fast_llm.config import Configurable, Field, FieldUpdate, config_class
+from fast_llm.config import Configurable, Field, config_class
 from fast_llm.data.document.abstract import Batch, Document
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
-from fast_llm.engine.schedule.config import BatchConfig
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -23,18 +21,17 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class BatchPreprocessingConfig(PreprocessingConfig):
-    batch: BatchConfig = Field()
+    distributed: DistributedConfig = Field()
     phase: PhaseType = Field(default=PhaseType.inference)
+    micro_batch_splits: int = Field(default=1)
 
-    def get_batch_meta(self) -> "PreprocessedBatch":
+    def get_batch_meta(self, micro_batch_size: int = 1) -> "PreprocessedBatch":
         raise NotImplementedError()
 
 
-@config_class()
+@config_class(dynamic_type={PreprocessingConfig: "language_model_batch"})
 class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, BatchPreprocessingConfig):
     _abstract = False
-    # TODO: Duplicate `use_loss_masking_spans`, `use_preference_spans`
-    batch: GPTBatchConfig = FieldUpdate()
     predicted_tokens: int = Field(default=1)
     return_cumulative_sequence_lengths: bool = Field(default=False)
     return_max_sequence_lengths: bool = Field(default=False)
@@ -47,7 +44,7 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, Ba
         Assert.custom(isinstance, self.image_patches, (ImagePatchConfig, NullPreprocessingConfig))
         Assert.custom(isinstance, self.tokenizer, (TokenizerConfig, NullPreprocessingConfig))
 
-    def get_batch_meta(self) -> "PreprocessedBatch":
+    def get_batch_meta(self, micro_batch_size: int = 1) -> "LanguageModelPreprocessedBatch":
         import torch
 
         from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
@@ -55,21 +52,13 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, Ba
         from fast_llm.data.document.token import TokenDocument
 
         device = torch.device("meta")
-        tokens = torch.empty(self.total_length, dtype=torch.int64, device=device)
+        tokens = torch.empty(micro_batch_size + self.predicted_tokens, dtype=torch.int64, device=device)
         batch = LanguageModelBatch.from_documents([LanguageModelDocument(tokens=TokenDocument(tokens=tokens))])
         return LanguageModelPreprocessedBatch.from_batch(batch, config=self, device=device)
 
     @functools.cached_property
     def use_image_patches(self) -> bool:
         return isinstance(self.image_patches, ImagePatchConfig)
-
-    @functools.cached_property
-    def total_length(self) -> int:
-        return self.batch.sequence_length + self.predicted_tokens
-
-    @functools.cached_property
-    def distributed(self) -> DistributedConfig:
-        return self.batch.distributed
 
     def check_compatibility(self, preprocessing: typing.Self) -> None:
         Assert.custom(isinstance, preprocessing, LanguageModelPreprocessingConfig)
@@ -84,23 +73,23 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, Ba
 
 
 @dataclasses.dataclass
-class MicroBatch:
+class ModelInput:
     pass
 
 
-class PreprocessedBatch[ConfigType: BatchPreprocessingConfig, MicroBatchType: MicroBatch](Configurable[ConfigType]):
-    def __init__(self, config: ConfigType, micro_batches: list[MicroBatchType]):
+class PreprocessedBatch[ConfigType: BatchPreprocessingConfig, ModelInputType: ModelInput](Configurable[ConfigType]):
+    def __init__(self, config: ConfigType, micro_batches: list[ModelInputType]):
         super().__init__(config)
         self._micro_batches = micro_batches
 
     @property
-    def micro_batches(self) -> list[MicroBatchType]:
+    def micro_batches(self) -> list[ModelInputType]:
         return self._micro_batches
 
     def __len__(self) -> int:
         return len(self._micro_batches)
 
-    def __getitem__(self, idx: int) -> MicroBatchType:
+    def __getitem__(self, idx: int) -> ModelInputType:
         return self._micro_batches[idx]
 
     @classmethod

@@ -12,7 +12,7 @@ import yaml
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SampledDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER, LegacyMemmapDataset
 from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
@@ -129,8 +129,8 @@ class MegatronDatasetConfig[DocumentType: LanguageModelDocument](MemmapDatasetCo
 
 
 class MegatronMemmapDataset(LegacyMemmapDataset):
-    def sample(self, sampling: GPTSamplingData) -> "MegatronSampledIndexedDataset":
-        return MegatronSampledIndexedDataset(self, sampling)
+    def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> "MegatronSampledIndexedDataset":
+        return MegatronSampledIndexedDataset(self, config, num_samples, seed)
 
     @classmethod
     def write_dataset(
@@ -200,23 +200,21 @@ class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](Sampled
     """
 
     def __init__(
-        self,
-        indexed_dataset: MegatronMemmapDataset,
-        sampling: GPTSamplingData,
+        self, indexed_dataset: MegatronMemmapDataset, sampling: GPTSamplingConfig, num_samples: int, seed: int
     ):
-        assert isinstance(sampling, GPTSamplingData)
+        assert isinstance(sampling, GPTSamplingConfig)
         self._indexed_dataset = indexed_dataset
-        self._num_samples = sampling.parameters.num_samples
-        self._sequence_length = sampling.parameters.sequence_length
+        self._config = sampling
+        self._num_samples = num_samples
 
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
-        np_rng = np.random.RandomState(seed=sampling.config.seed)
+        np_rng = np.random.RandomState(seed=seed)
 
         # Assume less than one epoch.
-        Assert.lt(self._sequence_length * self._num_samples, num_tokens)
+        Assert.lt(self._config.micro_batch_size * num_samples, num_tokens)
 
         self._doc_idx = np.arange(num_documents, dtype=np.int32)
         np_rng.shuffle(self._doc_idx)
@@ -225,7 +223,9 @@ class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](Sampled
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
-        self._sample_idx = build_sample_idx(document_sizes, self._doc_idx, self._sequence_length, 1, num_tokens, True)
+        self._sample_idx = build_sample_idx(
+            document_sizes, self._doc_idx, self._config.micro_batch_size, 1, num_tokens, True
+        )
         self._shuffle_idx = np.arange(0, self._sample_idx.shape[0] - 1, dtype=np.uint32)
         np_rng.shuffle(self._shuffle_idx)
 

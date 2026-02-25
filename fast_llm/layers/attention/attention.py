@@ -311,7 +311,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # Manually add the gradients from later micro-sequences.
             key_value = AttachGrad.apply(key_value, present)
 
-        key_value = key_value[:, : kwargs[AttentionKwargs.sequence_k_dim].size]
+        key_value = key_value[: kwargs[AttentionKwargs.sequence_k_dim].size]
         key, value = key_value.split(self._local_head_groups * self._config.head_size, dim=-1)
 
         query = query.unflatten(-1, (self._local_heads, self._config.head_size))
@@ -442,9 +442,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         else:
             attention_mask = None
 
-        document_mask = (kwargs[AttentionKwargs.seq_idx][None, :] == kwargs[AttentionKwargs.seq_idx][:, None])[
-            None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-        ]
+        document_mask = (
+            kwargs[AttentionKwargs.document_index_k][None, None, None, :]
+            == kwargs[AttentionKwargs.document_index_q][None, :, None, None]
+        )
         if attention_mask is None:
             attention_mask = document_mask
         else:

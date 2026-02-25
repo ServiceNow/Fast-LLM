@@ -3,7 +3,7 @@ import abc
 import torch
 
 from fast_llm.data.dataset.abstract import SamplableDataset
-from fast_llm.data.dataset.config import SamplingData, SamplingParameters
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.data.document.abstract import Document
 from fast_llm.utils import Assert, padded_cumsum
 
@@ -29,9 +29,7 @@ class IndexedDataset[DocumentType: Document](SamplableDataset[DocumentType]):
         """
 
     @abc.abstractmethod
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> DocumentType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         pass
 
     def __len__(self) -> int:
@@ -49,10 +47,10 @@ class IndexedDataset[DocumentType: Document](SamplableDataset[DocumentType]):
         """
         return self.get_document_sizes().sum().item()
 
-    def sample(self, sampling: SamplingData) -> "GPTSampledIndexedDataset":
+    def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.sampled import SampledIndexedDataset
 
-        return SampledIndexedDataset(self, sampling)
+        return SampledIndexedDataset(self, config, num_samples, seed)
 
 
 class DatasetSlice[DocumentType: Document](IndexedDataset[DocumentType]):
@@ -84,15 +82,13 @@ class DatasetSlice[DocumentType: Document](IndexedDataset[DocumentType]):
     def get_document_size(self, index: int) -> int:
         return self._dataset.get_document_size(self._begin + index)
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> DocumentType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         """
         Get the sample (document) with the given index (in the dataset slice),
         optionally subsampled to a specific offset (starting point) and maximum length
         (end = min(offset + length, sample_length).
         """
-        return self._dataset.get_document(index + self._begin, begin, end, parameters)
+        return self._dataset.get_document(index + self._begin, begin, end)
 
     def __len__(self) -> int:
         return self._end - self._begin
@@ -132,13 +128,9 @@ class ConcatenatedDataset[DocumentType: Document](IndexedDataset[DocumentType]):
         dataset = torch.searchsorted(self._dataset_splits[1:], index, side="right")
         return self._datasets[dataset].get_document_size(index - self._dataset_splits[dataset].item())
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> DocumentType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         dataset = torch.searchsorted(self._dataset_splits[1:], index, side="right")
-        return self._datasets[dataset].get_document(
-            index - self._dataset_splits[dataset].item(), begin, end, parameters
-        )
+        return self._datasets[dataset].get_document(index - self._dataset_splits[dataset].item(), begin, end)
 
     @property
     def name(self) -> str:

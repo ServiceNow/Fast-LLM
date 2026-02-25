@@ -1,4 +1,3 @@
-import dataclasses
 import enum
 import functools
 import itertools
@@ -7,11 +6,10 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.document.abstract import Document
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -32,16 +30,11 @@ class ShufflingType(str, enum.Enum):
 
 
 @config_class()
-class SamplingConfig(Config):
+class SamplingConfigBase(Config):
     """
     A dataset-dependent configuration for sampling.
     """
 
-    seed: int = Field(
-        default=784569,
-        desc="Seed for random sampling.",
-        hint=FieldHint.feature,
-    )
     gpu: bool = Field(
         default=True,
         desc="Enable fast sampling on GPU."
@@ -54,51 +47,64 @@ class SamplingConfig(Config):
         desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
+    micro_batch_size: int = Field(
+        default=2048,
+        desc="Size of individual micro-batches.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    # TODO: ===== Implement ======
+    maximum_document_length: int = Field(
+        default=None,
+        desc="Maximum number of tokens in a document."
+        " Document exceeding this size will be truncated or dropped depending on `truncate_documents`.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    truncate_documents: bool | None = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self) -> None:
+        if self.maximum_document_length is None:
+            self.maximum_document_length = self.micro_batch_size
+        super()._validate()
 
 
-@dataclasses.dataclass(kw_only=True)
-class SamplingParameters:
+@config_class()
+class SamplingConfig(SamplingConfigBase):
     """
-    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
+    Holds all the necessary information for sampling.
     """
 
-    sequence_length: int
-    num_samples: int
-    truncate_documents: bool = True
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
-    extra_tokens: int = 1
+    # TODO: ===== Already in `preprocessing` ======
+    predicted_tokens: int = Field(default=1)
+    cache_directory: pathlib.Path | None = Field(default=None)
+    dataset_name: str = Field(default="dataset")
+    preprocessing: PreprocessingConfig = Field()
+    world_size: int = Field(default=1)
+    rank: int = Field(default=0)
+    _rank_counter: typing.Iterator[int] = Field(init=False)
+
+    def _validate(self):
+        # Using itertools.count to make the field mutable.
+        self._rank_counter = itertools.count()
+
+    def is_running_next(self) -> bool:
+        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
+        return next(self._rank_counter) % self.world_size == self.rank
 
     @functools.cached_property
-    def total_length(self) -> int:
-        return self.sequence_length + self.extra_tokens
-
-
-@dataclasses.dataclass(kw_only=True)
-class SamplingData:
-    """
-    Holds all the necessary information for sampling, including dataset-dependent ones (`SamplingConfig`),
-    usage-dependent ones (`SamplingParameters`), and others set by the `Data`.
-    """
-
-    # TODO: Have a separate configuration (subset?) for `build`?
-    config: SamplingConfig
-    parameters: SamplingParameters
-    cache_directory: pathlib.Path | None
-    distributed_config: DistributedConfig
-    dataset_name: str
-    preprocessing: PreprocessingConfig
-    # Using a mutable rather than an int so it's shared with all copies made with `update`.
-    _rank_counter: typing.Iterator[int] = itertools.count
-
-    def update_config(self, update: SamplingConfig):
-        return dataclasses.replace(
-            self, config=self.config.from_dict(self.config, update.to_dict(), update_type=UpdateType.update)
-        )
-
-    def get_next_rank(self) -> int:
-        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
-        return next(self._rank_counter()) % self.distributed_config.world_size
+    def sample_size(self) -> int:
+        return self.micro_batch_size + self.predicted_tokens
 
 
 @config_class()
@@ -112,7 +118,7 @@ class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         raise NotImplementedError()
 
 
@@ -121,8 +127,8 @@ class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[Docume
     def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
-        return self.build(sampling.preprocessing).sample(sampling)
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        return self.build(config.preprocessing).sample(config, num_samples, seed)
 
 
 @config_class()
@@ -197,27 +203,6 @@ class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[Document
         )
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "sampled"})
-class SampledDatasetUpdateConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
-    """
-    Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
-    Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
-    """
-
-    _abstract = True
-    sampling: SamplingConfig = Field(
-        desc="Optional override to sampling configuration parameters.",
-        hint=FieldHint.core,
-    )
-    dataset: SampledDatasetConfig[DocumentType] = Field(
-        desc="The dataset to sample from.",
-        hint=FieldHint.core,
-    )
-
-    def build_and_sample(self, data: SamplingData) -> SampledDataset[DocumentType]:
-        return self.dataset.build_and_sample(data.update_config(self.sampling))
-
-
 @config_class(dynamic_type={SampledDatasetConfig: "blended"})
 class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
     _abstract = False
@@ -243,10 +228,7 @@ class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[Document
         Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
 
-    def build_and_sample(
-        self,
-        sampling: SamplingData,
-    ) -> SampledDataset[DocumentType]:
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
@@ -254,15 +236,10 @@ class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[Document
         sampled_datasets = [
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
-                dataclasses.replace(
-                    sampling,
-                    parameters=dataclasses.replace(
-                        sampling.parameters,
-                        num_samples=math.ceil(weight * sampling.parameters.num_samples) + 1,
-                    ),
-                    # TODO: Seed may not be unique for nested blended datasets.
-                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * 697}),
-                ),
+                config,
+                num_samples=math.ceil(weight * num_samples) + 1,
+                # TODO: Seed may not be unique for nested blended datasets.
+                seed=seed + i * 697,
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
@@ -271,5 +248,6 @@ class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[Document
             self.name,
             sampled_datasets,
             self.weights,
-            sampling,
+            config,
+            num_samples,
         )

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.token import TokenDocument
 from fast_llm.engine.config_utils.data_type import DataType
@@ -19,7 +19,8 @@ class GPTFimDataset[DocumentType: LanguageModelDocument](SampledDataset[Document
         self,
         config: FimConfig,
         dataset: SampledDataset[DocumentType],
-        sampling: GPTSamplingData,
+        sampling: GPTSamplingConfig,
+        seed: int,
     ):
         if sampling.preprocessing.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
@@ -28,7 +29,7 @@ class GPTFimDataset[DocumentType: LanguageModelDocument](SampledDataset[Document
         self._config = config
         self._dataset = dataset
 
-        self._seed = sampling.config.seed
+        self._seed = seed
         self._tokenizer = self._config.tokenizer.get_tokenizer()
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")

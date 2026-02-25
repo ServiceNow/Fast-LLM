@@ -6,7 +6,6 @@ import numpy as np
 import PIL.Image
 import pytest
 
-from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
@@ -149,7 +148,7 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
         )
         Assert.eq(hf_dataset[index]["image_positions"], DATASET_WITH_IMAGE_PATCHES_IMAGE_POSITIONS[index])
 
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         expected_tokens = [
             tokens
             for token_or_patches in DATASET_WITH_IMAGE_PATCHES_SAMPLES[index]
@@ -176,6 +175,6 @@ def test_gpt_data_with_missing_image_patches():
     dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
 
     for index in COMMON_DATASET_SAMPLES:
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
         Assert.none(document.image_patches)

@@ -243,7 +243,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
 
         # because we use cu_seqlens, chunk_kda requires batch size to be 1 (flatten, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303)
         # similarly to ShortConvolution from fla we already operate on flattened batches here (https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914)
-        seq_idx = kwargs[MixerKwargs.seq_idx].unsqueeze(0)
+        seq_idx = kwargs[MixerKwargs.document_index_q].unsqueeze(0)
         q = self._apply_conv(q, self.q_conv, seq_idx)
         k = self._apply_conv(k, self.k_conv, seq_idx)
         v = self._apply_conv(v, self.v_conv, seq_idx)

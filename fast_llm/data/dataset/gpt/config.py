@@ -1,13 +1,12 @@
-import dataclasses
 import pathlib
 import time
 import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingData
+from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingConfig
 from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
@@ -19,14 +18,14 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.document.language_model import LanguageModelDocument
 
 
-@dataclasses.dataclass(kw_only=True)
-class GPTSamplingData(SamplingData):
+@config_class()
+class GPTSamplingConfig(SamplingConfig):
     """
     Holds all the necessary information for sampling, including dataset-dependent ones (`GPTSamplingConfig`),
     usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
     """
 
-    preprocessing: LanguageModelPreprocessingConfig
+    preprocessing: LanguageModelPreprocessingConfig = FieldUpdate()
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
@@ -38,10 +37,12 @@ class GPTRandomDatasetConfig[DocumentType: LanguageModelDocument](SampledDataset
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: GPTSamplingData) -> "GPTRandomSampledDataset[DocumentType]":
+    def build_and_sample(
+        self, config: GPTSamplingConfig, num_samples: int, seed: int
+    ) -> "GPTRandomSampledDataset[DocumentType]":
         from fast_llm.data.dataset.gpt.random import GPTRandomSampledDataset
 
-        return GPTRandomSampledDataset[DocumentType](sampling, self.name)
+        return GPTRandomSampledDataset[DocumentType](config, self.name, num_samples, seed)
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "file"})
@@ -53,9 +54,8 @@ class GPTDatasetFromFileConfig[DocumentType: LanguageModelDocument](SamplableDat
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
-        config = self._load_config()
-        return config.build_and_sample(sampling)
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        return self._load_config().build_and_sample(config, num_samples, seed)
 
     def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
         config = self._load_config()
@@ -173,12 +173,13 @@ class GPTFimSampledDatasetConfig[DocumentType: LanguageModelDocument](SampledDat
     )
 
     def build_and_sample(
-        self,
-        sampling: GPTSamplingData,
+        self, config: GPTSamplingConfig, num_samples: int, seed: int
     ) -> "GPTFimDataset[DocumentType]":
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return GPTFimDataset[DocumentType](self, self.dataset.build_and_sample(sampling), sampling)
+        return GPTFimDataset[DocumentType](
+            self, self.dataset.build_and_sample(config, num_samples, seed), config, seed
+        )
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "test_slow"})
@@ -195,8 +196,7 @@ class GPTTestSlowDatasetConfig[DocumentType: LanguageModelDocument](SampledDatas
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[DocumentType]:
-        assert sampling.distributed_config.world_size > 1
-        if sampling.distributed_config.rank == 0:
+    def build_and_sample(self, config: GPTSamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        if config.is_running_next():
             time.sleep(self.sleep)
-        return GPTRandomDatasetConfig[DocumentType]().build_and_sample(sampling)
+        return GPTRandomDatasetConfig[DocumentType]().build_and_sample(config, num_samples, seed)

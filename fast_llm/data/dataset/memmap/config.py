@@ -13,7 +13,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
 if typing.TYPE_CHECKING:
-    import torch
+    pass
 
     from fast_llm.data.dataset.indexed import IndexedDataset
     from fast_llm.data.dataset.memmap.abstract import (
@@ -301,6 +301,8 @@ class TokenReaderConfig(MemmapReaderConfig):
 
     @property
     def _expected_buffer_size(self) -> int:
+        import torch
+
         return self.num_tokens * self.data_type.torch.itemsize + (self.num_documents + 1) * torch.int64.itemsize
 
     def get_metadata(self) -> dict[str, typing.Any]:
