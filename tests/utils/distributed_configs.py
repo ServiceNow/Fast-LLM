@@ -104,7 +104,7 @@ _fp16_compare = get_config(
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
     compare=None,
-    config_args=[],
+    config_args=["data.micro_batch_size=4096"],
     num_gpus=1,
 )
 
@@ -113,14 +113,18 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         name="bf16",
         compare="simple",
         # Also tests parallel data loader.
-        config_args=["model.distributed.compute_dtype=bf16", "training.num_workers=1"],
+        config_args=[
+            "model.distributed.compute_dtype=bf16",
+            "training.num_workers=1",
+            "data.micro_batch_size=4096",
+        ],
         num_gpus=1,
         compare_config=_bf16_compare,
     ),
     DistributedTestingConfig(
         name="fp16",
         compare="simple",
-        config_args=["model.distributed.compute_dtype=fp16"],
+        config_args=["model.distributed.compute_dtype=fp16", "data.micro_batch_size=4096"],
         num_gpus=1,
         compare_config=_fp16_compare,
     ),
@@ -128,7 +132,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="ce4",
         compare="simple",
-        config_args=["model.base_model.head.cross_entropy_splits=4"],
+        config_args=["model.base_model.head.cross_entropy_splits=4", "data.micro_batch_size=4096"],
         num_gpus=1,
         compare_config=_compare_layer_mismatch,
     ),
@@ -136,31 +140,31 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="ms4",
         compare="simple",
-        config_args=["schedule.micro_batch_splits=4"],
+        config_args=["schedule.micro_batch_splits=4", "data.micro_batch_size=4096"],
         num_gpus=1,
         compare_config=_compare_layer_mismatch,
     ),
     # Gradient accumulation baselines.
     DistributedTestingConfig(
         name="df2",
-        config_args=["schedule.depth_first_micro_batches=4"],
+        config_args=["schedule.depth_first_micro_batches=2", "data.micro_batch_size=2048"],
         num_gpus=1,
     ),
     DistributedTestingConfig(
         name="df4",
-        config_args=["schedule.depth_first_micro_batches=4"],
+        config_args=["schedule.depth_first_micro_batches=4", "data.micro_batch_size=1024"],
         num_gpus=1,
     ),
     DistributedTestingConfig(
         name="df8",
-        config_args=["schedule.depth_first_micro_batches=4"],
+        config_args=["schedule.depth_first_micro_batches=8", "data.micro_batch_size=512"],
         num_gpus=1,
     ),
     # Breadth-first gradient accumulation.
     DistributedTestingConfig(
         name="bf4",
         compare="df4",
-        config_args=["schedule.breadth_first_micro_batches=4"],
+        config_args=["schedule.breadth_first_micro_batches=4", "data.micro_batch_size=1024"],
         num_gpus=1,
         compare_config=_compare_layer_match,
     ),
@@ -168,7 +172,11 @@ _SINGLE_GPU_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="bf2_df2",
         compare="df4",
-        config_args=["schedule.depth_first_micro_batches=2", "schedule.breadth_first_micro_batches=2"],
+        config_args=[
+            "schedule.depth_first_micro_batches=2",
+            "schedule.breadth_first_micro_batches=2",
+            "data.micro_batch_size=1024",
+        ],
         num_gpus=1,
         compare_config=_compare_layer_match,
     ),
@@ -183,7 +191,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="dp2",
         compare="df2",
-        config_args=[],
+        config_args=["data.micro_batch_size=2048"],
         num_gpus=2,
         # TODO: layer outputs are the same but logged differently.
         compare_config=_compare_layer_mismatch,
@@ -192,7 +200,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="dp2_z2",
         compare="dp2",
-        config_args=["model.multi_stage.zero_stage=2"],
+        config_args=["model.multi_stage.zero_stage=2", "data.micro_batch_size=2048"],
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
@@ -200,7 +208,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="dp2_z3",
         compare="dp2",
-        config_args=["model.multi_stage.zero_stage=3"],
+        config_args=["model.multi_stage.zero_stage=3", "data.micro_batch_size=2048"],
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
@@ -208,15 +216,19 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="dp2_z3_df4",
         compare="df8",
-        config_args=["model.multi_stage.zero_stage=3", "schedule.depth_first_micro_batches=4"],
+        config_args=[
+            "model.multi_stage.zero_stage=3",
+            "schedule.depth_first_micro_batches=4",
+            "data.micro_batch_size=512",
+        ],
         num_gpus=2,
         compare_config=_z3_accumulation_compare,
     ),
     # Sequence-data-parallel
     DistributedTestingConfig(
         name="sdp2",
-        compare="dp2",
-        config_args=["model.distributed.sequence_data_parallel=2"],
+        compare="simple",
+        config_args=["model.distributed.sequence_data_parallel=2", "data.micro_batch_size=4096"],
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
@@ -225,7 +237,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="tp2",
         compare="simple",
-        config_args=["model.distributed.tensor_parallel=2"],
+        config_args=["model.distributed.tensor_parallel=2", "data.micro_batch_size=4096"],
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
@@ -236,6 +248,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "data.micro_batch_size=4096",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -247,6 +260,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "schedule.depth_first_micro_batches=4",
+            "data.micro_batch_size=1024",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -260,6 +274,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_tensor_parallel=True",
             "model.base_model.embeddings.vocab_parallel=False",
             "model.base_model.head.cross_entropy_splits=4",
+            "data.micro_batch_size=4096",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -272,6 +287,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "data.micro_batch_size=2048",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,
@@ -285,6 +301,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=512",
         ],
         num_gpus=4,
         compare_config=_compare_layer_mismatch,
@@ -297,6 +314,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "data.micro_batch_size=2048",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,
@@ -310,6 +328,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=1024",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -322,6 +341,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=1",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=1024",
         ],
         num_gpus=2,
         compare_config=_pp_tied_weight_compare,
@@ -334,6 +354,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.micro_batch_splits=4",
+            "data.micro_batch_size=4096",
         ],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -347,6 +368,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=512",
         ],
         num_gpus=4,
         compare_config=_compare_layer_mismatch,
@@ -362,6 +384,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=1024",
         ],
         num_gpus=4,
         compare_config=_pp_tied_weight_compare,
@@ -377,6 +400,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=412",
         ],
         num_gpus=8,
         compare_config=_compare_layer_match,
@@ -391,6 +415,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=1",
             "schedule.breadth_first_micro_batches=4",
+            "data.micro_batch_size=512",
         ],
         num_gpus=8,
         compare_config=_pp_tied_weight_compare,
@@ -406,6 +431,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.micro_batch_splits=4",
+            "data.micro_batch_size=2048",
         ],
         num_gpus=8,
         compare_config=_compare_layer_mismatch,

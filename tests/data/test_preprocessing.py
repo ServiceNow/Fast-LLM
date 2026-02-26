@@ -54,4 +54,5 @@ def test_preprocessing(tokens, loss_masking_spans):
         label_tokens.append(label_tokens_)
 
     Assert.eq(len(micro_batch.labels), 1)
+    print("AAA", micro_batch.labels)
     Assert.all_equal(micro_batch.labels[0], torch.cat(label_tokens)[1:])

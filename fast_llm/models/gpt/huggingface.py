@@ -86,7 +86,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
     ) -> LanguageModelPreprocessedBatch:
         # NOTE: We are ignoring position_ids as we reconstruct them from attention_mask via sequence_lengths.
         if attention_mask is None:
-            sequence_lengths = [input_ids.numel()]
+            sequence_lengths = [input_ids.size(1)] * input_ids.size(0)
         else:
             # First non-zero indexes or zero index if the row is all zeros (invalid row)
             first_non_zero_indexes = attention_mask.argmax(dim=1)
@@ -129,6 +129,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         if use_cache:
             # The transformers will save the present keys and values to this list.
             batch.micro_batches[0].presents = []
+        return batch
 
     def _inner_forward(
         self, batch: LanguageModelPreprocessedBatch, input_shape: tuple[int]

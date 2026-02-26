@@ -265,7 +265,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             },
         },
         "data": {
-            "micro_batch_size": 512,
+            "maximum_document_length": 512,
             "gpu": torch.cuda.is_available(),
         },
         "optimizer": {"learning_rate": {"base": 0.0001}},
@@ -566,7 +566,6 @@ update_and_add_testing_config(
         ("model", "base_model", "head", "losses"): {
             "distillation": {"type": "distillation", "loss_type": "reverse_kl", "reference_model": "teacher"},
         },
-        ("batch", "use_loss_masking_spans"): True,
         ("reference_models"): {
             "teacher": {
                 "model": {"base_model": copy.deepcopy(_mistral_base_model)},

@@ -2,6 +2,7 @@ import typing
 
 import torch
 
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.functional.config import TargetFormat, TritonConfig
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
@@ -60,3 +61,6 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             target_format=TargetFormat.logits,
             entropy_loss_type=self._config.loss_type,
         )
+
+    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+        return {"return_prediction_mask": True}

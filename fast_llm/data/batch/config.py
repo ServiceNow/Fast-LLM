@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @config_class()
 class BatchPreprocessingConfig(PreprocessingConfig):
     distributed: DistributedConfig = Field()
-    phase: PhaseType = Field(default=PhaseType.inference)
+    phase: PhaseType = Field(default=PhaseType.training)
     micro_batch_splits: int = Field(default=1)
 
     def get_batch_meta(self, micro_batch_size: int = 1) -> "PreprocessedBatch":
@@ -52,9 +52,13 @@ class LanguageModelBatchPreprocessingConfig(LanguageModelPreprocessingConfig, Ba
         from fast_llm.data.document.token import TokenDocument
 
         device = torch.device("meta")
-        tokens = torch.empty(micro_batch_size + self.predicted_tokens, dtype=torch.int64, device=device)
+        tokens = torch.empty(micro_batch_size + self.num_labels, dtype=torch.int64, device=device)
         batch = LanguageModelBatch.from_documents([LanguageModelDocument(tokens=TokenDocument(tokens=tokens))])
         return LanguageModelPreprocessedBatch.from_batch(batch, config=self, device=device)
+
+    @functools.cached_property
+    def num_labels(self) -> int:
+        return 0 if self.phase == PhaseType.inference else self.predicted_tokens
 
     @functools.cached_property
     def use_image_patches(self) -> bool:

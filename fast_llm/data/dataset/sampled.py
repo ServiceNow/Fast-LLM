@@ -15,7 +15,7 @@ from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.document.abstract import Document
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, compare_nested
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -171,6 +171,8 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             "config": self._config.to_dict(verbose=FieldVerboseLevel.everything),
         }
         del yaml_data["config"]["rank"]
+        del yaml_data["config"]["preprocessing"]
+        del yaml_data["config"]["cache_directory"]
         if self._config.truncate_documents:
             yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
 
@@ -181,13 +183,14 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
                 yaml_data["unshuffled_tokens"] = loaded_yaml_data["unshuffled_tokens"]
             self._load_yaml_data(yaml_data)
 
-            if loaded_yaml_data != yaml_data:
+            if errors := compare_nested(loaded_yaml_data, yaml_data):
                 raise RuntimeError(
                     f"Invalid dataset cache for dataset {self.name}."
                     " If this is due to an intended configuration change,"
                     " please delete the cache before continuing."
                     f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
                     f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                    f"\nDifferences:\n{"\n".join(errors)}"
                 )
             # Dataset is already sampled, skip.
             logger.info(f"Using existing sampling for dataset {self.name}")

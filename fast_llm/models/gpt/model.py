@@ -71,21 +71,21 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             if phase == PhaseType.inference:
                 kwargs[BlockKwargs.output_hidden_states].append(re.compile(r"head\..*logits.*$"))
 
-            for name, reference_model in self._reference_models.items():
-                reference_tokens, reference_kwargs = reference_preprocessed_batches[name][micro_sequence_index]
-                if name in self._decoder_reference_models:
-                    # TODO: Get the actual names
-                    reference_kwargs[BlockKwargs.output_hidden_states].append(
-                        re.compile(r"decoder\.\d+\.mixer_output$")
-                    )
-
-                reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
-
-                kwargs[f"reference_{name}_hidden_states"] = {
-                    layer_name: tensor
-                    for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
-                }
             if not micro_sequence.is_meta:
+                for name, reference_model in self._reference_models.items():
+                    reference_tokens, reference_kwargs = reference_preprocessed_batches[name][micro_sequence_index]
+                    if name in self._decoder_reference_models:
+                        # TODO: Get the actual names
+                        reference_kwargs[BlockKwargs.output_hidden_states].append(
+                            re.compile(r"decoder\.\d+\.mixer_output$")
+                        )
+
+                    reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
+
+                    kwargs[f"reference_{name}_hidden_states"] = {
+                        layer_name: tensor
+                        for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
+                    }
                 self.preprocess(kwargs)
             preprocessed.append((micro_sequence.tokens, kwargs))
 

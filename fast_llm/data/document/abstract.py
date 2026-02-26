@@ -18,4 +18,4 @@ class Batch(Document):
         pass
 
     def to_device(self, device: "torch.device | str") -> typing.Self:
-        pass
+        return self

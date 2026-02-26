@@ -121,7 +121,7 @@ class LanguageModelPreprocessedBatch[
             device = batch.tokens.tokens.device
         batch = batch.to_device(device)
         is_meta = device.type == "meta"
-        total_input_length = len(batch) - config.predicted_tokens
+        total_input_length = len(batch) - config.num_labels
         input_length = div(total_input_length, config.micro_batch_splits)
 
         token_dim = TensorDim(
@@ -182,8 +182,9 @@ class LanguageModelPreprocessedBatch[
                     micro_batch.document_index_q, micro_batch.document_index_k = cropped_sample.tokens.document_index
                 if config.return_position_index:
                     micro_batch.position_index = cropped_sample.tokens.position_index
+                    print("AAA", micro_sequence_index, micro_batch.position_index)
 
-                for prediction_distance in range(1, config.predicted_tokens + 1):
+                for prediction_distance in range(1, config.num_labels + 1):
                     label_begin = sequence_k_past + prediction_distance
                     label_end = sequence_k + prediction_distance
                     label_tokens = batch.tokens.crop(label_begin, label_end)

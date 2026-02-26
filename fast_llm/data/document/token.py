@@ -60,7 +60,7 @@ class TokenBatch(TokenDocument, Batch):
             cropped_length = min(document_end, end) - max(document_begin, begin)
             if cropped_length > 0:
                 lengths_.append(cropped_length)
-                if not current_document_begin:
+                if current_document_begin is None:
                     current_document_begin = document_begin
             if document_end > end:
                 break
@@ -104,6 +104,7 @@ class TokenBatch(TokenDocument, Batch):
     @functools.cached_property
     def document_index(self) -> tuple[torch.Tensor, torch.Tensor]:
         cumulative_lengths_q, cumulative_lengths_k = self.cumulative_lengths
+        # Note: index starts at 1. Index 0 is for sequence k before `self.current_document_begin`.
         return (
             torch.searchsorted(cumulative_lengths_q, torch.arange(len(self.tokens)), side="right"),
             torch.searchsorted(
@@ -113,6 +114,14 @@ class TokenBatch(TokenDocument, Batch):
 
     @functools.cached_property
     def position_index(self) -> torch.Tensor:
-        return torch.cat(
-            [torch.arange(document_length, dtype=torch.int32, device=self.device) for document_length in self.lengths]
+        _, document_index_k = self.document_index
+        _, cumulative_lengths_k = self.cumulative_lengths
+        document_begins = cumulative_lengths_k[
+            document_index_k[self.sequence_k_past : self.sequence_k_past + len(self.tokens)] - 1
+        ]
+        return (
+            torch.arange(
+                self.sequence_k_past, self.sequence_k_past + len(self.tokens), dtype=torch.int32, device=self.device
+            )
+            - document_begins
         )

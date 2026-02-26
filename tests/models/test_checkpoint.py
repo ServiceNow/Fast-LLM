@@ -33,7 +33,7 @@ _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 _CHECKPOINT_AND_EVAL_ARGS = [
     "training.checkpoint.interval=1",
     "training.evaluators.validation.interval=2",
-    "training.evaluators.validation.evaluator.iterations=1",
+    "training.evaluators.validation.iterations=1",
 ]
 
 

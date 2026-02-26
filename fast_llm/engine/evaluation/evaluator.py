@@ -88,9 +88,6 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         preprocessing_config = self._multi_stage.get_preprocessing_config(
             PhaseType.validation, runner.config.micro_batch_splits
         )
-        self._data.sample_dataset(
-            self._name, preprocessing_config, run_count * self._config.iterations * self._schedule.samples_per_batch
-        )
         # Setup the schedule
         self._schedule = Schedule(
             config=runner.config,
@@ -100,6 +97,9 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
             phase=PhaseType.validation,
         )
         self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
+        self._data.sample_dataset(
+            self._name, preprocessing_config, run_count * self._config.iterations * self._schedule.samples_per_batch
+        )
         self._data_iterator = None
 
     def run(
