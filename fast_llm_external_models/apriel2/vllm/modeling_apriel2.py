@@ -1148,16 +1148,16 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         self.projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
         self.projection_size_ba = self.num_v_heads * 2
 
-        self.in_proj_qkvz = ColumnParallelLinear(
+        self.in_proj_qkvz = MergedColumnParallelLinear(
             input_size=self.hidden_size,
-            output_size=self.projection_size_qkvz,
+            output_sizes=[self.key_dim, self.key_dim, self.value_dim, self.value_dim],
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.in_proj_qkvz",
         )
-        self.in_proj_ba = ColumnParallelLinear(
+        self.in_proj_ba = MergedColumnParallelLinear(
             input_size=self.hidden_size,
-            output_size=self.projection_size_ba,
+            output_sizes=[self.num_v_heads, self.num_v_heads],
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.in_proj_ba",
@@ -1593,10 +1593,20 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 self.conv1d.weight_loader(self.conv1d.weight, weight)
                 loaded.add("conv1d.weight")
             elif name == "in_proj_qkvz.weight":
-                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, weight)
+                q_w, k_w, v_w, z_w = weight.split(
+                    [self.key_dim, self.key_dim, self.value_dim, self.value_dim], dim=0
+                )
+                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, q_w, 0)
+                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, k_w, 1)
+                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, v_w, 2)
+                self.in_proj_qkvz.weight_loader(self.in_proj_qkvz.weight, z_w, 3)
                 loaded.add("in_proj_qkvz.weight")
             elif name == "in_proj_ba.weight":
-                self.in_proj_ba.weight_loader(self.in_proj_ba.weight, weight)
+                b_w, a_w = weight.split(
+                    [self.num_v_heads, self.num_v_heads], dim=0
+                )
+                self.in_proj_ba.weight_loader(self.in_proj_ba.weight, b_w, 0)
+                self.in_proj_ba.weight_loader(self.in_proj_ba.weight, a_w, 1)
                 loaded.add("in_proj_ba.weight")
             elif name == "out_proj.weight":
                 self.out_proj.weight_loader(self.out_proj.weight, weight)
@@ -1605,10 +1615,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 self.norm.weight.data.copy_(weight)
                 loaded.add("norm.weight")
             elif name == "A_log":
-                self.A_log.data.copy_(weight)
+                self.A_log.weight_loader(self.A_log, weight)
                 loaded.add("A_log")
             elif name == "dt_bias":
-                self.dt_bias.data.copy_(weight)
+                self.dt_bias.weight_loader(self.dt_bias, weight)
                 loaded.add("dt_bias")
         return loaded
 
@@ -2033,10 +2043,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 self.g_b_proj.weight_loader(self.g_b_proj.weight, weight)
                 loaded.add("g_b_proj.weight")
             elif name == "A_log":
-                self.A_log.data.copy_(weight)
+                self.A_log.weight_loader(self.A_log, weight)
                 loaded.add("A_log")
             elif name == "dt_bias":
-                self.dt_bias.data.copy_(weight)
+                self.dt_bias.weight_loader(self.dt_bias, weight)
                 loaded.add("dt_bias")
         return loaded
 
@@ -2821,6 +2831,16 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             vllm_config=vllm_config,
             prefix=maybe_prefix(prefix, "model"),
         )
+        decoder_cfg = getattr(config, "decoder", {})
+        # We need to remap weights whenever we rely on predefined mapping and loadiong from a supernet checkpoint
+        if isinstance(decoder_cfg, dict) and decoder_cfg.get("type") == "pattern":
+            pattern = decoder_cfg.get("pattern", [])
+            substr = {}
+            for l, m_name in enumerate(pattern):
+                substr[f"model.decoder.blocks.{l}.mixer.mixers.{m_name}"] = f"model.layers.{l}.mixer"
+            # Fall through for non-mixer weights (mlp, norm, etc.)
+            substr["model.decoder.blocks."] = "model.layers."
+            self.hf_to_vllm_mapper = WeightsMapper(orig_to_new_substr=substr)
 
         if get_pp_group().is_last_rank:
             self.lm_head = ParallelLMHead(
