@@ -350,6 +350,12 @@ def main():
         default=DEFAULT_MAX_SHARD_SIZE,
         help=f"Maximum shard size in bytes (default: {DEFAULT_MAX_SHARD_SIZE // (1024**3)}GB)",
     )
+    parser.add_argument(
+        "--diagram",
+        type=Path,
+        metavar="SVG_PATH",
+        help="Save architecture diagram SVG to the given path",
+    )
 
     args = parser.parse_args()
 
@@ -382,8 +388,13 @@ def main():
 
     # Dry-run mode: just build and show the plan, don't execute
     if args.dry_run:
-        plan, _ = build_plan(source_config, surgery_configs, args.source_format)
+        plan, final_config = build_plan(source_config, surgery_configs, args.source_format)
         print_plan(plan, title="CONVERSION PLAN (dry-run)", show_summary=True)
+        if args.diagram:
+            from fast_llm_external_models.apriel2.conversion.diagram import generate_diagram
+
+            generate_diagram(final_config, output_path=str(args.diagram))
+            logger.info(f"Architecture diagram saved to {args.diagram}")
         print("Dry-run complete. No files written.")
         return
 
@@ -408,6 +419,13 @@ def main():
         seed=args.seed,
         show_plan=args.show_plan or args.verbose,
     )
+
+    # Generate diagram if requested
+    if args.diagram:
+        from fast_llm_external_models.apriel2.conversion.diagram import generate_diagram
+
+        generate_diagram(apriel2_config, output_path=str(args.diagram))
+        logger.info(f"Architecture diagram saved to {args.diagram}")
 
     # Save config (build_plan returns S which has no init, but strip defensively)
     output_config_file = args.output_dir / "config.json"
