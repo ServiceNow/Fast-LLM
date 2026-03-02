@@ -35,6 +35,8 @@ from fast_llm_external_models.apriel2.conversion.diagram.model import (
 )
 from fast_llm_external_models.apriel2.conversion.diagram.style import Theme
 
+_ARROW_CLR = 1  # px clearance between arrowhead tip and target box edge
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Primitives
@@ -583,8 +585,8 @@ class DecoderBlock:
             (norm1_bb.bottom, mixer_bb.y),
         ]
         for y1, y2 in flow_segments:
-            if y2 - y1 > 1:
-                arrows.append(S.Line(x1=cx, y1=y1, x2=cx, y2=y2, class_=["arrow"]))
+            if y2 - y1 > 2 * _ARROW_CLR:
+                arrows.append(S.Line(x1=cx, y1=y1 + _ARROW_CLR, x2=cx, y2=y2 - _ARROW_CLR, class_=["arrow"]))
 
         # ── Entry / exit arrow stubs (manual arrowheads) ──────────
         # Output stub: line from res2+ upward, arrowhead at top
@@ -592,23 +594,23 @@ class DecoderBlock:
         arrows.append(_arrow_up(cx, res2_bb.y - 8))
 
         # Input stub: line from below mixer upward, arrowhead at mixer bottom
-        arrows.append(S.Line(x1=cx, y1=mixer_bb.bottom + g + 8, x2=cx, y2=mixer_bb.bottom, class_=["arrow"]))
-        arrows.append(_arrow_up(cx, mixer_bb.bottom))
+        arrows.append(S.Line(x1=cx, y1=mixer_bb.bottom + g + 8, x2=cx, y2=mixer_bb.bottom + _ARROW_CLR, class_=["arrow"]))
+        arrows.append(_arrow_up(cx, mixer_bb.bottom + _ARROW_CLR))
 
         # ── Residual bypass lines ─────────────────────────────────
         # Residual 1: wraps Mixer + Norm1 (bypass from input to res1+)
         input_y = mixer_bb.bottom + g
         arrows.append(S.Line(x1=cx, y1=input_y, x2=bypass_x, y2=input_y, class_=["arrow"]))
         arrows.append(S.Line(x1=bypass_x, y1=input_y, x2=bypass_x, y2=res1_bb.cy, class_=["arrow"]))
-        arrows.append(S.Line(x1=bypass_x, y1=res1_bb.cy, x2=cx + sr, y2=res1_bb.cy, class_=["arrow"]))
-        arrows.append(_arrow_left(cx + sr, res1_bb.cy))
+        arrows.append(S.Line(x1=bypass_x, y1=res1_bb.cy, x2=cx + sr + _ARROW_CLR, y2=res1_bb.cy, class_=["arrow"]))
+        arrows.append(_arrow_left(cx + sr + _ARROW_CLR, res1_bb.cy))
 
         # Residual 2: wraps FFN + Norm2 (bypass from above res1+ to res2+)
         branch2_y = (mlp_bb.bottom + res1_bb.y) / 2
         arrows.append(S.Line(x1=cx, y1=branch2_y, x2=bypass_x, y2=branch2_y, class_=["arrow"]))
         arrows.append(S.Line(x1=bypass_x, y1=branch2_y, x2=bypass_x, y2=res2_bb.cy, class_=["arrow"]))
-        arrows.append(S.Line(x1=bypass_x, y1=res2_bb.cy, x2=cx + sr, y2=res2_bb.cy, class_=["arrow"]))
-        arrows.append(_arrow_left(cx + sr, res2_bb.cy))
+        arrows.append(S.Line(x1=bypass_x, y1=res2_bb.cy, x2=cx + sr + _ARROW_CLR, y2=res2_bb.cy, class_=["arrow"]))
+        arrows.append(_arrow_left(cx + sr + _ARROW_CLR, res2_bb.cy))
 
         # ── Background rect (behind everything) ──────────────────
         actual_h = cur_y - bb.y
@@ -628,6 +630,25 @@ class DecoderBlock:
         cur_y += sr * 2 + g      # res2 symbol
         cur_y += (bh - 4) + g    # norm2
         return BBox(ix, cur_y, iw, bh)
+
+    def mixer_bbox(self, bb: BBox, th: Theme) -> BBox:
+        """Return the BBox of the mixer box within this block."""
+        g = th.geo.gap
+        bg = g * 2  # branch gap
+        bh = th.geo.box_h
+        pad = th.geo.pad_block
+        sr = th.geo.symbol_r
+        iw = bb.w - 2 * pad - g - 6
+        ix = bb.x + pad
+        cur_y = bb.y + pad
+        cur_y += sr * 2 + g      # res2 symbol
+        cur_y += (bh - 4) + g    # norm2
+        cur_y += bh + bg          # FFN + branch gap
+        cur_y += sr * 2 + g      # res1 symbol
+        cur_y += (bh - 4) + g    # norm1
+        mixer = _mixer_box(self.mixer, th)
+        msz = mixer.measure(th)
+        return BBox(ix, cur_y, iw, msz.h)
 
 
 @dataclass
@@ -898,7 +919,11 @@ class MLPDetail:
                 Box(act, "box-activation", w=self.w - 20, h=bh),
                 Box("up_proj", "box-linear", w=self.w - 20, h=bh),
             ]
-        gap = th.geo.gap * 2 if self.config.gated else None
+        if self.config.gated:
+            g = th.geo.gap
+            gap = [g, g * 2, g * 2]  # × sits close to down_proj; wider spacing elsewhere
+        else:
+            gap = None
         return _detail_layout(children, th, gap=gap)
 
     def measure(self, th: Theme) -> Size:
@@ -937,7 +962,7 @@ class MLPDetail:
         abs_child0_cx = bb.x + child0_cx
         abs_child1_cx = bb.x + child1_cx
 
-        clearance = 3
+        clearance = _ARROW_CLR
 
         # down_proj → × : single upward arrow
         y1 = bb.y + down_bb.bottom
@@ -1133,16 +1158,19 @@ def detail_for_mixer(mixer: MixerSpec) -> AttentionDetail | GDNDetail | KDADetai
     return None
 
 
-def _detail_layout(children: list, th: Theme, gap: float | None = None) -> list[tuple[BBox, object]]:
+def _detail_layout(children: list, th: Theme, gap: float | list[float] | None = None) -> list[tuple[BBox, object]]:
     """Measure children vertically and compute per-child BBoxes (relative coords)."""
-    g = gap if gap is not None else th.geo.gap
+    default_g = th.geo.gap
+    gaps: list[float] | None = gap if isinstance(gap, list) else None
+    uniform_g = gap if isinstance(gap, (int, float)) else default_g
     sizes = [c.measure(th) for c in children]
     max_w = max((s.w for s in sizes), default=0)
     items: list[tuple[BBox, object]] = []
     y = 0.0
-    for child, sz in zip(children, sizes, strict=True):
+    for i, (child, sz) in enumerate(zip(children, sizes, strict=True)):
         x = (max_w - sz.w) / 2
         items.append((BBox(x, y, sz.w, sz.h), child))
+        g = gaps[i] if gaps and i < len(gaps) else uniform_g
         y += sz.h + g
     return items
 
@@ -1160,6 +1188,6 @@ class _DetailArrows:
             y1 = bb.y + cur_bb.bottom
             y2 = bb.y + next_bb.y
             if y2 - y1 > 1:
-                tip_y = y1 + 3
+                tip_y = y1 + _ARROW_CLR
                 yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
                 yield _arrow_up(cx, tip_y)

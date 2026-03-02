@@ -231,9 +231,10 @@ def _layout(
             stoch_bb = BBox(stoch_x, content_y, stoch_sz.w, stoch_sz.h)
             body.extend(stoch_panel.render(stoch_bb, th))
 
-            # Connector: block → stochastic panel
+            # Connector: mixer box → stochastic panel
+            mixer_bb = block.mixer_bbox(group_bb, th)
             body.append(connector_bezier(
-                group_bb.right, group_bb.cy,
+                mixer_bb.right, mixer_bb.cy,
                 stoch_bb.x, stoch_bb.cy,
             ))
 
@@ -261,9 +262,10 @@ def _layout(
                 detail_sz = detail.measure(th)
                 detail_bb = BBox(detail_x, detail_y, detail_sz.w, detail_sz.h)
                 body.extend(detail.render(detail_bb, th))
-                # Connector from block to detail
+                # Connector: mixer box → detail
+                mixer_bb = block.mixer_bbox(group_bb, th)
                 body.append(connector_bezier(
-                    group_bb.right, group_bb.cy,
+                    mixer_bb.right, mixer_bb.cy,
                     detail_bb.x, detail_bb.cy,
                 ))
                 detail_y += detail_sz.h + th.geo.gap_detail
