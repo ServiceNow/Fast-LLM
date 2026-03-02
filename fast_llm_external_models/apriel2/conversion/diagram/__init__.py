@@ -196,15 +196,8 @@ def _layout(
         if count == 0 and arch.vision_encoder and arch.vision_encoder.block_spec == spec:
             count = arch.vision_encoder.num_blocks
 
-        # Section label
-        body.append(S.Text(
-            x=left_x, y=content_y + th.typo.sz_ann,
-            text=f"Block type: {label}", class_=["t-note"],
-        ))
-        content_y += th.typo.sz_ann + 8
-
         # Decoder block (with brace + count)
-        block = DecoderBlock(spec.mixer, norm_type=spec.norm_type)
+        block = DecoderBlock(spec.mixer, norm_type=spec.norm_type, title=label)
         group = BlockGroup(block, count, label if count > 1 else "")
         group_sz = group.measure(th)
         group_bb = BBox(left_x, content_y, group_sz.w, group_sz.h)

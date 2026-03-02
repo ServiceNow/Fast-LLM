@@ -1223,7 +1223,7 @@ class TestDecoderBlock:
         sz = block.measure(TH)
         elements = list(block.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
-        assert isinstance(elements[0], S.Rect)
+        assert isinstance(elements[0], S.G)
 
     def test_different_mixer_types(self):
         for mtype in ["attention", "gdn", "kda", "mamba"]:
@@ -1481,12 +1481,12 @@ class TestMLPDetail:
         assert "GELU" in svg_str
 
     def test_background_box(self):
-        """MLPDetail renders a detail-bg rect."""
+        """MLPDetail renders a detail-mlp titled frame."""
         detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "detail-bg" in svg_str
+        assert "detail-mlp" in svg_str
 
     def test_gated_fork_merge_arrows(self):
         """Gated MLP renders fork/merge Path arrows with manual arrowheads."""
@@ -1641,7 +1641,7 @@ class TestStochasticMixerPanel:
         elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
         assert "box-attention" in svg_str
-        assert "box-ssm" in svg_str
+        assert "box-gdn" in svg_str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1698,7 +1698,8 @@ class TestDefs:
 class TestDetailedTheme:
     def test_stylesheet_contains_box_classes(self):
         css = TH.stylesheet()
-        for name in ["box-attention", "box-ssm", "box-conv", "box-gate",
+        for name in ["box-attention", "box-swa", "box-gdn", "box-kda",
+                      "box-mamba", "box-conv", "box-gate",
                       "box-stochastic", "box-norm", "box-linear",
                       "box-activation", "box-mlp", "box-embedding"]:
             assert name in css, f"Missing {name} in stylesheet"
@@ -1717,6 +1718,10 @@ class TestDetailedTheme:
     def test_stylesheet_contains_background(self):
         css = TH.stylesheet()
         assert ".background" in css
+
+    def test_stylesheet_contains_detail_content(self):
+        css = TH.stylesheet()
+        assert ".detail-content" in css, "Missing .detail-content in stylesheet"
 
     def test_palette_mixer(self):
         pal = Palette()
@@ -1823,28 +1828,28 @@ class TestMixerCssClass:
             mixer=MixerSpec(mixer_type="sliding_window", label="SWA"),
             mlp=MLPDisplayConfig(), norm_type="RMSNorm",
         )
-        assert mixer_css_class(spec) == "box-attention"
+        assert mixer_css_class(spec) == "box-swa"
 
     def test_gdn(self):
         spec = BlockSpec(
             mixer=MixerSpec(mixer_type="gdn", label="GDN"),
             mlp=MLPDisplayConfig(), norm_type="RMSNorm",
         )
-        assert mixer_css_class(spec) == "box-ssm"
+        assert mixer_css_class(spec) == "box-gdn"
 
     def test_kda(self):
         spec = BlockSpec(
             mixer=MixerSpec(mixer_type="kda", label="KDA"),
             mlp=MLPDisplayConfig(), norm_type="RMSNorm",
         )
-        assert mixer_css_class(spec) == "box-ssm"
+        assert mixer_css_class(spec) == "box-kda"
 
     def test_mamba(self):
         spec = BlockSpec(
             mixer=MixerSpec(mixer_type="mamba", label="Mamba"),
             mlp=MLPDisplayConfig(), norm_type="RMSNorm",
         )
-        assert mixer_css_class(spec) == "box-ssm"
+        assert mixer_css_class(spec) == "box-mamba"
 
     def test_stochastic(self):
         spec = BlockSpec(

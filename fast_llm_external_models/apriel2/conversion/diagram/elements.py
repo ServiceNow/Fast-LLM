@@ -230,10 +230,10 @@ def mixer_css_class(spec: BlockSpec) -> str:
         return "box-stochastic"
     css_map = {
         "attention": "box-attention",
-        "sliding_window": "box-attention",
-        "gdn": "box-ssm",
-        "kda": "box-ssm",
-        "mamba": "box-ssm",
+        "sliding_window": "box-swa",
+        "gdn": "box-gdn",
+        "kda": "box-kda",
+        "mamba": "box-mamba",
     }
     return css_map.get(mixer.mixer_type, "box-linear")
 
@@ -478,10 +478,10 @@ def _mixer_box(mixer: MixerSpec | StochasticMixerSpec, th: Theme) -> Box:
 
     css_map = {
         "attention": "box-attention",
-        "sliding_window": "box-attention",
-        "gdn": "box-ssm",
-        "kda": "box-ssm",
-        "mamba": "box-ssm",
+        "sliding_window": "box-swa",
+        "gdn": "box-gdn",
+        "kda": "box-kda",
+        "mamba": "box-mamba",
     }
     css = css_map.get(mixer.mixer_type, "box-linear")
 
@@ -506,6 +506,10 @@ class DecoderBlock:
     mixer: MixerSpec | StochasticMixerSpec
     norm_type: str = "RMSNorm"
     block_w: float | None = None
+    title: str = ""
+
+    def _title_offset(self, th: Theme) -> float:
+        return th.geo.title_h if self.title else 0
 
     def measure(self, th: Theme) -> Size:
         w = self.block_w or th.geo.block_w
@@ -515,20 +519,21 @@ class DecoderBlock:
         mixer_box = _mixer_box(self.mixer, th)
         mh = mixer_box.measure(th).h
         bg = g * 2  # branch gap — extra space where bypass lines leave the center line
-        h = 2 * th.geo.pad_block + sr * 2 + g + (bh - 4) + g + bh + bg + sr * 2 + g + (bh - 4) + g + mh + g
+        h = 3 * g + sr * 2 + g + (bh - 4) + g + bh + bg + sr * 2 + g + (bh - 4) + g + mh + g
+        h += self._title_offset(th)
         return Size(w, h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         g = th.geo.gap
         bg = g * 2  # branch gap — extra space where bypass lines leave the center line
         bh = th.geo.box_h
-        pad = th.geo.pad_block
         sr = th.geo.symbol_r
-        iw = bb.w - 2 * pad - g - 6  # reserve right margin for bypass lines
-        ix = bb.x + pad
+        title_offset = self._title_offset(th)
+        iw = bb.w - 3 * g  # reserve right margin for bypass lines
+        ix = bb.x + g
         cx = ix + iw / 2  # center x for flow lines
-        bypass_x = bb.right - pad - 6  # single bypass x for both residuals
-        cur_y = bb.y + pad
+        bypass_x = bb.right - g  # single bypass x for both residuals
+        cur_y = bb.y + 2 * g + title_offset
 
         elements: list[S.Element] = []
         arrows: list[S.Element] = []
@@ -574,7 +579,7 @@ class DecoderBlock:
         msz = mixer.measure(th)
         mixer_bb = BBox(ix, cur_y, iw, msz.h)
         _collect(mixer.render(mixer_bb, th))
-        cur_y += msz.h + pad + g
+        cur_y += msz.h + 3 * g
 
         # ── Vertical flow arrows through center ───────────────────
         flow_segments = [
@@ -590,11 +595,11 @@ class DecoderBlock:
 
         # ── Entry / exit arrow stubs (manual arrowheads) ──────────
         # Output stub: line from res2+ upward, arrowhead at top
-        arrows.append(S.Line(x1=cx, y1=res2_bb.y, x2=cx, y2=res2_bb.y - 8, class_=["arrow"]))
-        arrows.append(_arrow_up(cx, res2_bb.y - 8))
+        arrows.append(S.Line(x1=cx, y1=res2_bb.y, x2=cx, y2=res2_bb.y - g, class_=["arrow"]))
+        arrows.append(_arrow_up(cx, res2_bb.y - g))
 
         # Input stub: line from below mixer upward, arrowhead at mixer bottom
-        arrows.append(S.Line(x1=cx, y1=mixer_bb.bottom + g + 8, x2=cx, y2=mixer_bb.bottom + _ARROW_CLR, class_=["arrow"]))
+        arrows.append(S.Line(x1=cx, y1=mixer_bb.bottom + 2 * g, x2=cx, y2=mixer_bb.bottom + _ARROW_CLR, class_=["arrow"]))
         arrows.append(_arrow_up(cx, mixer_bb.bottom + _ARROW_CLR))
 
         # ── Residual bypass lines ─────────────────────────────────
@@ -612,9 +617,11 @@ class DecoderBlock:
         arrows.append(S.Line(x1=bypass_x, y1=res2_bb.cy, x2=cx + sr + _ARROW_CLR, y2=res2_bb.cy, class_=["arrow"]))
         arrows.append(_arrow_left(cx + sr + _ARROW_CLR, res2_bb.cy))
 
-        # ── Background rect (behind everything) ──────────────────
+        # ── Background frame (behind everything) ─────────────────
         actual_h = cur_y - bb.y
-        yield S.Rect(x=bb.x, y=bb.y, width=bb.w, height=actual_h, class_=["block-bg"])
+        frame, _ = _render_detail_frame(bb.x, bb.y, bb.w, actual_h, self.title, "block-bg", th)
+        yield frame
+
         yield from arrows
         yield from elements
 
@@ -622,11 +629,10 @@ class DecoderBlock:
         """Return the BBox of the 'Feed forward' box within this block."""
         g = th.geo.gap
         bh = th.geo.box_h
-        pad = th.geo.pad_block
         sr = th.geo.symbol_r
-        iw = bb.w - 2 * pad - g - 6
-        ix = bb.x + pad
-        cur_y = bb.y + pad
+        iw = bb.w - 3 * g
+        ix = bb.x + g
+        cur_y = bb.y + 2 * g + self._title_offset(th)
         cur_y += sr * 2 + g      # res2 symbol
         cur_y += (bh - 4) + g    # norm2
         return BBox(ix, cur_y, iw, bh)
@@ -636,11 +642,10 @@ class DecoderBlock:
         g = th.geo.gap
         bg = g * 2  # branch gap
         bh = th.geo.box_h
-        pad = th.geo.pad_block
         sr = th.geo.symbol_r
-        iw = bb.w - 2 * pad - g - 6
-        ix = bb.x + pad
-        cur_y = bb.y + pad
+        iw = bb.w - 3 * g
+        ix = bb.x + g
+        cur_y = bb.y + 2 * g + self._title_offset(th)
         cur_y += sr * 2 + g      # res2 symbol
         cur_y += (bh - 4) + g    # norm2
         cur_y += bh + bg          # FFN + branch gap
@@ -682,6 +687,59 @@ class BlockGroup:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _render_detail_frame(
+    x: float, y: float, w: float, h: float,
+    title: str, css: str, th: Theme,
+) -> tuple[S.G, BBox]:
+    """Titled outer box: colored title strip + white content area.
+
+    Returns (frame_group, content_bb) where content_bb is the inset region
+    for child content (padded by ``g`` on all sides below the title strip).
+    """
+    rx = th.geo.rx_block
+    g = th.geo.gap
+    title_h = th.geo.title_h if title else 0
+    content_bb = BBox(x + g, y + title_h + g, w - 2 * g, h - title_h - 2 * g)
+    if not title:
+        # Untitled: single rounded rect, white content
+        return S.G(class_=[css], elements=[
+            S.Rect(x=x, y=y, width=w, height=h, rx=rx, class_=["detail-content"]),
+        ]), content_bb
+    # Title strip: rounded top corners, square bottom
+    title_path = S.Path(
+        d=[
+            S.MoveTo(x, y + title_h),
+            S.LineTo(x, y + rx),
+            S.Arc(rx, rx, 0, False, True, x + rx, y),
+            S.LineTo(x + w - rx, y),
+            S.Arc(rx, rx, 0, False, True, x + w, y + rx),
+            S.LineTo(x + w, y + title_h),
+            S.ClosePath(),
+        ],
+        class_=["detail-title"],
+    )
+    # Content area: square top, rounded bottom corners
+    content_path = S.Path(
+        d=[
+            S.MoveTo(x, y + title_h),
+            S.LineTo(x + w, y + title_h),
+            S.LineTo(x + w, y + h - rx),
+            S.Arc(rx, rx, 0, False, True, x + w - rx, y + h),
+            S.LineTo(x + rx, y + h),
+            S.Arc(rx, rx, 0, False, True, x, y + h - rx),
+            S.ClosePath(),
+        ],
+        class_=["detail-content"],
+    )
+    return S.G(class_=[css], elements=[
+        title_path,
+        content_path,
+        S.Text(x=x + w / 2, y=y + title_h / 2, text=title,
+               class_=["t-label-bold"], text_anchor="middle",
+               dominant_baseline="central"),
+    ]), content_bb
+
+
 MixerDetail = "AttentionDetail | GDNDetail | KDADetail | MambaDetail"
 
 _ACTIVATION_DISPLAY: dict[str, str] = {"silu": "SiLU", "gelu": "GELU", "relu": "ReLU"}
@@ -699,9 +757,10 @@ class AttentionDetail:
 
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 2
+        box_css = "box-swa" if self.config.window_size else "box-attention"
         children: list[Box | Symbol | HStack] = [
             Box("o_proj", "box-linear", w=70, h=bh - 2),
-            Box(self._title(), "box-attention", w=self.w - 30, h=bh,
+            Box(self._title(), box_css, w=self.w - 30, h=bh,
                 bold=True),
             HStack([Box("q", "box-norm", w=65, h=bh - 4),
                     Box("k", "box-norm", w=65, h=bh - 4)], gap=10),
@@ -710,22 +769,38 @@ class AttentionDetail:
         return _detail_layout(children, th)
 
     def measure(self, th: Theme) -> Size:
+        g = th.geo.gap
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
-        return Size(self.w + 100, total_h)
+        content_w = max((bb.right for bb, _ in items), default=0)
+        return Size(content_w + 2 * g + 100, total_h + 2 * g + th.geo.title_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        g = th.geo.gap
+        title_h = th.geo.title_h
         items = self._build(th)
-        yield from _DetailArrows.render(items, bb)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+
+        # Titled outer frame
+        detail_css = "detail-swa" if self.config.window_size else "detail-attention"
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            self._title(), detail_css, th,
+        )
+        yield frame
+
+        # Content inside padded area
+        yield from _DetailArrows.render(items, content_bb)
         for child_bb, child in items:
-            shifted = BBox(bb.x + child_bb.x, bb.y + child_bb.y, child_bb.w, child_bb.h)
+            shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
         # Side annotations (item 1 = attention box)
-        attn_bb = BBox(bb.x + items[1][0].x, bb.y + items[1][0].y, items[1][0].w, items[1][0].h)
+        attn_bb = BBox(content_bb.x + items[1][0].x, content_bb.y + items[1][0].y, items[1][0].w, items[1][0].h)
         heads = self.config.heads
         kv_heads = self.config.kv_heads or heads
-        ax = bb.x + self.w - 10
+        ax = content_bb.right - 10
         yield S.Text(x=ax, y=attn_bb.cy - 8, text=f"{heads} attention heads", class_=["t-count"])
         yield S.Text(x=ax, y=attn_bb.cy + 6, text=f"{kv_heads} key & value heads", class_=["t-count"])
         if self.config.window_size:
@@ -733,12 +808,12 @@ class AttentionDetail:
                          text=f"window = {self.config.window_size:,}", class_=["t-dim"])
 
         # "RoPE" label (item 2 = q/k RoPE row)
-        qk_bb = BBox(bb.x + items[2][0].x, bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
+        qk_bb = BBox(content_bb.x + items[2][0].x, content_bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
         yield S.Text(x=qk_bb.x - 8, y=qk_bb.cy, text="RoPE", class_=["t-note"],
                      text_anchor="end", dominant_baseline="central")
 
         # q k v labels under qkv_proj (item 3)
-        proj_bb = BBox(bb.x + items[3][0].x, bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
+        proj_bb = BBox(content_bb.x + items[3][0].x, content_bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
         third = proj_bb.w / 3
         for i, lbl in enumerate("qkv"):
             px = proj_bb.x + (i + 0.5) * third
@@ -759,7 +834,7 @@ class GDNDetail:
         children: list[Box | Symbol | HStack] = [
             Box("out_proj", "box-linear", w=70, h=bh - 2),
             Box("Gated RMSNorm", "box-norm", w=self.w - 40, h=bh),
-            Box("Gated Delta Rule", "box-ssm", w=self.w - 30, h=bh + 10, bold=True),
+            Box("Gated Delta Rule", "box-gdn", w=self.w - 30, h=bh + 10, bold=True),
             Box("CausalConv1d", "box-conv", w=self.w - 60, h=bh),
             HStack([
                 Box("in_proj_qkvz", "box-linear", w=pw, h=bh),
@@ -769,20 +844,35 @@ class GDNDetail:
         return _detail_layout(children, th)
 
     def measure(self, th: Theme) -> Size:
+        g = th.geo.gap
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
-        return Size(self.w + 80, total_h)
+        content_w = max((bb.right for bb, _ in items), default=0)
+        return Size(content_w + 2 * g + 80, total_h + 2 * g + th.geo.title_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        g = th.geo.gap
+        title_h = th.geo.title_h
         items = self._build(th)
-        yield from _DetailArrows.render(items, bb)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+
+        # Titled outer frame
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            "Gated DeltaNet", "detail-gdn", th,
+        )
+        yield frame
+
+        # Content inside padded area
+        yield from _DetailArrows.render(items, content_bb)
         for child_bb, child in items:
-            shifted = BBox(bb.x + child_bb.x, bb.y + child_bb.y, child_bb.w, child_bb.h)
+            shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
-        gdr_bb = BBox(bb.x + items[2][0].x, bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
-        conv_bb = BBox(bb.x + items[3][0].x, bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
-        ax = bb.x + self.w - 15
+        gdr_bb = BBox(content_bb.x + items[2][0].x, content_bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
+        conv_bb = BBox(content_bb.x + items[3][0].x, content_bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
+        ax = content_bb.right - 15
         v_heads = self.config.value_heads
         k_heads = self.config.key_heads
         k_dim = self.config.key_head_dim
@@ -807,7 +897,7 @@ class KDADetail:
         children: list[Box | Symbol | HStack] = [
             Box("o_proj", "box-linear", w=70, h=bh - 2),
             Box("Gated RMSNorm", "box-norm", w=self.w - 50, h=bh),
-            Box("Kimi Delta Attention", "box-ssm", w=self.w - 30, h=bh + 10, bold=True),
+            Box("Kimi Delta Attention", "box-kda", w=self.w - 30, h=bh + 10, bold=True),
             HStack([Box("Conv", "box-conv", w=cw, h=bh - 4),
                     Box("Conv", "box-conv", w=cw, h=bh - 4),
                     Box("Conv", "box-conv", w=cw, h=bh - 4)], gap=5),
@@ -818,19 +908,34 @@ class KDADetail:
         return _detail_layout(children, th)
 
     def measure(self, th: Theme) -> Size:
+        g = th.geo.gap
         items = self._build(th)
-        total_h = items[-1][0].bottom + 12 if items else 0
-        return Size(self.w + 90, total_h)
+        total_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+        return Size(content_w + 2 * g + 90, total_h + 2 * g + th.geo.title_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        g = th.geo.gap
+        title_h = th.geo.title_h
         items = self._build(th)
-        yield from _DetailArrows.render(items, bb)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+
+        # Titled outer frame
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            "Kimi Delta Attention", "detail-kda", th,
+        )
+        yield frame
+
+        # Content inside padded area
+        yield from _DetailArrows.render(items, content_bb)
         for child_bb, child in items:
-            shifted = BBox(bb.x + child_bb.x, bb.y + child_bb.y, child_bb.w, child_bb.h)
+            shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
-        kda_bb = BBox(bb.x + items[2][0].x, bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
-        ax = bb.x + self.w - 10
+        kda_bb = BBox(content_bb.x + items[2][0].x, content_bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
+        ax = content_bb.right - 10
         ay = kda_bb.y - 5
         yield S.Text(x=ax, y=ay, text="\u03b2: b_proj", class_=["t-note"])
         yield S.Text(x=ax, y=ay + 15, text="Gate kernel:", class_=["t-note"])
@@ -844,7 +949,7 @@ class KDADetail:
         yield S.Text(x=ax, y=ay + 75, text=f"{n_heads} heads, dim {head_dim}", class_=["t-count"])
 
         # q k v labels under projections (item 4)
-        proj_bb = BBox(bb.x + items[4][0].x, bb.y + items[4][0].y, items[4][0].w, items[4][0].h)
+        proj_bb = BBox(content_bb.x + items[4][0].x, content_bb.y + items[4][0].y, items[4][0].w, items[4][0].h)
         cw = (self.w - 80) // 3
         for i, lbl in enumerate("qkv"):
             px = proj_bb.x + i * (cw + 5) + cw / 2
@@ -864,32 +969,47 @@ class MambaDetail:
         children: list[Box | Symbol | HStack] = [
             Box("out_proj", "box-linear", w=70, h=bh - 2),
             Box("Gated RMSNorm", "box-norm", w=self.w - 40, h=bh),
-            Box("Mamba SSM", "box-ssm", w=self.w - 30, h=bh + 10, bold=True),
+            Box("Mamba SSM", "box-mamba", w=self.w - 30, h=bh + 10, bold=True),
             Box("CausalConv1d", "box-conv", w=self.w - 60, h=bh),
             Box("in_proj", "box-linear", w=self.w - 60, h=bh),
         ]
         return _detail_layout(children, th)
 
     def measure(self, th: Theme) -> Size:
+        g = th.geo.gap
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
-        return Size(self.w + 80, total_h)
+        content_w = max((bb.right for bb, _ in items), default=0)
+        return Size(content_w + 2 * g + 80, total_h + 2 * g + th.geo.title_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        g = th.geo.gap
+        title_h = th.geo.title_h
         items = self._build(th)
-        yield from _DetailArrows.render(items, bb)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+
+        # Titled outer frame
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            "Mamba SSM", "detail-mamba", th,
+        )
+        yield frame
+
+        # Content inside padded area
+        yield from _DetailArrows.render(items, content_bb)
         for child_bb, child in items:
-            shifted = BBox(bb.x + child_bb.x, bb.y + child_bb.y, child_bb.w, child_bb.h)
+            shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
         # Side annotations
-        ssm_bb = BBox(bb.x + items[2][0].x, bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
-        ax = bb.x + self.w - 15
+        ssm_bb = BBox(content_bb.x + items[2][0].x, content_bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
+        ax = content_bb.right - 15
         if self.config.d_state:
             yield S.Text(x=ax, y=ssm_bb.cy - 8, text=f"d_state = {self.config.d_state}", class_=["t-dim"])
         if self.config.d_inner:
             yield S.Text(x=ax, y=ssm_bb.cy + 6, text=f"d_inner = {self.config.d_inner}", class_=["t-dim"])
-        conv_bb = BBox(bb.x + items[3][0].x, bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
+        conv_bb = BBox(content_bb.x + items[3][0].x, content_bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
         if self.config.d_conv:
             yield S.Text(x=ax, y=conv_bb.cy, text=f"d_conv = {self.config.d_conv}", class_=["t-dim"])
 
@@ -929,8 +1049,9 @@ class MLPDetail:
     def measure(self, th: Theme) -> Size:
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
-        pad = th.geo.gap
-        return Size(self.w + 2 * pad + 60, total_h + 2 * pad)
+        g = th.geo.gap
+        content_w = max((bb.right for bb, _ in items), default=0)
+        return Size(content_w + 2 * g + 60, total_h + 2 * g + th.geo.title_h)
 
     def _render_arrows(
         self,
@@ -1032,36 +1153,38 @@ class MLPDetail:
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build(th)
         content_h = items[-1][0].bottom if items else 0
-        pad = th.geo.gap
+        g = th.geo.gap
+        title_h = th.geo.title_h
+        content_w = max((cbb.right for cbb, _ in items), default=0)
 
-        # Background box with padding
-        yield S.Rect(
-            x=bb.x, y=bb.y, width=self.w + 2 * pad, height=content_h + 2 * pad,
-            class_=["detail-bg"],
+        # Titled outer frame
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            "Feed forward", "detail-mlp", th,
         )
+        yield frame
 
-        # Offset content by padding
-        inner_bb = BBox(bb.x + pad, bb.y + pad, bb.w - 2 * pad, bb.h - 2 * pad)
-        yield from self._render_arrows(items, inner_bb, th)
+        # Content inside padded area
+        yield from self._render_arrows(items, content_bb, th)
         for child_bb, child in items:
-            shifted = BBox(inner_bb.x + child_bb.x, inner_bb.y + child_bb.y, child_bb.w, child_bb.h)
+            shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
         intermediate = self.config.intermediate_size
         if intermediate:
-            ax = bb.x + self.w + pad - 10
-            yield S.Text(x=ax, y=bb.y + pad + 8, text="Intermediate size", class_=["t-note"])
-            yield S.Text(x=ax, y=bb.y + pad + 22, text=f"= {intermediate:,}", class_=["t-dim"])
+            ax = content_bb.right - 10
+            yield S.Text(x=ax, y=content_bb.y + 8, text="Intermediate size", class_=["t-note"])
+            yield S.Text(x=ax, y=content_bb.y + 22, text=f"= {intermediate:,}", class_=["t-dim"])
 
 
 def _mixer_spec_css(mixer: MixerSpec) -> str:
     """Return the CSS class for a single MixerSpec."""
     css_map = {
         "attention": "box-attention",
-        "sliding_window": "box-attention",
-        "gdn": "box-ssm",
-        "kda": "box-ssm",
-        "mamba": "box-ssm",
+        "sliding_window": "box-swa",
+        "gdn": "box-gdn",
+        "kda": "box-kda",
+        "mamba": "box-mamba",
     }
     return css_map.get(mixer.mixer_type, "box-linear")
 
@@ -1076,71 +1199,56 @@ class StochasticMixerPanel:
     def _box_h(self, th: Theme) -> float:
         return th.geo.box_h
 
-    def _gap(self) -> float:
+    def _inner_gap(self) -> float:
         return 8.0
-
-    def _pad(self) -> float:
-        return 12.0
-
-    def _title_h(self) -> float:
-        return 20.0
 
     def measure(self, th: Theme) -> Size:
         w = self.w or th.geo.stack_w
-        pad = self._pad()
-        title_h = self._title_h()
+        g = th.geo.gap
+        title_h = th.geo.title_h
         bh = self._box_h(th)
-        gap = self._gap()
+        gap = self._inner_gap()
         n = len(self.spec.sub_mixers)
         content_h = n * bh + max(0, n - 1) * gap
-        total_h = pad + title_h + content_h + pad
+        total_h = 2 * g + title_h + content_h
         return Size(w, total_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
-        pad = self._pad()
-        title_h = self._title_h()
         bh = self._box_h(th)
-        gap = self._gap()
-        inner_w = bb.w - 2 * pad
+        gap = self._inner_gap()
 
-        # Dashed container background
-        yield S.Rect(
-            x=bb.x, y=bb.y, width=bb.w, height=bb.h,
-            class_=["detail-bg"],
+        # Titled outer frame
+        frame, content_bb = _render_detail_frame(
+            bb.x, bb.y, bb.w, bb.h,
+            "Stochastic mixer dispatch", "detail-stochastic", th,
         )
-
-        # Title
-        yield S.Text(
-            x=bb.x + bb.w / 2, y=bb.y + pad + title_h / 2,
-            text="Stochastic Dispatch",
-            class_=["t-note"], text_anchor="middle",
-            dominant_baseline="central",
-        )
+        yield frame
 
         # Sub-mixer boxes
-        box_y = bb.y + pad + title_h
+        inner_w = content_bb.w
+        box_y = content_bb.y
         for name, sub_mixer in self.spec.sub_mixers:
             css = _mixer_spec_css(sub_mixer)
             label = name
             if name == self.spec.main_mixer_name:
                 label += " \u2605"
             box = Box(label, css, w=inner_w, h=bh)
-            box_bb = BBox(bb.x + pad, box_y, inner_w, bh)
+            box_bb = BBox(content_bb.x, box_y, inner_w, bh)
             yield from box.render(box_bb, th)
             box_y += bh + gap
 
     def sub_mixer_bboxes(self, bb: BBox, th: Theme) -> list[tuple[BBox, MixerSpec]]:
         """Return (bbox, MixerSpec) for each sub-mixer box."""
-        pad = self._pad()
-        title_h = self._title_h()
+        g = th.geo.gap
+        title_h = th.geo.title_h
         bh = self._box_h(th)
-        gap = self._gap()
-        inner_w = bb.w - 2 * pad
+        gap = self._inner_gap()
+        inner_w = bb.w - 2 * g
 
         result: list[tuple[BBox, MixerSpec]] = []
-        box_y = bb.y + pad + title_h
+        box_y = bb.y + title_h + g
         for _name, sub_mixer in self.spec.sub_mixers:
-            result.append((BBox(bb.x + pad, box_y, inner_w, bh), sub_mixer))
+            result.append((BBox(bb.x + g, box_y, inner_w, bh), sub_mixer))
             box_y += bh + gap
         return result
 

@@ -16,17 +16,23 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Palette:
-    # mixer types
-    attention: str = "#f0c0c0"
-    attn_text: str = "#8b2252"
-    ssm: str = "#c0d8f0"
-    ssm_text: str = "#2a4a7a"
+    # mixer types — pastel fills derived from Tab10 at 25% saturation
+    attention: str = "#c7ddec"
+    attn_text: str = "#114163"
+    swa: str = "#ffdfc3"
+    swa_text: str = "#8c4608"
+    kda: str = "#cae7ca"
+    kda_text: str = "#185818"
+    gdn: str = "#f5c9c9"
+    gdn_text: str = "#761516"
+    mamba: str = "#e4d9ef"
+    mamba_text: str = "#513968"
     conv: str = "#f0d0e0"
     conv_text: str = "#7a2a4a"
     gate: str = "#e8d8f0"
     gate_text: str = "#5a3a7a"
-    stochastic: str = "#ffe0c0"
-    stoch_text: str = "#8b4500"
+    stochastic: str = "#f0e8d8"
+    stoch_text: str = "#6a5a3a"
 
     # infrastructure
     embedding: str = "#3d6b6b"
@@ -60,10 +66,10 @@ class Palette:
         """(fill, text) for a mixer type."""
         return {
             "attention": (self.attention, self.attn_text),
-            "sliding_window": (self.attention, self.attn_text),
-            "gdn": (self.ssm, self.ssm_text),
-            "kda": (self.ssm, self.ssm_text),
-            "mamba": (self.ssm, self.ssm_text),
+            "sliding_window": (self.swa, self.swa_text),
+            "gdn": (self.gdn, self.gdn_text),
+            "kda": (self.kda, self.kda_text),
+            "mamba": (self.mamba, self.mamba_text),
             "stochastic": (self.stochastic, self.stoch_text),
         }.get(kind, (self.linear, self.linear_text))
 
@@ -92,7 +98,6 @@ class Geometry:
     gap: float = 10
     gap_block: float = 6
     gap_detail: float = 24
-    pad_block: float = 12
     pad_outer: float = 40
 
     connector_gap: float = 80
@@ -104,6 +109,8 @@ class Geometry:
     stack_cell_h: float = 32  # matches box_h
     stack_cell_gap: float = 10  # matches gap — room for vertical flow lines
     stack_conn_gap: float = 60  # gap between overview right edge and definition area
+
+    title_h: float = 24  # height of title strip in titled panels
 
     stroke: float = 1.2
     stroke_arrow: float = 1.5
@@ -130,7 +137,10 @@ class Theme:
             act=p.activation, act_t=p.act_text,
             mlp=p.mlp, mlp_t=p.mlp_text,
             attn=p.attention, attn_t=p.attn_text,
-            ssm=p.ssm, ssm_t=p.ssm_text,
+            swa=p.swa, swa_t=p.swa_text,
+            kda=p.kda, kda_t=p.kda_text,
+            gdn=p.gdn, gdn_t=p.gdn_text,
+            mamba=p.mamba, mamba_t=p.mamba_text,
             conv=p.conv, conv_t=p.conv_text,
             gate=p.gate, gate_t=p.gate_text,
             stoch=p.stochastic, stoch_t=p.stoch_text,
@@ -176,8 +186,14 @@ text.mono {{ font-family: {mono}; }}
 /* ── mixer boxes ────────────────────────── */
 .box-attention {{ fill: {attn}; stroke: none; }}
 .box-attention > text {{ fill: {attn_t}; }}
-.box-ssm       {{ fill: {ssm}; stroke: none; }}
-.box-ssm > text {{ fill: {ssm_t}; }}
+.box-swa       {{ fill: {swa}; stroke: none; }}
+.box-swa > text {{ fill: {swa_t}; }}
+.box-gdn       {{ fill: {gdn}; stroke: none; }}
+.box-gdn > text {{ fill: {gdn_t}; }}
+.box-kda       {{ fill: {kda}; stroke: none; }}
+.box-kda > text {{ fill: {kda_t}; }}
+.box-mamba     {{ fill: {mamba}; stroke: none; }}
+.box-mamba > text {{ fill: {mamba_t}; }}
 .box-conv      {{ fill: {conv}; stroke: none; }}
 .box-conv > text {{ fill: {conv_t}; }}
 .box-gate      {{ fill: {gate}; stroke: none; }}
@@ -196,6 +212,27 @@ text.mono {{ font-family: {mono}; }}
   fill: {det_bg}; stroke: {det_s};
   rx: {rx_blk}; stroke-width: {sw}; stroke-dasharray: {dash};
 }}
+
+/* ── detail panel frames ───────────────── */
+.detail-attention {{ fill: {attn}; stroke: {attn}; stroke-width: {sw}; }}
+.detail-attention > text {{ fill: {attn_t}; stroke: none; }}
+
+.detail-swa {{ fill: {swa}; stroke: {swa}; stroke-width: {sw}; }}
+.detail-swa > text {{ fill: {swa_t}; stroke: none; }}
+.detail-gdn {{ fill: {gdn}; stroke: {gdn}; stroke-width: {sw}; }}
+.detail-gdn > text {{ fill: {gdn_t}; stroke: none; }}
+.detail-kda {{ fill: {kda}; stroke: {kda}; stroke-width: {sw}; }}
+.detail-kda > text {{ fill: {kda_t}; stroke: none; }}
+.detail-mamba {{ fill: {mamba}; stroke: {mamba}; stroke-width: {sw}; }}
+.detail-mamba > text {{ fill: {mamba_t}; stroke: none; }}
+
+.detail-stochastic {{ fill: {stoch}; stroke: {stoch}; stroke-width: {sw}; stroke-dasharray: 6 3; }}
+.detail-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
+
+.detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw}; }}
+.detail-mlp > text {{ fill: {mlp_t}; stroke: none; }}
+
+.detail-content {{ fill: white; }}
 
 /* ── wires ──────────────────────────────── */
 .arrow     {{ stroke: {wire}; stroke-width: 1.5; fill: none; }}
