@@ -17,6 +17,7 @@ import svg as S
 
 from fast_llm_external_models.apriel2.conversion.diagram import generate_diagram
 from fast_llm_external_models.apriel2.conversion.diagram.elements import (
+    ArchitectureOverview,
     Arrow,
     AttentionDetail,
     BlockGroup,
@@ -25,12 +26,16 @@ from fast_llm_external_models.apriel2.conversion.diagram.elements import (
     GDNDetail,
     KDADetail,
     Label,
+    MambaDetail,
     MLPDetail,
+    StochasticMixerPanel,
     Symbol,
+    VisionEncoderColumn,
     brace_left,
     connector_bezier,
     defs,
     detail_for_mixer,
+    mixer_css_class,
 )
 from fast_llm_external_models.apriel2.conversion.diagram.layout import (
     Align,
@@ -62,7 +67,6 @@ from fast_llm_external_models.apriel2.conversion.diagram.layout import (
 from fast_llm_external_models.apriel2.conversion.diagram.model import (
     ArchitectureModel,
     AttentionDisplayConfig,
-    BlockGroup as ModelBlockGroup,
     BlockSpec,
     GDNDisplayConfig,
     KDADisplayConfig,
@@ -1293,6 +1297,21 @@ class TestAttentionDetail:
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
 
+    def test_has_qkv_proj(self):
+        """Attention detail shows fused qkv_proj instead of 3 separate Linear boxes."""
+        detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "qkv_proj" in svg_str
+
+    def test_no_cross_symbol(self):
+        """No ×cross symbol in attention detail panel."""
+        detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
+        items = detail._build(TH)
+        for _, child in items:
+            assert not isinstance(child, Symbol)
+
     def test_sliding_window_variant(self):
         detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8, window_size=4096))
         sz = detail.measure(TH)
@@ -1320,6 +1339,26 @@ class TestGDNDetail:
         svg_str = "".join(str(e) for e in elements)
         assert "32" in svg_str
 
+    def test_no_cross_symbol(self):
+        """No ×cross symbol in GDN detail panel."""
+        detail = GDNDetail(GDNDisplayConfig(
+            value_heads=32, key_heads=8, key_head_dim=64, value_head_dim=64, conv_kernel=4,
+        ))
+        items = detail._build(TH)
+        for _, child in items:
+            assert not isinstance(child, Symbol)
+
+    def test_hstack_equal_width(self):
+        """in_proj_qkvz and in_proj_βα should have equal width."""
+        detail = GDNDetail(GDNDisplayConfig(
+            value_heads=32, key_heads=8, key_head_dim=64, value_head_dim=64, conv_kernel=4,
+        ))
+        items = detail._build(TH)
+        hstack = items[-1][1]
+        assert isinstance(hstack, HStack)
+        # Both boxes should have the same width
+        assert hstack.children[0].w == hstack.children[1].w
+
 
 class TestKDADetail:
     def test_measure(self):
@@ -1333,6 +1372,55 @@ class TestKDADetail:
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
+
+    def test_no_cross_symbol(self):
+        """No ×cross symbol in KDA detail panel."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        items = detail._build(TH)
+        for _, child in items:
+            assert not isinstance(child, Symbol)
+
+    def test_has_b_proj_annotation(self):
+        """KDA detail panel shows β: b_proj annotation."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "b_proj" in svg_str
+
+
+class TestMambaDetail:
+    def test_measure(self):
+        detail = MambaDetail(MambaDisplayConfig(d_state=64, d_conv=4, d_inner=256))
+        sz = detail.measure(TH)
+        assert sz.w > 0
+        assert sz.h > 0
+
+    def test_render(self):
+        detail = MambaDetail(MambaDisplayConfig(d_state=64, d_conv=4, d_inner=256))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        assert len(elements) > 0
+        svg_str = "".join(str(e) for e in elements)
+        assert "Mamba SSM" in svg_str
+        assert "in_proj" in svg_str
+        assert "out_proj" in svg_str
+        assert "CausalConv1d" in svg_str
+
+    def test_annotations(self):
+        detail = MambaDetail(MambaDisplayConfig(d_state=64, d_conv=4, d_inner=256))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "d_state = 64" in svg_str
+        assert "d_conv = 4" in svg_str
+        assert "d_inner = 256" in svg_str
+
+    def test_five_rows(self):
+        """Mamba detail has 5 rows: out_proj, norm, ssm, conv, in_proj."""
+        detail = MambaDetail(MambaDisplayConfig(d_state=64))
+        items = detail._build(TH)
+        assert len(items) == 5
 
 
 class TestMLPDetail:
@@ -1356,6 +1444,109 @@ class TestMLPDetail:
         svg_str = "".join(str(e) for e in elements)
         assert "11,008" in svg_str or "11008" in svg_str
 
+    def test_labels_gated(self):
+        """Gated MLP shows down_proj, gate_proj, up_proj."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "down_proj" in svg_str
+        assert "gate_proj" in svg_str
+        assert "up_proj" in svg_str
+
+    def test_labels_ungated(self):
+        """Ungated MLP shows down_proj and up_proj."""
+        detail = MLPDetail(MLPDisplayConfig(gated=False, activation="silu", intermediate_size=5504))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "down_proj" in svg_str
+        assert "up_proj" in svg_str
+
+    def test_silu_capitalization(self):
+        """Activation label reads 'SiLU' not 'SILU'."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "SiLU" in svg_str
+        assert "SILU" not in svg_str
+
+    def test_gelu_capitalization(self):
+        """Activation label reads 'GELU' for gelu."""
+        detail = MLPDetail(MLPDisplayConfig(gated=False, activation="gelu", intermediate_size=5504))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "GELU" in svg_str
+
+    def test_background_box(self):
+        """MLPDetail renders a detail-bg rect."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "detail-bg" in svg_str
+
+    def test_gated_fork_merge_arrows(self):
+        """Gated MLP renders fork/merge Path arrows with manual arrowheads."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        # Fork/merge produces Path elements for the routing lines
+        fork_merge_paths = [e for e in elements if isinstance(e, S.Path)
+                            and hasattr(e, 'd') and e.d and len(e.d) >= 4]
+        assert len(fork_merge_paths) >= 4, f"Expected ≥4 fork/merge path lines, got {len(fork_merge_paths)}"
+        # Manual arrowhead Paths (V-shapes with 3 commands: MoveTo, LineTo, LineTo)
+        arrowheads = [e for e in elements if isinstance(e, S.Path)
+                      and hasattr(e, 'd') and e.d and len(e.d) == 3]
+        assert len(arrowheads) >= 4, f"Expected ≥4 manual arrowheads, got {len(arrowheads)}"
+        # No marker_end on any element
+        for e in elements:
+            if hasattr(e, 'marker_end'):
+                assert not e.marker_end, "Expected no marker_end (manual arrowheads instead)"
+
+    def test_ungated_simple_arrows(self):
+        """Ungated MLP renders simple Line arrows with manual arrowheads."""
+        detail = MLPDetail(MLPDisplayConfig(gated=False, activation="silu", intermediate_size=5504))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        # Ungated case should produce Line elements for arrow shafts (no marker_end)
+        line_arrows = [e for e in elements if isinstance(e, S.Line)
+                       and getattr(e, 'class_', None) == ["arrow"]]
+        assert len(line_arrows) >= 2, f"Expected ≥2 arrow lines, got {len(line_arrows)}"
+        # Manual arrowhead Paths (V-shapes)
+        arrowheads = [e for e in elements if isinstance(e, S.Path)
+                      and hasattr(e, 'd') and e.d and len(e.d) == 3]
+        assert len(arrowheads) >= 2, f"Expected ≥2 manual arrowheads, got {len(arrowheads)}"
+
+
+class TestDecoderBlockMlpBbox:
+    def test_mlp_bbox_within_block(self):
+        """mlp_bbox returns a BBox inside the block bounds."""
+        mixer = MixerSpec(mixer_type="attention", label="Attn",
+                          display=AttentionDisplayConfig(heads=8))
+        block = DecoderBlock(mixer)
+        block_sz = block.measure(TH)
+        block_bb = BBox(100, 200, block_sz.w, block_sz.h)
+        mlp_bb = block.mlp_bbox(block_bb, TH)
+        assert mlp_bb.x >= block_bb.x
+        assert mlp_bb.y >= block_bb.y
+        assert mlp_bb.right <= block_bb.right
+        assert mlp_bb.bottom <= block_bb.bottom
+        assert mlp_bb.w > 0
+        assert mlp_bb.h > 0
+
+    def test_mlp_bbox_height_is_box_h(self):
+        """mlp_bbox height matches the standard box height."""
+        mixer = MixerSpec(mixer_type="gdn", label="GDN",
+                          display=GDNDisplayConfig(value_heads=8))
+        block = DecoderBlock(mixer)
+        block_sz = block.measure(TH)
+        block_bb = BBox(0, 0, block_sz.w, block_sz.h)
+        mlp_bb = block.mlp_bbox(block_bb, TH)
+        assert mlp_bb.h == TH.geo.box_h
+
 
 class TestDetailForMixer:
     def test_attention(self):
@@ -1376,11 +1567,81 @@ class TestDetailForMixer:
         detail = detail_for_mixer(mixer)
         assert isinstance(detail, KDADetail)
 
-    def test_mamba_returns_none(self):
+    def test_mamba(self):
         mixer = MixerSpec(mixer_type="mamba", label="Mamba",
                           display=MambaDisplayConfig(d_state=64))
         detail = detail_for_mixer(mixer)
-        assert detail is None
+        assert isinstance(detail, MambaDetail)
+
+
+class TestStochasticMixerPanel:
+    def _make_spec(self) -> StochasticMixerSpec:
+        return StochasticMixerSpec(
+            main_mixer_name="attention",
+            sub_mixers=(
+                ("attention", MixerSpec(mixer_type="attention", label="Attn",
+                                        display=AttentionDisplayConfig(heads=8))),
+                ("gdn", MixerSpec(mixer_type="gdn", label="GDN",
+                                   display=GDNDisplayConfig(value_heads=8))),
+                ("kda", MixerSpec(mixer_type="kda", label="KDA",
+                                   display=KDADisplayConfig(heads=8))),
+            ),
+        )
+
+    def test_measure_height(self):
+        """Height = n sub-mixers × (box_h + gap) + padding + title."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        assert sz.h > 0
+        assert sz.w > 0
+
+    def test_render_has_title(self):
+        """'Stochastic' appears in rendered SVG."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Stochastic" in svg_str
+
+    def test_render_sub_mixer_boxes(self):
+        """Each sub-mixer name appears in rendered SVG."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "attention" in svg_str
+        assert "gdn" in svg_str
+        assert "kda" in svg_str
+
+    def test_main_mixer_marked(self):
+        """Main mixer has ★ indicator."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "\u2605" in svg_str
+
+    def test_sub_mixer_bboxes_count(self):
+        """Returns correct number of (bbox, spec) pairs."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        bboxes = panel.sub_mixer_bboxes(BBox(0, 0, sz.w, sz.h), TH)
+        assert len(bboxes) == 3
+
+    def test_sub_mixer_css_classes(self):
+        """Each sub-mixer uses correct CSS class."""
+        spec = self._make_spec()
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "box-attention" in svg_str
+        assert "box-ssm" in svg_str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1421,6 +1682,12 @@ class TestDefs:
         assert "arr-d" in svg_str
         assert "arr-u" in svg_str
         assert "shadow" in svg_str
+
+    def test_markers_no_orient(self):
+        """Markers must NOT use orient='auto-start-reverse' (causes sideways arrows)."""
+        d = defs(TH)
+        svg_str = str(d)
+        assert "auto-start-reverse" not in svg_str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1536,3 +1803,297 @@ class TestGenerateDiagram:
         svg = generate_diagram(config)
         assert "<defs>" in svg
         assert "arr-d" in svg
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# mixer_css_class
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestMixerCssClass:
+    def test_attention(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="attention", label="Attention"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-attention"
+
+    def test_sliding_window(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="sliding_window", label="SWA"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-attention"
+
+    def test_gdn(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="gdn", label="GDN"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-ssm"
+
+    def test_kda(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="kda", label="KDA"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-ssm"
+
+    def test_mamba(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="mamba", label="Mamba"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-ssm"
+
+    def test_stochastic(self):
+        spec = BlockSpec(
+            mixer=StochasticMixerSpec(
+                main_mixer_name="attention",
+                sub_mixers=(
+                    ("attention", MixerSpec(mixer_type="attention", label="Attn")),
+                    ("gdn", MixerSpec(mixer_type="gdn", label="GDN")),
+                ),
+            ),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-stochastic"
+
+    def test_unknown_type(self):
+        spec = BlockSpec(
+            mixer=MixerSpec(mixer_type="unknown", label="Unknown"),
+            mlp=MLPDisplayConfig(), norm_type="RMSNorm",
+        )
+        assert mixer_css_class(spec) == "box-linear"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ArchitectureOverview
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestArchitectureOverview:
+    def _fixed_arch(self, num_blocks: int = 24) -> ArchitectureModel:
+        return extract_model(_fixed_attention_config(num_blocks))
+
+    def _hybrid_arch(self) -> ArchitectureModel:
+        return extract_model(_hybrid_dil_config())
+
+    def _comprehensive_arch(self) -> ArchitectureModel:
+        return extract_model(_comprehensive_config())
+
+    def test_text_only_cells(self):
+        """Fixed attention → 4 cells: embed + 1 group + norm + lm_head."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        # 1 embed + 1 decoder group + 1 norm + 1 lm_head = 4
+        assert len(cells) == 4
+
+    def test_hybrid_cells(self):
+        """Hybrid 8+32+8 → 7 cells: embed + 3 groups + norm + lm_head."""
+        arch = self._hybrid_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        # 1 embed + 3 decoder groups + 1 norm + 1 lm_head = 6
+        assert len(cells) == 6
+
+    def test_comprehensive_cells(self):
+        """Comprehensive 48 groups → 52 cells: embed + 48 groups + norm + lm_head."""
+        arch = self._comprehensive_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        # 1 embed + 48 decoder groups + 1 norm + 1 lm_head = 51
+        assert len(cells) == 51
+
+    def test_cell_height_uniform(self):
+        """All cells have stack_cell_h height."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        for cell_bb, _ in cells:
+            assert cell_bb.h == TH.geo.stack_cell_h
+
+    def test_cells_non_overlapping(self):
+        """Sequential bboxes should not overlap."""
+        arch = self._hybrid_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        for i in range(len(cells) - 1):
+            assert cells[i][0].bottom <= cells[i + 1][0].y
+
+    def test_contains_embedding_label(self):
+        """'Embedding' should appear in rendered SVG."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Embedding" in svg_str
+
+    def test_contains_lm_head_label(self):
+        """'LM Head' should appear in rendered SVG."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "LM Head" in svg_str
+
+    def test_multiplier_in_label(self):
+        """Groups with count>1 show '×N' in the label."""
+        arch = self._fixed_arch(24)
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "\u00d724" in svg_str
+
+    def test_range_labels(self):
+        """Decoder cells should have range annotations."""
+        arch = self._hybrid_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "stack-label" in svg_str
+
+    def test_tied_weights(self):
+        """When tie_word_embeddings=True, 'tied' appears in SVG."""
+        arch = self._hybrid_arch()
+        assert arch.tie_word_embeddings is True
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "tied" in svg_str
+
+    def test_decoder_cells_have_spec(self):
+        """Decoder cell_bboxes have non-None spec; non-decoder cells have None."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = overview.cell_bboxes(bb, TH)
+        # First cell = Embedding (None), last = LM Head (None), second-to-last = Norm (None)
+        assert cells[0][1] is None  # Embedding
+        assert cells[-1][1] is None  # LM Head
+        assert cells[-2][1] is None  # Norm
+        # Decoder cells should have non-None spec
+        for _, spec in cells[1:-2]:
+            assert spec is not None
+
+
+class TestVisionEncoderColumn:
+    def _vision_spec(self) -> VisionEncoderSpec:
+        arch = extract_model(_vision_config())
+        assert arch.vision_encoder is not None
+        return arch.vision_encoder
+
+    def test_three_cells(self):
+        """Measure height = 3 cells + 2 gaps."""
+        vision = self._vision_spec()
+        col = VisionEncoderColumn(vision)
+        sz = col.measure(TH)
+        expected_h = 3 * TH.geo.stack_cell_h + 2 * TH.geo.stack_cell_gap
+        assert sz.h == expected_h
+
+    def test_render_patch_embed_label(self):
+        """'Patch Embed' should appear in rendered SVG."""
+        vision = self._vision_spec()
+        col = VisionEncoderColumn(vision)
+        sz = col.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(col.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Patch Embed" in svg_str
+
+    def test_render_adapter_label(self):
+        """'Adapter' should appear in rendered SVG."""
+        vision = self._vision_spec()
+        col = VisionEncoderColumn(vision)
+        sz = col.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(col.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Adapter" in svg_str
+
+    def test_cell_bboxes(self):
+        """Only the encoder cell (middle) has a non-None spec."""
+        vision = self._vision_spec()
+        col = VisionEncoderColumn(vision)
+        sz = col.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        cells = col.cell_bboxes(bb, TH)
+        assert len(cells) == 3
+        assert cells[0][1] is None  # Patch Embed
+        assert cells[1][1] is not None  # Vision Encoder
+        assert cells[2][1] is None  # Adapter
+
+
+class TestLayoutIncludesStack:
+    def test_fixed_has_overview(self):
+        """End-to-end: fixed decoder SVG contains overview elements."""
+        config = _fixed_attention_config(24)
+        svg = generate_diagram(config)
+        assert "Embedding" in svg
+        assert "LM Head" in svg
+        assert "RMSNorm" in svg
+
+    def test_hybrid_has_overview_and_tied(self):
+        """End-to-end: hybrid decoder SVG has overview + tied weights."""
+        config = _hybrid_dil_config()
+        svg = generate_diagram(config)
+        assert "Embedding" in svg
+        assert "tied" in svg
+        # Should have connector paths
+        assert "connector" in svg
+
+    def test_vision_has_vision_column(self):
+        """End-to-end: vision config SVG has vision column elements."""
+        config = _vision_config()
+        svg = generate_diagram(config)
+        assert "Patch Embed" in svg
+        assert "Vision Enc" in svg
+        assert "Adapter" in svg
+        assert "replace" in svg
+
+    def test_comprehensive_has_overview(self):
+        """End-to-end: comprehensive config SVG has overview."""
+        config = _comprehensive_config()
+        svg = generate_diagram(config)
+        assert "Embedding" in svg
+        assert "LM Head" in svg
+
+    def test_stochastic_has_dispatch_column(self):
+        """When stochastic blocks exist, 'Stochastic' appears in SVG."""
+        config = _stochastic_supernet_config()
+        svg = generate_diagram(config)
+        assert "Stochastic" in svg
+
+    def test_no_stochastic_no_column(self):
+        """When no stochastic blocks, 'Stochastic Dispatch' absent."""
+        config = _fixed_attention_config(4)
+        svg = generate_diagram(config)
+        assert "Stochastic Dispatch" not in svg
+
+    def test_comprehensive_has_dispatch(self):
+        """Comprehensive config shows stochastic panel."""
+        config = _comprehensive_config()
+        svg = generate_diagram(config)
+        assert "Stochastic" in svg

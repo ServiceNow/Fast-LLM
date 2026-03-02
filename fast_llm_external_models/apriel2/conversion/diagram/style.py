@@ -99,6 +99,12 @@ class Geometry:
     residual_r: float = 9
     symbol_r: float = 9
 
+    # Layer stack / architecture overview column
+    stack_w: float = 185  # matches inner_w for consistency with block boxes
+    stack_cell_h: float = 32  # matches box_h
+    stack_cell_gap: float = 10  # matches gap — room for vertical flow lines
+    stack_conn_gap: float = 60  # gap between overview right edge and definition area
+
     stroke: float = 1.2
     stroke_arrow: float = 1.5
     dash: list[int] = field(default_factory=lambda: [6, 4])
@@ -179,7 +185,7 @@ text.mono {{ font-family: {mono}; }}
 .box-stochastic {{
   fill: {stoch}; stroke: {stoch_t}; stroke-dasharray: 6 3;
 }}
-.box-stochastic > text {{ fill: {stoch_t}; }}
+.box-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
 
 /* ── structural boxes ───────────────────── */
 .block-bg {{
@@ -196,6 +202,9 @@ text.mono {{ font-family: {mono}; }}
 .connector {{ stroke: {dash_col}; stroke-width: 1;
               stroke-dasharray: {dash}; fill: none; }}
 .brace     {{ stroke: {note}; stroke-width: 1.5; fill: none; }}
+
+/* ── layer stack ───────────────────────── */
+.stack-label {{ font-size: {sz_sm}px; fill: {note}; dominant-baseline: central; }}
 .symbol    {{ stroke: {wire}; stroke-width: 1.2; fill: white; }}
 .symbol line {{ stroke: {wire}; stroke-width: 1.5; }}
 

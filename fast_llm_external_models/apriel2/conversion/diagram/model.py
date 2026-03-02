@@ -102,6 +102,7 @@ class VisionEncoderSpec:
     mixer: MixerSpec
     mlp_label: str
     adapter_label: str
+    block_spec: BlockSpec  # full block spec for the vision encoder blocks
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,9 @@ def extract_model(config: dict) -> ArchitectureModel:
     vision_encoder = None
     if "vision_encoder" in config:
         vision_encoder = _extract_vision_encoder(config["vision_encoder"])
+        ve_spec = vision_encoder.block_spec
+        if ve_spec not in {s for _, s in unique_specs}:
+            unique_specs.append(("Vision Encoder", ve_spec))
 
     # Model name
     model_name = config.get("model_type", "Apriel2")
@@ -501,6 +505,8 @@ def _extract_vision_encoder(ve_config: dict) -> VisionEncoderSpec:
     adapter_config = ve_config.get("adapter", {})
     adapter_label = _make_mlp_label(adapter_config)
 
+    block_spec = _extract_block_spec(block, hidden_size)
+
     return VisionEncoderSpec(
         hidden_size=hidden_size,
         num_blocks=num_blocks,
@@ -508,4 +514,5 @@ def _extract_vision_encoder(ve_config: dict) -> VisionEncoderSpec:
         mixer=mixer,
         mlp_label=mlp_label_str,
         adapter_label=adapter_label,
+        block_spec=block_spec,
     )
