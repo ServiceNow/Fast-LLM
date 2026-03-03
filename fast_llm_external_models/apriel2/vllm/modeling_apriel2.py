@@ -109,6 +109,11 @@ DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
 DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
 DEBUG_FINAL_NORM = False  # Debug final norm before LM head
 DEBUG_LM_HEAD = False  # Debug LM head input/output
+# Log ssm_state_indices at every GDN/KDA forward (decode only, suppressed
+# during CUDA graph capture).  Flags duplicate block IDs with "** DUPLICATE **".
+# NOTE: In FULL CUDA graph mode, model-side logging never executes during replay;
+# use the GDN metadata builder logging in gdn_attn.py instead (which also reads
+# this env var).
 DEBUG_STATE_INDICES = os.environ.get("APRIEL2_DEBUG_STATE_INDICES", "0") == "1"
 
 # =============================================================================
@@ -227,14 +232,36 @@ DEBUG_STATE_INDICES = os.environ.get("APRIEL2_DEBUG_STATE_INDICES", "0") == "1"
 # can be faster than attention in Mode 1 (FULL graphs).
 #
 # =============================================================================
+# Capture the entire forward (including stochastic dispatch) as one monolithic
+# CUDA graph per batch size.  On placement change, ALL graphs are invalidated
+# and re-captured via capture_model() (~5-15 s).  When disabled, the dispatch
+# op is registered as a graph-splitting op, forcing PIECEWISE mode where Python
+# selects the active mixer each step (no re-capture needed).
+# See Mode 1 vs Mode 2/3 in the table above.
+# Default: "1" (enabled).
 APRIEL2_FULL_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_FULL_CUDA_GRAPHS", "1") == "1"
+
+# Only relevant when APRIEL2_FULL_CUDA_GRAPHS=0 (PIECEWISE mode).
+# Caches a separate small CUDA graph per (mixer_name, batch_size) at each
+# stochastic dispatch point.  Creates ~5k graphs (~2.4 GiB), adding memory
+# pressure but slightly faster than fully-eager dispatch.
+# See Mode 2 vs Mode 3 in the table above.
+# Default: "0" (disabled — the throughput gain is marginal).
 APRIEL2_MIXER_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_MIXER_CUDA_GRAPHS", "0") == "1"
 
 # Offload inactive mixer weights to CPU after profile_run(). Frees ~19 GiB
 # GPU memory for KV cache. On layout switch, weights are swapped layer by layer.
-# Note: cannot offload during load_weights() because torch.compile captures all
-# parameters as graph inputs — profile_run() would crash with CPU tensors.
-# Default: enabled with FULL CUDA graphs (layout is fixed per graph capture).
+#
+# Constraints:
+# - Cannot offload during load_weights(): torch.compile captures all parameters
+#   as graph inputs — profile_run() would crash with CPU tensors.
+# - Only moves parameters, NOT buffers: RotaryEmbedding.cos_sin_cache is shared
+#   across mixer instances (via get_rope() LRU cache); moving it corrupts the
+#   active mixer.
+# - Offloaded modules are removed from nn.ModuleDict and stored in a plain dict
+#   (_offloaded_mixers) to prevent torch.compile guard invalidation.
+#
+# Default: "1" when FULL graphs enabled (layout fixed per capture), "0" otherwise.
 APRIEL2_OFFLOAD_INACTIVE_MIXERS: bool = (
     os.environ.get("APRIEL2_OFFLOAD_INACTIVE_MIXERS", "1" if APRIEL2_FULL_CUDA_GRAPHS else "0") == "1"
 )
