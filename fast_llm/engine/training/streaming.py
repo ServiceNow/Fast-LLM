@@ -4,6 +4,7 @@ import typing
 
 import torch.distributed
 
+from fast_llm.core.distributed import init_extra_process_group
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig, TrainerCallback
 
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 REDIS_TRAINING_STREAM = "fast_llm_events"
 REDIS_TRAINING_FIELD = "event"
+WEIGHTS_BROADCAST_PG_NAME = "fast_llm_weights_broadcast"
 
 
 class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](TrainerCallback[ConfigType]):
@@ -23,12 +25,13 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._client = self._config.get_client()
             init_method = f"tcp://{config.broadcast.host}:{config.broadcast.port}"
             logger.info(f"Waiting for weights broadcast rendezvous at {init_method} ...")
-            # TODO: Create a custom process group instead.
-            self._process_group = torch.distributed.init_process_group(
+            self._process_group = init_extra_process_group(
                 backend=str(self._config.broadcast.backend),
                 init_method=init_method,
                 world_size=config.broadcast.external_world_size + 1,
                 rank=0,
+                # TODO: make it settable from config
+                group_name=WEIGHTS_BROADCAST_PG_NAME,
             )
             logger.info(f"Weights broadcast rendezvous at {init_method} connected")
 
