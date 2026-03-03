@@ -22,7 +22,7 @@ from einops import rearrange
 from torch import nn
 from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
-from vllm.attention.layer import Attention
+from vllm import __version_tuple__ as _vllm_version
 from vllm.compilation.decorators import support_torch_compile
 from vllm.compilation.monitor import cudagraph_capturing_enabled, validate_cudagraph_capturing_enabled
 from vllm.config import CacheConfig, ModelConfig, SpeculativeConfig, VllmConfig, get_current_vllm_config
@@ -69,6 +69,11 @@ from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
 from vllm.v1.attention.selector import get_mamba_attn_backend
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec, MambaSpec, SlidingWindowSpec
 
+if _vllm_version >= (0, 16, 0):
+    from vllm.model_executor.layers.attention import Attention
+else:
+    from vllm.attention.layer import Attention
+
 # Lazy triton allocator setup - only called when a triton kernel needs scratch memory
 _triton_allocator_installed = False
 
@@ -104,6 +109,7 @@ DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
 DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
 DEBUG_FINAL_NORM = False  # Debug final norm before LM head
 DEBUG_LM_HEAD = False  # Debug LM head input/output
+DEBUG_STATE_INDICES = os.environ.get("APRIEL2_DEBUG_STATE_INDICES", "0") == "1"
 
 # =============================================================================
 # CUDA Graph Modes for Stochastic Mixers
@@ -748,17 +754,28 @@ class Apriel2Config(PretrainedConfig):
 
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
+    # Attention-type mixers that use KV cache (not recurrent state)
+    _ATTENTION_MIXER_TYPES = {"attention", "sliding_window"}
+
     @property
     def layers_block_type(self) -> list[str]:
-        """Return block types for each layer (for hybrid model detection)."""
+        """Return block types for each layer, normalized to 'attention' or 'mamba'.
+
+        vLLM's get_num_layers_by_block_type() expects these two canonical types.
+        All attention-like mixers map to 'attention'; all recurrent mixers
+        (GDN, KDA, Mamba) map to 'mamba'.
+        """
         decoder_config = self.decoder
         seq_type = decoder_config.get("type", "fixed")
         num_blocks = decoder_config.get("num_blocks", self.num_hidden_layers)
 
+        def _normalize(mixer_type: str) -> str:
+            return "attention" if mixer_type in self._ATTENTION_MIXER_TYPES else "mamba"
+
         if seq_type == "fixed":
             block_config = decoder_config.get("block", {})
             mixer_type = block_config.get("mixer", {}).get("type", "attention")
-            return [mixer_type] * num_blocks
+            return [_normalize(mixer_type)] * num_blocks
         elif seq_type == "pattern":
             pattern = decoder_config.get("pattern", ["attention"])
             blocks_config = decoder_config.get("blocks", {})
@@ -766,7 +783,7 @@ class Apriel2Config(PretrainedConfig):
             for i in range(num_blocks):
                 block_name = pattern[i % len(pattern)]
                 mixer_type = blocks_config.get(block_name, {}).get("mixer", {}).get("type", "attention")
-                result.append(mixer_type)
+                result.append(_normalize(mixer_type))
             return result
         return ["attention"] * num_blocks
 
@@ -1767,6 +1784,17 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
 
+        if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
+            indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
+            unique = {i for i in indices if i >= 0}
+            dup = len(indices) - len(unique) - indices.count(-1)
+            tag = " ** DUPLICATE **" if dup > 0 else ""
+            print(
+                f"[STATE-IDX GDN {self.prefix}] "
+                f"decodes={attn_metadata.num_decodes} prefills={attn_metadata.num_prefills} "
+                f"indices={indices}{tag}"
+            )
+
         # self._debug_print(f"num_actual_tokens={num_actual_tokens}, num_prefills={attn_metadata.num_prefills}, num_decodes={attn_metadata.num_decodes}")
         # self._debug_print(f"has_initial_state={has_initial_state}")
         # self._debug_print(f"non_spec_query_start_loc={non_spec_query_start_loc}")
@@ -2204,6 +2232,17 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
         constant_caches = self.kv_cache[forward_context.virtual_engine]
+
+        if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
+            indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
+            unique = {i for i in indices if i >= 0}
+            dup = len(indices) - len(unique) - indices.count(-1)
+            tag = " ** DUPLICATE **" if dup > 0 else ""
+            print(
+                f"[STATE-IDX KDA {self.prefix}] "
+                f"decodes={attn_metadata.num_decodes} prefills={attn_metadata.num_prefills} "
+                f"indices={indices}{tag}"
+            )
 
         q_proj_states = q_proj_states[:num_actual_tokens]
         k_proj_states = k_proj_states[:num_actual_tokens]
@@ -3160,12 +3199,76 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         },
     )
 
-    # For hybrid models
+    # has_inner_state = True: model uses recurrent state (GDN, KDA, Mamba).
+    # is_hybrid = False: we handle config verification ourselves via
+    # MODELS_CONFIG_MAP (see config_convertor.py) rather than relying on
+    # vLLM's default HybridAttentionMambaModelConfig dispatch.  This is
+    # necessary because the default dispatch crashes for pure-mamba models
+    # (ZeroDivisionError: num_kv_heads=0 when no attention blocks exist).
     has_inner_state = True
-    # Don't use is_hybrid=True - it triggers HybridAttentionMambaModelConfig
-    # which assumes all mamba-like layers have the same shape.
-    # Apriel2 has heterogeneous blocks, each with its own get_kv_cache_spec().
     is_hybrid = False
+
+    @classmethod
+    def get_mamba_state_shape_from_config(
+        cls,
+        vllm_config: VllmConfig,
+    ) -> tuple:
+        """Return the largest mamba state shape across all mixer types.
+
+        HybridAttentionMambaModelConfig.verify_and_update_config() calls this
+        to compute page size alignment.  It only needs a conservative upper
+        bound — per-layer get_kv_cache_spec() handles actual heterogeneous
+        allocation.  We return the shape of whichever mixer type produces the
+        largest page_size_bytes (the "envelope").
+        """
+        config = vllm_config.model_config.hf_config
+        decoder_config = getattr(config, "decoder", {}) or {}
+        blocks_config = get_blocks_config(decoder_config)
+        block_params = get_block_params(blocks_config, vllm_config)
+
+        # Find the mamba block with the largest natural page size
+        best_shapes: tuple | None = None
+        best_page_size = 0
+        for params in block_params.values():
+            if isinstance(params, MambaBlockParams):
+                if params.natural_page_size > best_page_size:
+                    best_page_size = params.natural_page_size
+                    best_shapes = params.shapes
+
+        if best_shapes is None:
+            # Pure attention model — return minimal shapes so
+            # verify_and_update_config() sees mamba_page_size=0 and returns.
+            return ((1, 1), (1, 1))
+
+        return best_shapes
+
+    @classmethod
+    def get_mamba_state_dtype_from_config(
+        cls,
+        vllm_config: VllmConfig,
+    ) -> tuple:
+        """Return dtypes matching the envelope mamba state shape.
+
+        Must be consistent with get_mamba_state_shape_from_config() — returns
+        the dtypes of whichever mixer type has the largest page size.
+        """
+        config = vllm_config.model_config.hf_config
+        decoder_config = getattr(config, "decoder", {}) or {}
+        blocks_config = get_blocks_config(decoder_config)
+        block_params = get_block_params(blocks_config, vllm_config)
+
+        best_dtypes: tuple | None = None
+        best_page_size = 0
+        for params in block_params.values():
+            if isinstance(params, MambaBlockParams):
+                if params.natural_page_size > best_page_size:
+                    best_page_size = params.natural_page_size
+                    best_dtypes = params.dtypes
+
+        if best_dtypes is None:
+            return (torch.float32, torch.float32)
+
+        return best_dtypes
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
