@@ -169,5 +169,4 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
                 for stream_key, messages_ in messages:
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
-                        print(message)
                         yield RedisDocument.from_message(message).to_sample(sampling.preprocessing)
