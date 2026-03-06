@@ -61,12 +61,8 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         )
         if self._config.bos_token is not None:
             self.tokenizer.bos_token = self._config.bos_token
-        if self.tokenizer.eos_token_id is None:
-            raise ValueError("Tokenizer does not have an EOS token.")
-        if self.tokenizer.bos_token_id is None:
-            raise ValueError("Tokenizer does not have an BOS token.")
-        self.eod_id = self.tokenizer.eos_token_id
-        self.bod_id = self.tokenizer.bos_token_id
+        self.eod_id = getattr(self.tokenizer, "eos_token_id", None)
+        self.bod_id = getattr(self.tokenizer, "bos_token_id", None)
 
     @functools.cached_property
     def vocab_size(self) -> int:
@@ -89,9 +85,9 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         import torch
 
         tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        if begin:
+        if (begin and self.bod_id is not None):
             tokens.insert(0, self.bod_id)
-        if end:
+        if (end and self.eod_id is not None):
             tokens.append(self.eod_id)
 
         if self._config.max_vocab_size is not None:
@@ -271,10 +267,10 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         # Prepend BOS / append EOS if not already present anywhere in the sequence.
         # We check anywhere (not just first/last) because some chat templates add trailing
         # whitespace after the final EOS token, e.g. "<|im_end|>\n".
-        prepend_bos = begin and self.bod_id not in tokens
-        append_eos = end and self.eod_id not in tokens
+        prepend_bos = begin and self.bod_id is not None and self.bod_id not in tokens
+        append_eos = end and self.eod_id is not None and self.eod_id not in tokens
         tokens = [self.bod_id] * prepend_bos + list(tokens) + [self.eod_id] * append_eos
-        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [False] * append_eos
+        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [True] * append_eos
 
         # Convert boolean train mask to loss masking spans (spans where train_mask[i] == False)
         loss_masking_spans = _train_mask_to_loss_spans(train_mask)
