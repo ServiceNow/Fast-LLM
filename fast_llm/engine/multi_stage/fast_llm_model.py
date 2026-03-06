@@ -4,7 +4,7 @@ import typing
 
 from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
-from fast_llm.data.batch.config import BatchPreprocessingConfig
+from fast_llm.data.document.config import BatchPreprocessingConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed

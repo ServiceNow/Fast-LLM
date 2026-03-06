@@ -5,7 +5,7 @@ import typing
 from fast_llm.engine.base_model.base_model import Layer, LayerBaseWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.language_model import LanguageModel
@@ -54,12 +54,13 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
     def get_layers(self) -> list["Layer"]:
         return self.embeddings.get_layers() + self.encoder.get_layers() + self.adapter.get_layers()
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
         return safe_merge_dicts(
-            self.embeddings.get_preprocessing_config(phase),
-            self.encoder.get_preprocessing_config(phase),
-            self.adapter.get_preprocessing_config(phase),
+            {"normalization": self._config.normalization},
+            self.embeddings.get_preprocessing_config(),
+            self.encoder.get_preprocessing_config(),
+            self.adapter.get_preprocessing_config(),
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
@@ -107,10 +108,15 @@ class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageMod
     def get_layers(self) -> list[Layer]:
         return self._vision_encoder_with_namespace.get_layers() + super().get_layers()
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(
-            self._vision_encoder_with_namespace.get_preprocessing_config(phase),
-            super().get_preprocessing_config(phase),
+            {
+                "vision_encoder": safe_merge_dicts(
+                    self._vision_encoder_with_namespace.get_preprocessing_config(),
+                    {"distributed": self._distributed_config, "namespace": self._vision_encoder_namespace},
+                )
+            },
+            super().get_preprocessing_config(),
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:

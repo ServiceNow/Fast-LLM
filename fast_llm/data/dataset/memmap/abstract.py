@@ -13,7 +13,6 @@ from fast_llm.data.dataset.memmap.config import (
     NullReaderConfig,
 )
 from fast_llm.data.document.abstract import Document
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
 from fast_llm.utils import Assert
 
 
@@ -29,12 +28,8 @@ class NullMemmapReader[ConfigType: NullReaderConfig](MemmapReaderBase[ConfigType
 
 
 class MemmapReader[ConfigType: MemmapReaderConfig](MemmapReaderBase[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
+    def __init__(self, config: ConfigType, buffer: memoryview):
         super().__init__(config)
-        # Note: This is the requirement at reading time (ex. from the model),
-        # which may differ from how the dataset was actually preprocessed (`config.preprocessing`)
-        # Compatibility checked in `MemmapDataset`.
-        self._model_preprocessing = NullPreprocessingConfig if model_preprocessing is None else model_preprocessing
         buffer_begin = self._config.begin + len(self._config.header)
         buffer_end = self._config.end - len(self._config.footer)
         Assert.eq(buffer[self._config.begin : buffer_begin].tobytes(), self._config.header)
@@ -67,16 +62,11 @@ class MemmapIndexedDatasetReader[ConfigType: MemmapIndexDatasetReaderConfig](Mem
 
 
 class MemmapWriter(abc.ABC):
-    def __init__(
-        self, stream: io.BufferedWriter | pathlib.Path, preprocessing_config: PreprocessingConfig | None = None
-    ):
+    def __init__(self, stream: io.BufferedWriter | pathlib.Path):
         self._owns_stream = isinstance(stream, pathlib.Path)
         if self._owns_stream:
             stream = stream.open("wb")
         self._stream = stream
-        self._preprocessing_config = (
-            NullPreprocessingConfig() if preprocessing_config is None else preprocessing_config
-        )
 
     def __enter__(self):
         self._begin = self._stream.tell()
@@ -111,9 +101,8 @@ class MemmapWriter(abc.ABC):
         cls,
         stream: io.BufferedWriter,
         documents: typing.Iterable[Document],
-        preprocessing_config: PreprocessingConfig | None = None,
     ) -> MemmapReaderConfig:
-        with cls(stream, preprocessing_config) as writer:
+        with cls(stream) as writer:
             for document in documents:
                 writer.write(document)
         return writer.get_config()

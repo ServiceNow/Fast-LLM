@@ -1,7 +1,6 @@
 import collections
 import datetime
 import enum
-import functools
 import json
 import logging
 import math
@@ -31,17 +30,14 @@ from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.patch import PatchDocument
 from fast_llm.data.document.range import RangeDocument
-from fast_llm.data.document.token import TokenDocument
-from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import (
+from fast_llm.data.preparation.config import DatasetPreparator
+from fast_llm.data.preparation.gpt_memmap.config import (
     ConversationSourceConfig,
     DocumentSourceConfig,
     GPTMemmapDatasetPreparatorConfig,
     LanguageModelSourceConfig,
 )
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import Tokenizer
+from fast_llm.data.preparation.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import normalize_probabilities, padded_cumsum
@@ -208,21 +204,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
-            self._preprocessing_config,
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
-
-    @functools.cached_property
-    def _preprocessing_config(self) -> LanguageModelPreprocessingConfig:
-        return LanguageModelPreprocessingConfig(
-            tokenizer=self._config.tokenizer,
-            vocab_size=self._tokenizer.vocab_size,
-            image_patches=(
-                self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
-            ),
-            use_loss_masking_spans=self._source_schema.has_loss_masking_span,
-            use_preference_spans=self._source_schema.has_preference_spans,
-        )
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelDocument:
         token_spans_by_type = collections.defaultdict(list)
@@ -335,7 +318,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         len(tokens)
 
         return LanguageModelDocument(
-            tokens=TokenDocument(tokens=tokens),
+            tokens=tokens,
             loss_masking_spans=(
                 RangeDocument(ranges=token_spans_by_type[SpanType.loss_masking])
                 if self._source_schema.has_loss_masking_span
@@ -466,9 +449,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
-                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
-                        self._preprocessing_config
-                    )
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
                     begin_index, end_index, metadata = dataset.reader.get_split(
                         split_begin_in_dataset, split_end_in_dataset
                     )

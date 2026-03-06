@@ -7,14 +7,13 @@ from fast_llm.data.dataset.memmap.abstract import MemmapReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import PatchReaderConfig
 from fast_llm.data.document.abstract import Document
 from fast_llm.data.document.patch import PatchDocument, filter_lengths
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 
 class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
-        super().__init__(config, buffer, model_preprocessing)
+    def __init__(self, config: ConfigType, buffer: memoryview):
+        super().__init__(config, buffer)
         self._patches = torch.frombuffer(
             self._buffer,
             dtype=self._config.data_type.torch,
@@ -137,5 +136,4 @@ class PatchWriter(MemmapWriter):
             num_patch_groups=self._group_count_cumsum[-1],
             patch_shape=self._patch_shape,
             data_type=DataType.from_torch(self._data_type),
-            preprocessing=self._preprocessing_config,
         )

@@ -11,7 +11,7 @@ import torch.utils
 import torch.utils.data
 
 from fast_llm.config import Configurable
-from fast_llm.data.batch.config import PreprocessedBatch
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
@@ -112,7 +112,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         config: ConfigType,
         *,
         multi_stage: MultiStageModel,
-        batch_meta: PreprocessedBatch,
+        batch_meta: list[ModelInput],
         distributed_config: DistributedConfig,
         phase: PhaseType,
     ):

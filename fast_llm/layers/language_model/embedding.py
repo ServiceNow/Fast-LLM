@@ -7,7 +7,7 @@ from fast_llm.core.ops import gather, reduce_forward, split
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
@@ -154,21 +154,15 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 dtype=self._residual_dtype,
             )
         if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
-            # Language model: input_ contains token ids.
-            token_ids = input_
+            # Language model: input_ contains duplicate token ids. TODO: ===== remove ======
             input_ = None
-        else:
-            # Multimodal case: input_ contains encoder output, token ids stores in kwargs.
-            # TODO: Support multiple encoders.
-            # TODO: Support pipeline-parallel.
-            token_ids = kwargs.get(LanguageModelKwargs.token_ids)
 
         out = self._forward(
             input_,
-            token_ids,
+            kwargs[LanguageModelKwargs.token_ids],
             kwargs.get(LanguageModelKwargs.position_ids),
-            # TODO ====== Vision ====== Review input masking.
-            kwargs.get(LanguageModelKwargs.mask_inputs),
+            # Masking is needed with image tokens or padding.
+            input_ is not None or kwargs[LanguageModelKwargs.num_tokens] < kwargs[LanguageModelKwargs.token_dim].size,
             embedding_map,
         )
         self._debug(out, None, (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim), kwargs)
@@ -178,7 +172,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         # TODO: Add marginal compute? (embeddings)
         return 0
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         out = {"vocab_size": self._config.vocab_size}
         if self._config.position_embeddings.enabled:
             out["return_position_index"] = True

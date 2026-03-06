@@ -9,7 +9,6 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.document.abstract import Document
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -89,7 +88,6 @@ class SamplingConfig(SamplingConfigBase):
     predicted_tokens: int = Field(default=1)
     cache_directory: pathlib.Path | None = Field(default=None)
     dataset_name: str = Field(default="dataset")
-    preprocessing: PreprocessingConfig = Field()
     world_size: int = Field(default=1)
     rank: int = Field(default=0)
     _rank_counter: typing.Iterator[int] = Field(init=False)
@@ -124,16 +122,16 @@ class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
 
 @config_class()
 class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
-    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
+    def build(self) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
     def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
-        return self.build(config.preprocessing).sample(config, num_samples, seed)
+        return self.build().sample(config, num_samples, seed)
 
 
 @config_class()
 class IndexedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[DocumentType]":
+    def build(self) -> "IndexedDataset[DocumentType]":
         raise NotImplementedError()
 
 
@@ -157,10 +155,10 @@ class ConcatenatedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[D
         valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "ConcatenatedDataset":
+    def build(self) -> "ConcatenatedDataset":
         from fast_llm.data.dataset.indexed import ConcatenatedDataset
 
-        return ConcatenatedDataset(self.name, [dataset.build(preprocessing) for dataset in self.datasets])
+        return ConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "slice"})
@@ -190,10 +188,10 @@ class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[Document
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "DatasetSlice":
+    def build(self) -> "DatasetSlice":
         from fast_llm.data.dataset.indexed import DatasetSlice
 
-        dataset = self.dataset.build(preprocessing)
+        dataset = self.dataset.build()
         size = len(dataset)
         return DatasetSlice[DocumentType](
             f"{dataset.name}_{self.begin}_{self.end}",

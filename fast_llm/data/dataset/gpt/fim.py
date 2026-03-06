@@ -4,7 +4,6 @@ import torch
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
 from fast_llm.data.document.language_model import LanguageModelDocument
-from fast_llm.data.document.token import TokenDocument
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import MAX_SEED
 
@@ -55,12 +54,10 @@ class GPTFimDataset[DocumentType: LanguageModelDocument](SampledDataset[Document
 
         return [
             LanguageModelDocument(
-                tokens=TokenDocument(
-                    tokens=torch.from_numpy(
-                        self._fim(
-                            document.tokens.tokens.numpy(),
-                            np.random.RandomState(seed=(self._seed + index) % MAX_SEED),
-                        )
+                tokens=torch.from_numpy(
+                    self._fim(
+                        document.tokens.numpy(),
+                        np.random.RandomState(seed=(self._seed + index) % MAX_SEED),
                     )
                 )
             )

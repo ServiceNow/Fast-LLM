@@ -4,12 +4,11 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplableDatasetConfig, SampledDatasetConfig, SamplingConfig
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -25,7 +24,7 @@ class GPTSamplingConfig(SamplingConfig):
     usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
     """
 
-    preprocessing: LanguageModelPreprocessingConfig = FieldUpdate()
+    preprocessing: LanguageModelBatchPreprocessingConfig = Field()
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "random"})
@@ -57,10 +56,10 @@ class GPTDatasetFromFileConfig[DocumentType: LanguageModelDocument](SamplableDat
     def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         return self._load_config().build_and_sample(config, num_samples, seed)
 
-    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[DocumentType]:
+    def build(self) -> SamplableDataset[DocumentType]:
         config = self._load_config()
         assert isinstance(config, SamplableDatasetConfig)
-        return config.build(preprocessing)
+        return config.build()
 
     def _load_config(self) -> SampledDatasetConfig[DocumentType]:
         assert self.path.is_file(), f"File {self.path} does not exist."

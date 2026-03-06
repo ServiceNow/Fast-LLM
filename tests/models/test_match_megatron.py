@@ -18,8 +18,7 @@ from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.token import TokenDocument
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
@@ -124,8 +123,8 @@ class MegatronDatasetConfig[DocumentType: LanguageModelDocument](MemmapDatasetCo
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "LegacyMemmapDataset[DocumentType]":
-        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path, preprocessing)
+    def build(self) -> "LegacyMemmapDataset[DocumentType]":
+        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path)
 
 
 class MegatronMemmapDataset(LegacyMemmapDataset):
@@ -151,7 +150,7 @@ class MegatronMemmapDataset(LegacyMemmapDataset):
         # Write the binary data file (.bin) lazily
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
             for document in documents:
-                token_ids = document.tokens.tokens
+                token_ids = document.tokens
                 # Infer dtype from the first document
                 if dtype is None:
                     dtype = token_ids.dtype

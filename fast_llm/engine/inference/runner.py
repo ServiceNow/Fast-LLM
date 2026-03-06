@@ -40,7 +40,7 @@ class InferenceRunner(abc.ABC):
         self._schedule = Schedule(
             config=self._schedule_config,
             multi_stage=self._fast_llm_model,
-            batch_meta=self._fast_llm_model.get_preprocessing_config(PhaseType.inference).get_batch_meta(),
+            batch_meta=self._fast_llm_model.get_preprocessing_config(PhaseType.inference).get_input_meta(),
             distributed_config=self._fast_llm_model.config.distributed,
             phase=PhaseType.inference,
         )

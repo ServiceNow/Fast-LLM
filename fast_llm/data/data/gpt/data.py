@@ -6,8 +6,6 @@ import warnings
 import torch
 import torch.utils.data
 
-from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.data_loader import SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
@@ -15,7 +13,8 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingConfigBase
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.monitor import DatasetMonitor
-from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument, LanguageModelInput
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -50,7 +49,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         dataset_name: str,
         config: LanguageModelBatchPreprocessingConfig,
         num_samples: int,
-    ) -> LanguageModelPreprocessedBatch:
+    ) -> list[LanguageModelInput]:
         assert self._is_setup
         Assert.gt(num_samples, 0)
         if dataset_name not in self._config.datasets:
@@ -82,7 +81,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         dataset = self._config.datasets[dataset_name].build_and_sample(sampling, num_samples, self._config.seed)
         self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
-        return config.get_batch_meta(self._config.micro_batch_size)
+        return config.get_input_meta(self._config.micro_batch_size)
 
     def get_iterator(
         self,
@@ -93,7 +92,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         prefetch_factor: int | None = None,
         timeout: float = 60,
         preprocess: bool = True,
-    ) -> typing.Iterator[LanguageModelPreprocessedBatch]:
+    ) -> typing.Iterator[list[LanguageModelInput] | LanguageModelBatch]:
         assert self._is_setup
 
         # Some dataset names may come from phases and are capitalized,
@@ -126,12 +125,12 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         documents: list[list[LanguageModelDocument]],
         dataset_name: str,
         preprocess: bool = True,
-    ) -> LanguageModelPreprocessedBatch | LanguageModelBatch:
+    ) -> list[LanguageModelInput] | LanguageModelBatch:
         documents = [document for documents_ in documents for document in documents_]
         pad_to_size = self._config.micro_batch_size + self._preprocessing[dataset_name].predicted_tokens
+        batch = LanguageModelBatch.from_documents(documents, pad_to_size)
+
         if preprocess:
-            return LanguageModelPreprocessedBatch.from_documents(
-                documents, self._preprocessing[dataset_name], pad_to_size
-            )
+            return batch.get_model_inputs(self._preprocessing[dataset_name])
         else:
-            return LanguageModelBatch.from_documents(documents, pad_to_size)
+            return batch

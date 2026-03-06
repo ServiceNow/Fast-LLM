@@ -7,7 +7,7 @@ import torch.nn
 from fast_llm.engine.base_model.base_model import Layer, LayerWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -62,8 +62,8 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
     def get_layers(self) -> list["Layer"]:
         return self._layers_with_namespace
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        return self._layers_with_namespace[0].get_preprocessing_config(phase)
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return self._layers_with_namespace[0].get_preprocessing_config()
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._layers_with_namespace[0].preprocess(kwargs)
@@ -125,9 +125,9 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
     def get_layers(self) -> list[Layer]:
         return self._layers_with_namespace
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(
-            self._layers_with_namespace[index].get_preprocessing_config(phase)
+            self._layers_with_namespace[index].get_preprocessing_config()
             for _, index in self._config.preprocessing_layers.items()
         )
 

@@ -11,8 +11,8 @@ from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
-from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_SAMPLES, COMMON_DATASET_TEXT
-from tests.utils.dataset import get_common_test_dataset, get_test_dataset_with_image_patches
+from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_TEXT
+from tests.utils.dataset import get_test_dataset_with_image_patches
 
 DATASET_WITH_IMAGE_PATCHES_TOKENS = [55750, 56809, 59145, 59145]
 DATASET_WITH_IMAGE_PATCHES_IMAGE_MD5 = {
@@ -123,10 +123,8 @@ def _get_image_tokens(
 @pytest.mark.parametrize("image_break_token", (None, 55))
 @pytest.mark.parametrize("image_end_token", (None, 132))
 def test_gpt_data_with_image_patches(image_break_token, image_end_token):
-    _, config, hf_path, preprocessing = get_test_dataset_with_image_patches(image_break_token, image_end_token)
-    dataset: MemmapDataset[LanguageModelDocument] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
-        preprocessing
-    )
+    _, config, hf_path, _ = get_test_dataset_with_image_patches(image_break_token, image_end_token)
+    dataset: MemmapDataset[LanguageModelDocument] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
     test_index = 2 * (image_break_token is not None) + (image_end_token is not None)
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
@@ -158,7 +156,7 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
                 else [token_or_patches]
             )
         ]
-        Assert.eq(document.tokens.tokens.tolist(), expected_tokens)
+        Assert.eq(document.tokens.tolist(), expected_tokens)
         Assert.eq(document.image_patches.token_map.tolist(), DATASET_WITH_IMAGE_PATCHES_TOKEN_MAP[index][test_index])
         Assert.eq(document.image_patches.positions.tolist(), DATASET_WITH_IMAGE_PATCHES_POSITIONS[index])
         Assert.eq(document.image_patches.lengths, DATASET_WITH_IMAGE_PATCHES_LENGTHS[index])
@@ -166,15 +164,3 @@ def test_gpt_data_with_image_patches(image_break_token, image_end_token):
             hashlib.md5(document.image_patches.patches.numpy().tobytes()).hexdigest(),
             DATASET_WITH_IMAGE_PATCHES_PATCHES_MD5[index],
         )
-
-
-@pytest.mark.slow
-def test_gpt_data_with_missing_image_patches():
-    path, config, hf_path, _ = get_common_test_dataset()
-    _, _, _, preprocessing = get_test_dataset_with_image_patches(config_only=True)
-    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
-
-    for index in COMMON_DATASET_SAMPLES:
-        document = dataset.get_document(index)
-        Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
-        Assert.none(document.image_patches)

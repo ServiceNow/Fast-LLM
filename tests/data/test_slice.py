@@ -37,7 +37,7 @@ def test_gpt_slice():
     dataset = get_dataset_config(
         {"type": "slice", "dataset": memmap_config, "begin": 0.025, "end": 0.1},
         DatasetSliceConfig[LanguageModelDocument],
-    ).build(preprocessing)
+    ).build()
     compare_indexed_dataset_tokens(dataset, 75, 3399, {i - 25: sample for i, sample in COMMON_DATASET_SAMPLES.items()})
     sampled = dataset.sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_SLICE_VALIDATION_SAMPLES)

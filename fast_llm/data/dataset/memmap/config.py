@@ -1,3 +1,4 @@
+import functools
 import io
 import logging
 import math
@@ -6,9 +7,6 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig, PreprocessingConfig
-from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
@@ -40,12 +38,12 @@ class MemmapDatasetConfig[DocumentType: Document](IndexedDatasetConfig[DocumentT
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[DocumentType]":
+    def build(self) -> "IndexedDataset[DocumentType]":
         name = str(self.path).replace("/", "__")
         if self.path.is_file():
             from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 
-            return MemmapDataset[DocumentType](name, self.path, preprocessing)
+            return MemmapDataset[DocumentType](name, self.path)
         elif self.path.with_suffix(".bin").is_file() and self.path.with_suffix(".idx").is_file():
             logger.warning(
                 "Using the legacy memmap dataset format."
@@ -54,7 +52,7 @@ class MemmapDatasetConfig[DocumentType: Document](IndexedDatasetConfig[DocumentT
             )
             from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
 
-            return LegacyMemmapDataset[DocumentType](name, self.path, preprocessing)
+            return LegacyMemmapDataset[DocumentType](name, self.path)
         else:
             raise FileNotFoundError(self.path)
 
@@ -125,15 +123,13 @@ class MemmapReaderConfig(MemmapReaderBaseConfig):
     # Constant strings for alignment safety.
     header: typing.ClassVar[bytes]
     footer: typing.ClassVar[bytes]
-    # Additional information about how the dataset was prepared.
-    preprocessing: PreprocessingConfig = Field()
 
     @property
     def reader_class(self) -> "type[MemmapReader]":
         raise NotImplementedError()
 
-    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None) -> "MemmapReader":
-        return self.reader_class(self, buffer, model_preprocessing)
+    def get_reader(self, buffer: memoryview) -> "MemmapReader":
+        return self.reader_class(self, buffer)
 
     @property
     def expected_buffer_size(self) -> int:
@@ -339,8 +335,8 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
     def reader_class(self) -> "type[MemmapIndexedDatasetReader]":
         raise NotImplementedError()
 
-    def get_reader(self, buffer: memoryview, model_preprocessing: PreprocessingConfig) -> "MemmapIndexedDatasetReader":
-        return self.reader_class(self, buffer, model_preprocessing)
+    def get_reader(self, buffer: memoryview) -> "MemmapIndexedDatasetReader":
+        return self.reader_class(self, buffer)
 
     def get_metadata(self) -> dict[str, typing.Any]:
         return {"num_tokens": self.num_tokens}
@@ -364,47 +360,29 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
     def _validate(self) -> None:
         super()._validate()
-        if isinstance(self.preprocessing, NullPreprocessingConfig):
-            # Address missing config, mostly for backward compatibility.
-            # TODO: We can't tell which dataset this comes from.
-            logger.warning(
-                f"Preprocessing configuration not specified for dataset reader, generating partial configuration from known parameters."
-            )
-            if isinstance(self.image_patches, PatchReaderConfig):
-                Assert.eq(len(patch_shape := self.image_patches.patch_shape), 3)
-                image_patches = ImagePatchConfig(height=patch_shape[1], width=patch_shape[2])
-            else:
-                image_patches = NullPreprocessingConfig()
-            self.preprocessing = LanguageModelPreprocessingConfig(
-                image_patches=image_patches,
-                use_loss_masking_spans=isinstance(self.loss_masking_spans, RangeReaderConfig),
-                use_preference_spans=isinstance(self.chosen_spans, RangeReaderConfig),
-            )
-        # TODO: Avoid duplicated information.
-        Assert.custom(
-            isinstance,
-            self.loss_masking_spans,
-            RangeReaderConfig if self.preprocessing.use_loss_masking_spans else NullReaderConfig,
-        )
-        Assert.custom(
-            isinstance,
-            self.chosen_spans,
-            RangeReaderConfig if self.preprocessing.use_preference_spans else NullReaderConfig,
-        )
-        Assert.custom(
-            isinstance,
-            self.rejected_spans,
-            RangeReaderConfig if self.preprocessing.use_preference_spans else NullReaderConfig,
-        )
-        if self.preprocessing.use_image_patches:
-            Assert.custom(isinstance, self.image_patches, PatchReaderConfig)
-            Assert.eq(self.image_patches.patch_shape, self.preprocessing.image_patches.patch_shape)
+        if self.has_image_patches:
+            Assert.eq(len(self.patch_shape), 3)
             Assert.eq(self.image_patches.data_type, DataType.uint8)
-        else:
-            Assert.custom(isinstance, self.image_patches, NullReaderConfig)
 
     def __len__(self) -> int:
         return len(self.tokens)
+
+    @functools.cached_property
+    def has_loss_masking_spans(self) -> bool:
+        return isinstance(self.loss_masking_spans, RangeReaderConfig)
+
+    @functools.cached_property
+    def has_preference_spans(self) -> bool:
+        return isinstance(self.chosen_spans, RangeReaderConfig)
+
+    @functools.cached_property
+    def has_image_patches(self) -> bool:
+        return isinstance(self.image_patches, PatchReaderConfig)
+
+    @functools.cached_property
+    def patch_shape(self) -> tuple[int, int, int]:
+        assert self.has_image_patches
+        return self.image_patches.patch_shape
 
     @property
     def num_tokens(self) -> int:

@@ -2,11 +2,11 @@ import pathlib
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.data.preparator.config import DatasetPreparatorConfig
+from fast_llm.data.preparation.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.preparator.dataset_discovery.prepare import DatasetDiscoveryPreparator
+    from fast_llm.data.preparation.dataset_discovery.prepare import DatasetDiscoveryPreparator
 
 
 @config_class(dynamic_type={RunnableConfig: "prepare_dataset_discovery", DatasetPreparatorConfig: "dataset_discovery"})
@@ -34,6 +34,6 @@ class DatasetDiscoveryConfig(DatasetPreparatorConfig):
 
     @classmethod
     def get_dataset_preparator_class(cls) -> type["DatasetDiscoveryPreparator"]:
-        from fast_llm.data.preparator.dataset_discovery.prepare import DatasetDiscoveryPreparator
+        from fast_llm.data.preparation.dataset_discovery.prepare import DatasetDiscoveryPreparator
 
         return DatasetDiscoveryPreparator

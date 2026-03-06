@@ -27,7 +27,6 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     # TODO: These are generic
     phase = "phase"
     loss_mask = "loss_mask"
-    mask_inputs = "mask_inputs"
 
 
 LM_HEAD_LOSS_NAME = "lm_head_loss"

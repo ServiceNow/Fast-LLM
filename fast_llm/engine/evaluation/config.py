@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.interval import IntervalConfig
 from fast_llm.utils import Assert
 

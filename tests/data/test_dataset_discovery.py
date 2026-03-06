@@ -5,7 +5,7 @@ import typing
 import pytest
 import yaml
 
-from fast_llm.data.preparator.dataset_discovery.config import DatasetDiscoveryConfig
+from fast_llm.data.preparation.dataset_discovery.config import DatasetDiscoveryConfig
 from fast_llm.utils import check_equal_nested
 from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
 

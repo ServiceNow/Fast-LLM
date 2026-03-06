@@ -1,13 +1,11 @@
 import pytest
 import torch
 
-from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.language_model import LanguageModelBatch
-from fast_llm.data.document.token import TokenBatch
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import MixerConfig
@@ -65,23 +63,16 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, lengths: list[in
         requires_grad=True,
     )
 
-    kwargs_packed = (
-        LanguageModelPreprocessedBatch.from_batch(
-            LanguageModelBatch(
-                tokens=TokenBatch(
-                    tokens=torch.empty(num_tokens, dtype=torch.int64, device=distributed.device), lengths=lengths
-                )
-            ),
-            LanguageModelBatchPreprocessingConfig(
-                distributed=distributed_config,
-                predicted_tokens=0,
-                **mixer.get_preprocessing_config(PhaseType.training),
-            ),
-            distributed.device,
+    (model_input_packed,) = LanguageModelBatch(
+        tokens=torch.empty(num_tokens, dtype=torch.int64, device=distributed.device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **mixer.get_preprocessing_config(),
         )
-        .micro_batches[0]
-        .to_kwargs()
     )
+    kwargs_packed = model_input_packed.to_kwargs()
     mixer.preprocess(kwargs_packed)
 
     out_packed, context = stage.forward(hidden_states, kwargs_packed)
@@ -94,23 +85,16 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, lengths: list[in
     # Run reference path separately per sequence without varlen packing, then concatenate.
     out_refs = []
     for length, hidden_states_ in zip(lengths, torch.split(hidden_states, lengths, dim=0), strict=True):
-        kwargs_unpacked = (
-            LanguageModelPreprocessedBatch.from_batch(
-                LanguageModelBatch(
-                    tokens=TokenBatch(
-                        tokens=torch.empty(length, dtype=torch.int64, device=distributed.device), lengths=[length]
-                    )
-                ),
-                LanguageModelBatchPreprocessingConfig(
-                    distributed=distributed_config,
-                    predicted_tokens=0,
-                    **mixer.get_preprocessing_config(PhaseType.training),
-                ),
-                distributed.device,
+        (model_input_unpacked,) = LanguageModelBatch(
+            tokens=torch.empty(length, dtype=torch.int64, device=distributed.device), lengths=[length]
+        ).get_model_inputs(
+            LanguageModelBatchPreprocessingConfig(
+                distributed=distributed_config,
+                predicted_tokens=0,
+                **mixer.get_preprocessing_config(),
             )
-            .micro_batches[0]
-            .to_kwargs()
         )
+        kwargs_unpacked = model_input_unpacked.to_kwargs()
         mixer.preprocess(kwargs_unpacked)
         out, context = stage.forward(hidden_states_, kwargs_unpacked)
         stage.backward(torch.ones_like(out), context)

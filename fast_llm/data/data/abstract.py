@@ -3,8 +3,9 @@ import pathlib
 import typing
 
 from fast_llm.config import Configurable
-from fast_llm.data.batch.config import BatchPreprocessingConfig, PreprocessedBatch
 from fast_llm.data.data.config import DataConfig
+from fast_llm.data.document.abstract import Batch, ModelInput
+from fast_llm.data.document.config import BatchPreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 
 if typing.TYPE_CHECKING:
@@ -33,7 +34,7 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         dataset_name: str,
         config: BatchPreprocessingConfig,
         num_samples: int,
-    ) -> PreprocessedBatch:
+    ) -> list[ModelInput]:
         pass
 
     def get_iterator(
@@ -45,5 +46,5 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         prefetch_factor: int | None = None,
         timeout: float = 60,
         preprocess: bool = True,
-    ) -> typing.Iterator[PreprocessedBatch]:
+    ) -> typing.Iterator[list[ModelInput] | Batch]:
         pass

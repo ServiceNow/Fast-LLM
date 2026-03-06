@@ -5,15 +5,11 @@ import torch
 
 from fast_llm.core.distributed import all_gather_scalar
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.engine.inference.runner import InferenceRunner
-from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.vision.config import VisionKwargs
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
-from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 
@@ -83,135 +79,6 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
     """
 
     _config: ConfigType
-
-    def preprocess_meta(
-        self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
-    ) -> list[tuple[TensorMeta, dict]]:
-        preprocessed_meta = []
-        for tokens, kwargs in super().preprocess_meta(batch_meta, phase):
-            kwargs[LanguageModelKwargs.token_ids] = tokens
-            kwargs[LanguageModelKwargs.mask_inputs] = True
-            # TODO: What about sequence data?
-            batch_data_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
-
-            token_dim = PatchSequenceTensorDim(
-                "token",
-                kwargs[VisionKwargs.token_dim].global_size,
-                self._distributed_config.get_distributed_dim(DistributedDimNames.data),
-                batch_data_dim,
-            )
-            hidden_token_dim = (
-                PatchSequenceTensorDim(
-                    "token_tp",
-                    token_dim.global_size,
-                    self._distributed_config.get_distributed_dim(DistributedDimNames.tensor_and_data),
-                    batch_data_dim,
-                )
-                if self._distributed_config.sequence_tensor_parallel
-                else token_dim
-            )
-            # These are used by the model (preprocessing) and shouldn't see the batch-parallel dim.
-            sequence_q_dim = TensorDim(
-                "sequence_q",
-                token_dim.global_size,
-                self._distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
-            )
-            TensorDim("sequence_k", token_dim.global_size)
-
-            image_patches = TensorMeta.from_dims(
-                (
-                    # We combine the batch and sequence dims to allow for variable sequence lengths.
-                    # Gives the same result, assuming we disable cross-image attention (TODO: Enforce)
-                    token_dim,
-                    # TODO: Relate to tensor dims in patch convolution.
-                    TensorDim("input_channels", self._config.vision_encoder.embeddings.input_channels),
-                    TensorDim("patch_height", self._config.vision_encoder.embeddings.patch_height),
-                    TensorDim("patch_width", self._config.vision_encoder.embeddings.patch_width),
-                )
-            )
-            kwargs[self._vision_encoder_namespace] = {
-                VisionKwargs.sequence_length: kwargs[VisionKwargs.sequence_length],
-                VisionKwargs.sequence_q_dim: token_dim,
-                VisionKwargs.sequence_k_dim: token_dim,
-                VisionKwargs.token_dim: token_dim,
-                VisionKwargs.hidden_token_dim: hidden_token_dim,
-            }
-
-            preprocessed_meta.append((image_patches, kwargs))
-
-        return preprocessed_meta
-
-    def preprocess_batch(
-        self,
-        batch: LanguageModelBatch,
-        preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
-        *,
-        phase: PhaseType,
-        iteration: int,
-        metrics: dict | None = None,
-        extra_kwargs: dict[str, typing.Any] | None = None,
-        device: torch.device | None,
-    ) -> list[tuple[torch.Tensor, dict]]:
-        preprocessed = super().preprocess_batch(
-            batch,
-            preprocessed_meta,
-            phase=phase,
-            iteration=iteration,
-            metrics=metrics,
-            extra_kwargs=extra_kwargs,
-            device=device,
-        )
-        # TODO: Support micro-sequences.
-        assert len(preprocessed) == 1, "Micro-sequences not supported for MultiModalModel."
-        tokens, kwargs = preprocessed[0]
-
-        kwargs[LanguageModelKwargs.token_ids] = tokens
-
-        # If document cropping is enabled, extra tokens may belong to images and need to be removed.
-        # TODO: Handle earlier.
-        tokens_end = kwargs[AttentionKwargs.sequence_k_dim].size
-        tokens_begin = tokens_end - kwargs[AttentionKwargs.sequence_q_dim].size
-        cropped_image_patches = batch.image_patches.crop(tokens_begin, tokens_end)
-
-        sequence_length = tokens.shape[:2].numel()
-        pad_size = sequence_length - cropped_image_patches.patches.size(0)
-
-        patches = cropped_image_patches.patches.to(self._distributed.config.compute_dtype.torch)
-        patches = torch.cat([patches, patches.new_zeros((pad_size,) + patches.shape[1:])])
-
-        positions = torch.cat(
-            [
-                cropped_image_patches.positions,
-                cropped_image_patches.positions.new_zeros((pad_size,) + cropped_image_patches.positions.shape[1:]),
-            ]
-        )
-
-        kwargs[self._vision_encoder_namespace] = {
-            **kwargs[self._vision_encoder_namespace],
-            VisionKwargs.patch_positions: positions,
-            VisionKwargs.sequence_lengths: [cropped_image_patches.lengths + [pad_size]],
-            VisionKwargs.sequence_length: sequence_length,
-            VisionKwargs.device: self._distributed.device,
-            VisionKwargs.output_hidden_states: kwargs.get(VisionKwargs.output_hidden_states, []),
-            VisionKwargs.hidden_states: kwargs[VisionKwargs.hidden_states],
-        }
-        # We need to modify `local_unpadded_size` directly in `preprocessed_meta` since it's the one used by the engine.
-        # Unsafe, but only needed for testing.
-        # TODO: Doesn't work with gradient accumulation (only sees the last value).
-        PatchSequenceTensorDim.local_unpadded_size = cropped_image_patches.patches.size(0)
-
-        kwargs[LanguageModelKwargs.embedding_map] = (
-            cropped_image_patches.sample_map * kwargs[VisionKwargs.sequence_q_dim].size
-            + cropped_image_patches.token_map
-        )
-
-        super().preprocess(kwargs)
-
-        return [(patches, kwargs)]
-
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        # Hack to delay preprocessing in super().preprocess_batch (TODO: Improve)
-        pass
 
 
 class MultiModalModel[ConfigType: MultiModalModelConfig](GPTModel[ConfigType]):

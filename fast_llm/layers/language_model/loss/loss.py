@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
 from fast_llm.utils import Assert
@@ -47,7 +47,9 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(
+        self,
+    ) -> dict[str, typing.Any]:
         return {}
 
     @property

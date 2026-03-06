@@ -7,9 +7,9 @@ from fast_llm.data.dataset.config import BlendedDatasetConfig
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.preparation.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
 from tests.utils.dataset import (
@@ -44,11 +44,11 @@ def test_common_prepared_dataset():
     We already test the dataset preparator indirectly through the test dataset (`get_test_dataset`).
     Here we verify the correctness of the prepared dataset directly and check for regressions.
     """
-    path, config, hf_path, preprocessing = get_common_test_dataset()
-    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)
+    path, config, hf_path, _ = get_common_test_dataset()
+    dataset = get_dataset_config(config, GPTDatasetFromFileConfig).build()
     dataset_from_shard = get_dataset_config(
         {"type": "memmap", "path": path / "shard_0_0.fast_llm_dataset"}, MemmapDatasetConfig
-    ).build(preprocessing)
+    ).build()
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -60,31 +60,35 @@ def test_common_prepared_dataset():
     for index in range(0, 200, 8):
         # Compare tokens for some samples.
         Assert.all_equal(
-            dataset_from_shard.get_document(index).tokens.tokens,
-            dataset.get_document(index).tokens.tokens,
+            dataset_from_shard.get_document(index).tokens,
+            dataset.get_document(index).tokens,
             tokenizer.tokenize(hf_dataset[index]["text"]),
         )
         # Compare text.
         Assert.eq(
-            tokenizer.detokenize(dataset.get_document(index).tokens.tokens, True, True),
+            tokenizer.detokenize(dataset.get_document(index).tokens, True, True),
             hf_dataset[index]["text"],
         )
 
     # Check some numerical values.
     for index in COMMON_DATASET_SAMPLES:
         Assert.eq(hf_dataset[index]["text"], COMMON_DATASET_TEXT[index])
-        document = dataset.get_document(index)
-        Assert.eq(document.tokens.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
+        document: LanguageModelDocument = dataset.get_document(index)
+        Assert.eq(document.tokens.tolist(), COMMON_DATASET_SAMPLES[index])
+        Assert.none(document.loss_masking_spans)
+        Assert.none(document.chosen_spans)
+        Assert.none(document.rejected_spans)
+        Assert.none(document.image_patches)
 
 
 @pytest.mark.slow
 def test_preparator_sharded():
-    path, config, hf_path, preprocessing = get_sharded_test_dataset()
+    path, config, hf_path, _ = get_sharded_test_dataset()
 
     dataset_config = get_dataset_config(config, GPTDatasetFromFileConfig)._load_config()
     Assert.custom(isinstance, dataset_config, BlendedDatasetConfig)
     Assert.eq(dataset_config.weights, [0.33003587104248827, 0.3455874161709333, 0.3243767127865784])
-    datasets_ = [dataset_config_.build(preprocessing) for dataset_config_ in dataset_config.datasets]
+    datasets_ = [dataset_config_.build() for dataset_config_ in dataset_config.datasets]
     Assert.eq([len(dataset) for dataset in datasets_], lengths := [334, 333, 333])
     Assert.eq([dataset.num_tokens for dataset in datasets_], [14813, 15511, 14559])
 
@@ -92,13 +96,9 @@ def test_preparator_sharded():
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
 
     for index in range(0, 50, 8):
-        Assert.all_equal(datasets_[0].get_document(index).tokens.tokens, tokenizer.tokenize(hf_dataset[index]["text"]))
-        Assert.all_equal(
-            datasets_[1].get_document(index).tokens.tokens, tokenizer.tokenize(hf_dataset[index + 334]["text"])
-        )
-        Assert.all_equal(
-            datasets_[2].get_document(index).tokens.tokens, tokenizer.tokenize(hf_dataset[index + 667]["text"])
-        )
+        Assert.all_equal(datasets_[0].get_document(index).tokens, tokenizer.tokenize(hf_dataset[index]["text"]))
+        Assert.all_equal(datasets_[1].get_document(index).tokens, tokenizer.tokenize(hf_dataset[index + 334]["text"]))
+        Assert.all_equal(datasets_[2].get_document(index).tokens, tokenizer.tokenize(hf_dataset[index + 667]["text"]))
 
 
 @pytest.mark.slow
@@ -184,9 +184,7 @@ def test_dataset_preparator_from_hub():
     assert (croissant_path := output_path / "croissant.json").is_file()
     Assert.eq(json.load(croissant_path.open("r"))["url"], "https://huggingface.co/datasets/openai/gsm8k")
 
-    dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build(
-        LanguageModelPreprocessingConfig()
-    )
+    dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build()
     Assert.custom(isinstance, dataset, MemmapDataset)
 
     hf_dataset = datasets.load_dataset("openai/gsm8k", "main", split="test")
@@ -196,6 +194,6 @@ def test_dataset_preparator_from_hub():
     Assert.eq(dataset.num_tokens, 179248)
     for index in range(0, 200, 8):
         Assert.eq(
-            tokenizer.detokenize(dataset.get_document(index).tokens.tokens),
+            tokenizer.detokenize(dataset.get_document(index).tokens),
             f"<|endoftext|>{hf_dataset[index]["answer"]}<|endoftext|>",
         )

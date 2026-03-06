@@ -5,8 +5,8 @@ import typing
 
 import torch
 
-from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.document.language_model import LanguageModelInput
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
@@ -42,7 +42,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def preprocess_batch(
         self,
-        batch: LanguageModelPreprocessedBatch,
+        model_inputs: list[LanguageModelInput],
         *,
         phase: PhaseType,
         iteration: int,
@@ -53,17 +53,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         reference_preprocessed_batches = {}
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_batches[name] = reference_model.fast_llm_model.base_model.preprocess_batch(
-                batch,
+                model_inputs,
                 phase=PhaseType.inference,
                 iteration=iteration,
                 device=device,
             )
 
         preprocessed = []
-        for micro_sequence_index, micro_sequence in enumerate(batch.micro_batches):
+        for input_index, model_input in enumerate(model_inputs):
             if device is not None:
-                micro_sequence.to_device_(device)
-            kwargs = micro_sequence.to_kwargs()
+                model_input.to_device_(device)
+            kwargs = model_input.to_kwargs()
             kwargs[LanguageModelKwargs.iteration] = iteration
             if extra_kwargs is not None:
                 Assert.empty(kwargs.keys() & extra_kwargs.keys())
@@ -71,9 +71,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             if phase == PhaseType.inference:
                 kwargs[BlockKwargs.output_hidden_states].append(re.compile(r"head\..*logits.*$"))
 
-            if not micro_sequence.is_meta:
+            if not model_input.is_meta:
                 for name, reference_model in self._reference_models.items():
-                    reference_tokens, reference_kwargs = reference_preprocessed_batches[name][micro_sequence_index]
+                    reference_tokens, reference_kwargs = reference_preprocessed_batches[name][input_index]
                     if name in self._decoder_reference_models:
                         # TODO: Get the actual names
                         reference_kwargs[BlockKwargs.output_hidden_states].append(
@@ -87,7 +87,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                         for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
                     }
                 self.preprocess(kwargs)
-            preprocessed.append((micro_sequence.tokens, kwargs))
+            preprocessed.append((model_input.tokens, kwargs))
 
         return preprocessed
 
@@ -119,8 +119,7 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
         return LanguageModelBatchPreprocessingConfig(
             phase=phase,
             micro_batch_splits=micro_batch_splits,
-            distributed=self._config.distributed,
-            **self._base_model.get_preprocessing_config(phase),
+            **self._base_model.get_preprocessing_config(),
         )
 
 

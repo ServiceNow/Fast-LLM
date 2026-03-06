@@ -5,24 +5,10 @@ import typing
 import torch
 
 from fast_llm.data.document.abstract import Batch, Document
-from fast_llm.utils import Assert, padded_cumsum
-
-
-def crop_lengths(lengths: list[int], begin: int, end: int) -> list[int]:
-    if len(lengths) == 1:
-        # Shortcut for the frequent case of a single document.
-        return [end - begin]
-    begin_ = 0
-    lengths_ = []
-    for length in lengths:
-        end_ = begin_ + length
-        cropped_length = min(end_, end) - max(begin_, begin)
-        if cropped_length > 0:
-            lengths_.append(cropped_length)
-        if end_ > end:
-            break
-        begin_ = end_
-    return lengths_
+from fast_llm.data.document.block import BlockModelInput, LengthModelInputPreprocessor
+from fast_llm.data.document.config import LengthPreprocessingConfig
+from fast_llm.tensor import TensorMeta
+from fast_llm.utils import Assert
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -34,94 +20,73 @@ class TokenDocument(Document):
 
 
 @dataclasses.dataclass(kw_only=True)
-class TokenBatch(TokenDocument, Batch):
+class TokenModelInput(BlockModelInput, TokenDocument):
+    @functools.cached_property
+    def is_meta(self) -> bool:
+        return isinstance(self.tokens, TensorMeta)
+
+
+@dataclasses.dataclass(kw_only=True)
+class TokenBatch(Batch, TokenDocument):
+    _model_input_class: typing.ClassVar[type[TokenModelInput]] = TokenModelInput
     lengths: list[int]
-    sequence_k_past: int = 0
-    current_document_begin: int = 0
+    unpadded_length: int = None
 
     def __post_init__(self):
         Assert.eq(sum(self.lengths), len(self.tokens))
+        if self.unpadded_length is None:
+            self.unpadded_length = len(self.tokens)
 
     @classmethod
-    def from_documents(cls, documents: typing.Iterable[TokenDocument]) -> typing.Self:
+    def from_documents(cls, documents: typing.Iterable[TokenDocument], pad_to_size: int | None = None) -> typing.Self:
+        tokens = [document.tokens for document in documents]
+        lengths = [len(document) for document in documents]
+        unpadded_length = sum(lengths)
+        if pad_to_size is not None:
+            Assert.geq(pad_to_size, unpadded_length)
+            padding = pad_to_size - unpadded_length
+            if padding > 0:
+                tokens.append(tokens[0].new_full([padding], -100))
+                lengths.append(padding)
         return cls(
-            tokens=torch.cat([document.tokens for document in documents]),
-            lengths=[len(document) for document in documents],
+            tokens=torch.cat(tokens),
+            lengths=lengths,
+            unpadded_length=unpadded_length,
         )
 
-    def crop(self, begin: int, end: int) -> typing.Self:
-        Assert.eq(self.sequence_k_past, self.current_document_begin, 0)
-
+    def _get_cropped_lengths(self, begin: int, end: int) -> tuple[list[int], int, int]:
         document_begin = 0
-        lengths_ = []
-        current_document_begin = None
+        lengths = []
         for length in self.lengths:
             document_end = document_begin + length
             cropped_length = min(document_end, end) - max(document_begin, begin)
             if cropped_length > 0:
-                lengths_.append(cropped_length)
-                if current_document_begin is None:
-                    current_document_begin = document_begin
+                if not lengths:
+                    first_document_begin = document_begin
+                lengths.append(cropped_length)
             if document_end > end:
                 break
             document_begin = document_end
 
-        return self.__class__(
-            tokens=self.tokens[begin:end],
-            lengths=lengths_,
+        return lengths, first_document_begin, document_end
+
+    def _get_model_input(self, begin: int, end: int, config: LengthPreprocessingConfig):
+        model_input = self._model_input_class(tokens=self.tokens[begin:end])
+        lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
+
+        LengthModelInputPreprocessor(
+            lengths=lengths,
             sequence_k_past=begin,
-            current_document_begin=current_document_begin,
-        )
+            first_document_begin=first_document_begin,
+            last_document_end=last_document_end,
+            device=self.tokens.device,
+            unpadded_length=min(end, self.unpadded_length) - begin,
+            sequence_length=len(self.tokens),
+        ).preprocess(model_input, config)
 
-    def to_device(self, device: "torch.device | str") -> typing.Self:
-        return self.__class__(
-            tokens=self.tokens.to(device, non_blocking=True),
-            lengths=self.lengths,
-            sequence_k_past=self.sequence_k_past,
-            current_document_begin=self.current_document_begin,
-        )
-
-    @functools.cached_property
-    def device(self) -> torch.device:
-        return self.tokens.device
-
-    @functools.cached_property
-    def cumulative_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
-        cumulative_lengths_q = torch.from_numpy(padded_cumsum(self.lengths)).to(dtype=torch.int32, device=self.device)
-        cumulative_lengths_k = cumulative_lengths_q + self.sequence_k_past
-        cumulative_lengths_k[0] = self.current_document_begin
-        return cumulative_lengths_q, cumulative_lengths_k
-
-    @functools.cached_property
-    def max_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
-        max_length_q = max(self.lengths)
-        max_length_k = max(max_length_q, self.sequence_k_past + self.lengths[0] - self.current_document_begin)
-        return (
-            torch.full((1,), max_length_q, dtype=torch.int32, device=self.device),
-            torch.full((1,), max_length_k, dtype=torch.int32, device=self.device),
-        )
-
-    @functools.cached_property
-    def document_index(self) -> tuple[torch.Tensor, torch.Tensor]:
-        cumulative_lengths_q, cumulative_lengths_k = self.cumulative_lengths
-        # Note: index starts at 1. Index 0 is for sequence k before `self.current_document_begin`.
-        return (
-            torch.searchsorted(cumulative_lengths_q, torch.arange(len(self.tokens)), side="right"),
-            torch.searchsorted(
-                cumulative_lengths_k, torch.arange(self.sequence_k_past + len(self.tokens)), side="right"
-            ),
-        )
-
-    @functools.cached_property
-    def position_index(self) -> torch.Tensor:
-        _, document_index_k = self.document_index
-        _, cumulative_lengths_k = self.cumulative_lengths
-        document_begins = cumulative_lengths_k[
-            document_index_k[self.sequence_k_past : self.sequence_k_past + len(self.tokens)] - 1
-        ]
-        return (
-            torch.arange(
-                self.sequence_k_past, self.sequence_k_past + len(self.tokens), dtype=torch.int32, device=self.device
+        Assert.eq(model_input.token_dim.size, end - begin)
+        if self.tokens.device.type == "meta":
+            model_input.tokens = TensorMeta.from_dims(
+                (model_input.token_dim,), tensor_name=f"tokens_{begin}_to_{end}", dtype=torch.int64
             )
-            - document_begins
-        )
+        return model_input

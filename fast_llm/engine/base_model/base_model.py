@@ -5,7 +5,7 @@ import typing
 import torch.nn
 
 from fast_llm.config import Configurable
-from fast_llm.data.batch.config import PreprocessedBatch
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -55,9 +55,9 @@ class LayerBase(torch.nn.Module, abc.ABC):
                 losses += layer.get_loss_definitions(count)
         return losses
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(
-            *(layer.get_preprocessing_config(phase) for layer in self.get_layers() if layer is not self)
+            *(layer.get_preprocessing_config() for layer in self.get_layers() if layer is not self)
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
@@ -114,8 +114,8 @@ class LayerBaseWithNamespace(LayerBase):
         """
         return self._layers_with_namespace
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
-        return self._layer.get_preprocessing_config(phase)
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return self._layer.get_preprocessing_config()
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -178,7 +178,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
     @abc.abstractmethod
     def preprocess_batch(
         self,
-        batch: PreprocessedBatch,
+        model_inputs: list[ModelInput],
         *,
         phase: PhaseType,
         iteration: int,

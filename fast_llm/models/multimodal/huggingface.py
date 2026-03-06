@@ -4,7 +4,8 @@ import typing
 import torch
 import transformers.modeling_outputs
 
-from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
+from fast_llm.data.document.patch import PatchBatch
+from fast_llm.data.preparation.image_patch import ImagePreparationConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelConfig, HuggingfaceGPTModelForCausalLM
 from fast_llm.models.multimodal.config import MultiModalModelConfig
@@ -35,7 +36,7 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
     ):
         super().__init__(fast_llm_model, config, runner, **kwargs)
         embedding_config = self.config.fast_llm_config.base_model.vision_encoder.embeddings
-        self._patch_config = ImagePatchConfig(
+        self._patch_config = ImagePreparationConfig(
             height=embedding_config.patch_height,
             width=embedding_config.patch_width,
             do_resize=False,
@@ -59,7 +60,8 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         return_dict: bool | None = None,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
-            self._get_batch(input_ids, pixel_values, attention_mask, position_ids, image_sizes),
+            self._get_batch(input_ids, attention_mask, pixel_values, image_sizes),
+            input_ids.shape,
             past_key_values,
             inputs_embeds,
             labels,
@@ -72,14 +74,11 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
     def _get_batch(
         self,
         input_ids: torch.Tensor | None = None,
-        pixel_values: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
+        pixel_values: torch.Tensor | None = None,
         image_sizes: torch.Tensor | None = None,
     ):
-        batch = super()._get_batch(input_ids, attention_mask, position_ids)
-        num_samples, sample_size = batch.tokens.tokens.shape
-
+        batch = super()._get_batch(input_ids, attention_mask)
         if pixel_values is None:
             images = []
         elif image_sizes is None:
@@ -93,21 +92,19 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         image_patches, image_position_ids, _, _, patch_counts = self._patch_config.get_patches_from_images(images)
 
         # Hugging Face encodes token positions through an image token, from which we extract the patch mapping.
-        image_mask = batch.tokens.tokens == self._image_token_index
+        image_mask = batch.tokens == self._image_token_index
 
-        sample_map, token_map = torch.nonzero(image_mask, as_tuple=True)
-        Assert.eq(len(sample_map), len(image_patches))
+        (token_map,) = torch.nonzero(image_mask, as_tuple=True)
+
+        Assert.eq(len(token_map), len(image_patches))
         # Fast-LLM uses negative token ids as placeholders for image tokens.
-        batch.tokens.tokens = torch.where(image_mask, -100, batch.tokens.tokens)
+        batch.tokens = torch.where(image_mask, -100, batch.tokens)
 
         batch.image_patches = PatchBatch(
-            image_patches,
-            sample_map,
-            token_map,
-            image_position_ids,
-            num_samples,
-            sample_size,
-            patch_counts,
+            patches=image_patches,
+            token_map=token_map,
+            positions=image_position_ids,
+            lengths=patch_counts,
         )
 
         return batch

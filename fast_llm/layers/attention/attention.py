@@ -8,7 +8,7 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -404,14 +404,15 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             )
         )
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return (
             {
                 "return_cumulative_sequence_lengths": True,
                 "return_max_sequence_lengths": True,
+                "causal": self._config.causal,
             }
             if self._implementation == AttentionImplementation.flash
-            else {"return_document_index": True}
+            else {"return_document_index": True, "causal": self._config.causal}
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:

@@ -7,13 +7,12 @@ from fast_llm.data.dataset.memmap.abstract import MemmapReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import RangeReaderConfig
 from fast_llm.data.document.abstract import Document
 from fast_llm.data.document.range import RangeDocument
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.utils import Assert
 
 
 class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
-    def __init__(self, config: ConfigType, buffer: memoryview, model_preprocessing: PreprocessingConfig | None = None):
-        super().__init__(config, buffer, model_preprocessing)
+    def __init__(self, config: ConfigType, buffer: memoryview):
+        super().__init__(config, buffer)
         self._ranges = torch.frombuffer(
             self._buffer,
             dtype=torch.int32,
@@ -69,5 +68,4 @@ class RangeWriter(MemmapWriter):
             end=end,
             num_documents=len(self._count_cumsum) - 1,
             num_ranges=self._count_cumsum[-1],
-            preprocessing=self._preprocessing_config,
         )

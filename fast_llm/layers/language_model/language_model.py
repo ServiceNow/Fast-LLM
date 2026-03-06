@@ -4,7 +4,7 @@ import typing
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
@@ -35,20 +35,20 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
             peft=peft,
         )
         self.embeddings: LanguageModelEmbedding = self._config.embeddings.get_layer(
-            distributed_config,
+            self._distributed_config,
             hidden_dim=self._hidden_dim,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.decoder = self._config.decoder.get_layer(
-            distributed_config,
+            self._distributed_config,
             self._hidden_dim,
             lr_scale=self._lr_scale,
             peft=self._peft,
             **({"return_last_layer_input": True} if self._config.head.prediction_heads > 1 else {}),
         )
         self.head, self.multi_token_prediction = self._config.head.get_layer(
-            distributed_config,
+            self._distributed_config,
             self._config.embeddings,
             hidden_dim=self._hidden_dim,
             lr_scale=self._lr_scale,
@@ -66,12 +66,13 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
             layers += self.multi_token_prediction.get_layers()
         return layers
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(
-            self.embeddings.get_preprocessing_config(phase),
-            self.decoder.get_preprocessing_config(phase),
-            self.head.get_preprocessing_config(phase),
-            self.multi_token_prediction.get_preprocessing_config(phase),
+            {"distributed": self._distributed_config},
+            self.embeddings.get_preprocessing_config(),
+            self.decoder.get_preprocessing_config(),
+            self.head.get_preprocessing_config(),
+            self.multi_token_prediction.get_preprocessing_config(),
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:

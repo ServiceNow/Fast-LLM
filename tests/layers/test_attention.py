@@ -1,10 +1,8 @@
 import pytest
 import torch
 
-from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.language_model import LanguageModelBatch
-from fast_llm.data.document.token import TokenBatch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.attention import Attention, _flash_available
@@ -46,23 +44,18 @@ def test_attention_implementations(causal: bool, window_size: int | None, length
     key = torch.empty(num_tokens, 2, 32, dtype=torch.bfloat16, device=device).normal_()
     value = torch.empty(num_tokens, 2, 32, dtype=torch.bfloat16, device=device).normal_()
 
-    kwargs = (
-        LanguageModelPreprocessedBatch.from_batch(
-            LanguageModelBatch(
-                tokens=TokenBatch(tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths)
-            ),
-            LanguageModelBatchPreprocessingConfig(
-                distributed=distributed_config,
-                predicted_tokens=0,
-                return_cumulative_sequence_lengths=True,
-                return_max_sequence_lengths=True,
-                return_document_index=True,
-            ),
-            device,
+    (model_input,) = LanguageModelBatch(
+        tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            return_cumulative_sequence_lengths=True,
+            return_max_sequence_lengths=True,
+            return_document_index=True,
         )
-        .micro_batches[0]
-        .to_kwargs()
     )
+    kwargs = model_input.to_kwargs()
     attention._preprocess_for_backup_attention(kwargs)
 
     out_backup = attention._attn_backup(query, key, value, kwargs)

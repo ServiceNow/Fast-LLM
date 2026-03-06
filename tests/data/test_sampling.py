@@ -5,8 +5,7 @@ import torch
 from fast_llm.data.dataset.config import ShufflingType
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.document.language_model import LanguageModelDocument
-from fast_llm.data.document.token import TokenDocument
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
@@ -62,9 +61,7 @@ class SimpleGPTIndexedDataset[DocumentType: LanguageModelDocument](IndexedDatase
     def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         if end is None:
             end = len(self._samples[index])
-        return LanguageModelDocument(
-            tokens=TokenDocument(tokens=torch.tensor(self._samples[index][begin:end], dtype=torch.int64))
-        )
+        return LanguageModelDocument(tokens=torch.tensor(self._samples[index][begin:end], dtype=torch.int64))
 
     def __len__(self) -> int:
         return len(self._samples)
@@ -170,4 +167,6 @@ def test_gpt_sample_padding():
         else:
             sampled = dataset.sample(*sampling)
             for idx in range(len(expected_samples)):
-                Assert.all_equal(sampled[idx].tokens.tokens, np.array(expected_samples[idx]))
+                Assert.all_equal(
+                    LanguageModelBatch.from_documents(sampled[idx]).tokens, np.array(expected_samples[idx])
+                )

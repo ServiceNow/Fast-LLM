@@ -115,7 +115,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._schedule = Schedule(
                 config=self._config.schedule,
                 multi_stage=self._multi_stage,
-                batch_meta=preprocessing_config.get_batch_meta(self._data.config.micro_batch_size),
+                batch_meta=preprocessing_config.get_input_meta(self._data.config.micro_batch_size),
                 distributed_config=self._config.model.distributed,
                 phase=PhaseType.training,
             )

@@ -1,11 +1,9 @@
 import pytest
 import torch
 
-from fast_llm.data.batch.config import LanguageModelBatchPreprocessingConfig
-from fast_llm.data.batch.language_model import LanguageModelPreprocessedBatch
-from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.data.document.range import RangeDocument
-from fast_llm.data.document.token import TokenDocument
 from fast_llm.utils import Assert
 
 
@@ -30,21 +28,21 @@ from fast_llm.utils import Assert
 def test_preprocessing(tokens, loss_masking_spans):
     documents = [
         LanguageModelDocument(
-            tokens=TokenDocument(tokens=torch.tensor(tokens_, dtype=torch.int64)),
+            tokens=torch.tensor(tokens_, dtype=torch.int64),
             loss_masking_spans=None if loss_masking_spans_ is None else RangeDocument(ranges=loss_masking_spans_),
         )
         for tokens_, loss_masking_spans_ in zip(tokens, loss_masking_spans, strict=True)
     ]
-    preprocessed = LanguageModelPreprocessedBatch.from_documents(documents, LanguageModelBatchPreprocessingConfig())
 
-    Assert.eq(len(preprocessed.micro_batches), 1)
-    micro_batch = preprocessed.micro_batches[0]
+    (model_input,) = LanguageModelBatch.from_documents(documents).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig()
+    )
 
-    Assert.all_equal(micro_batch.tokens, torch.cat([document.tokens.tokens for document in documents])[:-1])
+    Assert.all_equal(model_input.tokens, torch.cat([document.tokens for document in documents])[:-1])
 
     label_tokens = []
     for document in documents:
-        label_tokens_ = document.tokens.tokens.clone()
+        label_tokens_ = document.tokens.clone()
         # Mask cross-document attention
         label_tokens_[0] = -100
         # Loss masking spans
@@ -53,6 +51,5 @@ def test_preprocessing(tokens, loss_masking_spans):
                 label_tokens_[begin:end] = -100
         label_tokens.append(label_tokens_)
 
-    Assert.eq(len(micro_batch.labels), 1)
-    print("AAA", micro_batch.labels)
-    Assert.all_equal(micro_batch.labels[0], torch.cat(label_tokens)[1:])
+    Assert.eq(len(model_input.targets), 1)
+    Assert.all_equal(model_input.targets[0].tokens, torch.cat(label_tokens)[1:])

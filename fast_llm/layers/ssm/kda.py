@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -289,5 +289,5 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_cumulative_sequence_lengths": True, "return_document_index": True}

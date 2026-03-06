@@ -4,9 +4,8 @@ import pathlib
 import yaml
 
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
-from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.dataset_discovery.config import DatasetDiscoveryConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
+from fast_llm.data.preparation.config import DatasetPreparator
+from fast_llm.data.preparation.dataset_discovery.config import DatasetDiscoveryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +95,7 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
                 if subpath.suffix != ".fast_llm_dataset":
                     continue
                 try:
-                    num_tokens = MemmapDataset("", subpath, LanguageModelPreprocessingConfig()).num_tokens
+                    num_tokens = MemmapDataset("", subpath).num_tokens
                     if num_tokens == 0:
                         raise ValueError(f"Dataset is empty")
                 except Exception as e:

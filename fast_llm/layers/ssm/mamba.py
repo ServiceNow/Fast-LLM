@@ -7,7 +7,7 @@ import torch
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
@@ -252,7 +252,7 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         # TODO: Implement.
         raise NotImplementedError()
 
-    def get_preprocessing_config(self, phase: PhaseType) -> dict[str, typing.Any]:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         if not self._config.cross_document_attention:
             assert (
                 _mamba_varlen_available

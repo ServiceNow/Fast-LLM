@@ -6,8 +6,9 @@ import typing
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.batch.config import BatchPreprocessingConfig, PreprocessedBatch
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.document.abstract import ModelInput
+from fast_llm.data.document.config import BatchPreprocessingConfig
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.run import get_run, log_main_rank, run_exists
 from fast_llm.engine.distributed.config import PhaseType
@@ -70,7 +71,7 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
 
 
 class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
-    _data_iterator: typing.Iterator[PreprocessedBatch] | None = None
+    _data_iterator: typing.Iterator[list[ModelInput]] | None = None
     _loss_definitions: list[LossDef]
     _schedule: Schedule
     _preprocessing_config: BatchPreprocessingConfig
@@ -92,7 +93,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         self._schedule = Schedule(
             config=runner.config,
             multi_stage=self._multi_stage,
-            batch_meta=preprocessing_config.get_batch_meta(self._data.config.micro_batch_size),
+            batch_meta=preprocessing_config.get_input_meta(self._data.config.micro_batch_size),
             distributed_config=self._distributed.config,
             phase=PhaseType.validation,
         )
