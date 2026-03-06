@@ -242,12 +242,24 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             all_losses_dict[self._total_loss_name].append(total_loss)
             if len(self._losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._losses):
                 for name, loss_value in loss_dict.items():
+                    if name in self._all_extra_metric_names:
+                        continue  # extra metrics logged separately below
                     if self._config.cross_entropy_splits != 1:
                         loss_value /= self._config.cross_entropy_splits
                     if self._sequence_parallel_logits:
                         # TODO: Async
                         all_reduce(loss_value, op=ReduceOp.AVG, group=self._parallel_dim.group)
                     all_losses_dict[name].append(loss_value)
+            # Always log extra metrics regardless of number of losses or weights.
+            for metric_name in self._all_extra_metric_names:
+                if metric_name in loss_dict:
+                    metric_value = loss_dict[metric_name]
+                    if self._config.cross_entropy_splits != 1:
+                        metric_value /= self._config.cross_entropy_splits
+                    if self._sequence_parallel_logits:
+                        # TODO: Async
+                        all_reduce(metric_value, op=ReduceOp.AVG, group=self._parallel_dim.group)
+                    all_losses_dict[metric_name].append(metric_value)
 
         return total_loss, input_grad
 
@@ -293,8 +305,17 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             if grad_ is not None:
                 # TODO: Accumulate grads in-place to reduce memory and compute overhead.
                 grad = grad_ if grad is None else grad + grad_
+            # Collect any extra metrics stashed in kwargs by this loss.
+            for metric_name in loss.extra_metric_names:
+                key = f"_metric_{loss.name}_{metric_name}"
+                if key in kwargs:
+                    losses[metric_name] = kwargs.pop(key).detach()
 
         return losses, output_parallel_linear_backward(grad, context) if self.training else None
+
+    @functools.cached_property
+    def _all_extra_metric_names(self) -> set[str]:
+        return {metric for loss in self._losses for metric in loss.extra_metric_names}
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return [
@@ -307,6 +328,16 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     dtype=DataType.float32,
                 )
                 for loss in self._losses
+            ),
+            *(
+                LossDef(
+                    name=metric_name,
+                    formatted_name=metric_name,
+                    count=count,
+                    dtype=DataType.float32,
+                )
+                for loss in self._losses
+                for metric_name in loss.extra_metric_names
             ),
         ]
 

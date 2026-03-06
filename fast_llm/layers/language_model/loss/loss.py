@@ -37,6 +37,17 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         self._sequence_parallel = distributed_config.sequence_tensor_parallel and not self._vocab_parallel
         self._parallel_dim = distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
+    @property
+    def extra_metric_names(self) -> list[str]:
+        """Extra scalar metrics this loss exposes alongside its loss value.
+
+        Subclasses override this and stash values in kwargs under
+        ``f"_metric_{self._name}_{metric_name}"`` inside ``forward_backward``.
+        The head collects them and logs them to wandb regardless of how many
+        losses are active.
+        """
+        return []
+
     @abc.abstractmethod
     def forward_backward(
         self,
