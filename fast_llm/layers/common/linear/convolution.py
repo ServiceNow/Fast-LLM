@@ -34,11 +34,13 @@ class CausalConv1d(torch.nn.Module):
             else self._forward_torch
         )
 
-    def _forward_torch(self, input_: torch.Tensor, **kwargs) -> torch.Tensor:
-        if kwargs:
-            raise NotImplementedError(
-                f"Arguments {tuple(kwargs)} not implemented for torch implementation of 1d convolution."
-            )
+    def _forward_torch(
+        self, input_: torch.Tensor, document_index: torch.Tensor | None = None, lengths: list[int] | None = None
+    ) -> torch.Tensor:
+        if document_index is not None and lengths is None:
+            raise ValueError("Torch implementation of CausalConv1d requires lengths.")
+        if lengths is not None:
+            return torch.cat([self._forward_torch(x) for x in input_.split(lengths, dim=-1)], dim=-1)
         return self._activation.activation_fn(
             torch.nn.functional.conv1d(
                 input_,
@@ -49,13 +51,17 @@ class CausalConv1d(torch.nn.Module):
             )[..., : input_.size(1)]
         )
 
-    def _forward_causal_conv1d(self, input_: torch.Tensor, **kwargs) -> torch.Tensor:
+    def _forward_causal_conv1d(
+        self, input_: torch.Tensor, document_index: torch.Tensor | None = None, lengths: list[int] | None = None
+    ) -> torch.Tensor:
+        if lengths is not None and document_index is None:
+            raise ValueError("Compiled implementation of CausalConv1d requires document indices.")
         return _causal_conv1d_fn(
             input_,
             self.weight.squeeze(1),
             self.bias,
             activation=(None if self._activation == ActivationType.identity else self._activation.value),
-            **kwargs,
+            seq_idx=document_index,
         )
 
     def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:

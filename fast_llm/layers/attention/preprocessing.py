@@ -28,9 +28,7 @@ def preprocess_for_varlen(
     Assert.eq(kwargs[MixerKwargs.sequence_k_dim].global_size, kwargs[MixerKwargs.sequence_q_dim].global_size)
 
     sequence_lengths = [
-        sequence_length
-        for sequence_lengths in kwargs[MixerKwargs.sequence_lengths]
-        for sequence_length in sequence_lengths
+        sequence_length for sequence_lengths in kwargs[MixerKwargs.lengths] for sequence_length in sequence_lengths
     ]
     if return_cu_seqlens:
         cu_seqlens_q = torch.tensor([0] + sequence_lengths, dtype=torch.int32, device=device).cumsum(
@@ -43,7 +41,7 @@ def preprocess_for_varlen(
         kwargs[MixerKwargs.max_seqlen_q] = max_seqlen_q
         kwargs[MixerKwargs.max_seqlen_k] = max_seqlen_q
     if return_seq_idx:
-        kwargs[MixerKwargs.seq_idx] = torch.cat(
+        kwargs[MixerKwargs.document_index_q] = torch.cat(
             [
                 torch.full((sequence_length,), i, dtype=torch.int32, device=device)
                 for i, sequence_length in enumerate(sequence_lengths)

@@ -185,7 +185,7 @@ class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
         kwargs[self._vision_encoder_namespace] = {
             **kwargs[self._vision_encoder_namespace],
             VisionKwargs.patch_positions: positions,
-            VisionKwargs.sequence_lengths: [cropped_image_patches.lengths + [pad_size]],
+            VisionKwargs.lengths: [cropped_image_patches.lengths + [pad_size]],
             VisionKwargs.sequence_length: sequence_length,
             VisionKwargs.device: self._distributed.device,
             VisionKwargs.output_hidden_states: kwargs.get(VisionKwargs.output_hidden_states, []),

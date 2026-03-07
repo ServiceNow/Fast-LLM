@@ -87,7 +87,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         if self._vocab_parallel:
             token_mask = (token_ids >= self._vocab_start_index) * (token_ids < self._vocab_end_index)
             masked_input = (token_ids - self._vocab_start_index) * token_mask
-            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * token_mask.unsqueeze(2)  # noqa
+            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * token_mask.unsqueeze(-1)  # noqa
             embeddings = reduce_forward(embeddings, group)
             # TODO: Input masking of position embeddings inconsistant with non-vocab-parallel
             if self.position_embeddings_weight is not None:

@@ -80,7 +80,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         )
         # The token dimension as appears in hidden states, i.e. with possible sequence-tensor-parallel split.
         hidden_token_dim = (
-            (
+            TensorDim(
                 "token_tp",
                 token_dim.global_size,
                 self._distributed_config.get_distributed_dim(DistributedDimNames.tensor_and_data),
@@ -194,7 +194,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 AttentionKwargs.past_key_values: pasts,
                 AttentionKwargs.presents: presents,
                 BlockKwargs.iteration: iteration,
-                AttentionKwargs.sequence_lengths: cropped_tokens.lengths,
+                AttentionKwargs.lengths: cropped_tokens.lengths,
                 AttentionKwargs.device: self._distributed.device,
                 BlockKwargs.output_hidden_states: [],
                 BlockKwargs.hidden_states: {},

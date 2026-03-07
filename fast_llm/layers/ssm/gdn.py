@@ -2,8 +2,6 @@ import logging
 import typing
 
 import torch
-import torch.nn.functional as F
-from einops import rearrange
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
@@ -50,6 +48,7 @@ def torch_chunk_gated_delta_rule(
     initial_state=None,
     output_final_state=False,
     use_qk_l2norm_in_kernel=False,
+    cu_seqlens=None,
 ):
     initial_dtype = query.dtype
     if use_qk_l2norm_in_kernel:
@@ -62,11 +61,11 @@ def torch_chunk_gated_delta_rule(
     batch_size, num_heads, sequence_length, k_head_dim = key.shape
     v_head_dim = value.shape[-1]
     pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
-    query = F.pad(query, (0, 0, 0, pad_size))
-    key = F.pad(key, (0, 0, 0, pad_size))
-    value = F.pad(value, (0, 0, 0, pad_size))
-    beta = F.pad(beta, (0, pad_size))
-    g = F.pad(g, (0, pad_size))
+    query = torch.nn.functional.pad(query, (0, 0, 0, pad_size))
+    key = torch.nn.functional.pad(key, (0, 0, 0, pad_size))
+    value = torch.nn.functional.pad(value, (0, 0, 0, pad_size))
+    beta = torch.nn.functional.pad(beta, (0, pad_size))
+    g = torch.nn.functional.pad(g, (0, pad_size))
     total_sequence_length = sequence_length + pad_size
     scale = 1 / (query.shape[-1] ** 0.5)
     query = query * scale
@@ -252,36 +251,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             )
             self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
 
-        if not _causal_conv1d_available:
-            raise RuntimeError("Gated delta net requires `causal_conv1d`.")
-
-    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-        """
-        Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
-        Replaces fix_query_key_value_ordering from Qwen due to layout differences.
-        """
-
-        local_qkv_sizes = (
-            self._local_key_heads * self._config.key_head_dim,
-            self._local_key_heads * self._config.key_head_dim,
-            self._local_value_heads * self._config.value_head_dim,
-            self._local_value_heads * self._config.value_head_dim,
-        )
-        query, key, value, z = torch.split(mixed_qkvz, local_qkv_sizes, dim=-1)
-        query = query.reshape(*query.shape[:-1], self._local_key_heads, self._config.key_head_dim)
-        key = key.reshape(*key.shape[:-1], self._local_key_heads, self._config.key_head_dim)
-        value = value.reshape(*value.shape[:-1], self._local_value_heads, self._config.value_head_dim)
-        z = z.reshape(*z.shape[:-1], self._local_value_heads, self._config.value_head_dim)
-
-        beta, alpha = torch.split(
-            mixed_ba,
-            (self._local_value_heads, self._local_value_heads),
-            dim=-1,
-        )
-        beta = beta.reshape(*beta.shape[:-1], self._local_value_heads)
-        alpha = alpha.reshape(*alpha.shape[:-1], self._local_value_heads)
-        return query, key, value, z, beta, alpha
-
     def _forward(
         self,
         input_: torch.Tensor,
@@ -301,74 +270,72 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         """
 
         # in sequence parallel TP the input here is already scattered across sequence dimension
-        # TODO: fuse soome of the reshapes into rearranges
+        # TODO: fuse some of the reshapes into rearranges
         hidden_states = input_
 
+        # TODO: ====== Merge qkvz and ba ======
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
 
-        batch_size, sequence_length = projected_states_qkvz.shape[:2]
-
-        # note: to support var len training (packing) we need to flatten hidden states to batch_size = 1
-        # this is does not seem to be required by causal_conv1d_fn, but it it required by chunked_gdn_rule: https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/gated_delta_rule/chunk.py#L299
-        # similarly to kimi linear and to SHortCOnv from fla, we pass it flattened tro conv_1d as well, i.e. see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914
-        query, key, value, z, beta, alpha = self.fix_query_key_value_ordering(
-            projected_states_qkvz, projected_states_ba
+        query_key_value, z = torch.split(
+            projected_states_qkvz,
+            [
+                2 * self._local_key_heads * self._config.key_head_dim
+                + self._local_value_heads * self._config.value_head_dim,
+                self._local_value_heads * self._config.value_head_dim,
+            ],
+            dim=-1,
         )
-        query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
 
-        mixed_qkv = torch.cat((query, key, value), dim=-1)
-        mixed_qkv = rearrange(mixed_qkv, "b s ... -> (b s) ...").unsqueeze(0)  # 1 s d
-        mixed_qkv = rearrange(mixed_qkv, "b t d -> b d t")  # mixed_qkv.transpose(1, 2)
-        # conv func. gets sequence dim as last dim, see https://github.com/Dao-AILab/causal-conv1d/blob/22a4577d8ace9d5703daea91a7fb56695492152b/causal_conv1d/causal_conv1d_interface.py#L110
-        mixed_qkv = self.convolution(mixed_qkv, seq_idx=kwargs[MixerKwargs.seq_idx].unsqueeze(0))
-        mixed_qkv = rearrange(mixed_qkv, "b d t -> b t d")  # mixed_qkv.transpose(1, 2)
+        # Move sequence dim to last so the convolution acts on it, add pretend batch dimension.
+        # sequence, qkv_total -> 1, qkv_total, sequence
+        query_key_value = query_key_value.unsqueeze(0).transpose(1, 2)
+        query_key_value = self.convolution(
+            query_key_value,
+            document_index=kwargs[MixerKwargs.document_index_q].unsqueeze(0),
+            lengths=[length for lengths in kwargs[MixerKwargs.lengths] for length in lengths],
+        )
+        # 1, qkv_total, sequence -> 1, sequence, qkv_total
+        query_key_value = query_key_value.transpose(1, 2)
         query, key, value = torch.split(
-            mixed_qkv,
-            (
+            query_key_value,
+            [
                 self._local_key_heads * self._config.key_head_dim,
                 self._local_key_heads * self._config.key_head_dim,
                 self._local_value_heads * self._config.value_head_dim,
-            ),
+            ],
             dim=-1,
         )
-        query = query.reshape(query.shape[0], query.shape[1], -1, self._config.key_head_dim)
-        key = key.reshape(key.shape[0], key.shape[1], -1, self._config.key_head_dim)
-        value = value.reshape(value.shape[0], value.shape[1], -1, self._config.value_head_dim)
 
-        beta = beta.sigmoid()
-        g = -self.A_log.float().exp() * F.softplus(alpha.float() + self.dt_bias)
-
-        beta = rearrange(beta, "b s ... -> (b s) ...").unsqueeze(0)
-        g = rearrange(g, "b s ... -> (b s) ...").unsqueeze(0)
+        # 1, sequence, heads, head_dim
+        query = query.unflatten(-1, (self._local_key_heads, self._config.key_head_dim))
+        key = key.unflatten(-1, (self._local_key_heads, self._config.key_head_dim))
+        value = value.unflatten(-1, (self._local_value_heads, self._config.value_head_dim))
 
         if self._value_heads_per_key > 1:
             query = query.repeat_interleave(self._value_heads_per_key, dim=2)
             key = key.repeat_interleave(self._value_heads_per_key, dim=2)
 
-        core_attn_out, _ = self.chunk_gated_delta_rule(
+        beta, alpha = torch.split(projected_states_ba, [self._local_value_heads, self._local_value_heads], dim=-1)
+
+        out, _ = self.chunk_gated_delta_rule(
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            g=self._calculate_g(alpha).unsqueeze(0),
+            beta=beta.sigmoid().unsqueeze(0),
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
             cu_seqlens=kwargs[MixerKwargs.cu_seqlens_q],
         )
+        out = out.squeeze(0)
+        out = self.norm(out, z.reshape_as(out))
+        return self.out_proj(out.flatten(-2))
 
-        z_shape_og = z.shape
-        core_attn_out = rearrange(core_attn_out.squeeze(0), "(b s) ... -> b s ...", b=batch_size, s=sequence_length)
-
-        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
-        z = z.reshape(-1, z.shape[-1])
-        core_attn_out = self.norm(core_attn_out, z)
-        core_attn_out = core_attn_out.reshape(z_shape_og)
-        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
-        output = self.out_proj(core_attn_out)
-
-        return output
+    @torch.compile
+    def _calculate_g(self, alpha: torch.Tensor) -> torch.Tensor:
+        return -self.A_log.float().exp() * torch.nn.functional.softplus(alpha.float() + self.dt_bias)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         preprocess_for_varlen(

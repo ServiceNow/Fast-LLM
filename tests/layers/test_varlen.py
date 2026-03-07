@@ -71,7 +71,7 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
 
     kwargs_packed = {
         **kwargs,
-        BlockKwargs.sequence_lengths: sequence_lengths,
+        BlockKwargs.lengths: sequence_lengths,
         BlockKwargs.sequence_length: seq_len,
         BlockKwargs.batch_dim: TensorDim("", batch_size),
         BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
@@ -93,7 +93,7 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
             seq_len_ = len(seq)
             kwargs_seq = {
                 **kwargs,
-                BlockKwargs.sequence_lengths: [[seq_len_]],
+                BlockKwargs.lengths: [[seq_len_]],
                 BlockKwargs.sequence_length: seq_len_,
                 BlockKwargs.batch_dim: TensorDim("", 1),
                 BlockKwargs.sequence_q_dim: TensorDim("", seq_len_),
