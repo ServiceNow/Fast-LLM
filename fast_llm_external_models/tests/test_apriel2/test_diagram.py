@@ -1184,13 +1184,16 @@ class TestArrow:
     def test_render_down(self):
         a = Arrow("down")
         elements = list(a.render(BBox(50, 0, 0, 20), TH))
-        assert len(elements) == 1
+        assert len(elements) == 2  # line + chevron path
         assert isinstance(elements[0], S.Line)
+        assert isinstance(elements[1], S.Path)
 
     def test_render_up(self):
         a = Arrow("up")
         elements = list(a.render(BBox(50, 0, 0, 20), TH))
-        assert len(elements) == 1
+        assert len(elements) == 2  # line + chevron path
+        assert isinstance(elements[0], S.Line)
+        assert isinstance(elements[1], S.Path)
 
 
 class TestLabel:
@@ -1297,13 +1300,16 @@ class TestAttentionDetail:
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
 
-    def test_has_qkv_proj(self):
-        """Attention detail shows fused qkv_proj instead of 3 separate Linear boxes."""
+    def test_has_separate_projections(self):
+        """Attention detail shows separate q_proj, k_proj, v_proj (not fused qkv_proj)."""
         detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "qkv_proj" in svg_str
+        assert "q_proj" in svg_str
+        assert "k_proj" in svg_str
+        assert "v_proj" in svg_str
+        assert "qkv_proj" not in svg_str
 
     def test_no_cross_symbol(self):
         """No ×cross symbol in attention detail panel."""
@@ -1318,6 +1324,28 @@ class TestAttentionDetail:
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
         assert "4,096" in svg_str or "4096" in svg_str
+
+    def test_has_rope_boxes(self):
+        """Attention detail shows two RoPE boxes (for q and k columns)."""
+        detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert svg_str.count("RoPE") == 2
+
+    def test_has_sdpa_label(self):
+        """Attention detail shows 'Scaled dot-product attention' label."""
+        detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Scaled dot-product attention" in svg_str
+
+    def test_build_item_count(self):
+        """Attention detail _build() returns 5 items."""
+        detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
+        items = detail._build(TH)
+        assert len(items) == 5
 
 
 class TestGDNDetail:
@@ -1493,14 +1521,21 @@ class TestMLPDetail:
         detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
-        # Fork/merge produces Path elements for the routing lines
+        # Fork/merge produces Path elements for the routing lines (≥4 draw commands)
         fork_merge_paths = [e for e in elements if isinstance(e, S.Path)
                             and hasattr(e, 'd') and e.d and len(e.d) >= 4]
-        assert len(fork_merge_paths) >= 4, f"Expected ≥4 fork/merge path lines, got {len(fork_merge_paths)}"
-        # Manual arrowhead Paths (V-shapes with 3 commands: MoveTo, LineTo, LineTo)
-        arrowheads = [e for e in elements if isinstance(e, S.Path)
-                      and hasattr(e, 'd') and e.d and len(e.d) == 3]
-        assert len(arrowheads) >= 4, f"Expected ≥4 manual arrowheads, got {len(arrowheads)}"
+        assert len(fork_merge_paths) >= 2, f"Expected ≥2 fork/merge path lines, got {len(fork_merge_paths)}"
+        # 3-command Paths: arrowheads + fork L-paths (≥6 total)
+        three_cmd_paths = [e for e in elements if isinstance(e, S.Path)
+                           and hasattr(e, 'd') and e.d and len(e.d) == 3]
+        assert len(three_cmd_paths) >= 6, f"Expected ≥6 three-command paths, got {len(three_cmd_paths)}"
+        # No junction dot (clean fork split)
+        circles = [e for e in elements if isinstance(e, S.Circle)]
+        assert len(circles) == 0, f"Expected 0 circles (no junction dot), got {len(circles)}"
+        # "hidden states" labels as transparent boxes
+        svg_str = "".join(str(e) for e in elements)
+        assert svg_str.count("hidden states") == 2, "Expected 2 'hidden states' labels"
+        assert "box-transparent" in svg_str, "Expected box-transparent class for labels"
         # No marker_end on any element
         for e in elements:
             if hasattr(e, 'marker_end'):
@@ -1511,14 +1546,57 @@ class TestMLPDetail:
         detail = MLPDetail(MLPDisplayConfig(gated=False, activation="silu", intermediate_size=5504))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
-        # Ungated case should produce Line elements for arrow shafts (no marker_end)
+        # Ungated case: internal arrows + exit/entry arrows produce Lines
         line_arrows = [e for e in elements if isinstance(e, S.Line)
                        and getattr(e, 'class_', None) == ["arrow"]]
-        assert len(line_arrows) >= 2, f"Expected ≥2 arrow lines, got {len(line_arrows)}"
+        assert len(line_arrows) >= 4, f"Expected ≥4 arrow lines, got {len(line_arrows)}"
         # Manual arrowhead Paths (V-shapes)
         arrowheads = [e for e in elements if isinstance(e, S.Path)
                       and hasattr(e, 'd') and e.d and len(e.d) == 3]
-        assert len(arrowheads) >= 2, f"Expected ≥2 manual arrowheads, got {len(arrowheads)}"
+        assert len(arrowheads) >= 3, f"Expected ≥3 manual arrowheads, got {len(arrowheads)}"
+        # "hidden states" labels
+        svg_str = "".join(str(e) for e in elements)
+        assert svg_str.count("hidden states") == 2, "Expected 2 'hidden states' labels"
+
+    def test_hidden_states_labels(self):
+        """Both gated and ungated MLPs render 2 'hidden states' labels as transparent boxes."""
+        for gated in (True, False):
+            detail = MLPDetail(MLPDisplayConfig(gated=gated, activation="silu",
+                                                intermediate_size=11008 if gated else 5504))
+            sz = detail.measure(TH)
+            elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+            svg_str = "".join(str(e) for e in elements)
+            assert svg_str.count("hidden states") == 2, f"gated={gated}: expected 2 'hidden states'"
+            assert "box-transparent" in svg_str, f"gated={gated}: expected box-transparent class"
+
+    def test_gated_no_junction_dot(self):
+        """Gated MLP does not render a junction dot — just a clean fork split."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        circles = [e for e in elements if isinstance(e, S.Circle)]
+        assert len(circles) == 0, f"Expected 0 circles (no junction dot), got {len(circles)}"
+
+    def test_ungated_no_junction_dot(self):
+        """Ungated MLP does not render a junction dot."""
+        detail = MLPDetail(MLPDisplayConfig(gated=False, activation="silu", intermediate_size=5504))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        circles = [e for e in elements if isinstance(e, S.Circle)]
+        assert len(circles) == 0, f"Expected 0 circles in ungated MLP, got {len(circles)}"
+
+    def test_exit_arrow_skips_title_bar(self):
+        """The exit arrow from down_proj has a gap where the title bar sits."""
+        detail = MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=11008))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        # Collect all arrow Lines that are vertical (x1 == x2)
+        vertical_arrows = [e for e in elements if isinstance(e, S.Line)
+                           and getattr(e, 'class_', None) == ["arrow"]
+                           and e.x1 == e.x2]
+        # There should be at least 3 vertical segments for the exit arrow
+        # (title bar behind + content area + above frame), verifying no single line spans the full gap
+        assert len(vertical_arrows) >= 3, f"Expected ≥3 vertical arrow segments, got {len(vertical_arrows)}"
 
 
 class TestDecoderBlockMlpBbox:
@@ -1701,7 +1779,8 @@ class TestDetailedTheme:
         for name in ["box-attention", "box-swa", "box-gdn", "box-kda",
                       "box-mamba", "box-conv", "box-gate",
                       "box-stochastic", "box-norm", "box-linear",
-                      "box-activation", "box-mlp", "box-embedding"]:
+                      "box-activation", "box-mlp", "box-embedding",
+                      "box-transparent"]:
             assert name in css, f"Missing {name} in stylesheet"
 
     def test_stylesheet_contains_text_classes(self):
@@ -1888,34 +1967,34 @@ class TestArchitectureOverview:
         return extract_model(_comprehensive_config())
 
     def test_text_only_cells(self):
-        """Fixed attention → 4 cells: embed + 1 group + norm + lm_head."""
+        """Fixed attention → 5 cells: lm_head + norm + 1 group + embed + 1 pre-decoder."""
         arch = self._fixed_arch()
         overview = ArchitectureOverview(arch)
         sz = overview.measure(TH)
         bb = BBox(0, 0, sz.w, sz.h)
         cells = overview.cell_bboxes(bb, TH)
-        # 1 embed + 1 decoder group + 1 norm + 1 lm_head = 4
-        assert len(cells) == 4
+        # 1 lm_head + 1 norm + 1 decoder group + 1 embed + 1 pre-decoder = 5
+        assert len(cells) == 5
 
     def test_hybrid_cells(self):
-        """Hybrid 8+32+8 → 7 cells: embed + 3 groups + norm + lm_head."""
+        """Hybrid 8+32+8 → 7 cells: lm_head + norm + 3 groups + embed + 1 pre-decoder."""
         arch = self._hybrid_arch()
         overview = ArchitectureOverview(arch)
         sz = overview.measure(TH)
         bb = BBox(0, 0, sz.w, sz.h)
         cells = overview.cell_bboxes(bb, TH)
-        # 1 embed + 3 decoder groups + 1 norm + 1 lm_head = 6
-        assert len(cells) == 6
+        # 1 lm_head + 1 norm + 3 decoder groups + 1 embed + 1 pre-decoder = 7
+        assert len(cells) == 7
 
     def test_comprehensive_cells(self):
-        """Comprehensive 48 groups → 52 cells: embed + 48 groups + norm + lm_head."""
+        """Comprehensive 48 groups → 52 cells: lm_head + norm + 48 groups + embed + 1 pre-decoder."""
         arch = self._comprehensive_arch()
         overview = ArchitectureOverview(arch)
         sz = overview.measure(TH)
         bb = BBox(0, 0, sz.w, sz.h)
         cells = overview.cell_bboxes(bb, TH)
-        # 1 embed + 48 decoder groups + 1 norm + 1 lm_head = 51
-        assert len(cells) == 51
+        # 1 lm_head + 1 norm + 48 decoder groups + 1 embed + 1 pre-decoder = 52
+        assert len(cells) == 52
 
     def test_cell_height_uniform(self):
         """All cells have stack_cell_h height."""
@@ -1995,13 +2074,48 @@ class TestArchitectureOverview:
         sz = overview.measure(TH)
         bb = BBox(0, 0, sz.w, sz.h)
         cells = overview.cell_bboxes(bb, TH)
-        # First cell = Embedding (None), last = LM Head (None), second-to-last = Norm (None)
-        assert cells[0][1] is None  # Embedding
-        assert cells[-1][1] is None  # LM Head
-        assert cells[-2][1] is None  # Norm
-        # Decoder cells should have non-None spec
-        for _, spec in cells[1:-2]:
+        # cells[0] = LM Head (None), cells[1] = Norm (None)
+        assert cells[0][1] is None  # LM Head
+        assert cells[1][1] is None  # Norm
+        # cells[-2] = Embedding (None), cells[-1] = Text tokens (None)
+        assert cells[-2][1] is None  # Embedding
+        assert cells[-1][1] is None  # Text tokens
+        # Decoder block cells should have non-None spec
+        for _, spec in cells[2:-2]:
             assert spec is not None
+
+    def test_decoder_frame_label(self):
+        """'Decoder' frame title should appear in rendered SVG."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Decoder" in svg_str
+
+    def test_pre_decoder_labels(self):
+        """'Text tokens' should appear in rendered SVG as a transparent box label."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "Text tokens" in svg_str
+        assert "box-transparent" in svg_str
+        assert "Sample input text" not in svg_str
+
+    def test_no_marker_end_in_overview(self):
+        """All overview arrows use manual chevrons, not SVG marker-end."""
+        arch = self._fixed_arch()
+        overview = ArchitectureOverview(arch)
+        sz = overview.measure(TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        elements = list(overview.render(bb, TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "marker-end" not in svg_str
+        assert "marker_end" not in svg_str
 
 
 class TestVisionEncoderColumn:

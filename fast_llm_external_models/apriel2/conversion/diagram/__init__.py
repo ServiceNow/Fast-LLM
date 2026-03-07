@@ -165,8 +165,8 @@ def _layout(
     if arch.vision_encoder:
         vision_col = VisionEncoderColumn(arch.vision_encoder)
         vision_sz = vision_col.measure(th)
-        # Align vision adapter (top cell) with the Embedding cell (first cell in overview)
-        embed_bb = cell_bboxes[0][0]  # first cell = Embedding (bottom)
+        # Embedding is the last decoder cell, 3rd from end (before Text tokens + Sample input)
+        embed_bb = cell_bboxes[-3][0]
         # Vision column top (adapter) aligns with embedding center
         vision_top_y = embed_bb.cy - vision_sz.h / 2
         vision_bb = BBox(range_label_w, vision_top_y, vision_sz.w, vision_sz.h)

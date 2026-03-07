@@ -16,17 +16,17 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Palette:
-    # mixer types — pastel fills derived from Tab10 at 25% saturation
-    attention: str = "#c7ddec"
-    attn_text: str = "#114163"
-    swa: str = "#ffdfc3"
-    swa_text: str = "#8c4608"
-    kda: str = "#cae7ca"
-    kda_text: str = "#185818"
-    gdn: str = "#f5c9c9"
-    gdn_text: str = "#761516"
-    mamba: str = "#e4d9ef"
-    mamba_text: str = "#513968"
+    # mixer types — derived from matplotlib Tab10
+    attention: str = "#8fbbda"
+    attn_text: str = "#13476c"
+    swa: str = "#ffbf87"
+    swa_text: str = "#994c08"
+    kda: str = "#96d096"
+    kda_text: str = "#1a601a"
+    gdn: str = "#eb9394"
+    gdn_text: str = "#801718"
+    mamba: str = "#cab3de"
+    mamba_text: str = "#593e71"
     conv: str = "#f0d0e0"
     conv_text: str = "#7a2a4a"
     gate: str = "#e8d8f0"
@@ -232,6 +232,9 @@ text.mono {{ font-family: {mono}; }}
 .detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw}; }}
 .detail-mlp > text {{ fill: {mlp_t}; stroke: none; }}
 
+.detail-decoder {{ fill: {blk_bg}; stroke: {blk_s}; stroke-width: {sw}; }}
+.detail-decoder > text {{ fill: {note}; stroke: none; }}
+
 .detail-content {{ fill: white; }}
 
 /* ── wires ──────────────────────────────── */
@@ -244,6 +247,8 @@ text.mono {{ font-family: {mono}; }}
 .stack-label {{ font-size: {sz_sm}px; fill: {note}; dominant-baseline: central; }}
 .symbol    {{ stroke: {wire}; stroke-width: 1.2; fill: white; }}
 .symbol line {{ stroke: {wire}; stroke-width: 1.5; }}
+.box-transparent {{ fill: none; stroke: #cccccc; stroke-width: 0.5; }}
+.box-transparent > text {{ font-size: {sz_ann}px; fill: {note}; }}
 
 /* ── background ────────────────────────── */
 .background {{ fill: white; }}

@@ -18,6 +18,7 @@ from fast_llm_external_models.apriel2.conversion.diagram.layout import (
     BBox,
     HStack,
     Size,
+    Spacer,
     VStack,
     Align,
 )
@@ -115,15 +116,13 @@ class Arrow:
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:  # noqa: ARG002
         x = bb.cx
         if self.direction == "down":
-            yield S.Line(
-                x1=x, y1=bb.y, x2=x, y2=bb.bottom - 4,
-                class_=["arrow"], marker_end="url(#arr-d)",
-            )
+            tip_y = bb.bottom - _ARROW_CLR
+            yield S.Line(x1=x, y1=bb.y, x2=x, y2=tip_y, class_=["arrow"])
+            yield _arrow_down(x, tip_y)
         else:
-            yield S.Line(
-                x1=x, y1=bb.bottom, x2=x, y2=bb.y + 4,
-                class_=["arrow"], marker_end="url(#arr-u)",
-            )
+            tip_y = bb.y + _ARROW_CLR
+            yield S.Line(x1=x, y1=bb.bottom, x2=x, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(x, tip_y)
 
 
 @dataclass
@@ -196,6 +195,14 @@ def _arrow_up(x: float, y: float, sz: float = 4) -> S.Path:
     )
 
 
+def _arrow_down(x: float, y: float, sz: float = 4) -> S.Path:
+    """Downward arrowhead tip at (x, y): a small V opening upward."""
+    return S.Path(
+        d=[S.MoveTo(x - sz, y - sz), S.LineTo(x, y), S.LineTo(x + sz, y - sz)],
+        class_=["arrow"],
+    )
+
+
 def connector_bezier(x1: float, y1: float, x2: float, y2: float) -> S.Path:
     """Dashed cubic Bezier from (x1,y1) to (x2,y2)."""
     mx = (x1 + x2) / 2
@@ -261,6 +268,8 @@ class _OverviewItem:
     css: str  # box CSS class
     spec: BlockSpec | None  # for connector drawing (None for non-decoder cells)
     range_label: str  # left annotation (e.g. "0..7")
+    in_decoder: bool = True  # False for pre-decoder items outside the frame
+    is_data_label: bool = False  # True → render as plain text, not a box
 
 
 @dataclass
@@ -270,19 +279,35 @@ class ArchitectureOverview:
     arch: ArchitectureModel
 
     def _build_items(self) -> list[_OverviewItem]:
-        """Build items in bottom-to-top order (Embedding first, LM Head last)."""
+        """Build items in render order: top of screen first, bottom last.
+
+        Signal flows upward (bottom-to-top): Embedding feeds into block layers
+        which feed into Norm → LM Head.  Pre-decoder items (Text tokens)
+        sit below the decoder frame.
+        """
         arch = self.arch
         items: list[_OverviewItem] = []
 
-        # 1. Embedding (bottom)
-        sublabel = f"V={arch.vocab_size:,}" if arch.vocab_size else ""
+        # 1. LM Head (top, inside decoder)
+        sublabel = ""
+        if arch.hidden_size and arch.vocab_size:
+            sublabel = f"{arch.hidden_size} \u2192 {arch.vocab_size:,}"
         items.append(_OverviewItem(
-            label="Embedding", sublabel=sublabel,
-            css="box-embedding", spec=None, range_label="",
+            label="LM Head", sublabel=sublabel,
+            css="box-linear", spec=None, range_label="",
         ))
 
-        # 2. Decoder block groups (in order: layer 0 at bottom → higher layers at top)
-        for group in arch.block_groups:
+        # 2. Norm (inside decoder)
+        norm_type = "RMSNorm"
+        if arch.block_groups:
+            norm_type = arch.block_groups[0].block_spec.norm_type
+        items.append(_OverviewItem(
+            label=norm_type, sublabel="",
+            css="box-norm", spec=None, range_label="",
+        ))
+
+        # 3. Block groups REVERSED (highest layers at top, layer 0 at bottom)
+        for group in reversed(arch.block_groups):
             name = group.block_name or _mixer_short_name(group.block_spec)
             label = f"{name} \u00d7{group.count}" if group.count > 1 else name
             if group.count == 1:
@@ -295,22 +320,18 @@ class ArchitectureOverview:
                 spec=group.block_spec, range_label=range_label,
             ))
 
-        # 3. Norm (use the norm_type from the first block group)
-        norm_type = "RMSNorm"
-        if arch.block_groups:
-            norm_type = arch.block_groups[0].block_spec.norm_type
+        # 4. Embedding (bottom of decoder)
+        sublabel = f"V={arch.vocab_size:,}" if arch.vocab_size else ""
         items.append(_OverviewItem(
-            label=norm_type, sublabel="",
-            css="box-norm", spec=None, range_label="",
+            label="Embedding", sublabel=sublabel,
+            css="box-embedding", spec=None, range_label="",
         ))
 
-        # 4. LM Head (top)
-        sublabel = ""
-        if arch.hidden_size and arch.vocab_size:
-            sublabel = f"{arch.hidden_size} \u2192 {arch.vocab_size:,}"
+        # 5. Pre-decoder items (outside frame, below decoder)
         items.append(_OverviewItem(
-            label="LM Head", sublabel=sublabel,
-            css="box-linear", spec=None, range_label="",
+            label="Text tokens", sublabel="",
+            css="box-norm", spec=None, range_label="",
+            in_decoder=False, is_data_label=True,
         ))
 
         return items
@@ -321,7 +342,21 @@ class ArchitectureOverview:
         if n == 0:
             return Size(0, 0)
         range_label_w = 50  # space for range labels to the left
-        total_h = n * th.geo.stack_cell_h + (n - 1) * th.geo.stack_cell_gap
+        n_dec = sum(1 for i in items if i.in_decoder)
+        n_pre = n - n_dec
+        cell_h = th.geo.stack_cell_h
+        gap = th.geo.stack_cell_gap
+        g = th.geo.gap
+        title_h = th.geo.title_h
+
+        # Decoder frame: title strip + padding + cells
+        dec_h = title_h + 2 * g + n_dec * cell_h + (n_dec - 1) * gap
+        # Pre-decoder cells below frame
+        pre_h = n_pre * cell_h + (n_pre - 1) * gap if n_pre > 0 else 0
+        # Gap between frame and pre-decoder
+        frame_gap = gap if n_pre > 0 else 0
+
+        total_h = dec_h + frame_gap + pre_h
         return Size(th.geo.stack_w + range_label_w, total_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
@@ -331,18 +366,31 @@ class ArchitectureOverview:
         box_w = th.geo.stack_w
         cell_h = th.geo.stack_cell_h
         gap = th.geo.stack_cell_gap
+        g = th.geo.gap
+        title_h = th.geo.title_h
         cx = box_x + box_w / 2
 
-        y = bb.y
-        for i, item in enumerate(items):
-            # Determine actual box height (taller for sublabels)
+        dec_items = [it for it in items if it.in_decoder]
+        pre_items = [it for it in items if not it.in_decoder]
+        n_dec = len(dec_items)
+
+        # ── Decoder frame ───────────────────────────────────────────
+        dec_h = title_h + 2 * g + n_dec * cell_h + (n_dec - 1) * gap
+        frame, content_bb = _render_detail_frame(
+            box_x - g, bb.y, box_w + 2 * g, dec_h,
+            "Decoder", "detail-decoder", th,
+        )
+        yield frame
+
+        # ── Decoder cells inside frame ──────────────────────────────
+        y = content_bb.y
+        for i, item in enumerate(dec_items):
             bx = Box(item.label, item.css, w=box_w, h=cell_h, sublabel=item.sublabel)
             actual_h = bx.measure(th).h
-            # Center the (possibly taller) box within the cell_h slot
             box_y = y + (cell_h - actual_h) / 2
             yield from bx.render(BBox(box_x, box_y, box_w, actual_h), th)
 
-            # Range label to the left (only for decoder cells)
+            # Range label to the left
             if item.range_label:
                 idx_x = box_x - 4
                 yield S.Text(
@@ -352,20 +400,56 @@ class ArchitectureOverview:
                     dominant_baseline="central",
                 )
 
-            # Upward flow line between cells (arrow from current top to next bottom)
-            if i < len(items) - 1:
-                line_y1 = y + cell_h  # bottom of current cell
-                line_y2 = y + cell_h + gap  # top of next cell
+            # Upward flow arrow between decoder cells
+            if i < n_dec - 1:
+                line_y1 = y + cell_h
+                line_y2 = y + cell_h + gap
                 if line_y2 - line_y1 > 1:
-                    yield S.Line(x1=cx, y1=line_y1, x2=cx, y2=line_y2, class_=["arrow"])
+                    tip_y = line_y1 + _ARROW_CLR
+                    yield S.Line(x1=cx, y1=line_y2, x2=cx, y2=tip_y, class_=["arrow"])
+                    yield _arrow_up(cx, tip_y)
 
             y += cell_h + gap
 
-        # Tied weights: dashed connector from Embedding (bottom) to LM Head (top)
-        if self.arch.tie_word_embeddings and len(items) >= 2:
-            embed_cy = bb.y + cell_h / 2
-            lm_head_cy = bb.y + (len(items) - 1) * (cell_h + gap) + cell_h / 2
-            tied_x = box_x + box_w + 12  # right side of the boxes
+        # ── Pre-decoder cells below frame ───────────────────────────
+        pre_y = bb.y + dec_h + g  # gap between frame and pre-decoder
+        # Arrow from first pre-decoder to last decoder (crossing frame boundary)
+        if pre_items and dec_items:
+            last_dec_bottom = content_bb.y + (n_dec - 1) * (cell_h + gap) + cell_h
+            first_pre_top = pre_y
+            if first_pre_top - last_dec_bottom > 1:
+                tip_y = last_dec_bottom + _ARROW_CLR
+                yield S.Line(x1=cx, y1=first_pre_top, x2=cx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(cx, tip_y)
+
+        for i, item in enumerate(pre_items):
+            if item.is_data_label:
+                # Transparent box for data annotation labels
+                bx = Box(item.label, "box-transparent", w=box_w, h=cell_h)
+                yield from bx.render(BBox(box_x, pre_y, box_w, cell_h), th)
+            else:
+                bx = Box(item.label, item.css, w=box_w, h=cell_h, sublabel=item.sublabel)
+                actual_h = bx.measure(th).h
+                box_y = pre_y + (cell_h - actual_h) / 2
+                yield from bx.render(BBox(box_x, box_y, box_w, actual_h), th)
+
+            # Upward flow arrow between pre-decoder cells
+            if i < len(pre_items) - 1:
+                line_y1 = pre_y + cell_h
+                line_y2 = pre_y + cell_h + gap
+                if line_y2 - line_y1 > 1:
+                    tip_y = line_y1 + _ARROW_CLR
+                    yield S.Line(x1=cx, y1=line_y2, x2=cx, y2=tip_y, class_=["arrow"])
+                    yield _arrow_up(cx, tip_y)
+
+            pre_y += cell_h + gap
+
+        # ── Tied weights: Embedding → LM Head ───────────────────────
+        # In render order: LM Head is dec_items[0], Embedding is dec_items[-1]
+        if self.arch.tie_word_embeddings and n_dec >= 2:
+            lm_head_cy = content_bb.y + cell_h / 2
+            embed_cy = content_bb.y + (n_dec - 1) * (cell_h + gap) + cell_h / 2
+            tied_x = box_x + box_w + 12
             yield S.Path(
                 d=[
                     S.MoveTo(box_x + box_w, embed_cy),
@@ -384,19 +468,36 @@ class ArchitectureOverview:
             )
 
     def cell_bboxes(self, bb: BBox, th: Theme) -> list[tuple[BBox, BlockSpec | None]]:
-        """Return (bbox, spec) for each cell. Only decoder cells have non-None spec."""
+        """Return (bbox, spec) for each cell. Only decoder block cells have non-None spec."""
         items = self._build_items()
         range_label_w = 50
         box_x = bb.x + range_label_w
         box_w = th.geo.stack_w
         cell_h = th.geo.stack_cell_h
         gap = th.geo.stack_cell_gap
+        g = th.geo.gap
+        title_h = th.geo.title_h
+
+        dec_items = [it for it in items if it.in_decoder]
+        pre_items = [it for it in items if not it.in_decoder]
+        n_dec = len(dec_items)
+        dec_h = title_h + 2 * g + n_dec * cell_h + (n_dec - 1) * gap
 
         result: list[tuple[BBox, BlockSpec | None]] = []
-        y = bb.y
-        for item in items:
+
+        # Decoder cells (inside frame content area)
+        content_y = bb.y + title_h + g
+        y = content_y
+        for item in dec_items:
             result.append((BBox(box_x, y, box_w, cell_h), item.spec))
             y += cell_h + gap
+
+        # Pre-decoder cells (below frame)
+        pre_y = bb.y + dec_h + g
+        for item in pre_items:
+            result.append((BBox(box_x, pre_y, box_w, cell_h), item.spec))
+            pre_y += cell_h + gap
+
         return result
 
 
@@ -747,33 +848,168 @@ _ACTIVATION_DISPLAY: dict[str, str] = {"silu": "SiLU", "gelu": "GELU", "relu": "
 
 @dataclass
 class AttentionDetail:
-    """Detail panel for attention (full or sliding window)."""
+    """Detail panel for attention (full or sliding window).
+
+    Layout (data flows bottom → top)::
+
+        o_proj                          [0] box-linear
+          ↑
+        Scaled dot-product attention    [1] box-attention, bold
+          ↑       ↑       ↑
+          q       k       v            [2] HStack, box-transparent
+          ↑       ↑       |
+        RoPE    RoPE    (spacer)       [3] HStack (RoPE, RoPE, Spacer)
+          ↑       ↑       ↑
+        q_proj  k_proj  v_proj         [4] HStack, box-linear
+           \\      |      /
+            fork point
+    """
 
     config: AttentionDisplayConfig
-    w: float = 220
+    w: float = 250
 
     def _title(self) -> str:
         return "Sliding-window attention" if self.config.window_size else "Grouped-query attention"
 
+    @staticmethod
+    def _sdpa_title() -> str:
+        return "Scaled dot-product attention"
+
+    _PROJ_W = 55
+    _PROJ_GAP = 8
+    _FORK_SPACE = 12  # vertical space for entry fork below proj row
+
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 2
         box_css = "box-swa" if self.config.window_size else "box-attention"
+        pw, pg = self._PROJ_W, self._PROJ_GAP
         children: list[Box | Symbol | HStack] = [
-            Box("o_proj", "box-linear", w=70, h=bh - 2),
-            Box(self._title(), box_css, w=self.w - 30, h=bh,
-                bold=True),
-            HStack([Box("q", "box-norm", w=65, h=bh - 4),
-                    Box("k", "box-norm", w=65, h=bh - 4)], gap=10),
-            Box("qkv_proj", "box-linear", w=self.w - 60, h=bh - 2),
+            Box("o_proj", "box-linear", w=70, h=bh - 2),                                           # [0]
+            Box(self._sdpa_title(), box_css, w=self.w - 30, h=bh, bold=True),                      # [1]
+            HStack([Box("q", "box-transparent", w=pw, h=bh - 4),
+                    Box("k", "box-transparent", w=pw, h=bh - 4),
+                    Box("v", "box-transparent", w=pw, h=bh - 4)], gap=pg),                         # [2]
+            HStack([Box("RoPE", "box-norm", w=pw, h=bh - 4),
+                    Box("RoPE", "box-norm", w=pw, h=bh - 4),
+                    Spacer(w=pw, h=bh - 4)], gap=pg),                                              # [3]
+            HStack([Box("q_proj", "box-linear", w=pw, h=bh - 2),
+                    Box("k_proj", "box-linear", w=pw, h=bh - 2),
+                    Box("v_proj", "box-linear", w=pw, h=bh - 2)], gap=pg),                         # [4]
         ]
         return _detail_layout(children, th)
+
+    def _col_centers(self, items: list[tuple[BBox, Box | Symbol | HStack]], th: Theme) -> list[float]:
+        """Compute center-x of each of the three columns from the proj HStack (item 4)."""
+        proj_hstack = items[4][1]
+        assert isinstance(proj_hstack, HStack)
+        sizes = [c.measure(th) for c in proj_hstack.children]
+        hg = proj_hstack.gap if proj_hstack.gap is not None else th.geo.gap
+        proj_bb = items[4][0]
+        centers: list[float] = []
+        x = proj_bb.x
+        for sz in sizes:
+            centers.append(x + sz.w / 2)
+            x += sz.w + hg
+        return centers
 
     def measure(self, th: Theme) -> Size:
         g = th.geo.gap
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
-        return Size(content_w + 2 * g + 100, total_h + 2 * g + th.geo.title_h)
+        frame_h = total_h + self._FORK_SPACE + 2 * g + th.geo.title_h
+        return Size(content_w + 2 * g + 100, frame_h)
+
+    def _render_arrows(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Yield arrows between items with three parallel columns."""
+        clearance = _ARROW_CLR
+        g = th.geo.gap
+        cols = self._col_centers(items, th)
+
+        # [0] o_proj → [1] SDPA : single vertical arrow (centred on o_proj)
+        o_bb = items[0][0]
+        sdpa_bb = items[1][0]
+        cx = bb.x + o_bb.cx
+        y1 = bb.y + o_bb.bottom
+        y2 = bb.y + sdpa_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clearance
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # [1] SDPA → [2] labels : three parallel arrows
+        label_bb = items[2][0]
+        y1 = bb.y + sdpa_bb.bottom
+        y2 = bb.y + label_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                tip_y = y1 + clearance
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # [2] labels → [3] RoPE/Spacer : three parallel arrows (v column is pass-through)
+        rope_bb = items[3][0]
+        y1 = bb.y + label_bb.bottom
+        y2 = bb.y + rope_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                tip_y = y1 + clearance
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # [3] RoPE/Spacer → [4] projs : three parallel arrows
+        proj_bb = items[4][0]
+        y1 = bb.y + rope_bb.bottom
+        y2 = bb.y + proj_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                tip_y = y1 + clearance
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+    def _render_entry_fork(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        frame_bb: BBox,
+        content_bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Fork from single entry point to three proj columns (L-shaped paths)."""
+        clearance = _ARROW_CLR
+        g = th.geo.gap
+        cols = self._col_centers(items, th)
+        proj_bb = items[4][0]
+
+        # Fork midpoint: centered below proj row
+        content_cx = content_bb.x + content_bb.w / 2
+        midpoint_y = content_bb.y + proj_bb.bottom + g
+
+        for col_x in cols:
+            acx = content_bb.x + col_x
+            tip_y = content_bb.y + proj_bb.bottom + clearance
+            yield S.Path(
+                d=[
+                    S.MoveTo(content_cx, midpoint_y),
+                    S.LineTo(acx, midpoint_y),
+                    S.LineTo(acx, tip_y),
+                ],
+                class_=["arrow"],
+            )
+            yield _arrow_up(acx, tip_y)
+
+        # Entry line from frame bottom to fork midpoint
+        y_start = frame_bb.y + frame_bb.h
+        tip_y = midpoint_y + clearance
+        if y_start - tip_y > 1:
+            yield S.Line(x1=content_cx, y1=y_start, x2=content_cx, y2=tip_y, class_=["arrow"])
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         g = th.geo.gap
@@ -783,20 +1019,30 @@ class AttentionDetail:
         content_w = max((bb.right for bb, _ in items), default=0)
 
         # Titled outer frame
+        frame_h = content_h + self._FORK_SPACE + 2 * g + title_h
         detail_css = "detail-swa" if self.config.window_size else "detail-attention"
+        frame_bb = BBox(bb.x, bb.y, content_w + 2 * g, frame_h)
         frame, content_bb = _render_detail_frame(
-            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            frame_bb.x, frame_bb.y, frame_bb.w, frame_bb.h,
             self._title(), detail_css, th,
         )
         yield frame
 
-        # Content inside padded area
-        yield from _DetailArrows.render(items, content_bb)
+        # Exit arrow (top item to title strip)
+        yield from _DetailArrows.render_exit_arrow(items, frame_bb, content_bb, title_h)
+
+        # Custom inter-item arrows (three parallel columns)
+        yield from self._render_arrows(items, content_bb, th)
+
+        # Entry fork (single point fans out to three projections)
+        yield from self._render_entry_fork(items, frame_bb, content_bb, th)
+
+        # Render children
         for child_bb, child in items:
             shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
-        # Side annotations (item 1 = attention box)
+        # Side annotations (item 1 = SDPA box)
         attn_bb = BBox(content_bb.x + items[1][0].x, content_bb.y + items[1][0].y, items[1][0].w, items[1][0].h)
         heads = self.config.heads
         kv_heads = self.config.kv_heads or heads
@@ -806,19 +1052,6 @@ class AttentionDetail:
         if self.config.window_size:
             yield S.Text(x=ax, y=attn_bb.cy + 20,
                          text=f"window = {self.config.window_size:,}", class_=["t-dim"])
-
-        # "RoPE" label (item 2 = q/k RoPE row)
-        qk_bb = BBox(content_bb.x + items[2][0].x, content_bb.y + items[2][0].y, items[2][0].w, items[2][0].h)
-        yield S.Text(x=qk_bb.x - 8, y=qk_bb.cy, text="RoPE", class_=["t-note"],
-                     text_anchor="end", dominant_baseline="central")
-
-        # q k v labels under qkv_proj (item 3)
-        proj_bb = BBox(content_bb.x + items[3][0].x, content_bb.y + items[3][0].y, items[3][0].w, items[3][0].h)
-        third = proj_bb.w / 3
-        for i, lbl in enumerate("qkv"):
-            px = proj_bb.x + (i + 0.5) * third
-            yield S.Text(x=px, y=proj_bb.bottom + 10, text=lbl, class_=["t-note"],
-                         text_anchor="middle")
 
 
 @dataclass
@@ -858,14 +1091,16 @@ class GDNDetail:
         content_w = max((bb.right for bb, _ in items), default=0)
 
         # Titled outer frame
+        frame_bb = BBox(bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h)
         frame, content_bb = _render_detail_frame(
-            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            frame_bb.x, frame_bb.y, frame_bb.w, frame_bb.h,
             "Gated DeltaNet", "detail-gdn", th,
         )
         yield frame
 
         # Content inside padded area
         yield from _DetailArrows.render(items, content_bb)
+        yield from _DetailArrows.render_exit_arrow(items, frame_bb, content_bb, title_h)
         for child_bb, child in items:
             shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
@@ -907,12 +1142,14 @@ class KDADetail:
         ]
         return _detail_layout(children, th)
 
+    _EXT_LABEL_H = 25  # extra height for external data labels below the frame
+
     def measure(self, th: Theme) -> Size:
         g = th.geo.gap
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
-        return Size(content_w + 2 * g + 90, total_h + 2 * g + th.geo.title_h)
+        return Size(content_w + 2 * g + 90, total_h + 2 * g + th.geo.title_h + self._EXT_LABEL_H)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         g = th.geo.gap
@@ -921,15 +1158,19 @@ class KDADetail:
         content_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
 
-        # Titled outer frame
+        # Titled outer frame (does not include the external label area)
+        frame_h = content_h + 2 * g + title_h
+        frame_bb = BBox(bb.x, bb.y, content_w + 2 * g, frame_h)
         frame, content_bb = _render_detail_frame(
-            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            frame_bb.x, frame_bb.y, frame_bb.w, frame_bb.h,
             "Kimi Delta Attention", "detail-kda", th,
         )
         yield frame
 
         # Content inside padded area
         yield from _DetailArrows.render(items, content_bb)
+        yield from _DetailArrows.render_exit_arrow(items, frame_bb, content_bb, title_h)
+        yield from _DetailArrows.render_entry_arrow(items, frame_bb, content_bb)
         for child_bb, child in items:
             shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
@@ -948,13 +1189,19 @@ class KDADetail:
         head_dim = self.config.head_dim
         yield S.Text(x=ax, y=ay + 75, text=f"{n_heads} heads, dim {head_dim}", class_=["t-count"])
 
-        # q k v labels under projections (item 4)
+        # External data labels below the frame as transparent boxes
+        frame_bottom = frame_bb.y + frame_bb.h
+        label_box_h = 16
+        label_y = frame_bottom + self._EXT_LABEL_H - label_box_h
+
+        # q k v labels (centered under projection columns)
         proj_bb = BBox(content_bb.x + items[4][0].x, content_bb.y + items[4][0].y, items[4][0].w, items[4][0].h)
         cw = (self.w - 80) // 3
         for i, lbl in enumerate("qkv"):
             px = proj_bb.x + i * (cw + 5) + cw / 2
-            yield S.Text(x=px, y=proj_bb.bottom + 10, text=lbl, class_=["t-note"],
-                         text_anchor="middle")
+            bw = cw - 2
+            bx = Box(lbl, "box-transparent", w=bw, h=label_box_h)
+            yield from bx.render(BBox(px - bw / 2, label_y, bw, label_box_h), th)
 
 
 @dataclass
@@ -990,14 +1237,16 @@ class MambaDetail:
         content_w = max((bb.right for bb, _ in items), default=0)
 
         # Titled outer frame
+        frame_bb = BBox(bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h)
         frame, content_bb = _render_detail_frame(
-            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            frame_bb.x, frame_bb.y, frame_bb.w, frame_bb.h,
             "Mamba SSM", "detail-mamba", th,
         )
         yield frame
 
         # Content inside padded area
         yield from _DetailArrows.render(items, content_bb)
+        yield from _DetailArrows.render_exit_arrow(items, frame_bb, content_bb, title_h)
         for child_bb, child in items:
             shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
@@ -1021,6 +1270,9 @@ class MLPDetail:
     config: MLPDisplayConfig
     w: float = 180
 
+    _EXT_LABEL_H = 24  # vertical space for one external "hidden states" label
+    _LABEL_BOX_H = 16  # height of the transparent label box
+
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 4
         act = _ACTIVATION_DISPLAY.get(self.config.activation, self.config.activation.upper()) if self.config.activation else "SiLU"
@@ -1031,7 +1283,7 @@ class MLPDetail:
                 Symbol("cross"),
                 HStack([Box(act, "box-activation", w=half, h=bh),
                         Box("gate_proj", "box-linear", w=half, h=bh)], gap=6),
-                Box("up_proj", "box-linear", w=self.w - 20, h=bh),
+                Box("up_proj", "box-linear", w=half, h=bh),
             ]
         else:
             children = [
@@ -1041,17 +1293,25 @@ class MLPDetail:
             ]
         if self.config.gated:
             g = th.geo.gap
-            gap = [g, g * 2, g * 2]  # × sits close to down_proj; wider spacing elsewhere
+            gap = [g, g * 2, g]  # × sits close to down_proj; wider spacing below HStack
         else:
             gap = None
-        return _detail_layout(children, th, gap=gap)
+        items = _detail_layout(children, th, gap=gap)
+        # Left-align up_proj under the act box in the HStack
+        if self.config.gated and len(items) >= 4:
+            hstack_bb = items[2][0]
+            up_bb = items[3][0]
+            items[3] = (BBox(hstack_bb.x, up_bb.y, up_bb.w, up_bb.h), items[3][1])
+        return items
 
     def measure(self, th: Theme) -> Size:
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
         g = th.geo.gap
         content_w = max((bb.right for bb, _ in items), default=0)
-        return Size(content_w + 2 * g + 60, total_h + 2 * g + th.geo.title_h)
+        fork_space = g if self.config.gated else 0  # space for fork midpoint
+        frame_h = total_h + fork_space + 2 * g + th.geo.title_h
+        return Size(content_w + 2 * g + 60, frame_h + 2 * self._EXT_LABEL_H)
 
     def _render_arrows(
         self,
@@ -1072,18 +1332,18 @@ class MLPDetail:
         # Compute HStack child center-x positions (relative to hstack_bb)
         assert isinstance(hstack, HStack)
         child_sizes = [c.measure(th) for c in hstack.children]
-        g = hstack.gap if hstack.gap is not None else th.geo.gap
+        hg = hstack.gap if hstack.gap is not None else th.geo.gap
         child0_cx = hstack_bb.x + child_sizes[0].w / 2
-        child1_cx = hstack_bb.x + child_sizes[0].w + g + child_sizes[1].w / 2
+        child1_cx = hstack_bb.x + child_sizes[0].w + hg + child_sizes[1].w / 2
 
         # Absolute positions
         cross_cx = bb.x + (cross_bb.x + cross_bb.w / 2)
-        up_cx = bb.x + (up_bb.x + up_bb.w / 2)
         down_cx = bb.x + (down_bb.x + down_bb.w / 2)
         abs_child0_cx = bb.x + child0_cx
         abs_child1_cx = bb.x + child1_cx
 
         clearance = _ARROW_CLR
+        g = th.geo.gap
 
         # down_proj → × : single upward arrow
         y1 = bb.y + down_bb.bottom
@@ -1121,34 +1381,114 @@ class MLPDetail:
                 class_=["arrow"],
             )
 
-        # HStack → up_proj : two diverging arrows from up_proj center to each child center
+        # up_proj → act : straight vertical arrow (up_proj is left-aligned under act)
         y1 = bb.y + hstack_bb.bottom
         y2 = bb.y + up_bb.y
         if y2 - y1 > 1:
-            mid_y = (y1 + y2) / 2
-            # up_proj → left child (act)
             tip_y = y1 + clearance
-            yield S.Path(
-                d=[
-                    S.MoveTo(up_cx, y2),
-                    S.LineTo(up_cx, mid_y),
-                    S.LineTo(abs_child0_cx, mid_y),
-                    S.LineTo(abs_child0_cx, tip_y),
-                ],
-                class_=["arrow"],
-            )
+            yield S.Line(x1=abs_child0_cx, y1=y2, x2=abs_child0_cx, y2=tip_y, class_=["arrow"])
             yield _arrow_up(abs_child0_cx, tip_y)
-            # up_proj → right child (gate_proj)
-            yield S.Path(
-                d=[
-                    S.MoveTo(up_cx, y2),
-                    S.LineTo(up_cx, mid_y),
-                    S.LineTo(abs_child1_cx, mid_y),
-                    S.LineTo(abs_child1_cx, tip_y),
-                ],
-                class_=["arrow"],
-            )
-            yield _arrow_up(abs_child1_cx, tip_y)
+
+        # Fork midpoint: centered below up_proj (clean split, no dot)
+        content_cx = bb.x + bb.w / 2
+        midpoint_y = bb.y + up_bb.bottom + g
+
+        # Midpoint → up_proj: L-path left then up
+        up_proj_tip_y = bb.y + up_bb.bottom + clearance
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_child0_cx, midpoint_y),
+                S.LineTo(abs_child0_cx, up_proj_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_child0_cx, up_proj_tip_y)
+
+        # Midpoint → gate_proj: L-path right then up
+        gate_tip_y = bb.y + hstack_bb.bottom + clearance
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_child1_cx, midpoint_y),
+                S.LineTo(abs_child1_cx, gate_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_child1_cx, gate_tip_y)
+
+    def _render_exit_arrow(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        frame_bb: BBox,
+        content_bb: BBox,
+        g: float,
+    ) -> Iterator[S.Element]:
+        """Exit arrow from top item up through (skipping) title bar to output label."""
+        if not items:
+            return
+        top_bb = items[0][0]
+        cx = content_bb.x + top_bb.cx
+
+        # Segment 1: from top of down_proj to bottom of title strip (within content area)
+        y_from = content_bb.y + top_bb.y
+        y_title_bottom = content_bb.y - g  # = frame_bb.y + title_h
+        if y_from - y_title_bottom > 1:
+            yield S.Line(x1=cx, y1=y_from, x2=cx, y2=y_title_bottom, class_=["arrow"])
+
+        # Segment 2: from top of frame to above-frame label area
+        y_frame_top = frame_bb.y
+        tip_y = frame_bb.y - g + _ARROW_CLR
+        if y_frame_top - tip_y > 1:
+            yield S.Line(x1=cx, y1=y_frame_top, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+    def _render_entry_arrow(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        frame_bb: BBox,
+        content_bb: BBox,
+        g: float,
+    ) -> Iterator[S.Element]:
+        """Entry arrow from input label up to bottom item or fork midpoint."""
+        if not items:
+            return
+        clearance = _ARROW_CLR
+
+        if self.config.gated and len(items) >= 4:
+            # Arrow to fork midpoint (centered)
+            up_bb = items[-1][0]
+            midpoint_y = content_bb.y + up_bb.bottom + g
+            cx = content_bb.x + content_bb.w / 2
+            tip_y = midpoint_y + clearance
+        else:
+            # Arrow to bottom item
+            bottom_bb = items[-1][0]
+            cx = content_bb.x + bottom_bb.cx
+            tip_y = content_bb.y + bottom_bb.bottom + clearance
+
+        y_start = frame_bb.bottom + self._EXT_LABEL_H - self._LABEL_BOX_H - clearance
+        if y_start - tip_y > 1:
+            yield S.Line(x1=cx, y1=y_start, x2=cx, y2=tip_y, class_=["arrow"])
+
+    def _render_external_labels(
+        self,
+        frame_bb: BBox,
+        content_bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Render "hidden states" labels above and below the frame as transparent boxes."""
+        cx = content_bb.cx
+        w, h = 90, self._LABEL_BOX_H
+
+        # Output label: top-aligned in the _EXT_LABEL_H space above the frame
+        out_box = Box("hidden states", "box-transparent", w=w, h=h)
+        yield from out_box.render(BBox(cx - w / 2, frame_bb.y - self._EXT_LABEL_H, w, h), th)
+
+        # Input label: bottom-aligned in the _EXT_LABEL_H space below the frame
+        in_box = Box("hidden states", "box-transparent", w=w, h=h)
+        in_y = frame_bb.bottom + self._EXT_LABEL_H - h
+        yield from in_box.render(BBox(cx - w / 2, in_y, w, h), th)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build(th)
@@ -1156,25 +1496,71 @@ class MLPDetail:
         g = th.geo.gap
         title_h = th.geo.title_h
         content_w = max((cbb.right for cbb, _ in items), default=0)
+        fork_space = g if self.config.gated else 0
 
-        # Titled outer frame
+        # Frame is inset from bb by _EXT_LABEL_H on top and bottom
+        frame_x = bb.x
+        frame_y = bb.y + self._EXT_LABEL_H
+        frame_w = content_w + 2 * g
+        frame_h = content_h + fork_space + 2 * g + title_h
+        frame_bb = BBox(frame_x, frame_y, frame_w, frame_h)
+
         frame, content_bb = _render_detail_frame(
-            bb.x, bb.y, content_w + 2 * g, content_h + 2 * g + title_h,
+            frame_x, frame_y, frame_w, frame_h,
             "Feed forward", "detail-mlp", th,
         )
+
+        # 1. Exit arrow step 1 — title-bar region only (BEFORE frame, hidden by title strip)
+        if items:
+            top_bb = items[0][0]
+            cx = content_bb.x + top_bb.cx
+            y_title_bottom = frame_bb.y + title_h  # = content_bb.y - g
+            y_title_top = frame_bb.y
+            if y_title_bottom - y_title_top > 1:
+                yield S.Line(x1=cx, y1=y_title_bottom, x2=cx, y2=y_title_top, class_=["arrow"])
+
+        # 2. Frame group (title bar paints on top, hiding step-1 segment)
         yield frame
 
-        # Content inside padded area
+        # 3. Exit arrow step 2 — content-area segment (AFTER frame, visible)
+        if items:
+            top_bb = items[0][0]
+            cx = content_bb.x + top_bb.cx
+            y_from = content_bb.y + top_bb.y
+            y_title_bottom = frame_bb.y + title_h
+            if y_from - y_title_bottom > 1:
+                yield S.Line(x1=cx, y1=y_from, x2=cx, y2=y_title_bottom, class_=["arrow"])
+
+        # 3b. Exit arrow step 3 — above-frame segment + arrowhead (AFTER frame, visible)
+        if items:
+            top_bb = items[0][0]
+            cx = content_bb.x + top_bb.cx
+            y_frame_top = frame_bb.y
+            tip_y = frame_bb.y - self._EXT_LABEL_H + self._LABEL_BOX_H + _ARROW_CLR
+            if y_frame_top - tip_y > 1:
+                yield S.Line(x1=cx, y1=y_frame_top, x2=cx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(cx, tip_y)
+
+        # 4. Internal arrows (fork midpoint, merge paths, inter-item arrows)
         yield from self._render_arrows(items, content_bb, th)
+
+        # 5. Entry arrow (from input label to bottom item or fork midpoint)
+        yield from self._render_entry_arrow(items, frame_bb, content_bb, g)
+
+        # 6. Children (boxes, symbols)
         for child_bb, child in items:
             shifted = BBox(content_bb.x + child_bb.x, content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
+        # 7. Annotations
         intermediate = self.config.intermediate_size
         if intermediate:
             ax = content_bb.right - 10
             yield S.Text(x=ax, y=content_bb.y + 8, text="Intermediate size", class_=["t-note"])
             yield S.Text(x=ax, y=content_bb.y + 22, text=f"= {intermediate:,}", class_=["t-dim"])
+
+        # 8. External "hidden states" labels
+        yield from self._render_external_labels(frame_bb, content_bb, th)
 
 
 def _mixer_spec_css(mixer: MixerSpec) -> str:
@@ -1299,3 +1685,33 @@ class _DetailArrows:
                 tip_y = y1 + _ARROW_CLR
                 yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
                 yield _arrow_up(cx, tip_y)
+
+    @staticmethod
+    def render_exit_arrow(
+        items: list[tuple[BBox, object]], bb: BBox, content_bb: BBox, title_h: float,
+    ) -> Iterator[S.Element]:
+        """Upward arrow from top item to the frame's title strip bottom."""
+        if not items:
+            return
+        top_bb = items[0][0]
+        cx = content_bb.x + top_bb.x + top_bb.w / 2
+        y_start = content_bb.y + top_bb.y
+        y_end = bb.y + title_h + _ARROW_CLR
+        if y_start - y_end > 2 * _ARROW_CLR:
+            yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
+            yield _arrow_up(cx, y_end)
+
+    @staticmethod
+    def render_entry_arrow(
+        items: list[tuple[BBox, object]], bb: BBox, content_bb: BBox,
+    ) -> Iterator[S.Element]:
+        """Upward arrow from below the frame into the bottom item."""
+        if not items:
+            return
+        bottom_bb = items[-1][0]
+        cx = content_bb.x + bottom_bb.x + bottom_bb.w / 2
+        y_start = bb.y + bb.h
+        y_end = content_bb.y + bottom_bb.bottom + _ARROW_CLR
+        if y_start - y_end > 2 * _ARROW_CLR:
+            yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
+            yield _arrow_up(cx, y_end)
