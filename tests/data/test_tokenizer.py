@@ -79,14 +79,14 @@ CHAT_TEMPLATE = (
     ("messages", "expected_tokens", "expected_loss_masking_spans"),
     (
         # Single turn: full assistant turn (<assistant>Hello</assistant>) is trainable
-        # 15 tokens, trainable indices 7-13, loss mask spans cover 0-6 and 14
+        # 15 tokens, trainable indices 7-14, loss mask spans cover 0-6
         (
             [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
             [49152, 27, 789, 29, 16946, 750, 789, 2293, 17822, 29, 7371, 750, 17822, 29, 49152],
-            [(0, 7), (14, 15)],
+            [(0, 7)],
         ),
         # Multi-turn: both assistant turns are fully trainable
-        # 27 tokens, trainable indices 7-13 and 19-25
+        # 27 tokens, trainable indices 7-13 and 19-26
         (
             [
                 {"role": "user", "content": "A"},
@@ -123,10 +123,10 @@ CHAT_TEMPLATE = (
                 29,
                 49152,
             ],
-            [(0, 7), (14, 19), (26, 27)],
+            [(0, 7), (14, 19)],
         ),
         # System + user + assistant: full assistant turn trainable
-        # 23 tokens, trainable indices 15-21
+        # 23 tokens, trainable indices 15-22
         (
             [
                 {"role": "system", "content": "You are helpful."},
@@ -158,17 +158,17 @@ CHAT_TEMPLATE = (
                 29,
                 49152,
             ],
-            [(0, 15), (22, 23)],
+            [(0, 15)],
         ),
-        # User only: no trainable tokens
-        # 9 tokens, no trainable indices
+        # User only: no trainable tokens except EOS
+        # 9 tokens, trainable index 8 (EOS)
         (
             [{"role": "user", "content": "Hi"}],
             [49152, 27, 789, 29, 16946, 750, 789, 29, 49152],
-            [(0, 9)],
+            [(0, 8)],
         ),
         # Long multi-turn (85 tokens, 3 assistant responses with tags, tests span machinery)
-        # Trainable: indices 27-40, 49-62, 70-83
+        # Trainable: indices 27-40, 49-62, 70-84
         (
             [
                 {"role": "system", "content": "You are a helpful assistant that answers questions."},
@@ -266,7 +266,7 @@ CHAT_TEMPLATE = (
                 29,
                 49152,
             ],
-            [(0, 27), (41, 49), (63, 70), (84, 85)],
+            [(0, 27), (41, 49), (63, 70)],
         ),
     ),
 )
