@@ -34,33 +34,39 @@ class Palette:
     stochastic: str = "#f0e8d8"
     stoch_text: str = "#6a5a3a"
 
-    # infrastructure
-    embedding: str = "#3d6b6b"
-    emb_text: str = "#ffffff"
-    norm: str = "#d4e8d4"
-    norm_text: str = "#2d5a2d"
-    linear: str = "#e8e8e8"
-    linear_text: str = "#444444"
-    activation: str = "#fff3c0"
-    act_text: str = "#7a6a00"
-    mlp: str = "#e0e0e0"
-    mlp_text: str = "#444444"
+    # infrastructure — warm muted
+    embedding: str = "#e8e2da"
+    emb_text: str = "#4a4038"
+    norm: str = "#e8e2da"
+    norm_text: str = "#4a4038"
+    linear: str = "#e8e2da"
+    linear_text: str = "#4a4038"
+    activation: str = "#e8e2da"
+    act_text: str = "#4a4038"
+    mlp: str = "#e8e2da"
+    mlp_text: str = "#4a4038"
 
     # chrome
-    block_bg: str = "#f2f2f2"
-    block_stroke: str = "#cccccc"
-    detail_bg: str = "#fafafa"
-    detail_stroke: str = "#bbbbbb"
+    block_bg: str = "#faf7f2"
+    block_stroke: str = "#d4cfc8"
+    detail_bg: str = "#faf7f2"
+    detail_stroke: str = "#d4cfc8"
 
     # wires
-    wire: str = "#555555"
-    dash: str = "#999999"
+    wire: str = "#4a4038"
+    dash: str = "#9a9088"
 
     # annotation semantic colors
     dim: str = "#2a8a5a"
     count: str = "#c04070"
-    note: str = "#666666"
-    body: str = "#333333"
+    note: str = "#6a6058"
+    body: str = "#4a4038"
+
+    # new warm fields
+    muted_stroke: str = "#a09890"
+    symbol_fill: str = "#f0ead8"
+    symbol_stroke: str = "#8a7a5a"
+    background: str = "#faf7f2"
 
     def mixer(self, kind: str) -> tuple[str, str]:
         """(fill, text) for a mixer type."""
@@ -76,7 +82,7 @@ class Palette:
 
 @dataclass(frozen=True)
 class Typography:
-    family: str = "Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+    family: str = "Manrope, 'Helvetica Neue', Helvetica, Arial, sans-serif"
     mono: str = "'SF Mono', 'Fira Code', Consolas, monospace"
     sz_title: float = 22
     sz_subtitle: float = 16
@@ -92,13 +98,13 @@ class Geometry:
     detail_w: float = 240
     box_h: float = 32
     box_h_sm: float = 28
-    rx: float = 6
-    rx_block: float = 8
+    value_label_h: float = 20
+    rx: float = 7
+    rx_block: float = 10
 
     gap: float = 10
     gap_block: float = 6
     gap_detail: float = 24
-    pad_outer: float = 40
 
     connector_gap: float = 80
     residual_r: float = 9
@@ -112,8 +118,9 @@ class Geometry:
 
     title_h: float = 24  # height of title strip in titled panels
 
-    stroke: float = 1.2
-    stroke_arrow: float = 1.5
+    stroke: float = 1.8
+    stroke_arrow: float = 2.0
+    stroke_detail: float = 1.5
     dash: list[int] = field(default_factory=lambda: [6, 4])
 
 
@@ -146,21 +153,24 @@ class Theme:
             stoch=p.stochastic, stoch_t=p.stoch_text,
             blk_bg=p.block_bg, blk_s=p.block_stroke,
             det_bg=p.detail_bg, det_s=p.detail_stroke,
-            sz_title=t.sz_title, sz_sub=t.sz_subtitle,
             sz_label=t.sz_label, sz_ann=t.sz_ann, sz_sm=t.sz_small,
+            muted_s=p.muted_stroke,
+            sym_f=p.symbol_fill, sym_s=p.symbol_stroke,
+            bg=p.background,
+            sw_det=g.stroke_detail,
         )
 
 
 _CSS = """\
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
+
 /* ── base ───────────────────────────────── */
 text {{ font-family: {font}; fill: {body}; }}
 text.mono {{ font-family: {mono}; }}
 
 /* ── text roles ─────────────────────────── */
-.t-title  {{ font-size: {sz_title}px; font-weight: 700; fill: {count}; }}
-.t-sub    {{ font-size: {sz_sub}px; font-weight: 600; }}
 .t-label  {{ font-size: {sz_label}px; text-anchor: middle; dominant-baseline: central; }}
-.t-label-bold {{ font-size: {sz_label}px; font-weight: 600;
+.t-label-bold {{ font-size: {sz_label}px; font-weight: 700;
                  text-anchor: middle; dominant-baseline: central; }}
 .t-ann    {{ font-size: {sz_ann}px; }}
 .t-dim    {{ font-size: {sz_ann}px; fill: {dim}; }}
@@ -172,32 +182,32 @@ text.mono {{ font-family: {mono}; }}
 .box      {{ stroke-width: {sw}; }}
 
 /* ── component boxes ────────────────────── */
-.box-embedding {{ fill: {emb}; stroke: none; }}
-.box-embedding > text {{ fill: {emb_t}; }}
-.box-norm      {{ fill: {norm}; stroke: none; }}
-.box-norm > text {{ fill: {norm_t}; }}
-.box-linear    {{ fill: {lin}; stroke: none; }}
-.box-linear > text {{ fill: {lin_t}; }}
-.box-activation {{ fill: {act}; stroke: none; }}
-.box-activation > text {{ fill: {act_t}; }}
-.box-mlp       {{ fill: {mlp}; stroke: none; }}
-.box-mlp > text {{ fill: {mlp_t}; }}
+.box-embedding {{ fill: {emb}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-embedding > text {{ fill: {emb_t}; stroke: none; }}
+.box-norm      {{ fill: {norm}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-norm > text {{ fill: {norm_t}; stroke: none; }}
+.box-linear    {{ fill: {lin}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-linear > text {{ fill: {lin_t}; stroke: none; }}
+.box-activation {{ fill: {act}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-activation > text {{ fill: {act_t}; stroke: none; }}
+.box-mlp       {{ fill: {mlp}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-mlp > text {{ fill: {mlp_t}; stroke: none; }}
 
 /* ── mixer boxes ────────────────────────── */
-.box-attention {{ fill: {attn}; stroke: none; }}
-.box-attention > text {{ fill: {attn_t}; }}
-.box-swa       {{ fill: {swa}; stroke: none; }}
-.box-swa > text {{ fill: {swa_t}; }}
-.box-gdn       {{ fill: {gdn}; stroke: none; }}
-.box-gdn > text {{ fill: {gdn_t}; }}
-.box-kda       {{ fill: {kda}; stroke: none; }}
-.box-kda > text {{ fill: {kda_t}; }}
-.box-mamba     {{ fill: {mamba}; stroke: none; }}
-.box-mamba > text {{ fill: {mamba_t}; }}
-.box-conv      {{ fill: {conv}; stroke: none; }}
-.box-conv > text {{ fill: {conv_t}; }}
-.box-gate      {{ fill: {gate}; stroke: none; }}
-.box-gate > text {{ fill: {gate_t}; }}
+.box-attention {{ fill: {attn}; stroke: {attn_t}; stroke-width: 2.2; }}
+.box-attention > text {{ fill: {attn_t}; stroke: none; }}
+.box-swa       {{ fill: {swa}; stroke: {swa_t}; stroke-width: 2.2; }}
+.box-swa > text {{ fill: {swa_t}; stroke: none; }}
+.box-gdn       {{ fill: {gdn}; stroke: {gdn_t}; stroke-width: 2.2; }}
+.box-gdn > text {{ fill: {gdn_t}; stroke: none; }}
+.box-kda       {{ fill: {kda}; stroke: {kda_t}; stroke-width: 2.2; }}
+.box-kda > text {{ fill: {kda_t}; stroke: none; }}
+.box-mamba     {{ fill: {mamba}; stroke: {mamba_t}; stroke-width: 2.2; }}
+.box-mamba > text {{ fill: {mamba_t}; stroke: none; }}
+.box-conv      {{ fill: {conv}; stroke: {conv_t}; stroke-width: 2.2; }}
+.box-conv > text {{ fill: {conv_t}; stroke: none; }}
+.box-gate      {{ fill: {gate}; stroke: {gate_t}; stroke-width: 2.2; }}
+.box-gate > text {{ fill: {gate_t}; stroke: none; }}
 .box-stochastic {{
   fill: {stoch}; stroke: {stoch_t}; stroke-dasharray: 6 3;
 }}
@@ -208,48 +218,53 @@ text.mono {{ font-family: {mono}; }}
   fill: {blk_bg}; stroke: {blk_s};
   rx: {rx_blk}; stroke-width: {sw};
 }}
+.block-bg > text {{ stroke: none; }}
 .detail-bg {{
   fill: {det_bg}; stroke: {det_s};
   rx: {rx_blk}; stroke-width: {sw}; stroke-dasharray: {dash};
 }}
 
 /* ── detail panel frames ───────────────── */
-.detail-attention {{ fill: {attn}; stroke: {attn}; stroke-width: {sw}; }}
+.detail-attention {{ fill: {attn}; stroke: {attn}; stroke-width: {sw_det}; }}
 .detail-attention > text {{ fill: {attn_t}; stroke: none; }}
 
-.detail-swa {{ fill: {swa}; stroke: {swa}; stroke-width: {sw}; }}
+.detail-swa {{ fill: {swa}; stroke: {swa}; stroke-width: {sw_det}; }}
 .detail-swa > text {{ fill: {swa_t}; stroke: none; }}
-.detail-gdn {{ fill: {gdn}; stroke: {gdn}; stroke-width: {sw}; }}
+.detail-gdn {{ fill: {gdn}; stroke: {gdn}; stroke-width: {sw_det}; }}
 .detail-gdn > text {{ fill: {gdn_t}; stroke: none; }}
-.detail-kda {{ fill: {kda}; stroke: {kda}; stroke-width: {sw}; }}
+.detail-kda {{ fill: {kda}; stroke: {kda}; stroke-width: {sw_det}; }}
 .detail-kda > text {{ fill: {kda_t}; stroke: none; }}
-.detail-mamba {{ fill: {mamba}; stroke: {mamba}; stroke-width: {sw}; }}
+.detail-mamba {{ fill: {mamba}; stroke: {mamba}; stroke-width: {sw_det}; }}
 .detail-mamba > text {{ fill: {mamba_t}; stroke: none; }}
 
-.detail-stochastic {{ fill: {stoch}; stroke: {stoch}; stroke-width: {sw}; stroke-dasharray: 6 3; }}
+.detail-stochastic {{ fill: {stoch}; stroke: {stoch}; stroke-width: {sw_det}; stroke-dasharray: 6 3; }}
 .detail-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
 
-.detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw}; }}
+.detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw_det}; }}
 .detail-mlp > text {{ fill: {mlp_t}; stroke: none; }}
 
-.detail-decoder {{ fill: {blk_bg}; stroke: {blk_s}; stroke-width: {sw}; }}
+.detail-decoder {{ fill: {blk_bg}; stroke: {blk_s}; stroke-width: {sw_det}; }}
 .detail-decoder > text {{ fill: {note}; stroke: none; }}
 
-.detail-content {{ fill: white; }}
+.detail-content {{ fill: {bg}; }}
+
+/* ── shadows and sheens ───────────────── */
+.box-shadow {{ opacity: 0.18; stroke: none; }}
+.box-shadow-muted {{ opacity: 0.14; stroke: none; }}
+.box-sheen {{ fill: white; opacity: 0.45; stroke: none; }}
 
 /* ── wires ──────────────────────────────── */
-.arrow     {{ stroke: {wire}; stroke-width: 1.5; fill: none; }}
-.connector {{ stroke: {dash_col}; stroke-width: 1;
+.arrow     {{ stroke: {wire}; stroke-width: 2; fill: none; }}
+.connector {{ stroke: {dash_col}; stroke-width: 1.5;
               stroke-dasharray: {dash}; fill: none; }}
-.brace     {{ stroke: {note}; stroke-width: 1.5; fill: none; }}
 
 /* ── layer stack ───────────────────────── */
-.stack-label {{ font-size: {sz_sm}px; fill: {note}; dominant-baseline: central; }}
-.symbol    {{ stroke: {wire}; stroke-width: 1.2; fill: white; }}
-.symbol line {{ stroke: {wire}; stroke-width: 1.5; }}
-.box-transparent {{ fill: none; stroke: #cccccc; stroke-width: 0.5; }}
-.box-transparent > text {{ font-size: {sz_ann}px; fill: {note}; }}
+.symbol    {{ fill: {sym_f}; stroke: {sym_s}; stroke-width: 1.8; }}
+.symbol > text {{ fill: {wire}; stroke: none; font-weight: 800; }}
+.symbol-stroke {{ stroke: {wire}; stroke-width: 2; stroke-linecap: round; }}
+.box-transparent {{ fill: {bg}; stroke: {muted_s}; stroke-width: {sw}; }}
+.box-transparent > text {{ font-size: {sz_ann}px; fill: {note}; stroke: none; }}
 
 /* ── background ────────────────────────── */
-.background {{ fill: white; }}
+.background {{ fill: {bg}; }}
 """

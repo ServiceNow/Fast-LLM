@@ -17,9 +17,7 @@ import svg as S
 
 from fast_llm_external_models.apriel2.conversion.diagram.elements import (
     ArchitectureOverview,
-    BlockGroup,
     DecoderBlock,
-    MambaDetail,
     MLPDetail,
     StochasticMixerPanel,
     VisionEncoderColumn,
@@ -38,6 +36,29 @@ from fast_llm_external_models.apriel2.conversion.diagram.model import (
 from fast_llm_external_models.apriel2.conversion.diagram.style import Theme
 
 logger = logging.getLogger(__name__)
+
+# Shadow offset used by glossy boxes (box-shadow rects are offset by this amount).
+_SHADOW_OFFSET = 3.0
+
+
+class _ContentBBox:
+    """Tracks the bounding box of all placed content."""
+
+    def __init__(self) -> None:
+        self.min_x = float("inf")
+        self.min_y = float("inf")
+        self.max_x = float("-inf")
+        self.max_y = float("-inf")
+
+    def include(self, bb: BBox, shadow: float = _SHADOW_OFFSET) -> None:
+        """Expand to include *bb*, plus box shadow offset."""
+        self.min_x = min(self.min_x, bb.x)
+        self.min_y = min(self.min_y, bb.y)
+        self.max_x = max(self.max_x, bb.right + shadow)
+        self.max_y = max(self.max_y, bb.bottom + shadow)
+
+    def to_bbox(self) -> BBox:
+        return BBox(self.min_x, self.min_y, self.max_x - self.min_x, self.max_y - self.min_y)
 
 
 def _fix_xml_text(svg: str) -> str:
@@ -69,18 +90,23 @@ def generate_diagram(
     th = theme or Theme()
     arch = extract_model(config)
 
-    body, content_w, content_h = _layout(arch, th)
+    body, content_bb = _layout(arch, th)
 
-    pad = th.geo.pad_outer
-    total_w = content_w + pad * 2
-    total_h = content_h + pad * 2
+    clearance = 2 * th.geo.gap
+    dx = clearance - content_bb.x
+    dy = clearance - content_bb.y
+    total_w = content_bb.w + 2 * clearance
+    total_h = content_bb.h + 2 * clearance
+
+    translated = S.G(transform=[S.Translate(dx, dy)], elements=body)
 
     svg_elements: list[S.Element] = [
         S.Style(text=th.stylesheet()),
         defs(th),
-        S.Rect(x=0, y=0, width=total_w, height=total_h, class_=["background"]),
+        S.Rect(x=0, y=0, width=total_w, height=total_h, rx=th.geo.rx, class_=["background"]),
+        S.Rect(x=0, y=0, width=total_w, height=total_h, rx=th.geo.rx, fill="url(#dotgrid)"),
+        translated,
     ]
-    svg_elements.extend(body)
 
     canvas = S.SVG(
         viewBox=S.ViewBoxSpec(0, 0, total_w, total_h),
@@ -110,21 +136,20 @@ def _get_mixer_detail(spec: BlockSpec) -> object | None:
 def _layout(
     arch: ArchitectureModel,
     th: Theme,
-) -> tuple[list[S.Element], float, float]:
-    """Build element list and compute content size.
+) -> tuple[list[S.Element], BBox]:
+    """Build element list and compute content bounding box.
 
     Returns:
-        (elements, content_width, content_height)
+        (elements, content_bbox)
     """
+    g = th.geo.gap
     row_gap = th.geo.gap_detail * 2
     conn_gap = th.geo.connector_gap
 
     # ── Compute horizontal zones ───────────────────────────────────
-    range_label_w = 50  # space for "0..47" labels to the left of the overview
     vision_col_w = th.geo.stack_w + 30 if arch.vision_encoder else 0  # vision column + gap
-    overview_x = vision_col_w + range_label_w
-    brace_margin = 50  # room for brace + count badge
-    left_x = overview_x + th.geo.stack_w + th.geo.stack_conn_gap + brace_margin
+    overview_x = vision_col_w
+    left_x = overview_x + th.geo.stack_w + th.geo.stack_conn_gap
 
     # Determine if any block spec uses a stochastic mixer
     has_stochastic = any(
@@ -134,25 +159,8 @@ def _layout(
     stochastic_col_w = (th.geo.stack_w + conn_gap) if has_stochastic else 0
 
     body: list[S.Element] = []
-    content_y = 0.0
-    max_x = 0.0
-
-    # ── Title ──────────────────────────────────────────────────────
-    body.append(S.Text(
-        x=left_x, y=content_y + th.typo.sz_title,
-        text=arch.model_name, class_=["t-title"],
-    ))
-    content_y += th.typo.sz_title + 6
-
-    subtitle_parts = [f"h={arch.hidden_size}"]
-    if arch.vocab_size:
-        subtitle_parts.append(f"V={arch.vocab_size:,}")
-    subtitle_parts.append(f"{arch.total_blocks} blocks")
-    body.append(S.Text(
-        x=left_x, y=content_y + th.typo.sz_subtitle,
-        text="  ".join(subtitle_parts), class_=["t-sub"],
-    ))
-    content_y += th.typo.sz_subtitle + row_gap
+    content_y = row_gap
+    cbbox = _ContentBBox()
 
     # ── Architecture overview column ───────────────────────────────
     overview = ArchitectureOverview(arch)
@@ -160,6 +168,8 @@ def _layout(
     overview_bb = BBox(overview_x, content_y, overview_sz.w, overview_sz.h)
     body.extend(overview.render(overview_bb, th))
     cell_bboxes = overview.cell_bboxes(overview_bb, th)
+    # The overview's detail frame extends g left/right beyond measured size
+    cbbox.include(BBox(overview_bb.x - g, overview_bb.y, overview_bb.w + 2 * g, overview_bb.h + g))
 
     # ── Vision encoder column (if multimodal) ──────────────────────
     if arch.vision_encoder:
@@ -169,8 +179,9 @@ def _layout(
         embed_bb = cell_bboxes[-3][0]
         # Vision column top (adapter) aligns with embedding center
         vision_top_y = embed_bb.cy - vision_sz.h / 2
-        vision_bb = BBox(range_label_w, vision_top_y, vision_sz.w, vision_sz.h)
+        vision_bb = BBox(0, vision_top_y, vision_sz.w, vision_sz.h)
         body.extend(vision_col.render(vision_bb, th))
+        cbbox.include(BBox(vision_bb.x - g, vision_bb.y, vision_bb.w + 2 * g, vision_bb.h + g))
 
         # Horizontal merge arrow: adapter (top cell of vision) → embedding
         adapter_cy = vision_bb.y + 2 * (th.geo.stack_cell_h + th.geo.stack_cell_gap) + th.geo.stack_cell_h / 2
@@ -191,17 +202,12 @@ def _layout(
     mlp_usages: dict[MLPDisplayConfig, list[BBox]] = {}
 
     for label, spec in arch.unique_block_specs:
-        # Total count for this spec across all block groups
-        count = sum(g.count for g in arch.block_groups if g.block_spec == spec)
-        if count == 0 and arch.vision_encoder and arch.vision_encoder.block_spec == spec:
-            count = arch.vision_encoder.num_blocks
-
-        # Decoder block (with brace + count)
+        # Decoder block
         block = DecoderBlock(spec.mixer, norm_type=spec.norm_type, title=label)
-        group = BlockGroup(block, count, label if count > 1 else "")
-        group_sz = group.measure(th)
-        group_bb = BBox(left_x, content_y, group_sz.w, group_sz.h)
-        body.extend(group.render(group_bb, th))
+        block_sz = block.measure(th)
+        group_bb = BBox(left_x, content_y, block_sz.w, block_sz.h)
+        body.extend(block.render(group_bb, th))
+        cbbox.include(group_bb)
 
         # Track position for overview connectors
         spec_positions[spec] = group_bb
@@ -223,6 +229,7 @@ def _layout(
             stoch_x = group_bb.right + conn_gap
             stoch_bb = BBox(stoch_x, content_y, stoch_sz.w, stoch_sz.h)
             body.extend(stoch_panel.render(stoch_bb, th))
+            cbbox.include(stoch_bb)
 
             # Connector: mixer box → stochastic panel
             mixer_bb = block.mixer_bbox(group_bb, th)
@@ -239,15 +246,14 @@ def _layout(
                     detail_sz = detail.measure(th)
                     detail_bb = BBox(detail_x, detail_y, detail_sz.w, detail_sz.h)
                     body.extend(detail.render(detail_bb, th))
+                    cbbox.include(detail_bb)
                     # Connector: sub-mixer box → detail panel
                     body.append(connector_bezier(
                         sub_bb.right, sub_bb.cy,
                         detail_bb.x, detail_bb.cy,
                     ))
                     detail_y += detail_sz.h + th.geo.gap_detail
-                    max_x = max(max_x, detail_bb.right)
 
-            max_x = max(max_x, stoch_bb.right)
         else:
             # Non-stochastic: render single mixer detail
             detail = _get_mixer_detail(spec)
@@ -255,6 +261,7 @@ def _layout(
                 detail_sz = detail.measure(th)
                 detail_bb = BBox(detail_x, detail_y, detail_sz.w, detail_sz.h)
                 body.extend(detail.render(detail_bb, th))
+                cbbox.include(detail_bb)
                 # Connector: mixer box → detail
                 mixer_bb = block.mixer_bbox(group_bb, th)
                 body.append(connector_bezier(
@@ -262,11 +269,9 @@ def _layout(
                     detail_bb.x, detail_bb.cy,
                 ))
                 detail_y += detail_sz.h + th.geo.gap_detail
-                max_x = max(max_x, detail_bb.right)
 
-        row_h = max(group_sz.h, detail_y - content_y)
+        row_h = max(block_sz.h, detail_y - content_y)
         content_y += row_h + row_gap
-        max_x = max(max_x, group_bb.right)
 
     # ── Shared MLP detail panels (deduplicated) ───────────────────
     for mlp_config, ff_bboxes in mlp_usages.items():
@@ -278,6 +283,7 @@ def _layout(
         mlp_detail_x = left_x + th.geo.block_w + conn_gap + stochastic_col_w
         mlp_bb = BBox(mlp_detail_x, content_y, mlp_sz.w, mlp_sz.h)
         body.extend(mlp_detail.render(mlp_bb, th))
+        cbbox.include(mlp_bb)
         # Connector from each block's "Feed forward" box to the shared MLP detail
         for ff_bb in ff_bboxes:
             body.append(connector_bezier(
@@ -285,7 +291,6 @@ def _layout(
                 mlp_bb.x, mlp_bb.cy,
             ))
         content_y += mlp_sz.h + row_gap
-        max_x = max(max_x, mlp_bb.right)
 
     # ── Overview → definition connectors ───────────────────────────
     for cell_bb, cell_spec in cell_bboxes:
@@ -293,7 +298,7 @@ def _layout(
             def_bb = spec_positions[cell_spec]
             body.append(connector_bezier(
                 cell_bb.right, cell_bb.cy,
-                def_bb.x - 8, def_bb.cy,
+                def_bb.x, def_bb.cy,
             ))
 
     # ── Vision encoder → definition connectors ─────────────────────
@@ -305,10 +310,10 @@ def _layout(
                 def_bb = spec_positions[cell_spec]
                 body.append(connector_bezier(
                     cell_bb.right, cell_bb.cy,
-                    def_bb.x - 8, def_bb.cy,
+                    def_bb.x, def_bb.cy,
                 ))
 
-    content_w = max(max_x, left_x + th.geo.block_w)
-    content_h = max(content_y, overview_bb.bottom)
+    # Include the bottom extent (content_y includes row_gap after last element)
+    cbbox.max_y = max(cbbox.max_y, content_y)
 
-    return body, content_w, content_h
+    return body, cbbox.to_bbox()

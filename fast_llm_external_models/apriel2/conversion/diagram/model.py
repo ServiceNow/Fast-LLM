@@ -107,13 +107,11 @@ class VisionEncoderSpec:
 
 @dataclass(frozen=True)
 class ArchitectureModel:
-    model_name: str
     hidden_size: int
     vocab_size: int
     block_groups: list[BlockGroup]
     unique_block_specs: list[tuple[str, BlockSpec]]  # (label, spec)
     vision_encoder: VisionEncoderSpec | None
-    total_blocks: int
     tie_word_embeddings: bool
 
 
@@ -168,20 +166,12 @@ def extract_model(config: dict) -> ArchitectureModel:
         if ve_spec not in {s for _, s in unique_specs}:
             unique_specs.append(("Vision Encoder", ve_spec))
 
-    # Model name
-    model_name = config.get("model_type", "Apriel2")
-    architectures = config.get("architectures", [])
-    if architectures:
-        model_name = architectures[0].replace("ForCausalLM", "").replace("ForConditionalGeneration", "")
-
     return ArchitectureModel(
-        model_name=model_name,
         hidden_size=hidden_size,
         vocab_size=vocab_size,
         block_groups=groups,
         unique_block_specs=unique_specs,
         vision_encoder=vision_encoder,
-        total_blocks=num_blocks,
         tie_word_embeddings=tie_word_embeddings,
     )
 

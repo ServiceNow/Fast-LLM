@@ -20,18 +20,20 @@ from fast_llm_external_models.apriel2.conversion.diagram.elements import (
     ArchitectureOverview,
     Arrow,
     AttentionDetail,
-    BlockGroup,
     Box,
     DecoderBlock,
+    DetailEnvelope,
+    EnvelopeResult,
+    ExternalLabel,
     GDNDetail,
     KDADetail,
     Label,
     MambaDetail,
+    ValueLabel,
     MLPDetail,
     StochasticMixerPanel,
     Symbol,
     VisionEncoderColumn,
-    brace_left,
     connector_bezier,
     defs,
     detail_for_mixer,
@@ -410,7 +412,6 @@ class TestExtractModel:
     def test_extract_fixed_decoder(self):
         config = _fixed_attention_config(24)
         arch = extract_model(config)
-        assert arch.total_blocks == 24
         assert len(arch.block_groups) == 1
         assert len(arch.unique_block_specs) == 1
         assert arch.block_groups[0].count == 24
@@ -419,7 +420,6 @@ class TestExtractModel:
     def test_extract_pattern_decoder_runs(self):
         config = _hybrid_dil_config()
         arch = extract_model(config)
-        assert arch.total_blocks == 48
         assert len(arch.block_groups) == 3
         assert len(arch.unique_block_specs) == 2
         assert arch.block_groups[0].count == 8
@@ -429,7 +429,6 @@ class TestExtractModel:
     def test_extract_pattern_decoder_all_different(self):
         config = _comprehensive_config()
         arch = extract_model(config)
-        assert arch.total_blocks == 48
         assert len(arch.block_groups) == 48
         assert all(g.count == 1 for g in arch.block_groups)
         assert len(arch.unique_block_specs) == 8
@@ -1136,11 +1135,6 @@ class TestBox:
         assert sz.w == 100
         assert sz.h == 40
 
-    def test_measure_with_sublabel(self):
-        box = Box("Main", "box-norm", sublabel="Sub")
-        sz = box.measure(TH)
-        assert sz.h == TH.geo.box_h + 14
-
     def test_render_yields_group(self):
         box = Box("Test", "box-norm")
         sz = box.measure(TH)
@@ -1210,6 +1204,227 @@ class TestLabel:
         assert isinstance(elements[0], S.Text)
 
 
+class TestValueLabel:
+    def test_measure_auto_width(self):
+        vl = ValueLabel("hidden states")
+        sz = vl.measure(TH)
+        expected_w = len("hidden states") * TH.typo.sz_ann * 0.6 + 16
+        assert sz.w == pytest.approx(expected_w)
+
+    def test_measure_explicit_width(self):
+        vl = ValueLabel("q", w=55)
+        sz = vl.measure(TH)
+        assert sz.w == 55
+
+    def test_unified_height(self):
+        for text in ("q", "k", "v", "hidden states", "text tokens"):
+            vl = ValueLabel(text)
+            sz = vl.measure(TH)
+            assert sz.h == TH.geo.value_label_h, f"{text}: expected {TH.geo.value_label_h}, got {sz.h}"
+
+    def test_render_produces_group(self):
+        vl = ValueLabel("q")
+        sz = vl.measure(TH)
+        elements = list(vl.render(BBox(0, 0, sz.w, sz.h), TH))
+        assert len(elements) == 1
+        g = elements[0]
+        assert isinstance(g, S.G)
+        assert "box-transparent" in g.class_
+
+    def test_centers_in_larger_bbox(self):
+        vl = ValueLabel("q")
+        sz = vl.measure(TH)
+        big_bb = BBox(0, 0, sz.w + 40, sz.h + 20)
+        elements = list(vl.render(big_bb, TH))
+        g = elements[0]
+        # Second rect is the main rect (first is shadow)
+        rects = [e for e in g.elements if isinstance(e, S.Rect)]
+        rect = rects[1]
+        # Rect should be centered, not stretched to fill
+        assert rect.width == pytest.approx(sz.w)
+        assert rect.height == pytest.approx(sz.h)
+        assert rect.x == pytest.approx(20)  # (40 extra) / 2
+        assert rect.y == pytest.approx(10)  # (20 extra) / 2
+
+    def test_has_shadow_and_sheen(self):
+        vl = ValueLabel("hidden states")
+        sz = vl.measure(TH)
+        elements = list(vl.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "box-shadow-muted" in svg_str
+        assert "box-sheen" in svg_str
+
+
+class TestDetailEnvelope:
+    def test_measure_no_labels(self):
+        env = DetailEnvelope("Title", "css")
+        sz = env.measure_envelope(100, 50, TH)
+        g = TH.geo.gap
+        title_h = TH.geo.title_h
+        assert sz.w == 100 + 2 * g
+        assert sz.h == 50 + 2 * g + title_h
+
+    def test_measure_with_labels(self):
+        env = DetailEnvelope("Title", "css",
+                             output_labels=[ExternalLabel("out")],
+                             input_labels=[ExternalLabel("in")])
+        sz = env.measure_envelope(100, 50, TH)
+        label_h = TH.geo.value_label_h + TH.geo.gap
+        sz_no_labels = DetailEnvelope("Title", "css").measure_envelope(100, 50, TH)
+        assert sz.h == sz_no_labels.h + 2 * label_h
+
+    def test_label_area_h(self):
+        env = DetailEnvelope("Title", "css")
+        expected = TH.geo.value_label_h + TH.geo.gap
+        assert env.label_area_h(TH) == expected
+
+    def test_render_envelope_returns_result(self):
+        env = DetailEnvelope("Title", "css",
+                             output_labels=[ExternalLabel("out")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        assert isinstance(result, EnvelopeResult)
+        assert result.frame_bb.w > 0
+        assert result.content_bb.w > 0
+
+    def test_phase2_yields_frame(self):
+        env = DetailEnvelope("Title", "css")
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        elements = list(result.phase2_frame())
+        assert len(elements) == 1
+        assert isinstance(elements[0], S.G)
+
+    def test_phase3_with_output_label(self):
+        env = DetailEnvelope("Title", "css",
+                             output_labels=[ExternalLabel("hidden states")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        elements = list(result.phase3_exit_arrow_and_output_labels())
+        svg_str = "".join(str(e) for e in elements)
+        assert "hidden states" in svg_str
+
+    def test_phase4_with_single_input_label(self):
+        env = DetailEnvelope("Title", "css",
+                             input_labels=[ExternalLabel("hidden states")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        elements = list(result.phase4_entry_arrow_and_input_labels())
+        svg_str = "".join(str(e) for e in elements)
+        assert "hidden states" in svg_str
+
+    def test_phase4_with_multiple_input_labels(self):
+        env = DetailEnvelope("Title", "css",
+                             input_labels=[ExternalLabel("q"), ExternalLabel("k"), ExternalLabel("v")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        elements = list(result.phase4_entry_arrow_and_input_labels())
+        svg_str = "".join(str(e) for e in elements)
+        for lbl in ("q", "k", "v"):
+            assert lbl in svg_str
+
+    def test_no_labels_empty_phases(self):
+        env = DetailEnvelope("Title", "css")
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        assert list(result.phase3_exit_arrow_and_output_labels()) == []
+        assert list(result.phase4_entry_arrow_and_input_labels()) == []
+
+    def test_spine_cx_default(self):
+        """Default spine_cx equals content_bb.cx."""
+        env = DetailEnvelope("Title", "css")
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        assert result.spine_cx == pytest.approx(result.content_bb.cx)
+
+    def test_spine_cx_override(self):
+        """Overriding spine_cx shifts phase arrows to the new x."""
+        env = DetailEnvelope("Title", "css",
+                             output_labels=[ExternalLabel("out")],
+                             input_labels=[ExternalLabel("in")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(0, 0, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        # Override spine
+        new_cx = result.content_bb.x + 10
+        result.spine_cx = new_cx
+        # Phase 1 arrow should use new_cx
+        phase1 = list(result.phase1_behind_title())
+        assert len(phase1) >= 1
+        line = phase1[0]
+        assert line.x1 == pytest.approx(new_cx)
+        assert line.x2 == pytest.approx(new_cx)
+        # Phase 3 arrow should use new_cx
+        phase3 = list(result.phase3_exit_arrow_and_output_labels())
+        lines = [e for e in phase3 if isinstance(e, S.Line)]
+        assert len(lines) >= 1
+        assert lines[0].x1 == pytest.approx(new_cx)
+
+    def test_frame_bb_offset_by_output_area(self):
+        env = DetailEnvelope("Title", "css",
+                             output_labels=[ExternalLabel("out")])
+        sz = env.measure_envelope(100, 50, TH)
+        bb = BBox(10, 20, sz.w, sz.h)
+        result = env.render_envelope(bb, 100, 50, TH)
+        label_h = TH.geo.value_label_h + TH.geo.gap
+        assert result.frame_bb.y == pytest.approx(20 + label_h)
+
+    def test_containers_have_hidden_states_labels(self):
+        """All refactored containers render 'hidden states' labels."""
+        containers = [
+            GDNDetail(GDNDisplayConfig(value_heads=8)),
+            MambaDetail(MambaDisplayConfig(d_state=64)),
+            AttentionDetail(AttentionDisplayConfig(heads=8)),
+            MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=512)),
+        ]
+        for container in containers:
+            sz = container.measure(TH)
+            elements = list(container.render(BBox(0, 0, sz.w, sz.h), TH))
+            svg_str = "".join(str(e) for e in elements)
+            assert "hidden states" in svg_str, f"{type(container).__name__} missing 'hidden states'"
+
+    def test_kda_has_qkv_input_labels(self):
+        """KDADetail renders q, k, v input labels."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "hidden states" in svg_str  # output label
+        # q, k, v as separate label boxes
+        assert svg_str.count("box-transparent") >= 4  # 1 output + 3 input
+
+    def test_decoder_block_has_labels(self):
+        """DecoderBlock renders 'hidden states' labels."""
+        mixer = MixerSpec(mixer_type="attention", label="Attn",
+                          display=AttentionDisplayConfig(heads=8))
+        block = DecoderBlock(mixer)
+        sz = block.measure(TH)
+        elements = list(block.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "hidden states" in svg_str
+
+    def test_stochastic_panel_has_labels(self):
+        """StochasticMixerPanel renders 'hidden states' labels."""
+        spec = StochasticMixerSpec(
+            main_mixer_name="attention",
+            sub_mixers=(
+                ("attention", MixerSpec(mixer_type="attention", label="Attn")),
+            ),
+        )
+        panel = StochasticMixerPanel(spec)
+        sz = panel.measure(TH)
+        elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "hidden states" in svg_str
+
+
 class TestDecoderBlock:
     def test_measure(self):
         mixer = MixerSpec(mixer_type="attention", label="Attention",
@@ -1255,33 +1470,6 @@ class TestDecoderBlock:
         assert len(elements) > 0
 
 
-class TestBlockGroup:
-    def test_measure(self):
-        mixer = MixerSpec(mixer_type="attention", label="Attention")
-        block = DecoderBlock(mixer)
-        group = BlockGroup(block, 8)
-        sz = group.measure(TH)
-        assert sz == block.measure(TH)
-
-    def test_render_has_brace_and_count(self):
-        mixer = MixerSpec(mixer_type="attention", label="Attention")
-        block = DecoderBlock(mixer)
-        group = BlockGroup(block, 8, "attn")
-        sz = group.measure(TH)
-        elements = list(group.render(BBox(100, 0, sz.w, sz.h), TH))
-        svg_str = "".join(str(e) for e in elements)
-        assert "\u00d7" in svg_str
-        assert "attn" in svg_str
-
-    def test_render_no_label(self):
-        mixer = MixerSpec(mixer_type="gdn", label="GDN")
-        block = DecoderBlock(mixer)
-        group = BlockGroup(block, 4)
-        sz = group.measure(TH)
-        elements = list(group.render(BBox(100, 0, sz.w, sz.h), TH))
-        assert len(elements) > 0
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Detail panel tests
 # ═══════════════════════════════════════════════════════════════════════
@@ -1319,11 +1507,12 @@ class TestAttentionDetail:
             assert not isinstance(child, Symbol)
 
     def test_sliding_window_variant(self):
+        """Sliding window variant uses SWA CSS and title."""
         detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8, window_size=4096))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "4,096" in svg_str or "4096" in svg_str
+        assert "Sliding-window" in svg_str
 
     def test_has_rope_boxes(self):
         """Attention detail shows two RoPE boxes (for q and k columns)."""
@@ -1364,8 +1553,6 @@ class TestGDNDetail:
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
-        svg_str = "".join(str(e) for e in elements)
-        assert "32" in svg_str
 
     def test_no_cross_symbol(self):
         """No ×cross symbol in GDN detail panel."""
@@ -1408,13 +1595,6 @@ class TestKDADetail:
         for _, child in items:
             assert not isinstance(child, Symbol)
 
-    def test_has_b_proj_annotation(self):
-        """KDA detail panel shows β: b_proj annotation."""
-        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
-        sz = detail.measure(TH)
-        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
-        svg_str = "".join(str(e) for e in elements)
-        assert "b_proj" in svg_str
 
 
 class TestMambaDetail:
@@ -1434,15 +1614,6 @@ class TestMambaDetail:
         assert "in_proj" in svg_str
         assert "out_proj" in svg_str
         assert "CausalConv1d" in svg_str
-
-    def test_annotations(self):
-        detail = MambaDetail(MambaDisplayConfig(d_state=64, d_conv=4, d_inner=256))
-        sz = detail.measure(TH)
-        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
-        svg_str = "".join(str(e) for e in elements)
-        assert "d_state = 64" in svg_str
-        assert "d_conv = 4" in svg_str
-        assert "d_inner = 256" in svg_str
 
     def test_five_rows(self):
         """Mamba detail has 5 rows: out_proj, norm, ssm, conv, in_proj."""
@@ -1469,8 +1640,6 @@ class TestMLPDetail:
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
-        svg_str = "".join(str(e) for e in elements)
-        assert "11,008" in svg_str or "11008" in svg_str
 
     def test_labels_gated(self):
         """Gated MLP shows down_proj, gate_proj, up_proj."""
@@ -1525,10 +1694,10 @@ class TestMLPDetail:
         fork_merge_paths = [e for e in elements if isinstance(e, S.Path)
                             and hasattr(e, 'd') and e.d and len(e.d) >= 4]
         assert len(fork_merge_paths) >= 2, f"Expected ≥2 fork/merge path lines, got {len(fork_merge_paths)}"
-        # 3-command Paths: arrowheads + fork L-paths (≥6 total)
-        three_cmd_paths = [e for e in elements if isinstance(e, S.Path)
-                           and hasattr(e, 'd') and e.d and len(e.d) == 3]
-        assert len(three_cmd_paths) >= 6, f"Expected ≥6 three-command paths, got {len(three_cmd_paths)}"
+        # Arrowheads (4-command: MoveTo, LineTo, LineTo, ClosePath) + fork L-paths (3-command)
+        short_paths = [e for e in elements if isinstance(e, S.Path)
+                       and hasattr(e, 'd') and e.d and len(e.d) in (3, 4)]
+        assert len(short_paths) >= 6, f"Expected ≥6 short paths (arrowheads + L-paths), got {len(short_paths)}"
         # No junction dot (clean fork split)
         circles = [e for e in elements if isinstance(e, S.Circle)]
         assert len(circles) == 0, f"Expected 0 circles (no junction dot), got {len(circles)}"
@@ -1550,7 +1719,7 @@ class TestMLPDetail:
         line_arrows = [e for e in elements if isinstance(e, S.Line)
                        and getattr(e, 'class_', None) == ["arrow"]]
         assert len(line_arrows) >= 4, f"Expected ≥4 arrow lines, got {len(line_arrows)}"
-        # Manual arrowhead Paths (V-shapes)
+        # Manual arrowhead Paths (open chevrons: 3 commands, no ClosePath)
         arrowheads = [e for e in elements if isinstance(e, S.Path)
                       and hasattr(e, 'd') and e.d and len(e.d) == 3]
         assert len(arrowheads) >= 3, f"Expected ≥3 manual arrowheads, got {len(arrowheads)}"
@@ -1738,34 +1907,22 @@ class TestConnectorBezier:
         assert "connector" in svg_str
 
 
-class TestBraceLeft:
-    def test_returns_path(self):
-        path = brace_left(50, 10, 100)
-        assert isinstance(path, S.Path)
-
-    def test_has_brace_class(self):
-        path = brace_left(50, 10, 100)
-        svg_str = str(path)
-        assert "brace" in svg_str
-
-
 class TestDefs:
     def test_returns_defs(self):
         d = defs(TH)
         assert isinstance(d, S.Defs)
 
-    def test_contains_markers(self):
+    def test_contains_dotgrid(self):
         d = defs(TH)
         svg_str = str(d)
-        assert "arr-d" in svg_str
-        assert "arr-u" in svg_str
-        assert "shadow" in svg_str
+        assert "dotgrid" in svg_str
 
-    def test_markers_no_orient(self):
-        """Markers must NOT use orient='auto-start-reverse' (causes sideways arrows)."""
+    def test_no_markers(self):
+        """Markers were removed — only the dotgrid pattern should remain."""
         d = defs(TH)
         svg_str = str(d)
-        assert "auto-start-reverse" not in svg_str
+        assert "arr-d" not in svg_str
+        assert "arr-u" not in svg_str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1785,13 +1942,13 @@ class TestDetailedTheme:
 
     def test_stylesheet_contains_text_classes(self):
         css = TH.stylesheet()
-        for name in ["t-title", "t-sub", "t-label", "t-label-bold",
+        for name in ["t-label", "t-label-bold",
                       "t-ann", "t-dim", "t-count", "t-note", "t-small"]:
             assert f".{name}" in css, f"Missing .{name} in stylesheet"
 
     def test_stylesheet_contains_wires(self):
         css = TH.stylesheet()
-        for name in [".arrow", ".connector", ".brace", ".symbol"]:
+        for name in [".arrow", ".connector", ".symbol"]:
             assert name in css, f"Missing {name} in stylesheet"
 
     def test_stylesheet_contains_background(self):
@@ -1826,13 +1983,11 @@ class TestGenerateDiagram:
         svg = generate_diagram(config)
         assert svg.startswith("<svg")
         assert "viewBox" in svg
-        assert "Apriel2" in svg
 
     def test_hybrid_dil(self):
         config = _hybrid_dil_config()
         svg = generate_diagram(config)
         assert svg.startswith("<svg")
-        assert "Apriel2" in svg
         assert "attn" in svg
         assert "hybrid" in svg
 
@@ -1886,7 +2041,7 @@ class TestGenerateDiagram:
         config = _fixed_attention_config(4)
         svg = generate_diagram(config)
         assert "<defs>" in svg
-        assert "arr-d" in svg
+        assert "dotgrid" in svg
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2046,16 +2201,6 @@ class TestArchitectureOverview:
         svg_str = "".join(str(e) for e in elements)
         assert "\u00d724" in svg_str
 
-    def test_range_labels(self):
-        """Decoder cells should have range annotations."""
-        arch = self._hybrid_arch()
-        overview = ArchitectureOverview(arch)
-        sz = overview.measure(TH)
-        bb = BBox(0, 0, sz.w, sz.h)
-        elements = list(overview.render(bb, TH))
-        svg_str = "".join(str(e) for e in elements)
-        assert "stack-label" in svg_str
-
     def test_tied_weights(self):
         """When tie_word_embeddings=True, 'tied' appears in SVG."""
         arch = self._hybrid_arch()
@@ -2077,9 +2222,9 @@ class TestArchitectureOverview:
         # cells[0] = LM Head (None), cells[1] = Norm (None)
         assert cells[0][1] is None  # LM Head
         assert cells[1][1] is None  # Norm
-        # cells[-2] = Embedding (None), cells[-1] = Text tokens (None)
+        # cells[-2] = Embedding (None), cells[-1] = text tokens (None)
         assert cells[-2][1] is None  # Embedding
-        assert cells[-1][1] is None  # Text tokens
+        assert cells[-1][1] is None  # text tokens
         # Decoder block cells should have non-None spec
         for _, spec in cells[2:-2]:
             assert spec is not None
@@ -2094,15 +2239,16 @@ class TestArchitectureOverview:
         svg_str = "".join(str(e) for e in elements)
         assert "Decoder" in svg_str
 
-    def test_pre_decoder_labels(self):
-        """'Text tokens' should appear in rendered SVG as a transparent box label."""
+    def test_data_labels(self):
+        """'text tokens' and 'token probabilities' should appear in rendered SVG."""
         arch = self._fixed_arch()
         overview = ArchitectureOverview(arch)
         sz = overview.measure(TH)
         bb = BBox(0, 0, sz.w, sz.h)
         elements = list(overview.render(bb, TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "Text tokens" in svg_str
+        assert "text tokens" in svg_str
+        assert "token probabilities" in svg_str
         assert "box-transparent" in svg_str
         assert "Sample input text" not in svg_str
 
@@ -2216,3 +2362,92 @@ class TestLayoutIncludesStack:
         config = _comprehensive_config()
         svg = generate_diagram(config)
         assert "Stochastic" in svg
+
+
+class TestBackgroundClearance:
+    """Background rect has rounded corners and 2*gap clearance to content."""
+
+    def _parse_svg(self, svg_str: str):
+        import xml.etree.ElementTree as ET
+        return ET.fromstring(svg_str)
+
+    def _get_bg_rects(self, root):
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        return root.findall("svg:rect", ns)
+
+    def test_background_has_rounded_corners(self):
+        config = _fixed_attention_config(4)
+        svg = generate_diagram(config)
+        root = self._parse_svg(svg)
+        bg_rects = self._get_bg_rects(root)
+        assert len(bg_rects) >= 2
+        for rect in bg_rects[:2]:
+            rx = rect.get("rx")
+            assert rx is not None, "Background rect missing rx attribute"
+            assert float(rx) == TH.geo.rx
+
+    def test_content_wrapped_in_translated_group(self):
+        config = _fixed_attention_config(4)
+        svg = generate_diagram(config)
+        root = self._parse_svg(svg)
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        groups = root.findall("svg:g", ns)
+        # At least one <g> should have a translate transform
+        translated = [g for g in groups if g.get("transform") and "translate" in g.get("transform", "")]
+        assert len(translated) >= 1, "Expected a <g> with translate transform"
+
+    def test_clearance_at_least_2gap(self):
+        """Content + translation leaves >= 2*gap clearance on all sides."""
+        import re as _re
+        config = _fixed_attention_config(4)
+        th = TH
+        svg = generate_diagram(config, theme=th)
+        root = self._parse_svg(svg)
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+
+        # Parse viewBox dimensions
+        vb = root.get("viewBox", "")
+        vb_parts = vb.split()
+        assert len(vb_parts) == 4
+        total_w, total_h = float(vb_parts[2]), float(vb_parts[3])
+
+        # Parse translate transform
+        groups = root.findall("svg:g", ns)
+        translated = [g for g in groups if g.get("transform") and "translate" in g.get("transform", "")]
+        assert translated, "No translated group found"
+        transform = translated[0].get("transform", "")
+        m = _re.search(r"translate\(([\d.e+-]+)[, ]+([\d.e+-]+)\)", transform)
+        assert m, f"Could not parse translate from {transform}"
+        dx, dy = float(m.group(1)), float(m.group(2))
+
+        # Get the content bbox from _layout
+        from fast_llm_external_models.apriel2.conversion.diagram import _layout
+        from fast_llm_external_models.apriel2.conversion.diagram.model import extract_model
+        arch = extract_model(config)
+        _, content_bb = _layout(arch, th)
+
+        # After translation, content starts at (content_bb.x + dx, content_bb.y + dy)
+        # and ends at (content_bb.x + dx + content_bb.w, content_bb.y + dy + content_bb.h)
+        min_clearance = 2 * th.geo.gap
+        left = content_bb.x + dx
+        top = content_bb.y + dy
+        right = total_w - (content_bb.x + dx + content_bb.w)
+        bottom = total_h - (content_bb.y + dy + content_bb.h)
+        assert left >= min_clearance - 0.1, f"left={left} < {min_clearance}"
+        assert top >= min_clearance - 0.1, f"top={top} < {min_clearance}"
+        assert right >= min_clearance - 0.1, f"right={right} < {min_clearance}"
+        assert bottom >= min_clearance - 0.1, f"bottom={bottom} < {min_clearance}"
+
+    def test_all_configs_have_rounded_bg(self):
+        """Verify rounded corners for multiple config types."""
+        configs = [
+            _fixed_attention_config(4),
+            _hybrid_dil_config(),
+            _stochastic_supernet_config(),
+        ]
+        for config in configs:
+            svg = generate_diagram(config)
+            root = self._parse_svg(svg)
+            bg_rects = self._get_bg_rects(root)
+            assert len(bg_rects) >= 2
+            assert bg_rects[0].get("rx") is not None
