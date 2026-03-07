@@ -32,6 +32,11 @@ class TokenizerConfig(PreprocessingConfig):
         desc="BOS token to use if the tokenizer doesn't define one; must be an existing token.",
         hint=FieldHint.core,
     )
+    allow_no_bos: bool = Field(
+        default=False,
+        desc="Allow the tokenizer to not have a BOS token. Set to True for tokenizers without BOS (e.g. Qwen).",
+        hint=FieldHint.core,
+    )
     max_vocab_size: int | None = Field(
         default=None,
         desc="Constrain output tokens to a specific range. Used for testing.",
@@ -61,8 +66,12 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         )
         if self._config.bos_token is not None:
             self.tokenizer.bos_token = self._config.bos_token
-        self.eod_id = getattr(self.tokenizer, "eos_token_id", None)
-        self.bod_id = getattr(self.tokenizer, "bos_token_id", None)
+        if self.tokenizer.eos_token_id is None:
+            raise ValueError("Tokenizer does not have an EOS token.")
+        if self.tokenizer.bos_token_id is None and not self._config.allow_no_bos:
+            raise ValueError("Tokenizer does not have a BOS token. Set allow_no_bos=True to allow this.")
+        self.eod_id = self.tokenizer.eos_token_id
+        self.bod_id = self.tokenizer.bos_token_id
 
     @functools.cached_property
     def vocab_size(self) -> int:
