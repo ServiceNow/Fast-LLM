@@ -222,8 +222,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> torch.Tensor:
         assert _flash_available
-        window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
-        _flash_attn_varlen_func(
+        return _flash_attn_varlen_func(
             query,
             key,
             value,
@@ -232,7 +231,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             kwargs[AttentionKwargs.max_seqlen_q],
             kwargs[AttentionKwargs.max_seqlen_k],
             dropout_p=self._config.dropout if self.training else 0.0,
-            window_size=window_size,
+            window_size=(-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0),
             causal=self._config.causal,
             softmax_scale=self._softmax_scale,
         )

@@ -165,12 +165,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        sequence_length = kwargs[BlockKwargs.token_dim].size
-        token_shape = (1, sequence_length)
-        # TODO: ====== Keep flat ======
         # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
-        inner_projection = self.in_proj(input_).unflatten(0, token_shape)
-        dt = self.dt_proj(self.dt_in_proj(input_)).unflatten(0, token_shape)
+        inner_projection = self.in_proj(input_).unsqueeze(0)
+        dt = self.dt_proj(self.dt_in_proj(input_)).unsqueeze(0)
 
         z, x, b, c = torch.split(
             inner_projection,
@@ -241,10 +238,10 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         self._debug(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
-        y = y.transpose(1, 2)[:, :sequence_length]
+        y = y.transpose(1, 2)[:, : kwargs[BlockKwargs.token_dim].size]
         # (batch, sequence, local_heads * state)
         #   -> (local_tokens, hidden)
-        out, bias = self.out_proj(y.flatten(0, 1))
+        out, bias = self.out_proj(y.squeeze(0))
         self._debug(out, None, (kwargs.get(BlockKwargs.hidden_token_dim), self._hidden_dim), kwargs)
         return out, bias
 

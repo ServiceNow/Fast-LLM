@@ -17,7 +17,6 @@ from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_
 from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
 from fast_llm.data.document.language_model import LanguageModelDocument
-from fast_llm.data.document.token import TokenDocument
 from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
@@ -49,7 +48,7 @@ def get_megatron_test_dataset(prefix: pathlib.Path = MEGATRON_DATASET_PREFIX):
         tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
         samples = [
             LanguageModelDocument(
-                TokenDocument((tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16))
+                tokens=(tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16)
             )
             for document in hf_dataset
         ]
@@ -104,7 +103,8 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
         config_args=[
             "model.distributed.compute_dtype=fp32",
             f'data.datasets.training={{"type":"megatron","path":{MEGATRON_DATASET_PREFIX}}}',
-            "data.sampling.seed=1234",
+            "data.seed=1234",
+            "data.micro_batch_size=512",
             "model.base_model.use_megatron_initialization=True",
         ],
         num_gpus=1,
@@ -235,7 +235,7 @@ class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](Sampled
         shuffled_idx = self._shuffle_idx[idx]
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        return [
+        documents = [
             self._indexed_dataset.get_document(
                 self._doc_idx[doc].item(),
                 begin=(doc == doc_f) * offset_f,
@@ -243,6 +243,8 @@ class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](Sampled
             )
             for doc in range(doc_f, doc_l + 1)
         ]
+        # The Megatron side doesn't use varlen, so we make it look like a single document.
+        return [LanguageModelDocument(tokens=torch.cat([document.tokens for document in documents]))]
 
     @property
     def name(self) -> str:

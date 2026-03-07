@@ -83,7 +83,7 @@ class DatasetDiscoveryPreparator[ConfigType: DatasetDiscoveryConfig](DatasetPrep
         all_tokens = []
 
         # Collect dataset files directly in this directory (not in subdirectories)
-        for subpath in directory.iterdir():
+        for subpath in sorted(directory.iterdir()):
             if any(subpath.is_relative_to(ignore_path) for ignore_path in self._ignore_paths):
                 continue
             if subpath.is_dir():

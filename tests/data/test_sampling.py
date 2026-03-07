@@ -168,5 +168,6 @@ def test_gpt_sample_padding():
             sampled = dataset.sample(*sampling)
             for idx in range(len(expected_samples)):
                 Assert.all_equal(
-                    LanguageModelBatch.from_documents(sampled[idx]).tokens, np.array(expected_samples[idx])
+                    LanguageModelBatch.from_documents(sampled[idx], sequence_length + 1).tokens,
+                    np.array(expected_samples[idx]),
                 )

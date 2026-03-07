@@ -55,6 +55,12 @@ class LanguageModelInput(TokenModelInput):
             out[LanguageModelKwargs.token_ids] = self.tokens
         return out
 
+    def to_device_(self, device: "torch.device") -> typing.Self:
+        super().to_device_(device)
+        for target in self.targets:
+            target.to_device_(device)
+        return self
+
 
 @dataclasses.dataclass(kw_only=True)
 class LanguageModelBatch(TokenBatch):
@@ -67,12 +73,12 @@ class LanguageModelBatch(TokenBatch):
         cls, documents: typing.Iterable[LanguageModelDocument], pad_to_size: int | None = None
     ) -> typing.Self:
         batch = super().from_documents(documents, pad_to_size)
+        # We don't want to use `batch.lengths` because it may include a padding length.
+        lengths = [len(document) for document in documents]
         batch.loss_masking_spans = RangeBatch.from_documents(
-            [document.loss_masking_spans for document in documents], batch.lengths
+            [document.loss_masking_spans for document in documents], lengths
         )
-        batch.image_patches = PatchBatch.from_documents(
-            [document.image_patches for document in documents], batch.lengths
-        )
+        batch.image_patches = PatchBatch.from_documents([document.image_patches for document in documents], lengths)
         return batch
 
     def get_model_inputs(self, config: LanguageModelBatchPreprocessingConfig) -> list[LanguageModelInput]:

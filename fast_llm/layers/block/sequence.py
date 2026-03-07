@@ -127,8 +127,10 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(
-            self._layers_with_namespace[index].get_preprocessing_config()
-            for _, index in self._config.preprocessing_layers.items()
+            *(
+                self._layers_with_namespace[index].get_preprocessing_config()
+                for _, index in self._config.preprocessing_layers.items()
+            )
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:

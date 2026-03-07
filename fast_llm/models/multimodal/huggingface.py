@@ -105,6 +105,6 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
             token_map=token_map,
             positions=image_position_ids,
             lengths=patch_counts,
-        )
+        ).to_device_(input_ids.device)
 
         return batch

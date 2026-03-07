@@ -37,6 +37,7 @@ class BlockModelInput(ModelInput):
             LanguageModelKwargs.sequence_k_dim: self.sequence_k_dim,
             LanguageModelKwargs.num_tokens: self.unpadded_length,
             LanguageModelKwargs.sequence_length: self.sequence_length,
+            LanguageModelKwargs.lengths: self.lengths,
             AttentionKwargs.cu_seqlens_q: self.cumulative_lengths_q,
             AttentionKwargs.cu_seqlens_k: self.cumulative_lengths_k,
             AttentionKwargs.max_seqlen_q: self.max_length_q,
@@ -68,10 +69,10 @@ class LengthModelInputPreprocessor:
             sequence_data_dim,
         )
         model_input.hidden_token_dim = (
-            (
+            TensorDim(
                 "token_tp",
                 self.length * sequence_data_dim.size,
-                config.distributed.get_distributed_dim(DistributedDimNames.tensor_and_data),
+                config.distributed.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
             )
             if config.distributed.sequence_tensor_parallel
             else model_input.token_dim
@@ -116,8 +117,15 @@ class LengthModelInputPreprocessor:
         cumulative_lengths_q, cumulative_lengths_k = self.cumulative_lengths
         # Note: index starts at 1. Index 0 is for sequence k before `self.current_document_begin`.
         return (
-            torch.searchsorted(cumulative_lengths_q, torch.arange(self.length), side="right"),
-            torch.searchsorted(cumulative_lengths_k, torch.arange(self.sequence_k_past + self.length), side="right"),
+            torch.searchsorted(
+                cumulative_lengths_q, torch.arange(self.length, device=self.device), side="right", out_int32=True
+            ),
+            torch.searchsorted(
+                cumulative_lengths_k,
+                torch.arange(self.sequence_k_past + self.length, device=self.device),
+                side="right",
+                out_int32=True,
+            ),
         )
 
     @functools.cached_property

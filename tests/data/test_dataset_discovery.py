@@ -96,10 +96,10 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                         "type": "blended",
                         "name": "dataset",
                         "datasets": [
-                            {"type": "memmap", "path": "dataset/dataset_2.fast_llm_dataset"},
                             {"type": "memmap", "path": "dataset/dataset_1.fast_llm_dataset"},
+                            {"type": "memmap", "path": "dataset/dataset_2.fast_llm_dataset"},
                         ],
-                        "weights": [44883, 43910],
+                        "weights": [43910, 44883],
                     },
                     {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                 ],

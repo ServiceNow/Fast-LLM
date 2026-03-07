@@ -71,7 +71,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 "predicted_tokens": config.predicted_tokens,
                 "cache_directory": self._cache_directory,
                 "dataset_name": dataset_name,
-                "preprocessing": config,
+                "preprocessing": config.to_dict(),
                 "world_size": self._distributed_config.world_size,
                 "rank": self._distributed_config.rank,
             },
@@ -127,8 +127,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         preprocess: bool = True,
     ) -> list[LanguageModelInput] | LanguageModelBatch:
         documents = [document for documents_ in documents for document in documents_]
-        pad_to_size = self._config.micro_batch_size + self._preprocessing[dataset_name].predicted_tokens
-        batch = LanguageModelBatch.from_documents(documents, pad_to_size)
+        batch = LanguageModelBatch.from_documents(
+            documents, self._config.micro_batch_size + self._preprocessing[dataset_name].predicted_tokens
+        )
 
         if preprocess:
             return batch.get_model_inputs(self._preprocessing[dataset_name])

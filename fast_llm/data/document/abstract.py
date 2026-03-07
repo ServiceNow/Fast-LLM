@@ -14,12 +14,19 @@ if typing.TYPE_CHECKING:
 
 @dataclasses.dataclass(kw_only=True)
 class Document(abc.ABC):
-    def to_device_(self, device: "torch.device"):
+    def to_device_(self, device: "torch.device") -> typing.Self:
         import torch
 
         for field in dataclasses.fields(self):
+            print(
+                field.name, isinstance(value := getattr(self, field.name), torch.Tensor), isinstance(value, Document)
+            )
             if isinstance(value := getattr(self, field.name), torch.Tensor):
                 setattr(self, field.name, value.to(device))
+            elif isinstance(value, Document):
+                value.to_device_(device)
+
+        return self
 
 
 @dataclasses.dataclass(kw_only=True)

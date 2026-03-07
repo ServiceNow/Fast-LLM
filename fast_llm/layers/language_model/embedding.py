@@ -12,7 +12,6 @@ from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
@@ -81,12 +80,11 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         mask_inputs: bool,
         embedding_map: torch.Tensor,
     ) -> torch.Tensor:
-        Assert.eq(position_ids is None, self.position_embeddings_weight is None)
         group = self._parallel_dim.group
         if self._vocab_parallel:
             token_mask = (token_ids >= self._vocab_start_index) * (token_ids < self._vocab_end_index)
             masked_input = (token_ids - self._vocab_start_index) * token_mask
-            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * token_mask.unsqueeze(2)  # noqa
+            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * token_mask.unsqueeze(-1)  # noqa
             embeddings = reduce_forward(embeddings, group)
             # TODO: Input masking of position embeddings inconsistant with non-vocab-parallel
             if self.position_embeddings_weight is not None:
