@@ -1380,6 +1380,7 @@ class TestDetailEnvelope:
         """All refactored containers render 'hidden states' labels."""
         containers = [
             GDNDetail(GDNDisplayConfig(value_heads=8)),
+            KDADetail(KDADisplayConfig(heads=16, head_dim=128)),
             MambaDetail(MambaDisplayConfig(d_state=64)),
             AttentionDetail(AttentionDisplayConfig(heads=8)),
             MLPDetail(MLPDisplayConfig(gated=True, activation="silu", intermediate_size=512)),
@@ -1390,15 +1391,13 @@ class TestDetailEnvelope:
             svg_str = "".join(str(e) for e in elements)
             assert "hidden states" in svg_str, f"{type(container).__name__} missing 'hidden states'"
 
-    def test_kda_has_qkv_input_labels(self):
-        """KDADetail renders q, k, v input labels."""
+    def test_kda_has_hidden_states_input_labels(self):
+        """KDADetail renders 'hidden states' input labels (not q, k, v)."""
         detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "hidden states" in svg_str  # output label
-        # q, k, v as separate label boxes
-        assert svg_str.count("box-transparent") >= 4  # 1 output + 3 input
+        assert "hidden states" in svg_str
 
     def test_decoder_block_has_labels(self):
         """DecoderBlock renders 'hidden states' labels."""
@@ -1488,16 +1487,18 @@ class TestAttentionDetail:
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
 
-    def test_has_separate_projections(self):
-        """Attention detail shows separate q_proj, k_proj, v_proj (not fused qkv_proj)."""
+    def test_has_merged_qkv_proj(self):
+        """Attention detail shows merged qkv_proj (not separate q/k/v_proj)."""
         detail = AttentionDetail(AttentionDisplayConfig(heads=32, kv_heads=8))
         sz = detail.measure(TH)
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "q_proj" in svg_str
-        assert "k_proj" in svg_str
-        assert "v_proj" in svg_str
-        assert "qkv_proj" not in svg_str
+        assert "qkv_proj" in svg_str
+        # Ensure no standalone q_proj / k_proj / v_proj (only qkv_proj)
+        stripped = svg_str.replace("qkv_proj", "")
+        assert "q_proj" not in stripped
+        assert "k_proj" not in stripped
+        assert "v_proj" not in stripped
 
     def test_no_cross_symbol(self):
         """No ×cross symbol in attention detail panel."""
@@ -1563,16 +1564,17 @@ class TestGDNDetail:
         for _, child in items:
             assert not isinstance(child, Symbol)
 
-    def test_hstack_equal_width(self):
-        """in_proj_qkvz and in_proj_βα should have equal width."""
+    def test_proj_asymmetric_widths(self):
+        """in_proj_βα (68) and in_proj_qkvz (140) have asymmetric widths matching label spans."""
         detail = GDNDetail(GDNDisplayConfig(
             value_heads=32, key_heads=8, key_head_dim=64, value_head_dim=64, conv_kernel=4,
         ))
         items = detail._build(TH)
         hstack = items[-1][1]
         assert isinstance(hstack, HStack)
-        # Both boxes should have the same width
-        assert hstack.children[0].w == hstack.children[1].w
+        # in_proj_βα (left, 2 outputs) spans 2*32+4 = 68, in_proj_qkvz spans 4*32+3*4 = 140
+        assert hstack.children[0].w == 68
+        assert hstack.children[1].w == 140
 
 
 class TestKDADetail:
@@ -1595,6 +1597,36 @@ class TestKDADetail:
         for _, child in items:
             assert not isinstance(child, Symbol)
 
+    def test_proj_asymmetric_widths(self):
+        """Projection boxes have widths: proj_βg₁=68, proj_qkv=212, proj_g₂=68."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        items = detail._build(TH)
+        proj_hstack = items[5][1]
+        assert isinstance(proj_hstack, HStack)
+        sizes = [c.measure(TH) for c in proj_hstack.children]
+        assert sizes[0].w == 68   # proj_βg₁
+        assert sizes[1].w == 212  # proj_qkv (3 × 68 + 2 × 4)
+        assert sizes[2].w == 68   # proj_g₂
+
+    def test_six_value_labels(self):
+        """Label row [4] has 6 value labels: β, g₁, q, k, v, g₂."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        items = detail._build(TH)
+        label_hstack = items[4][1]
+        assert isinstance(label_hstack, HStack)
+        assert len(label_hstack.children) == 6
+        labels = [c.text for c in label_hstack.children]
+        assert labels == ["\u03b2", "g\u2081", "q", "k", "v", "g\u2082"]
+
+    def test_bypass_arrows(self):
+        """SVG contains β, g₁, g₂ labels for bypass arrows."""
+        detail = KDADetail(KDADisplayConfig(heads=16, head_dim=128))
+        sz = detail.measure(TH)
+        elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
+        svg_str = "".join(str(e) for e in elements)
+        assert "\u03b2" in svg_str
+        assert "g\u2081" in svg_str
+        assert "g\u2082" in svg_str
 
 
 class TestMambaDetail:
@@ -1610,16 +1642,38 @@ class TestMambaDetail:
         elements = list(detail.render(BBox(0, 0, sz.w, sz.h), TH))
         assert len(elements) > 0
         svg_str = "".join(str(e) for e in elements)
-        assert "Mamba SSM" in svg_str
+        assert "Selective Scan" in svg_str
+        assert "Mamba" in svg_str
         assert "in_proj" in svg_str
         assert "out_proj" in svg_str
         assert "CausalConv1d" in svg_str
+        assert "dt_proj" in svg_str
+        assert "Gated RMSNorm" not in svg_str
 
     def test_five_rows(self):
-        """Mamba detail has 5 rows: out_proj, norm, ssm, conv, in_proj."""
+        """Mamba detail has 5 items: out_proj, SSM, conv row, labels, projections."""
         detail = MambaDetail(MambaDisplayConfig(d_state=64))
         items = detail._build(TH)
         assert len(items) == 5
+
+    def test_proj_widths(self):
+        """in_proj=212 (z+x+B+C with wider x), dt_proj=68."""
+        detail = MambaDetail(MambaDisplayConfig(d_state=64))
+        items = detail._build(TH)
+        hstack = items[-1][1]
+        assert isinstance(hstack, HStack)
+        assert hstack.children[0].w == 212  # z(32) + x(104) + B(32) + C(32) + 3×gap(4)
+        assert hstack.children[1].w == 68
+
+    def test_five_value_labels(self):
+        """Label row [3] has 5 value labels: z, x, B, C, Δ."""
+        detail = MambaDetail(MambaDisplayConfig(d_state=64))
+        items = detail._build(TH)
+        label_hstack = items[3][1]
+        assert isinstance(label_hstack, HStack)
+        assert len(label_hstack.children) == 5
+        labels = [c.text for c in label_hstack.children]
+        assert labels == ["z", "x", "B", "C", "\u0394"]
 
 
 class TestMLPDetail:
@@ -2202,7 +2256,7 @@ class TestArchitectureOverview:
         assert "\u00d724" in svg_str
 
     def test_tied_weights(self):
-        """When tie_word_embeddings=True, 'tied' appears in SVG."""
+        """When tie_word_embeddings=True, a connector bypass path appears in SVG."""
         arch = self._hybrid_arch()
         assert arch.tie_word_embeddings is True
         overview = ArchitectureOverview(arch)
@@ -2210,7 +2264,7 @@ class TestArchitectureOverview:
         bb = BBox(0, 0, sz.w, sz.h)
         elements = list(overview.render(bb, TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "tied" in svg_str
+        assert "connector" in svg_str
 
     def test_decoder_cells_have_spec(self):
         """Decoder cell_bboxes have non-None spec; non-decoder cells have None."""
@@ -2321,12 +2375,11 @@ class TestLayoutIncludesStack:
         assert "RMSNorm" in svg
 
     def test_hybrid_has_overview_and_tied(self):
-        """End-to-end: hybrid decoder SVG has overview + tied weights."""
+        """End-to-end: hybrid decoder SVG has overview + tied weights bypass."""
         config = _hybrid_dil_config()
         svg = generate_diagram(config)
         assert "Embedding" in svg
-        assert "tied" in svg
-        # Should have connector paths
+        # Should have connector paths (including tied-weights bypass)
         assert "connector" in svg
 
     def test_vision_has_vision_column(self):

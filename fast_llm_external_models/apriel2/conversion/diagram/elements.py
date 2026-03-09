@@ -384,7 +384,10 @@ class ArchitectureOverview:
         frame_gap = g if n_pre > 0 else 0
 
         total_h = self._POST_LABEL_H + dec_h + frame_gap + pre_h
-        return Size(th.geo.stack_w, total_h)
+        w = th.geo.stack_w
+        if self.arch.tie_word_embeddings:
+            w += g
+        return Size(w, total_h)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build_items()
@@ -410,8 +413,9 @@ class ArchitectureOverview:
 
         # ── Decoder frame ───────────────────────────────────────────
         dec_h = title_h + 2 * g + n_dec * cell_h + (n_dec - 1) * gap
+        frame_w = bb.w + 2 * g if self.arch.tie_word_embeddings else box_w + 2 * g
         frame, content_bb = _render_detail_frame(
-            box_x - g, frame_top, box_w + 2 * g, dec_h,
+            box_x - g, frame_top, frame_w, dec_h,
             "Decoder", "detail-decoder", th,
         )
         yield frame
@@ -490,22 +494,15 @@ class ArchitectureOverview:
         if self.arch.tie_word_embeddings and n_dec >= 2:
             lm_head_cy = content_bb.y + cell_h / 2
             embed_cy = content_bb.y + (n_dec - 1) * (cell_h + gap) + cell_h / 2
-            tied_x = box_x + box_w + 12
+            bypass_x = box_x + box_w + g
             yield S.Path(
                 d=[
                     S.MoveTo(box_x + box_w, embed_cy),
-                    S.LineTo(tied_x, embed_cy),
-                    S.LineTo(tied_x, lm_head_cy),
+                    S.LineTo(bypass_x, embed_cy),
+                    S.LineTo(bypass_x, lm_head_cy),
                     S.LineTo(box_x + box_w, lm_head_cy),
                 ],
                 class_=["connector"],
-            )
-            mid_y = (embed_cy + lm_head_cy) / 2
-            yield S.Text(
-                x=tied_x + 4, y=mid_y,
-                text="tied weights",
-                class_=["t-small"],
-                dominant_baseline="central",
             )
 
     def cell_bboxes(self, bb: BBox, th: Theme) -> list[tuple[BBox, BlockSpec | None]]:
@@ -666,7 +663,7 @@ class DecoderBlock:
         mixer_box = _mixer_box(self.mixer, th)
         mh = mixer_box.measure(th).h
         bg = g * 2
-        return sr * 2 + g + (bh - 4) + g + bh + bg + sr * 2 + g + (bh - 4) + g + mh + g
+        return sr * 2 + g + bh + g + (bh - 4) + bg + sr * 2 + g + mh + g + (bh - 4) + g
 
     def measure(self, th: Theme) -> Size:
         w = self.block_w or th.geo.block_w
@@ -709,25 +706,20 @@ class DecoderBlock:
         _collect(Symbol("plus").render(res2_bb, th))
         cur_y += sr * 2 + g
 
-        # ── Post-MLP norm ─────────────────────────────────────────
-        norm2_bb = BBox(ix, cur_y, iw, bh - 4)
-        _collect(Box(self.norm_type, "box-norm", w=iw, h=bh - 4).render(norm2_bb, th))
-        cur_y += bh - 4 + g
-
         # ── Feed forward (MLP) ────────────────────────────────────
         mlp_bb = BBox(ix, cur_y, iw, bh)
         _collect(Box("Feed forward", "box-mlp", w=iw, h=bh).render(mlp_bb, th))
-        cur_y += bh + bg
+        cur_y += bh + g
+
+        # ── Pre-FFN norm ──────────────────────────────────────────
+        norm2_bb = BBox(ix, cur_y, iw, bh - 4)
+        _collect(Box(self.norm_type, "box-norm", w=iw, h=bh - 4).render(norm2_bb, th))
+        cur_y += bh - 4 + bg
 
         # ── Residual add 1 ────────────────────────────────────────
         res1_bb = BBox(cx - sr, cur_y, sr * 2, sr * 2)
         _collect(Symbol("plus").render(res1_bb, th))
         cur_y += sr * 2 + g
-
-        # ── Pre-mixer norm ────────────────────────────────────────
-        norm1_bb = BBox(ix, cur_y, iw, bh - 4)
-        _collect(Box(self.norm_type, "box-norm", w=iw, h=bh - 4).render(norm1_bb, th))
-        cur_y += bh - 4 + g
 
         # ── Mixer ─────────────────────────────────────────────────
         mixer = _mixer_box(self.mixer, th)
@@ -736,13 +728,18 @@ class DecoderBlock:
         _collect(mixer.render(mixer_bb, th))
         cur_y += msz.h + g
 
+        # ── Pre-mixer norm (input layernorm) ──────────────────────
+        norm1_bb = BBox(ix, cur_y, iw, bh - 4)
+        _collect(Box(self.norm_type, "box-norm", w=iw, h=bh - 4).render(norm1_bb, th))
+        cur_y += bh - 4 + g
+
         # ── Vertical flow arrows through center ───────────────────
         flow_segments = [
-            (res2_bb.bottom, norm2_bb.y),
-            (norm2_bb.bottom, mlp_bb.y),
-            (mlp_bb.bottom, res1_bb.y),
-            (res1_bb.bottom, norm1_bb.y),
-            (norm1_bb.bottom, mixer_bb.y),
+            (res2_bb.bottom, mlp_bb.y),
+            (mlp_bb.bottom, norm2_bb.y),
+            (norm2_bb.bottom, res1_bb.y),
+            (res1_bb.bottom, mixer_bb.y),
+            (mixer_bb.bottom, norm1_bb.y),
         ]
         for y1, y2 in flow_segments:
             if y2 - y1 > 2 * _ARROW_CLR:
@@ -751,12 +748,12 @@ class DecoderBlock:
         # ── Internal connector stubs (plain lines, no arrowheads) ──
         arrows.append(S.Line(x1=cx, y1=res2_bb.y, x2=cx, y2=frame_bb.y + title_offset, class_=["arrow"]))
 
-        arrows.append(S.Line(x1=cx, y1=frame_bb.bottom, x2=cx, y2=mixer_bb.bottom, class_=["arrow"]))
+        arrows.append(S.Line(x1=cx, y1=frame_bb.bottom, x2=cx, y2=norm1_bb.bottom, class_=["arrow"]))
 
         # ── Residual bypass lines ─────────────────────────────────
         tip_x = cx + sr + _ARROW_CLR
 
-        input_y = mixer_bb.bottom + g
+        input_y = norm1_bb.bottom + g
         arrows.append(S.Polyline(
             points=[S.Point(cx, input_y), S.Point(bypass_x, input_y),
                     S.Point(bypass_x, res1_bb.cy), S.Point(tip_x, res1_bb.cy)],
@@ -764,7 +761,7 @@ class DecoderBlock:
         ))
         arrows.append(_arrow_left(tip_x, res1_bb.cy))
 
-        branch2_y = (mlp_bb.bottom + res1_bb.y) / 2
+        branch2_y = (norm2_bb.bottom + res1_bb.y) / 2
         arrows.append(S.Polyline(
             points=[S.Point(cx, branch2_y), S.Point(bypass_x, branch2_y),
                     S.Point(bypass_x, res2_bb.cy), S.Point(tip_x, res2_bb.cy)],
@@ -796,7 +793,6 @@ class DecoderBlock:
         ix = bb.x + g
         cur_y = bb.y + output_area_h + 2 * g + self._title_offset(th)
         cur_y += sr * 2 + g      # res2 symbol
-        cur_y += (bh - 4) + g    # norm2
         return BBox(ix, cur_y, iw, bh)
 
     def mixer_bbox(self, bb: BBox, th: Theme) -> BBox:
@@ -810,10 +806,9 @@ class DecoderBlock:
         ix = bb.x + g
         cur_y = bb.y + output_area_h + 2 * g + self._title_offset(th)
         cur_y += sr * 2 + g      # res2 symbol
-        cur_y += (bh - 4) + g    # norm2
-        cur_y += bh + bg          # FFN + branch gap
+        cur_y += bh + g           # FFN
+        cur_y += (bh - 4) + bg    # norm2 + branch gap
         cur_y += sr * 2 + g      # res1 symbol
-        cur_y += (bh - 4) + g    # norm1
         mixer = _mixer_box(self.mixer, th)
         msz = mixer.measure(th)
         return BBox(ix, cur_y, iw, msz.h)
@@ -1080,13 +1075,16 @@ class AttentionDetail:
           ↑
         Scaled dot-product attention    [1] box-attention, bold
           ↑       ↑       ↑
-          q       k       v            [2] HStack, box-transparent
+          q       k       v            [2] HStack, value labels
           ↑       ↑       |
-        RoPE    RoPE    (spacer)       [3] HStack (RoPE, RoPE, Spacer)
-          ↑       ↑       ↑
-        q_proj  k_proj  v_proj         [4] HStack, box-linear
-           \\      |      /
-            fork point
+        RoPE    RoPE      |            [3] HStack (2 RoPE boxes only)
+          |       |       |
+        qkv_proj                       [4] box-linear (single merged)
+          ↑
+        (entry arrow)
+
+    Three lines emerge from the top of qkv_proj at the column
+    positions (split, not fork).  The v line bypasses the RoPE row.
     """
 
     config: AttentionDisplayConfig
@@ -1101,7 +1099,6 @@ class AttentionDetail:
 
     _PROJ_W = 55
     _PROJ_GAP = 8
-    _FORK_SPACE = 12  # vertical space for entry fork below proj row
 
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 2
@@ -1112,25 +1109,23 @@ class AttentionDetail:
             Box(self._sdpa_title(), box_css, w=self.w - 30, h=bh, bold=True),                      # [1]
             HStack([ValueLabel("q", w=pw),
                     ValueLabel("k", w=pw),
-                    ValueLabel("v", w=pw)], gap=pg),                         # [2]
+                    ValueLabel("v", w=pw)], gap=pg),                                                # [2]
             HStack([Box("RoPE", "box-norm", w=pw, h=bh - 4),
                     Box("RoPE", "box-norm", w=pw, h=bh - 4),
                     Spacer(w=pw, h=bh - 4)], gap=pg),                                              # [3]
-            HStack([Box("q_proj", "box-linear", w=pw, h=bh - 2),
-                    Box("k_proj", "box-linear", w=pw, h=bh - 2),
-                    Box("v_proj", "box-linear", w=pw, h=bh - 2)], gap=pg),                         # [4]
+            Box("qkv_proj", "box-linear", w=self.w - 30, h=bh - 2),                                # [4]
         ]
         return _detail_layout(children, th)
 
     def _col_centers(self, items: list[tuple[BBox, Box | Symbol | HStack]], th: Theme) -> list[float]:
-        """Compute center-x of each of the three columns from the proj HStack (item 4)."""
-        proj_hstack = items[4][1]
-        assert isinstance(proj_hstack, HStack)
-        sizes = [c.measure(th) for c in proj_hstack.children]
-        hg = proj_hstack.gap if proj_hstack.gap is not None else th.geo.gap
-        proj_bb = items[4][0]
+        """Compute center-x of each of the three columns from the value labels HStack (item 2)."""
+        label_hstack = items[2][1]
+        assert isinstance(label_hstack, HStack)
+        sizes = [c.measure(th) for c in label_hstack.children]
+        hg = label_hstack.gap if label_hstack.gap is not None else th.geo.gap
+        label_bb = items[2][0]
         centers: list[float] = []
-        x = proj_bb.x
+        x = label_bb.x
         for sz in sizes:
             centers.append(x + sz.w / 2)
             x += sz.w + hg
@@ -1148,9 +1143,7 @@ class AttentionDetail:
         items = self._build(th)
         total_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
-        # Include fork space in content height
-        content_h = total_h + self._FORK_SPACE
-        return self._envelope().measure_envelope(content_w, content_h, th)
+        return self._envelope().measure_envelope(content_w, total_h, th)
 
     def _render_arrows(
         self,
@@ -1158,9 +1151,12 @@ class AttentionDetail:
         bb: BBox,
         th: Theme,
     ) -> Iterator[S.Element]:
-        """Yield arrows between items with three parallel columns."""
+        """Yield arrows between items with three parallel columns.
+
+        q and k flow: qkv_proj → RoPE → label → SDPA
+        v flows:      qkv_proj → label → SDPA  (bypasses RoPE row)
+        """
         clearance = _ARROW_CLR
-        g = th.geo.gap
         cols = self._col_centers(items, th)
 
         # [0] o_proj → [1] SDPA : single vertical arrow (centred on o_proj)
@@ -1185,67 +1181,37 @@ class AttentionDetail:
                 yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
                 yield _arrow_up(acx, tip_y)
 
-        # [2] labels → [3] RoPE/Spacer : three parallel arrows (v column is pass-through)
         rope_bb = items[3][0]
+        qkv_bb = items[4][0]
+
+        # [2] labels → [3] RoPE : plain lines for q and k columns (no arrowhead)
         y1 = bb.y + label_bb.bottom
         y2 = bb.y + rope_bb.y
         if y2 - y1 > 1:
-            for col_x in cols:
+            for col_x in cols[:2]:
                 acx = bb.x + col_x
-                tip_y = y1 + clearance
-                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
-                yield _arrow_up(acx, tip_y)
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=y1, class_=["arrow"])
 
-        # [3] RoPE/Spacer → [4] projs : three parallel arrows
-        proj_bb = items[4][0]
+        # [3] RoPE → [4] qkv_proj : arrows for q and k columns
         y1 = bb.y + rope_bb.bottom
-        y2 = bb.y + proj_bb.y
+        y2 = bb.y + qkv_bb.y
         if y2 - y1 > 1:
-            for col_x in cols:
+            for col_x in cols[:2]:
                 acx = bb.x + col_x
                 tip_y = y1 + clearance
                 yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
                 yield _arrow_up(acx, tip_y)
 
-    def _render_entry_fork(
-        self,
-        items: list[tuple[BBox, Box | Symbol | HStack]],
-        frame_bb: BBox,
-        content_bb: BBox,
-        th: Theme,
-    ) -> Iterator[S.Element]:
-        """Fork from single entry point to three proj columns (L-shaped paths)."""
-        clearance = _ARROW_CLR
-        g = th.geo.gap
-        cols = self._col_centers(items, th)
-        proj_bb = items[4][0]
-
-        # Fork midpoint: centered below proj row
-        content_cx = content_bb.x + content_bb.w / 2
-        midpoint_y = content_bb.y + proj_bb.bottom + g
-
-        for col_x in cols:
-            acx = content_bb.x + col_x
-            tip_y = content_bb.y + proj_bb.bottom + clearance
-            yield S.Path(
-                d=[
-                    S.MoveTo(content_cx, midpoint_y),
-                    S.LineTo(acx, midpoint_y),
-                    S.LineTo(acx, tip_y),
-                ],
-                class_=["arrow"],
-            )
-            yield _arrow_up(acx, tip_y)
-
-        # Entry line from frame bottom to fork midpoint
-        y_start = frame_bb.y + frame_bb.h
-        tip_y = midpoint_y + clearance
-        if y_start - tip_y > 1:
-            yield S.Line(x1=content_cx, y1=y_start, x2=content_cx, y2=tip_y, class_=["arrow"])
+        # v column: continuous line from qkv_proj top to v label bottom (bypasses RoPE, no arrowhead)
+        v_cx = bb.x + cols[2]
+        v_end_y = bb.y + label_bb.bottom
+        v_start_y = bb.y + qkv_bb.y
+        if v_start_y - v_end_y > 1:
+            yield S.Line(x1=v_cx, y1=v_start_y, x2=v_cx, y2=v_end_y, class_=["arrow"])
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build(th)
-        content_h = (items[-1][0].bottom if items else 0) + self._FORK_SPACE
+        content_h = items[-1][0].bottom if items else 0
         content_w = max((cbb.right for cbb, _ in items), default=0)
 
         envelope = self._envelope()
@@ -1259,21 +1225,20 @@ class AttentionDetail:
         yield from env.phase2_frame()
         yield from env.phase3_exit_arrow_and_output_labels()
 
-        # Exit arrow from top item to title bar
+        # Exit line from top item to title bar (no arrowhead)
         if items:
             top_bb = items[0][0]
             cx = env.content_bb.x + top_bb.x + top_bb.w / 2
             y_start = env.content_bb.y + top_bb.y
-            y_end = env.frame_bb.y + title_h + _ARROW_CLR
-            if y_start - y_end > 2 * _ARROW_CLR:
+            y_end = env.frame_bb.y + title_h
+            if y_start - y_end > 1:
                 yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
-                yield _arrow_up(cx, y_end)
+
+        # Entry arrow from frame bottom to bottom item
+        yield from _DetailArrows.render_entry_arrow(items, env.frame_bb, env.content_bb)
 
         # Custom inter-item arrows (three parallel columns)
         yield from self._render_arrows(items, env.content_bb, th)
-
-        # Entry fork (single point fans out to three projections)
-        yield from self._render_entry_fork(items, env.frame_bb, env.content_bb, th)
 
         # Render children
         for child_bb, child in items:
@@ -1286,25 +1251,78 @@ class AttentionDetail:
 
 @dataclass
 class GDNDetail:
-    """Detail panel for Gated DeltaNet."""
+    """Detail panel for Gated DeltaNet.
+
+    Layout (data flows bottom → top)::
+
+             out_proj                              [0] box-linear
+               |                                        line only, no arrowhead
+             Gated RMSNorm                         [1] box-norm
+      ↑        ↑                 ↑ z bypass
+      β,α    Gated Delta Rule  [spacer]            [2] HStack(DeltaRule, Spacer)
+      bypass   ↑   ↑   ↑
+      [spacer] CausalConv1d [spacer]               [3] HStack(Spacer, Conv, Spacer)
+               |   |   |
+      β   α    q   k   v    z                      [4] HStack, value labels (reordered)
+      |   |    |   |   |    |
+      in_proj_βα | in_proj_qkvz                    [5] HStack
+             ↑       ↑
+              ╰──┬──╯                                   fork from hidden states
+                  |
+
+    β, α at far left bypass CausalConv1d, feeding into Gated Delta Rule.
+    q, k, v in middle flow through CausalConv1d → Gated Delta Rule.
+    z at far right bypasses both conv and delta rule, into Gated RMSNorm.
+    """
 
     config: GDNDisplayConfig
-    w: float = 240
+    w: float = 280
+
+    _PROJ_W = 32
+    _PROJ_GAP = 4
 
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 2
-        pw = (self.w - 70) // 2
+        pw, pg = self._PROJ_W, self._PROJ_GAP
+        conv_w = 3 * pw + 2 * pg                                    # 104
+        left_spacer_w = 2 * (pw + pg)                               # 72
+        labels_total_w = 6 * pw + 5 * pg                            # 212
+        right_spacer_w = labels_total_w - left_spacer_w - conv_w    # 36
+        proj_left_w = 2 * pw + pg            # in_proj_βα  (2 outputs)
+        proj_right_w = 4 * pw + 3 * pg      # in_proj_qkvz (4 outputs)
+        delta_w = 5 * pw + 4 * pg                                       # 176
+        delta_spacer_w = labels_total_w - delta_w                        # 36
         children: list[Box | Symbol | HStack] = [
-            Box("out_proj", "box-linear", w=70, h=bh - 2),
-            Box("Gated RMSNorm", "box-norm", w=self.w - 40, h=bh),
-            Box("Gated Delta Rule", "box-gdn", w=self.w - 30, h=bh + 10, bold=True),
-            Box("CausalConv1d", "box-conv", w=self.w - 60, h=bh),
-            HStack([
-                Box("in_proj_qkvz", "box-linear", w=pw, h=bh),
-                Box("in_proj_\u03b2\u03b1", "box-gate", w=pw, h=bh),
-            ], gap=10),
+            Box("out_proj", "box-linear", w=70, h=bh - 2),                              # [0]
+            Box("Gated RMSNorm", "box-norm", w=labels_total_w, h=bh),                     # [1]
+            HStack([Box("Gated Delta Rule", "box-gdn", w=delta_w, h=bh + 10, bold=True),  # [2]
+                    Spacer(delta_spacer_w, bh + 10)], gap=0),
+            HStack([Spacer(left_spacer_w, bh),                                           # [3]
+                    Box("CausalConv1d", "box-conv", w=conv_w, h=bh),
+                    Spacer(right_spacer_w, bh)], gap=0),
+            HStack([ValueLabel("\u03b2", w=pw), ValueLabel("\u03b1", w=pw),              # [4]
+                    ValueLabel("q", w=pw), ValueLabel("k", w=pw),
+                    ValueLabel("v", w=pw), ValueLabel("z", w=pw)], gap=pg),
+            HStack([                                                                      # [5]
+                Box("in_proj_\u03b2\u03b1", "box-gate", w=proj_left_w, h=bh),
+                Box("in_proj_qkvz", "box-linear", w=proj_right_w, h=bh),
+            ], gap=pg),
         ]
         return _detail_layout(children, th)
+
+    def _col_centers(self, items: list[tuple[BBox, Box | Symbol | HStack]], th: Theme) -> list[float]:
+        """Compute center-x of each of the 6 value label columns (β,α,q,k,v,z) from item [4]."""
+        label_hstack = items[4][1]
+        assert isinstance(label_hstack, HStack)
+        sizes = [c.measure(th) for c in label_hstack.children]
+        hg = label_hstack.gap if label_hstack.gap is not None else th.geo.gap
+        label_bb = items[4][0]
+        centers: list[float] = []
+        x = label_bb.x
+        for sz in sizes:
+            centers.append(x + sz.w / 2)
+            x += sz.w + hg
+        return centers
 
     def _envelope(self) -> DetailEnvelope:
         return DetailEnvelope(
@@ -1317,12 +1335,144 @@ class GDNDetail:
         items = self._build(th)
         content_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
+        fork_space = th.geo.gap  # space below proj boxes for fork
+        content_h += fork_space
         return self._envelope().measure_envelope(content_w, content_h, th)
+
+    def _render_arrows(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Yield arrows with bypass paths for z and β/α.
+
+        β, α: proj labels → Gated Delta Rule (bypasses conv)
+        q, k, v: proj labels → CausalConv1d → Gated Delta Rule (standard path)
+        z:       proj label  → Gated RMSNorm (bypasses conv and delta rule)
+        """
+        clr = _ARROW_CLR
+        cols = self._col_centers(items, th)
+        # cols: [β, α, q, k, v, z]
+
+        o_bb = items[0][0]       # out_proj
+        norm_bb = items[1][0]    # Gated RMSNorm
+        delta_bb = items[2][0]   # Gated Delta Rule
+        conv_bb = items[3][0]    # CausalConv1d (HStack with spacers)
+        label_bb = items[4][0]   # value labels
+        proj_bb = items[5][0]    # projection boxes
+
+        # --- Standard vertical arrows (centred) ---
+
+        # [0] out_proj ← [1] Gated RMSNorm
+        cx = bb.x + o_bb.cx
+        y1 = bb.y + o_bb.bottom
+        y2 = bb.y + norm_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clr
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # [1] Gated RMSNorm ← [2] Gated Delta Rule (centred)
+        cx = bb.x + (norm_bb.cx + delta_bb.cx) / 2
+        y1 = bb.y + norm_bb.bottom
+        y2 = bb.y + delta_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clr
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # --- q, k, v columns (indices 2,3,4): conv → delta rule arrows ---
+        y1 = bb.y + delta_bb.bottom
+        y2 = bb.y + conv_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols[2:5]:
+                acx = bb.x + col_x
+                tip_y = y1 + clr
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- q, k, v columns (indices 2,3,4): labels → conv arrows ---
+        y1 = bb.y + conv_bb.bottom
+        y2 = bb.y + label_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols[2:5]:
+                acx = bb.x + col_x
+                tip_y = y1 + clr
+                yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- All 6 columns: labels ← projections (plain lines, no arrowheads) ---
+        y1 = bb.y + label_bb.bottom
+        y2 = bb.y + proj_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                yield S.Line(x1=acx, y1=y1, x2=acx, y2=y2, class_=["arrow"])
+
+        # --- z bypass (index 5): label → Gated RMSNorm (skipping conv and delta rule) ---
+        z_cx = bb.x + cols[5]
+        z_tip_y = bb.y + norm_bb.bottom + clr
+        z_start_y = bb.y + label_bb.y
+        if z_start_y - z_tip_y > 1:
+            yield S.Line(x1=z_cx, y1=z_start_y, x2=z_cx, y2=z_tip_y, class_=["arrow"])
+            yield _arrow_up(z_cx, z_tip_y)
+
+        # --- β, α bypass (indices 0,1): labels → Gated Delta Rule (skipping conv) ---
+        for col_x in cols[0:2]:
+            acx = bb.x + col_x
+            tip_y = bb.y + delta_bb.bottom + clr
+            start_y = bb.y + label_bb.y
+            if start_y - tip_y > 1:
+                yield S.Line(x1=acx, y1=start_y, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- Fork below projections ---
+        # Compute proj box centers from the proj HStack children layout
+        proj_hstack = items[5][1]
+        assert isinstance(proj_hstack, HStack)
+        proj_sizes = [c.measure(th) for c in proj_hstack.children]
+        proj_hg = proj_hstack.gap if proj_hstack.gap is not None else th.geo.gap
+        proj_left_cx = proj_bb.x + proj_sizes[0].w / 2
+        proj_right_cx = proj_bb.x + proj_sizes[0].w + proj_hg + proj_sizes[1].w / 2
+
+        abs_proj_left_cx = bb.x + proj_left_cx
+        abs_proj_right_cx = bb.x + proj_right_cx
+        content_cx = (abs_proj_left_cx + abs_proj_right_cx) / 2
+        g = th.geo.gap
+        midpoint_y = bb.y + proj_bb.bottom + g
+
+        # Left branch: center → in_proj_βα center → up with arrowhead
+        proj_left_tip_y = bb.y + proj_bb.bottom + clr
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, proj_left_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_left_cx, proj_left_tip_y)
+
+        # Right branch: center → in_proj_qkvz center → up with arrowhead
+        proj_right_tip_y = bb.y + proj_bb.bottom + clr
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, proj_right_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_right_cx, proj_right_tip_y)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build(th)
         content_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
+        g = th.geo.gap
+        fork_space = g  # space below proj boxes for fork
+        content_h += fork_space
 
         envelope = self._envelope()
         env = envelope.render_envelope(bb, content_w, content_h, th)
@@ -1337,10 +1487,10 @@ class GDNDetail:
         # Phase 3: exit arrow + output labels
         yield from env.phase3_exit_arrow_and_output_labels()
 
-        # Internal arrows
-        yield from _DetailArrows.render(items, env.content_bb)
+        # Custom inter-item arrows (bypass paths for z and β/α, fork)
+        yield from self._render_arrows(items, env.content_bb, th)
 
-        # Exit arrow from top item to title bar (inside content)
+        # Exit line from top item to title bar (no arrowhead)
         title_h = th.geo.title_h
         if items:
             top_bb = items[0][0]
@@ -1349,7 +1499,6 @@ class GDNDetail:
             y_end = env.frame_bb.y + title_h + _ARROW_CLR
             if y_start - y_end > 2 * _ARROW_CLR:
                 yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
-                yield _arrow_up(cx, y_end)
 
         # Children
         for child_bb, child in items:
@@ -1359,7 +1508,7 @@ class GDNDetail:
         # Phase 4: entry arrow + input labels
         if items:
             bottom_bb = items[-1][0]
-            target_y = env.content_bb.y + bottom_bb.bottom + _ARROW_CLR
+            target_y = env.content_bb.y + bottom_bb.bottom + fork_space + _ARROW_CLR
         else:
             target_y = None
         yield from env.phase4_entry_arrow_and_input_labels(target_y)
@@ -1367,102 +1516,84 @@ class GDNDetail:
 
 @dataclass
 class KDADetail:
-    """Detail panel for Kimi Delta Attention."""
+    """Detail panel for Kimi Delta Attention.
+
+    Layout (data flows bottom → top)::
+
+             o_proj                                 [0] box-linear
+               |                                         line only, no arrowhead
+             Gated RMSNorm                          [1] box-norm
+      ↑        ↑                 ↑ g₂ bypass
+      β,g₁   Kimi Delta Attn  [spacer]             [2] HStack(KDA, Spacer)
+      bypass   ↑   ↑   ↑
+      [spacer] Conv Conv Conv  [spacer]             [3] HStack(Spacer, 3×Conv, Spacer)
+               |   |   |
+      β  g₁   q   k   v   g₂                       [4] HStack, value labels
+      |  |    |   |   |    |
+      proj_βg₁  proj_qkv  proj_g₂                  [5] HStack of 3 proj boxes
+             ↑       ↑       ↑
+              ╰──────┼───────╯                           3-way fork from hidden states
+                     |
+
+    β, g₁ at far left bypass CausalConv1d, feeding into KDA core.
+    q, k, v in middle flow through CausalConv1d → KDA core.
+    g₂ at far right bypasses both conv and KDA core, into Gated RMSNorm.
+    """
 
     config: KDADisplayConfig
-    w: float = 260
+    w: float = 400
+
+    _PROJ_W = 32
+    _PROJ_GAP = 4
 
     def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
         bh = th.geo.box_h - 2
-        cw = (self.w - 80) // 3
+        pw, pg = self._PROJ_W, self._PROJ_GAP
+        qkv_w = 2 * pw + pg                                         # 68 (q/k/v each span 2 cols)
+        labels_total_w = (pw + pg + pw + pg                          # β, g₁
+                          + qkv_w + pg + qkv_w + pg + qkv_w + pg    # q, k, v
+                          + (2 * pw + pg))                           # g₂  → 356
+        kda_w = pw + pg + pw + pg + qkv_w + pg + qkv_w + pg + qkv_w  # 284 (β..v)
+        kda_spacer_w = labels_total_w - kda_w                        # 72
+        proj_left_w = 2 * pw + pg            # proj_βg₁  (2 outputs)  68
+        proj_center_w = 3 * qkv_w + 2 * pg  # proj_qkv  (3 outputs)  212
+        proj_right_w = 2 * pw + pg           # proj_g₂   (2 columns)  68
+        stagger_step = bh + th.geo.gap
+        spacer_h = bh + 2 * stagger_step     # vertical space for 3 staggered conv boxes
         children: list[Box | Symbol | HStack] = [
-            Box("o_proj", "box-linear", w=70, h=bh - 2),
-            Box("Gated RMSNorm", "box-norm", w=self.w - 50, h=bh),
-            Box("Kimi Delta Attention", "box-kda", w=self.w - 30, h=bh + 10, bold=True),
-            HStack([Box("Conv", "box-conv", w=cw, h=bh - 4),
-                    Box("Conv", "box-conv", w=cw, h=bh - 4),
-                    Box("Conv", "box-conv", w=cw, h=bh - 4)], gap=5),
-            HStack([Box("Linear", "box-linear", w=cw, h=bh - 4),
-                    Box("Linear", "box-linear", w=cw, h=bh - 4),
-                    Box("Linear", "box-linear", w=cw, h=bh - 4)], gap=5),
+            Box("o_proj", "box-linear", w=70, h=bh - 2),                                  # [0]
+            Box("Gated RMSNorm", "box-norm", w=labels_total_w, h=bh),                     # [1]
+            HStack([Box("Kimi Delta Attention", "box-kda", w=kda_w, h=bh + 10, bold=True),  # [2]
+                    Spacer(kda_spacer_w, bh + 10)], gap=0),
+            Spacer(labels_total_w, spacer_h),                                              # [3] reserved for staggered conv boxes
+            HStack([ValueLabel("\u03b2", w=pw), ValueLabel("g\u2081", w=pw),               # [4]
+                    ValueLabel("q", w=qkv_w), ValueLabel("k", w=qkv_w),
+                    ValueLabel("v", w=qkv_w), ValueLabel("g\u2082", w=2*pw+pg)], gap=pg),
+            HStack([                                                                        # [5]
+                Box("proj_\u03b2g\u2081", "box-gate", w=proj_left_w, h=bh),
+                Box("proj_qkv", "box-linear", w=proj_center_w, h=bh),
+                Box("proj_g\u2082", "box-gate", w=proj_right_w, h=bh),
+            ], gap=pg),
         ]
         return _detail_layout(children, th)
+
+    def _col_centers(self, items: list[tuple[BBox, Box | Symbol | HStack]], th: Theme) -> list[float]:
+        """Compute center-x of each of the 6 value label columns (β,g₁,q,k,v,g₂) from item [4]."""
+        label_hstack = items[4][1]
+        assert isinstance(label_hstack, HStack)
+        sizes = [c.measure(th) for c in label_hstack.children]
+        hg = label_hstack.gap if label_hstack.gap is not None else th.geo.gap
+        label_bb = items[4][0]
+        centers: list[float] = []
+        x = label_bb.x
+        for sz in sizes:
+            centers.append(x + sz.w / 2)
+            x += sz.w + hg
+        return centers
 
     def _envelope(self) -> DetailEnvelope:
         return DetailEnvelope(
             "Kimi Delta Attention", "detail-kda",
-            output_labels=[ExternalLabel("hidden states")],
-            input_labels=[ExternalLabel("q"), ExternalLabel("k"), ExternalLabel("v")],
-        )
-
-    def measure(self, th: Theme) -> Size:
-        items = self._build(th)
-        content_h = items[-1][0].bottom if items else 0
-        content_w = max((bb.right for bb, _ in items), default=0)
-        return self._envelope().measure_envelope(content_w, content_h, th)
-
-    def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
-        items = self._build(th)
-        content_h = items[-1][0].bottom if items else 0
-        content_w = max((bb.right for bb, _ in items), default=0)
-
-        envelope = self._envelope()
-        env = envelope.render_envelope(bb, content_w, content_h, th)
-        if items:
-            top_bb = items[0][0]
-            env.spine_cx = env.content_bb.x + top_bb.x + top_bb.w / 2
-
-        yield from env.phase1_behind_title()
-        yield from env.phase2_frame()
-        yield from env.phase3_exit_arrow_and_output_labels()
-
-        # Internal arrows
-        yield from _DetailArrows.render(items, env.content_bb)
-
-        # Exit arrow from top item to title bar
-        title_h = th.geo.title_h
-        if items:
-            top_bb = items[0][0]
-            cx = env.content_bb.x + top_bb.x + top_bb.w / 2
-            y_start = env.content_bb.y + top_bb.y
-            y_end = env.frame_bb.y + title_h + _ARROW_CLR
-            if y_start - y_end > 2 * _ARROW_CLR:
-                yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
-                yield _arrow_up(cx, y_end)
-
-        # Entry arrow from frame bottom to bottom item
-        yield from _DetailArrows.render_entry_arrow(items, env.frame_bb, env.content_bb)
-
-        # Children
-        for child_bb, child in items:
-            shifted = BBox(env.content_bb.x + child_bb.x, env.content_bb.y + child_bb.y, child_bb.w, child_bb.h)
-            yield from child.render(shifted, th)
-
-        # Input labels (q, k, v) below the frame
-        yield from env.phase4_entry_arrow_and_input_labels()
-
-
-@dataclass
-class MambaDetail:
-    """Detail panel for Mamba SSM."""
-
-    config: MambaDisplayConfig
-    w: float = 220
-
-    def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
-        bh = th.geo.box_h - 2
-        children: list[Box | Symbol | HStack] = [
-            Box("out_proj", "box-linear", w=70, h=bh - 2),
-            Box("Gated RMSNorm", "box-norm", w=self.w - 40, h=bh),
-            Box("Mamba SSM", "box-mamba", w=self.w - 30, h=bh + 10, bold=True),
-            Box("CausalConv1d", "box-conv", w=self.w - 60, h=bh),
-            Box("in_proj", "box-linear", w=self.w - 60, h=bh),
-        ]
-        return _detail_layout(children, th)
-
-    def _envelope(self) -> DetailEnvelope:
-        return DetailEnvelope(
-            "Mamba SSM", "detail-mamba",
             output_labels=[ExternalLabel("hidden states")],
             input_labels=[ExternalLabel("hidden states")],
         )
@@ -1471,12 +1602,171 @@ class MambaDetail:
         items = self._build(th)
         content_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
+        fork_space = th.geo.gap
+        content_h += fork_space
         return self._envelope().measure_envelope(content_w, content_h, th)
+
+    def _render_arrows(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Yield arrows with bypass paths for g₂ and β/g₁.
+
+        β, g₁: proj labels → KDA core (bypasses conv)
+        q, k, v: proj labels → CausalConv1d (staggered) → KDA core
+        g₂:      proj label  → Gated RMSNorm (bypasses conv and KDA core)
+        """
+        clr = _ARROW_CLR
+        cols = self._col_centers(items, th)
+        # cols: [β, g₁, q, k, v, g₂]
+
+        bh = th.geo.box_h - 2
+        pw, pg = self._PROJ_W, self._PROJ_GAP
+
+        o_bb = items[0][0]       # out_proj
+        norm_bb = items[1][0]    # Gated RMSNorm
+        kda_bb = items[2][0]     # Kimi Delta Attention
+        spacer_bb = items[3][0]  # Spacer (reserved for staggered conv boxes)
+        label_bb = items[4][0]   # value labels
+        proj_bb = items[5][0]    # projection boxes
+
+        # --- Render 3 staggered CausalConv1d boxes ---
+        kda_conv_w = 2 * pw + pg + 24  # 92 — fits "CausalConv1d" label with comfortable padding
+        stagger_step = bh + th.geo.gap  # vertical gap between boxes = g
+        conv_boxes: list[Box] = []
+        conv_bboxes: list[BBox] = []
+        for i, col_idx in enumerate((2, 3, 4)):  # q, k, v
+            box = Box("CausalConv1d", "box-conv", w=kda_conv_w, h=bh)
+            col_cx = cols[col_idx]
+            box_x = bb.x + col_cx - kda_conv_w / 2
+            box_y = bb.y + spacer_bb.y + i * stagger_step
+            box_bb = BBox(box_x, box_y, kda_conv_w, bh)
+            conv_boxes.append(box)
+            conv_bboxes.append(box_bb)
+            yield from box.render(box_bb, th)
+
+        # --- Standard vertical arrows (centred) ---
+
+        # [0] out_proj ← [1] Gated RMSNorm
+        cx = bb.x + o_bb.cx
+        y1 = bb.y + o_bb.bottom
+        y2 = bb.y + norm_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clr
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # [1] Gated RMSNorm ← [2] KDA core (centred)
+        cx = bb.x + (norm_bb.cx + kda_bb.cx) / 2
+        y1 = bb.y + norm_bb.bottom
+        y2 = bb.y + kda_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clr
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # --- q, k, v: conv → KDA core arrows (per staggered box) ---
+        for i, col_idx in enumerate((2, 3, 4)):
+            acx = bb.x + cols[col_idx]
+            tip_y = bb.y + kda_bb.bottom + clr
+            start_y = conv_bboxes[i].y  # top of this conv box
+            if start_y - tip_y > 1:
+                yield S.Line(x1=acx, y1=start_y, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- q, k, v: labels → conv arrows (per staggered box) ---
+        for i, col_idx in enumerate((2, 3, 4)):
+            acx = bb.x + cols[col_idx]
+            tip_y = conv_bboxes[i].bottom + clr  # bottom of this conv box
+            start_y = bb.y + label_bb.y
+            if start_y - tip_y > 1:
+                yield S.Line(x1=acx, y1=start_y, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- All 6 columns: labels ← projections (plain lines, no arrowheads) ---
+        y1 = bb.y + label_bb.bottom
+        y2 = bb.y + proj_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                yield S.Line(x1=acx, y1=y1, x2=acx, y2=y2, class_=["arrow"])
+
+        # --- g₂ bypass (index 5): label → Gated RMSNorm (skipping conv and KDA core) ---
+        g2_cx = bb.x + cols[5]
+        g2_tip_y = bb.y + norm_bb.bottom + clr
+        g2_start_y = bb.y + label_bb.y
+        if g2_start_y - g2_tip_y > 1:
+            yield S.Line(x1=g2_cx, y1=g2_start_y, x2=g2_cx, y2=g2_tip_y, class_=["arrow"])
+            yield _arrow_up(g2_cx, g2_tip_y)
+
+        # --- β, g₁ bypass (indices 0,1): labels → KDA core (skipping conv) ---
+        for col_x in cols[0:2]:
+            acx = bb.x + col_x
+            tip_y = bb.y + kda_bb.bottom + clr
+            start_y = bb.y + label_bb.y
+            if start_y - tip_y > 1:
+                yield S.Line(x1=acx, y1=start_y, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- 3-way fork below projections ---
+        proj_hstack = items[5][1]
+        assert isinstance(proj_hstack, HStack)
+        proj_sizes = [c.measure(th) for c in proj_hstack.children]
+        proj_hg = proj_hstack.gap if proj_hstack.gap is not None else th.geo.gap
+        proj_left_cx = proj_bb.x + proj_sizes[0].w / 2
+        proj_center_cx = proj_bb.x + proj_sizes[0].w + proj_hg + proj_sizes[1].w / 2
+        proj_right_cx = (proj_bb.x + proj_sizes[0].w + proj_hg
+                         + proj_sizes[1].w + proj_hg + proj_sizes[2].w / 2)
+
+        abs_proj_left_cx = bb.x + proj_left_cx
+        abs_proj_center_cx = bb.x + proj_center_cx
+        abs_proj_right_cx = bb.x + proj_right_cx
+        content_cx = abs_proj_center_cx
+        g = th.geo.gap
+        midpoint_y = bb.y + proj_bb.bottom + g
+
+        # Left branch: center → proj_βg₁ center → up
+        proj_tip_y = bb.y + proj_bb.bottom + clr
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, proj_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_left_cx, proj_tip_y)
+
+        # Center branch: straight up
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(content_cx, proj_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(content_cx, proj_tip_y)
+
+        # Right branch: center → proj_g₂ center → up
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, proj_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_right_cx, proj_tip_y)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
         items = self._build(th)
         content_h = items[-1][0].bottom if items else 0
         content_w = max((bb.right for bb, _ in items), default=0)
+        g = th.geo.gap
+        fork_space = g
+        content_h += fork_space
 
         envelope = self._envelope()
         env = envelope.render_envelope(bb, content_w, content_h, th)
@@ -1484,14 +1774,17 @@ class MambaDetail:
             top_bb = items[0][0]
             env.spine_cx = env.content_bb.x + top_bb.x + top_bb.w / 2
 
+        # Phase 1: arrow behind title bar
         yield from env.phase1_behind_title()
+        # Phase 2: frame
         yield from env.phase2_frame()
+        # Phase 3: exit arrow + output labels
         yield from env.phase3_exit_arrow_and_output_labels()
 
-        # Internal arrows
-        yield from _DetailArrows.render(items, env.content_bb)
+        # Custom inter-item arrows (bypass paths for g₂ and β/g₁, fork)
+        yield from self._render_arrows(items, env.content_bb, th)
 
-        # Exit arrow from top item to title bar
+        # Exit line from top item to title bar (no arrowhead)
         title_h = th.geo.title_h
         if items:
             top_bb = items[0][0]
@@ -1500,17 +1793,259 @@ class MambaDetail:
             y_end = env.frame_bb.y + title_h + _ARROW_CLR
             if y_start - y_end > 2 * _ARROW_CLR:
                 yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
-                yield _arrow_up(cx, y_end)
 
         # Children
         for child_bb, child in items:
             shifted = BBox(env.content_bb.x + child_bb.x, env.content_bb.y + child_bb.y, child_bb.w, child_bb.h)
             yield from child.render(shifted, th)
 
-        # Entry arrow + input labels
+        # Phase 4: entry arrow + input labels
         if items:
             bottom_bb = items[-1][0]
-            target_y = env.content_bb.y + bottom_bb.bottom + _ARROW_CLR
+            target_y = env.content_bb.y + bottom_bb.bottom + fork_space + _ARROW_CLR
+        else:
+            target_y = None
+        yield from env.phase4_entry_arrow_and_input_labels(target_y)
+
+
+@dataclass
+class MambaDetail:
+    """Detail panel for Mamba SSM.
+
+    Layout (data flows bottom → top)::
+
+             out_proj                              [0] box-linear (narrow, centered)
+               ↑
+             Selective Scan                         [1] box-mamba (wide, spans 6 cols = 208px)
+         ↑   ↑   ↑   ↑   ↑                             receives z, x, B, C, Δ
+         z   │        │   Δ  bypass conv (in spacer zones)
+             │   B,C  │      bypass conv (through conv zone, single-segment arrows)
+             │        │
+         [sp] CausalConv1d [sp]                   [2] HStack(Spacer, Conv, Spacer)
+              ↑                                         only x actually convolved
+         z   x   B   C   Δ                        [3] HStack of 5 ValueLabels
+         └───┼───┼───┘   │
+          in_proj    dt_proj                       [4] HStack of 2 projection boxes
+              ↑         ↑
+               ╰───┼───╯                                2-way fork from hidden states
+                   ↑
+
+    z bypasses CausalConv1d, fed to SSM as output gate (y * silu(z)).
+    x flows through CausalConv1d → SSM (input signal).
+    B, C bypass CausalConv1d, fed to SSM as state-space parameters.
+    Δ comes from a separate dt_proj, fed to SSM as time-step parameter.
+    No Gated RMSNorm — Mamba has zero normalization layers.
+    """
+
+    config: MambaDisplayConfig
+    w: float = 340
+
+    _PROJ_W = 32
+    _PROJ_GAP = 4
+
+    def _build(self, th: Theme) -> list[tuple[BBox, Box | Symbol | HStack]]:
+        bh = th.geo.box_h - 2
+        pw, pg = self._PROJ_W, self._PROJ_GAP
+        x_w = 3 * pw + 2 * pg                               # 104 (x spans 3 columns)
+        labels_total_w = pw + pg + x_w + pg + pw + pg + pw + pg + (2 * pw + pg)  # 284
+        left_spacer_w = pw + pg                              # 36  (z bypass zone)
+        conv_w = 3 * pw + 2 * pg                             # 104 (covers x only)
+        right_spacer_w = labels_total_w - left_spacer_w - conv_w  # 144  (B, C, Δ bypass zone)
+        ssm_w = labels_total_w                               # 284
+        in_proj_w = pw + pg + x_w + pg + pw + pg + pw        # 212 (z, x, B, C)
+        dt_proj_w = 2 * pw + pg                              # 68  (Δ)
+
+        children: list[Box | Symbol | HStack] = [
+            Box("out_proj", "box-linear", w=70, h=bh - 2),                        # [0]
+            Box("Selective Scan", "box-mamba", w=ssm_w, h=bh + 10, bold=True),     # [1]
+            HStack([Spacer(left_spacer_w, bh),                                     # [2]
+                    Box("CausalConv1d", "box-conv", w=conv_w, h=bh),
+                    Spacer(right_spacer_w, bh)], gap=0),
+            HStack([ValueLabel("z", w=pw), ValueLabel("x", w=x_w),                # [3]
+                    ValueLabel("B", w=pw), ValueLabel("C", w=pw),
+                    ValueLabel("\u0394", w=2 * pw + pg)], gap=pg),
+            HStack([Box("in_proj", "box-linear", w=in_proj_w, h=bh),              # [4]
+                    Box("dt_proj", "box-linear", w=dt_proj_w, h=bh)], gap=pg),
+        ]
+        return _detail_layout(children, th)
+
+    def _col_centers(self, items: list[tuple[BBox, Box | Symbol | HStack]], th: Theme) -> list[float]:
+        """Compute center-x of each of the 5 value label columns (z,x,B,C,Δ) from item [3]."""
+        label_hstack = items[3][1]
+        assert isinstance(label_hstack, HStack)
+        sizes = [c.measure(th) for c in label_hstack.children]
+        hg = label_hstack.gap if label_hstack.gap is not None else th.geo.gap
+        label_bb = items[3][0]
+        centers: list[float] = []
+        x = label_bb.x
+        for sz in sizes:
+            centers.append(x + sz.w / 2)
+            x += sz.w + hg
+        return centers
+
+    def _envelope(self) -> DetailEnvelope:
+        return DetailEnvelope(
+            "Mamba", "detail-mamba",
+            output_labels=[ExternalLabel("hidden states")],
+            input_labels=[ExternalLabel("hidden states")],
+        )
+
+    def measure(self, th: Theme) -> Size:
+        items = self._build(th)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+        fork_space = th.geo.gap  # space below proj boxes for fork
+        content_h += fork_space
+        return self._envelope().measure_envelope(content_w, content_h, th)
+
+    def _render_arrows(
+        self,
+        items: list[tuple[BBox, Box | Symbol | HStack]],
+        bb: BBox,
+        th: Theme,
+    ) -> Iterator[S.Element]:
+        """Yield arrows with bypass paths for z, B, C, and Δ.
+
+        x:    label → CausalConv1d → Mamba SSM (standard path through conv)
+        z:    label → Mamba SSM (bypasses conv, output gate)
+        B, C: labels → Mamba SSM (bypass conv, SSM parameters)
+        Δ:    label → Mamba SSM (bypasses conv, time-step from dt_proj)
+        """
+        clr = _ARROW_CLR
+        cols = self._col_centers(items, th)
+        # cols: [z, x, B, C, Δ]
+
+        o_bb = items[0][0]       # out_proj
+        ssm_bb = items[1][0]     # Mamba SSM
+        conv_bb = items[2][0]    # CausalConv1d (HStack with spacers)
+        label_bb = items[3][0]   # value labels
+        proj_bb = items[4][0]    # projection boxes
+
+        # --- [0] out_proj ← [1] Mamba SSM ---
+        cx = bb.x + o_bb.cx
+        y1 = bb.y + o_bb.bottom
+        y2 = bb.y + ssm_bb.y
+        if y2 - y1 > 1:
+            tip_y = y1 + clr
+            yield S.Line(x1=cx, y1=y2, x2=cx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(cx, tip_y)
+
+        # --- x column (index 1): conv → SSM arrow ---
+        y1 = bb.y + ssm_bb.bottom
+        y2 = bb.y + conv_bb.y
+        if y2 - y1 > 1:
+            acx = bb.x + cols[1]
+            tip_y = y1 + clr
+            yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(acx, tip_y)
+
+        # --- x column (index 1): label → conv arrow ---
+        y1 = bb.y + conv_bb.bottom
+        y2 = bb.y + label_bb.y
+        if y2 - y1 > 1:
+            acx = bb.x + cols[1]
+            tip_y = y1 + clr
+            yield S.Line(x1=acx, y1=y2, x2=acx, y2=tip_y, class_=["arrow"])
+            yield _arrow_up(acx, tip_y)
+
+        # --- z, B, C, Δ bypass (indices 0, 2, 3, 4): labels → SSM (skipping conv) ---
+        for col_idx in (0, 2, 3, 4):
+            acx = bb.x + cols[col_idx]
+            tip_y = bb.y + ssm_bb.bottom + clr
+            start_y = bb.y + label_bb.y
+            if start_y - tip_y > 1:
+                yield S.Line(x1=acx, y1=start_y, x2=acx, y2=tip_y, class_=["arrow"])
+                yield _arrow_up(acx, tip_y)
+
+        # --- All 5 columns: labels ← projections (plain lines, no arrowheads) ---
+        y1 = bb.y + label_bb.bottom
+        y2 = bb.y + proj_bb.y
+        if y2 - y1 > 1:
+            for col_x in cols:
+                acx = bb.x + col_x
+                yield S.Line(x1=acx, y1=y1, x2=acx, y2=y2, class_=["arrow"])
+
+        # --- 2-way fork below projections ---
+        proj_hstack = items[4][1]
+        assert isinstance(proj_hstack, HStack)
+        proj_sizes = [c.measure(th) for c in proj_hstack.children]
+        proj_hg = proj_hstack.gap if proj_hstack.gap is not None else th.geo.gap
+        proj_left_cx = proj_bb.x + proj_sizes[0].w / 2
+        proj_right_cx = proj_bb.x + proj_sizes[0].w + proj_hg + proj_sizes[1].w / 2
+
+        abs_proj_left_cx = bb.x + proj_left_cx
+        abs_proj_right_cx = bb.x + proj_right_cx
+        content_cx = (abs_proj_left_cx + abs_proj_right_cx) / 2
+        g = th.geo.gap
+        midpoint_y = bb.y + proj_bb.bottom + g
+
+        # Left branch: center → in_proj center → up with arrowhead
+        proj_left_tip_y = bb.y + proj_bb.bottom + clr
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, midpoint_y),
+                S.LineTo(abs_proj_left_cx, proj_left_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_left_cx, proj_left_tip_y)
+
+        # Right branch: center → dt_proj center → up with arrowhead
+        proj_right_tip_y = bb.y + proj_bb.bottom + clr
+        yield S.Path(
+            d=[
+                S.MoveTo(content_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, midpoint_y),
+                S.LineTo(abs_proj_right_cx, proj_right_tip_y),
+            ],
+            class_=["arrow"],
+        )
+        yield _arrow_up(abs_proj_right_cx, proj_right_tip_y)
+
+    def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        items = self._build(th)
+        content_h = items[-1][0].bottom if items else 0
+        content_w = max((bb.right for bb, _ in items), default=0)
+        g = th.geo.gap
+        fork_space = g  # space below proj boxes for fork
+        content_h += fork_space
+
+        envelope = self._envelope()
+        env = envelope.render_envelope(bb, content_w, content_h, th)
+        if items:
+            top_bb = items[0][0]
+            env.spine_cx = env.content_bb.x + top_bb.x + top_bb.w / 2
+
+        # Phase 1: arrow behind title bar
+        yield from env.phase1_behind_title()
+        # Phase 2: frame
+        yield from env.phase2_frame()
+        # Phase 3: exit arrow + output labels
+        yield from env.phase3_exit_arrow_and_output_labels()
+
+        # Custom inter-item arrows (bypass paths for z, B, C, Δ, fork)
+        yield from self._render_arrows(items, env.content_bb, th)
+
+        # Exit line from top item to title bar (no arrowhead)
+        title_h = th.geo.title_h
+        if items:
+            top_bb = items[0][0]
+            cx = env.content_bb.x + top_bb.x + top_bb.w / 2
+            y_start = env.content_bb.y + top_bb.y
+            y_end = env.frame_bb.y + title_h + _ARROW_CLR
+            if y_start - y_end > 2 * _ARROW_CLR:
+                yield S.Line(x1=cx, y1=y_start, x2=cx, y2=y_end, class_=["arrow"])
+
+        # Children
+        for child_bb, child in items:
+            shifted = BBox(env.content_bb.x + child_bb.x, env.content_bb.y + child_bb.y, child_bb.w, child_bb.h)
+            yield from child.render(shifted, th)
+
+        # Phase 4: entry arrow + input labels
+        if items:
+            bottom_bb = items[-1][0]
+            target_y = env.content_bb.y + bottom_bb.bottom + fork_space + _ARROW_CLR
         else:
             target_y = None
         yield from env.phase4_entry_arrow_and_input_labels(target_y)
