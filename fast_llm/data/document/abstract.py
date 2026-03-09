@@ -18,9 +18,6 @@ class Document(abc.ABC):
         import torch
 
         for field in dataclasses.fields(self):
-            print(
-                field.name, isinstance(value := getattr(self, field.name), torch.Tensor), isinstance(value, Document)
-            )
             if isinstance(value := getattr(self, field.name), torch.Tensor):
                 setattr(self, field.name, value.to(device))
             elif isinstance(value, Document):
@@ -36,7 +33,7 @@ class ModelInput(Document):
     # referred by name or regex pattern.
     # Tensor names are generally of the form `{module_name}.{tensor_name}`.
     # This field is typically populated downstream, depending on the task.
-    output_hidden_states: set[str] = dataclasses.field(default_factory=list)
+    output_hidden_states: set[str] = dataclasses.field(default_factory=set)
     # The model will populate this with the hidden states specified by `output_hidden_states`,
     # together with the metadata necessary to reconstruct the global tensor.
     hidden_states: "dict[str, tuple[TensorMeta, torch.Tensor]]" = dataclasses.field(default_factory=dict)

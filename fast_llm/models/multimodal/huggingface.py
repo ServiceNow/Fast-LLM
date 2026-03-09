@@ -1,11 +1,15 @@
+import functools
 import logging
+import re
 import typing
 
 import torch
 import transformers.modeling_outputs
 
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelInput
 from fast_llm.data.document.patch import PatchBatch
 from fast_llm.data.preparation.image_patch import ImagePreparationConfig
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelConfig, HuggingfaceGPTModelForCausalLM
 from fast_llm.models.multimodal.config import MultiModalModelConfig
@@ -108,3 +112,27 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         ).to_device_(input_ids.device)
 
         return batch
+
+    def _get_input(
+        self,
+        batch: LanguageModelBatch,
+        past_key_values=None,
+        use_cache: bool | None = None,
+        output_hidden_states: bool | None = None,
+    ) -> LanguageModelInput:
+        model_input = super()._get_input(batch, past_key_values, use_cache, output_hidden_states)
+        if output_hidden_states and isinstance(output_hidden_states, bool):
+            model_input.output_hidden_states.update(
+                re.compile(pattern)
+                for pattern in (
+                    self.fast_llm_base_model.vision_encoder.embeddings.module_name + "$",
+                    *(layer.module_name + "$" for layer in self.fast_llm_base_model.vision_encoder.encoder),
+                    self.fast_llm_base_model.vision_encoder.adapter.module_name + "$",
+                )
+            )
+        return model_input
+
+    @functools.cached_property
+    def preprocessing_config(self):
+        preprocessing_config = self._fast_llm_model.get_preprocessing_config(PhaseType.inference)
+        return preprocessing_config.from_dict(preprocessing_config, {("vision_encoder", "normalization"): None})

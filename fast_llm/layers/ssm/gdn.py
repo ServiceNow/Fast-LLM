@@ -165,15 +165,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         z_dim = CompositeTensorDim("gdn_z", (self._value_heads_dim, self._value_head_dim))
         qkvz_dim = ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim))
-        # for Qwen's layour use soemthing like this instead:
-        # n_vheads_per_k_head = self._config.value_heads // self._config.key_heads
-        # head_size = 2 * self._config.key_head_dim + 2 * self._config.value_head_dim * n_vheads_per_k_head
-        # n_heads = self._config.key_heads
-        # qkvz_dim = TensorDim(e
-        #     "gdn_qkvz",
-        #     n_heads * head_size,
-        #     self._parallel_dim if n_heads > 1 else None,
-        # )
         ba_dim = ConcatenatedTensorDim(
             "gdn_ba",
             (
@@ -181,13 +172,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 CompositeTensorDim("gdn_alpha", (self._value_heads_dim,)),
             ),
         )
-        # for Qwen's layour use something like this instead:
-        # ba_dim = TensorDim(
-        #     "gdn_ba",
-        #     2 * self._config.value_heads,
-        #     self._parallel_dim if 2 * self._config.value_heads > 1 else None,
-        # )
-
         qkv_channels_dim = ConcatenatedTensorDim("gdn_qkv", (query_dim, key_dim, value_dim))
 
         self.in_proj_qkvz = self._config.qkv_projection_layer.get_layer(

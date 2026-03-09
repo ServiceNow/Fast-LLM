@@ -40,7 +40,6 @@ class CausalConv1d(torch.nn.Module):
         if document_index is not None and lengths is None:
             raise ValueError("Torch implementation of CausalConv1d requires lengths.")
         if lengths is not None:
-            print("AAA", input_.shape, lengths, sum(lengths))
             return torch.cat([self._forward_torch(x) for x in input_.split(lengths, dim=-1)], dim=-1)
         return self._activation.activation_fn(
             torch.nn.functional.conv1d(
@@ -49,7 +48,7 @@ class CausalConv1d(torch.nn.Module):
                 bias=self.bias,
                 groups=self.weight.size(0),
                 padding=self.weight.size(2) - 1,
-            )[..., : input_.size(1)]
+            )[..., : input_.size(-1)]
         )
 
     def _forward_causal_conv1d(

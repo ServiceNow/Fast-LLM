@@ -12,6 +12,7 @@ from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelHeadConfig
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.utils import safe_merge_dicts
 
 
 class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[ConfigType]):
@@ -88,7 +89,11 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
         return sum((head.get_output_weights() for head in self.heads), [])
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
-        return self._layers_with_namespace[0].get_preprocessing_config() if self._enabled else {}
+
+        return safe_merge_dicts(
+            {"predicted_tokens": self._config.prediction_heads},
+            self._layers_with_namespace[0].get_preprocessing_config() if self._enabled else {},
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         if self._enabled:

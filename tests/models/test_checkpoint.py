@@ -332,7 +332,7 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
         dtype=torch.int64,
         device=testing_device,
     )
-    kwargs = {}
+    kwargs = {"output_hidden_states": True}
     if model_testing_config.model_type == "multimodal":
         kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(testing_device)
         kwargs["image_sizes"] = torch.tensor(
@@ -360,6 +360,8 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
         # Last one cropped out.
 
     output_ref = model_ref(test_input, **kwargs)
+    hidden_states_ref = output_ref.hidden_states
+    hidden_states_ref["logits"] = output_ref.logits
     model_from_fast_llm = hf_class.from_pretrained(fast_llm_path, distributed_update).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
@@ -375,20 +377,49 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
         .to(testing_device)
         .eval()
     )
+    config = CompareConfig()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
         output = model(test_input, **kwargs)
-        # TODO: Make a generic comparison util.
-        CompareConfig().compare_tensors(
-            {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},
-            {"samples": output.logits, "shape": output.logits.shape, "step": 0},
-            errors,
-            name,
-            "logits",
-        )
+        hidden_states_ref_ = hidden_states_ref
+        if model is model_as_hf:
+            hidden_states = output.hidden_states + (output.logits,)
+            if model_testing_config.model_type == "multimodal":
+                # Llava doesn't allow returning the vision hidden states, so we run the vision model directly instead.
+                vision_output = model_as_hf.vision_tower(
+                    pixel_values=kwargs["pixel_values"], image_sizes=kwargs["image_sizes"], output_hidden_states=True
+                )
+                adapter_output = model_as_hf.multi_modal_projector(vision_output.hidden_states[-1])
+                vision_hidden_states = vision_output.hidden_states + (adapter_output,)
+                hidden_states = vision_hidden_states + hidden_states
+                hidden_states_ref_ = hidden_states_ref.copy()
+                # Adjust the vision hidden states
+                # TODO: ====== Do in HF wrapper ======
+                for name, hidden_state in hidden_states_ref.items():
+                    if name.startswith("vision_encoder"):
+                        hidden_states_ref_[name] = hidden_state.flatten(0, 1)[:46].unsqueeze(0)
+
+            hidden_states = {
+                name: hidden_state for name, hidden_state in zip(hidden_states_ref, hidden_states, strict=True)
+            }
+        else:
+            hidden_states = output.hidden_states
+            hidden_states["logits"] = output.logits
+
+        Assert.eq(hidden_states_ref_.keys(), hidden_states.keys())
+
+        for tensor_name, hidden_state_ref in hidden_states_ref_.items():
+            hidden_state = hidden_states[tensor_name]
+            config.compare_tensors(
+                {"samples": hidden_state_ref, "shape": hidden_state_ref.shape, "step": 0},
+                {"samples": hidden_state, "shape": hidden_state.shape, "step": 0},
+                errors,
+                name,
+                tensor_name,
+            )
 
     if errors:
         for error in errors:

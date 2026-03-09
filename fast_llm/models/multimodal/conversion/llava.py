@@ -11,7 +11,7 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
@@ -254,12 +254,12 @@ class LlavaHeadConverter(MistralHeadConverter):
     @classmethod
     def get_converters(
         cls,
-        config: LanguageModelHeadConfig,
+        config: LanguageModelConfig,
         exported_config: dict,
     ) -> list[WeightConverter]:
         return [
             *cls.normalization_converter_class.get_converters(
-                config.normalization,
+                config.head.normalization,
                 f"head.final_norm",
                 f"language_model.model.norm",
             ),
@@ -317,7 +317,7 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
                 config.decoder, "decoder", "language_model.model.layers"
             ),
             *cls.language_model_converter_class.head_converter_class.get_converters(
-                config.head, {"tie_word_embeddings": False}
+                config, {"tie_word_embeddings": False}
             ),
         ]
 

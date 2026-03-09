@@ -1,3 +1,4 @@
+import functools
 import logging
 import random
 import re
@@ -149,15 +150,17 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         use_cache: bool | None = None,
         output_hidden_states: bool | None = None,
     ) -> LanguageModelInput:
-        (model_input,) = batch.get_model_inputs(self._fast_llm_model.get_preprocessing_config(PhaseType.inference))
+        (model_input,) = batch.get_model_inputs(self.preprocessing_config)
 
         if output_hidden_states:
             if isinstance(output_hidden_states, bool):
                 # Hugging Face expect the last layer to include the final norm.
                 # Note: We can't index `decoder` with slice because it tries to create a new block sequence instance.
-                output_hidden_states = [layer.module_name + "$" for layer in self.fast_llm_base_model.decoder][:-1] + [
-                    self.fast_llm_base_model.head.heads[0].final_norm.module_name + "$"
-                ]
+                output_hidden_states = (
+                    [self.fast_llm_base_model.embeddings.module_name + "$"]
+                    + [layer.module_name + "$" for layer in self.fast_llm_base_model.decoder][:-1]
+                    + [self.fast_llm_base_model.head.final_norm.module_name + "$"]
+                )
 
             # This needs to be set before preprocessing so it propagates to layers with namespace.
             # kwargs is shallow-copied so changes will propagate back to the main namespace.
@@ -175,3 +178,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         # Propagate to sub-configs if needed.
         model_input.set_children_attributes()
         return model_input
+
+    @functools.cached_property
+    def preprocessing_config(self):
+        return self._fast_llm_model.get_preprocessing_config(PhaseType.inference)

@@ -90,6 +90,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return grad_output
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
+        print("QQQQQQQ", len(kwargs[LanguageModelLossKwargs.labels]), self._prediction_distance - 1)
         return self._prepare_target(
             kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1], kwargs, split_index
         )

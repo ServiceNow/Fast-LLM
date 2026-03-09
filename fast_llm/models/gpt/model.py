@@ -69,14 +69,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                 Assert.empty(kwargs.keys() & extra_kwargs.keys())
                 kwargs.update(extra_kwargs)
             if phase == PhaseType.inference:
-                kwargs[BlockKwargs.output_hidden_states].append(re.compile(r"head\..*logits.*$"))
+                kwargs[BlockKwargs.output_hidden_states].add(re.compile(r"head\..*logits.*$"))
 
             if not model_input.is_meta:
                 for name, reference_model in self._reference_models.items():
                     reference_tokens, reference_kwargs = reference_preprocessed_batches[name][input_index]
                     if name in self._decoder_reference_models:
                         # TODO: Get the actual names
-                        reference_kwargs[BlockKwargs.output_hidden_states].append(
+                        reference_kwargs[BlockKwargs.output_hidden_states].add(
                             re.compile(r"decoder\.\d+\.mixer_output$")
                         )
 
@@ -93,9 +93,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def get_tied_parameters(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
         # TODO: Integrate to the `LayerBase` interface, move to `LanguageModel`, `MultiTokenPrediction`?
-        output_weights = self.head.get_output_weights()
+        output_weights = self.head.get_output_weights() + self.multi_token_prediction.get_output_weights()
         if self._config.tied_embedding_weight:
             output_weights.insert(0, self.embeddings.word_embeddings_weight)
+        # print("WWWWWWWWW", [x.tensor_name for x in output_weights], self.multi_token_prediction.get_output_weights())
         return {output_weights[0].tensor_name: output_weights} if len(output_weights) > 1 else {}
 
     @functools.cached_property
