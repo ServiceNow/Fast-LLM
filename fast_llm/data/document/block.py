@@ -62,17 +62,17 @@ class LengthModelInputPreprocessor:
         model_input.lengths = self.lengths
         model_input.unpadded_length = self.unpadded_length
         model_input.sequence_length = self.sequence_length
-        sequence_data_dim = config.distributed.get_distributed_dim(DistributedDimNames.sequence_data)
+        data_dim = config.distributed.get_distributed_dim(DistributedDimNames.data)
         model_input.token_dim = TensorDim(
             "token",
-            self.length * sequence_data_dim.size,
-            sequence_data_dim,
+            self.length * data_dim.size,
+            data_dim,
         )
         model_input.hidden_token_dim = (
             TensorDim(
                 "token_tp",
-                self.length * sequence_data_dim.size,
-                config.distributed.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
+                self.length * data_dim.size,
+                config.distributed.get_distributed_dim(DistributedDimNames.tensor_and_data),
             )
             if config.distributed.sequence_tensor_parallel
             else model_input.token_dim

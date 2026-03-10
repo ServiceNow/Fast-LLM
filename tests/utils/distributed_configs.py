@@ -47,9 +47,12 @@ _compare_layer_mismatch = copy.deepcopy(_compare_layer_match)
 for tensor in ("fw", "bw"):
     _compare_layer_mismatch.sub_configs[(None, tensor)].ignore_tensors = True
 _pp_tied_weight_compare = copy.deepcopy(_compare_layer_mismatch)
-_z3_accumulation_compare = copy.deepcopy(_compare_layer_mismatch)
-_z3_accumulation_compare.sub_configs[(None, "bias")].ignore_duplicates = True
-_z3_accumulation_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
+_compare_layer_match_duplicate_gradients = copy.deepcopy(_compare_layer_match)
+_compare_layer_match_duplicate_gradients.sub_configs[(None, "bias")].ignore_duplicates = True
+_compare_layer_match_duplicate_gradients.sub_configs[(None, "gradient")].ignore_duplicates = True
+_compare_layer_mismatch_duplicate_gradients = copy.deepcopy(_compare_layer_mismatch)
+_compare_layer_mismatch_duplicate_gradients.sub_configs[(None, "bias")].ignore_duplicates = True
+_compare_layer_mismatch_duplicate_gradients.sub_configs[(None, "gradient")].ignore_duplicates = True
 _pp_tied_weight_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
 _pp_tied_weight_compare.sub_configs[("init", None)].ignore_duplicates = True
 for tensor in ("fw", "bw"):
@@ -101,6 +104,7 @@ _fp16_compare = get_config(
 
 
 # Simple case
+# TODO: ====== Backup attn takes too much memory with 4k tokens.
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
     compare=None,
@@ -214,15 +218,15 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     ),
     # Depth-first micro-batches
     DistributedTestingConfig(
-        name="dp2_z3_df4",
+        name="dp2_z2_df4",
         compare="df8",
         config_args=[
-            "model.multi_stage.zero_stage=3",
+            "model.multi_stage.zero_stage=2",
             "schedule.depth_first_micro_batches=4",
             "data.micro_batch_size=512",
         ],
         num_gpus=2,
-        compare_config=_z3_accumulation_compare,
+        compare_config=_compare_layer_mismatch_duplicate_gradients,
     ),
     # Sequence-data-parallel
     DistributedTestingConfig(
@@ -295,7 +299,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Breadth-first micro-batches
     DistributedTestingConfig(
         name="sdp2_stp2_bf4",
-        compare="dp2_z3_df4",
+        compare="df4",
         config_args=[
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
@@ -309,12 +313,12 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Sequence-data-parallel
     DistributedTestingConfig(
         name="sdp2_stp2",
-        compare="dp2",
+        compare="simple",
         config_args=[
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
-            "data.micro_batch_size=2048",
+            "data.micro_batch_size=4096",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,
@@ -363,7 +367,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Simple
     DistributedTestingConfig(
         name="dp2_pp2s2_bf4",
-        compare="dp2_z3_df4",
+        compare="dp2_z2_df4",
         config_args=[
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
@@ -371,7 +375,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "data.micro_batch_size=512",
         ],
         num_gpus=4,
-        compare_config=_compare_layer_mismatch,
+        compare_config=_compare_layer_match_duplicate_gradients,
     ),
     # ===== 2d configs (Tensor + Pipeline)
     # Simple [mb]
@@ -393,7 +397,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Simple
     DistributedTestingConfig(
         name="dp2_stp2_pp2s2_bf4",
-        compare="dp2_z3_df4",
+        compare="dp2_z2_df4",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
@@ -408,7 +412,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Tied weights on different ranks
     DistributedTestingConfig(
         name="dp2_tp2_pp2s1_bf4",
-        compare="dp2_z3_df4",
+        compare="dp2_z2_df4",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",

@@ -231,6 +231,12 @@ class DistributedConfig(Config):
         desc="Enable CUDA device.",
         hint=FieldHint.expert,
     )
+    force_cpu_initialization: bool = Field(
+        default=False,
+        desc="Initialize on cpu even if cuda is enabled. Useful for matching cpu and cuda runs.",
+        hint=FieldHint.expert,
+    )
+
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
     # TODO: Rename to compute_dtype (not just for training), move elsewhere
     compute_dtype: DataType = Field(

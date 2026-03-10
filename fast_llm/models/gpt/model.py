@@ -96,7 +96,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
         output_weights = self.head.get_output_weights() + self.multi_token_prediction.get_output_weights()
         if self._config.tied_embedding_weight:
             output_weights.insert(0, self.embeddings.word_embeddings_weight)
-        # print("WWWWWWWWW", [x.tensor_name for x in output_weights], self.multi_token_prediction.get_output_weights())
         return {output_weights[0].tensor_name: output_weights} if len(output_weights) > 1 else {}
 
     @functools.cached_property

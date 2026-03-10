@@ -29,7 +29,7 @@ def convert_rotary_real_to_complex(tensor: torch.Tensor, head_size: int, dim: in
     return tensor.unflatten(dim, (-1, 2, div(head_size, 2))).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 
-def rotary_embeddings_complex(tensor: torch.Tensor, rope_frequencies: torch.Tensor) -> torch.Tensor:
+def rotary_embeddings_complex(tensor: torch.Tensor, frequencies: torch.Tensor) -> torch.Tensor:
     """
     Apply rotary embeddings to a tensor:
     * Convert it to a complex, full-precision tensor
@@ -39,24 +39,31 @@ def rotary_embeddings_complex(tensor: torch.Tensor, rope_frequencies: torch.Tens
     # TODO: This could use torch compile, but it doesn't support complex tensors at the moment.
     """
     complex_tensor = torch.view_as_complex(tensor.to(torch.float32).view(*tensor.shape[:-1], -1, 2))
-    return torch.view_as_real(complex_tensor * rope_frequencies).view_as(tensor).type_as(tensor)
+    return torch.view_as_real(complex_tensor * frequencies).view_as(tensor).type_as(tensor)
 
 
 @torch.compile
-def rotary_embeddings_real(tensor: torch.Tensor, rope_frequencies: torch.Tensor) -> torch.Tensor:
+def rotary_embeddings_real(
+    tensor: torch.Tensor, frequencies: torch.Tensor, is_key_value: bool = False
+) -> torch.Tensor:
     """
     Apply rotary embeddings to a tensor.
     """
+    if is_key_value:
+        tensor, value = tensor.chunk(2, dim=-2)
     tensor_re, tensor_im = torch.chunk(tensor, 2, dim=-1)
-    frequencies_re, frequencies_im = torch.chunk(rope_frequencies, 2, dim=-1)
+    frequencies_re, frequencies_im = torch.chunk(frequencies, 2, dim=-1)
 
-    return torch.cat(
+    out = torch.cat(
         [
             tensor_re * frequencies_re - tensor_im * frequencies_im,
             tensor_im * frequencies_re + tensor_re * frequencies_im,
         ],
         dim=-1,
-    )
+    ).to(tensor.dtype)
+    if is_key_value:
+        out = torch.cat([out, value], dim=-2)
+    return out
 
 
 class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module):
@@ -92,18 +99,17 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._create_tensors(kwargs[AttentionKwargs.sequence_length], kwargs[AttentionKwargs.device])
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
-        kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
+        kwargs[AttentionKwargs.rotary_freq] = self._rotary_embedding_frequencies[
             sequence_k - kwargs[AttentionKwargs.token_dim].size : sequence_k
         ]
-        kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:sequence_k]
 
     def forward(
-        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+        self, query: torch.Tensor, key_value: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         rotary_fn = triton_rotary_autograd_ if TritonConfig.enabled(query.device) else rotary_embeddings_real
-        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
-        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
-        return query, key
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq])
+        key_value = rotary_fn(key_value, kwargs[AttentionKwargs.rotary_freq], is_key_value=True)
+        return query, key_value
 
     def _create_tensors(self, sequence_length: int, device: torch.device) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
@@ -227,14 +233,12 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
         frequencies = convert_rotary_complex_to_real(
             torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
         ).contiguous()
-        # TODO: Support different q and k frequencies.
-        kwargs[AttentionKwargs.rotary_freq_q] = frequencies
-        kwargs[AttentionKwargs.rotary_freq_k] = frequencies
+        kwargs[AttentionKwargs.rotary_freq] = frequencies
 
     def forward(
-        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+        self, query: torch.Tensor, key_value: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         rotary_fn = triton_rotary_autograd_ if TritonConfig.enabled(query.device) else rotary_embeddings_real
-        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
-        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
-        return query, key
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq])
+        key_value = rotary_fn(key_value, kwargs[AttentionKwargs.rotary_freq], is_key_value=True)
+        return query, key_value

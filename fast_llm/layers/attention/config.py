@@ -26,8 +26,7 @@ class MixerKwargs(BlockKwargs):
 
 
 class AttentionKwargs(MixerKwargs):
-    rotary_freq_q = "rotary_freq_q"
-    rotary_freq_k = "rotary_freq_k"
+    rotary_freq = "rotary_freq"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
     # TODO: Review these

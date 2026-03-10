@@ -99,10 +99,10 @@ def test_triton_rotary(num_tokens, num_heads, head_size, testing_device):
         2,
     )
 
-    y_triton = triton_rotary_(x, frequencies)
+    triton_rotary_(x, frequencies)
 
     Assert.rms_close(y_real, y_complex, 1e-4)
-    Assert.rms_close(y_real, y_triton, 1e-4)
+    Assert.rms_close(y_real, x, 1e-4)
 
 
 @requires_triton

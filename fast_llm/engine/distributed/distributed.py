@@ -211,8 +211,8 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
         self.pp_generator = torch.Generator(device=self.device)
         self.tp_generator = torch.Generator(device=self.device)
-        self.pp_init_generator = torch.Generator(device=self.device)
-        self.tp_init_generator = torch.Generator(device=self.device)
+        self.pp_init_generator = torch.Generator(device=self.initialization_device)
+        self.tp_init_generator = torch.Generator(device=self.initialization_device)
 
         self._pp_seed = (pp_base_seed + self._config.pp_gen_seed_shift) % MAX_SEED
         self._tp_seed = (tp_base_seed + self._config.tp_gen_seed_shift) % MAX_SEED
@@ -229,8 +229,12 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self.set_step(0, PhaseType.training)
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self._pool.device
+
+    @property
+    def initialization_device(self) -> torch.device:
+        return torch.device("cpu") if self._config.force_cpu_initialization else self.device
 
     def add_group(self, distributed_dim: DistributedDim) -> ProcessGroup | None:
         """

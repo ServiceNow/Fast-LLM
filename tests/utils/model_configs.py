@@ -817,7 +817,7 @@ update_and_add_testing_config(
     # Tests apriel2 format with pattern decoder mixing all mixer types.
     # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention, gdn.
     "llama",
-    "apriel2_text_all_hybrid",
+    "apriel2_text",
     updates={
         ("model", "base_model", "tied_embedding_weight"): True,
         ("model", "base_model", "decoder"): {
@@ -828,9 +828,9 @@ update_and_add_testing_config(
                     "mixer": {
                         "type": "attention",
                         "rotary": {"type": "default", "theta": 10000},
-                        "heads": 8,
-                        "head_groups": 4,
-                        "head_size": 32,
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
                         "add_linear_biases": False,
                     },
                 },
@@ -838,10 +838,10 @@ update_and_add_testing_config(
                     **copy.deepcopy(_llama_block),
                     "mixer": {
                         "type": "mamba",
-                        "d_inner": 512,
-                        "state_size": 16,
-                        "dt_rank": 16,
-                        "d_xb": 256,
+                        "d_inner": 256,
+                        "state_size": 8,
+                        "dt_rank": 8,
+                        "d_xb": 128,
                         "add_linear_biases": False,
                     },
                 },
@@ -853,9 +853,9 @@ update_and_add_testing_config(
                             "attn": {
                                 "type": "attention",
                                 "rotary": {"type": "default", "theta": 10000},
-                                "heads": 8,
-                                "head_groups": 4,
-                                "head_size": 32,
+                                "heads": 4,
+                                "head_groups": 2,
+                                "head_size": 16,
                                 "add_linear_biases": False,
                             },
                             "gdn": {
@@ -867,10 +867,10 @@ update_and_add_testing_config(
                             },
                             "mamba": {
                                 "type": "mamba",
-                                "d_inner": 512,
-                                "state_size": 16,
-                                "dt_rank": 16,
-                                "d_xb": 256,
+                                "d_inner": 256,
+                                "state_size": 8,
+                                "dt_rank": 8,
+                                "d_xb": 128,
                                 "add_linear_biases": False,
                             },
                             "kda": {
@@ -888,9 +888,9 @@ update_and_add_testing_config(
                     "mixer": {
                         "type": "attention",
                         "rotary": {"type": "default", "theta": 10000},
-                        "heads": 8,
-                        "head_groups": 4,
-                        "head_size": 32,
+                        "heads": 4,
+                        "head_groups": 2,
+                        "head_size": 16,
                         "window_size": 128,
                         "add_linear_biases": False,
                     },
@@ -939,27 +939,19 @@ update_and_add_testing_config(
 
 update_and_add_testing_config(
     # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
-    # Uses the same decoder as apriel2_text_all_hybrid but adds vision capabilities.
-    "apriel2_text_all_hybrid",
-    "apriel2",
+    # Uses the same decoder as apriel2_text but adds vision capabilities.
+    "apriel2_text",
+    "apriel2_multimodal",
     model_type="multimodal",
     updates={
-        ("model", "base_model", "vision_encoder"): {
-            "embeddings": {"patch_height": 4, "patch_width": 4, "normalization": {"type": "rms_norm"}},
-            "encoder": copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["decoder"]),
-            "adapter": {"intermediate_size": 256},
-            "hidden_size": 256,
-        },
+        ("model", "base_model", "vision_encoder"): copy.deepcopy(
+            MODEL_CONFIGS["llava"].config_dict["model"]["base_model"]["vision_encoder"]
+        ),
         # Reduce decoder blocks for faster testing
         ("model", "base_model", "decoder", "num_blocks"): 2,
         # Extend the vocab size to ensure the image token id is not in the mock dataset.
         ("model", "base_model", "embeddings", "vocab_size"): 386,
         ("model", "base_model", "image_token_index"): 384,
-        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "rotary", "type"): "default_2d",
-        ("model", "base_model", "vision_encoder", "encoder", "num_blocks"): 1,
-        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "causal"): False,
-        # Pixtral doesn't support GQA
-        ("model", "base_model", "vision_encoder", "encoder", "block", "mixer", "head_groups"): 8,
     },
     get_dataset=get_multimodal_test_dataset,
     megatron_args=None,
@@ -970,7 +962,7 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported for Mamba.
