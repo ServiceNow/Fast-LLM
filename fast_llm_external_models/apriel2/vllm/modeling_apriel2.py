@@ -1830,8 +1830,14 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         conv_state = self_kv_cache[0].transpose(-1, -2)
         ssm_state = self_kv_cache[1]
 
-        # self._debug_tensor("conv_state (from cache)", conv_state)
-        # self._debug_tensor("ssm_state (from cache)", ssm_state)
+        # During FULL CUDA graph capture the dummy batch size can exceed
+        # the number of allocated KV cache blocks (e.g. capture=512 but
+        # only 282 cache lines).  Clamp to avoid out-of-bounds access in
+        # conv1d and recurrent kernels.  At inference time the scheduler
+        # guarantees num_actual_tokens <= cache lines, so this is a no-op.
+        num_cache_lines = conv_state.size(0)
+        if num_actual_tokens > num_cache_lines:
+            num_actual_tokens = num_cache_lines
 
         mixed_qkv = mixed_qkv[:num_actual_tokens]
         b = b[:num_actual_tokens]
@@ -1864,7 +1870,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             ).transpose(0, 1)
         else:
             # self._debug_print("Using causal_conv1d_update (decode path)")
-            mixed_qkv = causal_conv1d_update(
+            causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
                 conv_weights,
@@ -1950,6 +1956,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 print(
                     f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}"
                 )
+            # num_actual_tokens already clamped to cache lines above
+            num_decodes = min(attn_metadata.num_decodes, num_actual_tokens)
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1958,8 +1966,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=ssm_state,
                 inplace_final_state=True,
-                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
-                ssm_state_indices=non_spec_state_indices_tensor,
+                cu_seqlens=non_spec_query_start_loc[: num_decodes + 1],
+                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
                 use_qk_l2norm_in_kernel=True,
             )
             # self._debug_tensor("core_out (from fused_recurrent)", core_out)
@@ -2260,6 +2268,18 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         num_actual_tokens = attn_metadata.num_actual_tokens
         constant_caches = self.kv_cache[forward_context.virtual_engine]
 
+        (conv_state_q, conv_state_k, conv_state_v, recurrent_state) = constant_caches
+        conv_state_q = conv_state_q.transpose(-1, -2)
+        conv_state_k = conv_state_k.transpose(-1, -2)
+        conv_state_v = conv_state_v.transpose(-1, -2)
+
+        # During FULL CUDA graph capture the dummy batch size can exceed
+        # the number of allocated KV cache blocks.  Clamp to avoid
+        # out-of-bounds access.  At inference time this is a no-op.
+        num_cache_lines = conv_state_q.size(0)
+        if num_actual_tokens > num_cache_lines:
+            num_actual_tokens = num_cache_lines
+
         if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
             indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
             unique = {i for i in indices if i >= 0}
@@ -2276,11 +2296,6 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         v_proj_states = v_proj_states[:num_actual_tokens]
         g1 = g1[:num_actual_tokens]
         beta = beta[:num_actual_tokens]
-
-        (conv_state_q, conv_state_k, conv_state_v, recurrent_state) = constant_caches
-        conv_state_q = conv_state_q.transpose(-1, -2)
-        conv_state_k = conv_state_k.transpose(-1, -2)
-        conv_state_v = conv_state_v.transpose(-1, -2)
 
         q_conv_weights = self.q_conv1d.weight.view(self.q_conv1d.weight.size(0), self.q_conv1d.weight.size(2))
         k_conv_weights = self.k_conv1d.weight.view(self.k_conv1d.weight.size(0), self.k_conv1d.weight.size(2))
@@ -2372,6 +2387,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             )
             recurrent_state[non_spec_state_indices_tensor] = last_recurrent_state
         else:
+            num_decodes = min(attn_metadata.num_decodes, num_actual_tokens)
             core_attn_out_non_spec, _ = fused_recurrent_kda(
                 q=q,
                 k=k,
@@ -2380,8 +2396,8 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=recurrent_state,
                 use_qk_l2norm_in_kernel=True,
-                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
-                ssm_state_indices=non_spec_state_indices_tensor,
+                cu_seqlens=non_spec_query_start_loc[: num_decodes + 1],
+                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
             )
         core_attn_out[0, :num_actual_tokens] = core_attn_out_non_spec[0, :num_actual_tokens]
 
