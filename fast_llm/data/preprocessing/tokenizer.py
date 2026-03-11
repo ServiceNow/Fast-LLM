@@ -32,6 +32,11 @@ class TokenizerConfig(PreprocessingConfig):
         desc="BOS token to use if the tokenizer doesn't define one; must be an existing token.",
         hint=FieldHint.core,
     )
+    allow_no_bos: bool = Field(
+        default=False,
+        desc="Allow the tokenizer to not have a BOS token. Set to True for tokenizers without BOS (e.g. Qwen).",
+        hint=FieldHint.core,
+    )
     max_vocab_size: int | None = Field(
         default=None,
         desc="Constrain output tokens to a specific range. Used for testing.",
@@ -63,8 +68,8 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
             self.tokenizer.bos_token = self._config.bos_token
         if self.tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer does not have an EOS token.")
-        if self.tokenizer.bos_token_id is None:
-            raise ValueError("Tokenizer does not have an BOS token.")
+        if self.tokenizer.bos_token_id is None and not self._config.allow_no_bos:
+            raise ValueError("Tokenizer does not have a BOS token. Set allow_no_bos=True to allow this.")
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
 
@@ -89,9 +94,9 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         import torch
 
         tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        if begin:
+        if (begin and self.bod_id is not None):
             tokens.insert(0, self.bod_id)
-        if end:
+        if (end and self.eod_id is not None):
             tokens.append(self.eod_id)
 
         if self._config.max_vocab_size is not None:
@@ -271,10 +276,10 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         # Prepend BOS / append EOS if not already present anywhere in the sequence.
         # We check anywhere (not just first/last) because some chat templates add trailing
         # whitespace after the final EOS token, e.g. "<|im_end|>\n".
-        prepend_bos = begin and self.bod_id not in tokens
-        append_eos = end and self.eod_id not in tokens
+        prepend_bos = begin and self.bod_id is not None and self.bod_id not in tokens
+        append_eos = end and self.eod_id is not None and self.eod_id not in tokens
         tokens = [self.bod_id] * prepend_bos + list(tokens) + [self.eod_id] * append_eos
-        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [False] * append_eos
+        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [True] * append_eos
 
         # Convert boolean train mask to loss masking spans (spans where train_mask[i] == False)
         loss_masking_spans = _train_mask_to_loss_spans(train_mask)
