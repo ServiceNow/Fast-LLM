@@ -74,6 +74,73 @@ if _vllm_version >= (0, 16, 0):
 else:
     from vllm.attention.layer import Attention
 
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: fix vLLM's KV cache group_size for heterogeneous hybrid models
+# ---------------------------------------------------------------------------
+# vLLM's _get_kv_cache_groups_uniform_page_size computes
+#   group_size = min(num_layers_per_type)
+# which was designed for models with simple n:1 repeating patterns (Gemma3,
+# LLaMA4).  For Apriel2 supernets with arbitrary placement ratios (e.g. 12
+# attention + 1 GDN + 11 KDA), min = 1 creates one KV-cache group per layer
+# (24 total).  Each group triggers a metadata rebuild per forward step,
+# causing >2× throughput regression on small models.
+#
+# The fix: use max(num_layers_per_type) as group_size.  This gives at most
+# num_types groups (one per spec type).  Tensor positions without a layer of
+# a given type are simply unused by that type — no memory is wasted because
+# the physical tensor at each position is shared across types.
+def _patch_kv_cache_grouping() -> None:
+    import vllm.v1.core.kv_cache_utils as _kcu
+
+    _original = _kcu._get_kv_cache_groups_uniform_page_size
+
+    def _patched(kv_cache_spec: dict) -> list:
+        from collections import defaultdict
+        from math import ceil as _ceil
+
+        same_type_layers: defaultdict[object, list[str]] = defaultdict(list)
+        for layer_name, layer_spec in kv_cache_spec.items():
+            same_type_layers[layer_spec].append(layer_name)
+
+        min_num = min(len(v) for v in same_type_layers.values())
+        max_num = max(len(v) for v in same_type_layers.values())
+
+        if min_num > 2 or max_num < min_num * 1.25:
+            # Not a singleton/near-singleton case — use original logic.
+            return _original(kv_cache_spec)
+
+        # Singleton / near-singleton type detected.
+        # Use max_num as group_size to produce at most num_types groups.
+        group_size = max_num
+        apriel2_logger.info(
+            "KV cache grouping: using group_size=%d (max) instead of %d "
+            "(min) to avoid O(num_layers) groups with %d spec types",
+            group_size,
+            min_num,
+            len(same_type_layers),
+        )
+
+        grouped_layers = []
+        for layers in same_type_layers.values():
+            num_padding = group_size - len(layers) % group_size
+            if num_padding != group_size:
+                apriel2_logger.info(
+                    "KV cache grouping: %d padding layers for type with " "%d real layers (group_size=%d)",
+                    num_padding,
+                    len(layers),
+                    group_size,
+                )
+            num_groups = _ceil(len(layers) / group_size)
+            for i in range(num_groups):
+                grouped_layers.append(layers[i::num_groups])
+        return _kcu.create_kv_cache_group_specs(kv_cache_spec, grouped_layers)
+
+    _kcu._get_kv_cache_groups_uniform_page_size = _patched
+
+
+_patch_kv_cache_grouping()
+
 # Lazy triton allocator setup - only called when a triton kernel needs scratch memory
 _triton_allocator_installed = False
 
@@ -115,6 +182,9 @@ DEBUG_LM_HEAD = False  # Debug LM head input/output
 # use the GDN metadata builder logging in gdn_attn.py instead (which also reads
 # this env var).
 DEBUG_STATE_INDICES = os.environ.get("APRIEL2_DEBUG_STATE_INDICES", "0") == "1"
+# Sync CUDA before/between GDN kernels to catch the exact source of async
+# illegal-memory-access errors.  Very slow — only for debugging.
+DEBUG_SYNC = os.environ.get("APRIEL2_DEBUG_SYNC", "0") == "1"
 
 # =============================================================================
 # CUDA Graph Modes for Stochastic Mixers
@@ -1018,7 +1088,14 @@ class Apriel2Attention(nn.Module, AttentionLayerBase):
         return loaded
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        """Return cache spec for attention with unified page size for hybrid models."""
+        """Return cache spec for attention with unified page size for hybrid models.
+
+        Returns SlidingWindowSpec for sliding-window layers and FullAttentionSpec
+        for regular attention.  This puts them in separate KV cache groups (and
+        therefore separate FlashInfer metadata builders), which avoids the
+        "Window left is not the same for all layers" error.  The monkey-patched
+        grouping function handles the potential singleton-group degeneration.
+        """
         config = vllm_config.model_config.hf_config
         block_size, _ = get_unified_page_size_for_config(config, vllm_config)
 
@@ -1039,13 +1116,13 @@ class Apriel2Attention(nn.Module, AttentionLayerBase):
                 dtype=kv_cache_dtype,
                 sliding_window=self.window_size,
             )
-        else:
-            return FullAttentionSpec(
-                block_size=block_size,
-                num_kv_heads=self.num_kv_heads,
-                head_size=self.head_dim,
-                dtype=kv_cache_dtype,
-            )
+
+        return FullAttentionSpec(
+            block_size=block_size,
+            num_kv_heads=self.num_kv_heads,
+            head_size=self.head_dim,
+            dtype=kv_cache_dtype,
+        )
 
 
 class Apriel2MambaMixer(nn.Module):
@@ -1279,19 +1356,28 @@ direct_register_custom_op(
     fake_impl=stochastic_mixer_dispatch_fake,
 )
 
-# Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks.
-# Only needed in PIECEWISE mode — in FULL mode the dispatch is transparent to
-# graph capture (the active mixer's kernels get baked into the full graph).
-if not APRIEL2_FULL_CUDA_GRAPHS:
-    try:
-        from vllm.config.compilation import CompilationConfig, CUDAGraphMode
+# Register custom ops as PIECEWISE splitting ops so they cause graph breaks.
+# The Apriel2 GDN op MUST always be registered: even in FULL_AND_PIECEWISE mode,
+# PIECEWISE graphs handle prefill.  Without the graph break, the decode path gets
+# baked into a compiled piece; prefill batches then replay the wrong path →
+# illegal memory access.  The stochastic dispatch op is only needed when
+# FULL graphs are disabled (in FULL mode, the active mixer's kernels get baked
+# into the full graph transparently).
+try:
+    from vllm.config.compilation import CompilationConfig, CUDAGraphMode
 
+    _gdn_op = "vllm::apriel2_gdn_attention_core"
+    if _gdn_op not in CompilationConfig._attention_ops:
+        CompilationConfig._attention_ops.append(_gdn_op)
+        logger.info(f"Added {_gdn_op} to vLLM splitting ops")
+
+    if not APRIEL2_FULL_CUDA_GRAPHS:
         _stochastic_op = "vllm::stochastic_mixer_dispatch"
         if _stochastic_op not in CompilationConfig._attention_ops:
             CompilationConfig._attention_ops.append(_stochastic_op)
             logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
-    except ImportError:
-        logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
+except ImportError:
+    logger.warning("Could not add custom ops to vLLM splitting ops")
 
 
 def _force_piecewise_cudagraph_for_stochastic_mixers():
@@ -1341,7 +1427,7 @@ def fused_gdn_gating_kernel(
     g_ptr,
     beta_ptr,
     num_heads: tl.constexpr,
-    total_elements: tl.constexpr,
+    total_elements,
     BLOCK_SIZE: tl.constexpr,
     SOFTPLUS_THRESHOLD: tl.constexpr,
 ):
@@ -1720,6 +1806,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             device=hidden_states.device,
         )
 
+        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-1] {self.prefix}: pre-custom-op sync OK", flush=True)
+
         torch.ops.vllm.apriel2_gdn_attention_core(
             mixed_qkv,
             b,
@@ -1833,10 +1923,16 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # During FULL CUDA graph capture the dummy batch size can exceed
         # the number of allocated KV cache blocks (e.g. capture=512 but
         # only 282 cache lines).  Clamp to avoid out-of-bounds access in
-        # conv1d and recurrent kernels.  At inference time the scheduler
-        # guarantees num_actual_tokens <= cache lines, so this is a no-op.
+        # conv1d and recurrent kernels.
+        # IMPORTANT: Only clamp during CUDA graph capture.  During normal
+        # inference, num_actual_tokens is the number of *tokens* in the
+        # batch, which can exceed num_blocks (= number of *state slots*)
+        # during prefill (many tokens share the same state slot).
+        # Clamping during prefill would truncate the input and cause the
+        # conv1d/recurrent kernels to read out-of-bounds via cache_indices
+        # that still reference the full batch.
         num_cache_lines = conv_state.size(0)
-        if num_actual_tokens > num_cache_lines:
+        if cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
             num_actual_tokens = num_cache_lines
 
         mixed_qkv = mixed_qkv[:num_actual_tokens]
@@ -1857,6 +1953,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             # self._debug_print("Using causal_conv1d_fn (prefill path)")
             mixed_qkv_T = mixed_qkv.transpose(0, 1)
             # self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
+
             mixed_qkv = causal_conv1d_fn(
                 mixed_qkv_T,
                 conv_weights,
@@ -1868,6 +1965,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 query_start_loc=non_spec_query_start_loc,
                 metadata=attn_metadata,
             ).transpose(0, 1)
+            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+                torch.cuda.synchronize()
+                print(f"[SYNC-2] {self.prefix}: post-causal_conv1d_fn sync OK", flush=True)
         else:
             # self._debug_print("Using causal_conv1d_update (decode path)")
             causal_conv1d_update(
@@ -1899,13 +1999,33 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         # self._debug_tensor("A_log", self.A_log)
         # self._debug_tensor("dt_bias", self.dt_bias)
+
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
+        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-3] {self.prefix}: post-fused_gdn_gating sync OK", flush=True)
         # self._debug_tensor("g (from gating)", g)
         # self._debug_tensor("beta (from gating)", beta)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
             # self._debug_print("Using chunk_gated_delta_rule (prefill)")
+            # Bounds check + diagnostics (sync-3 already caught async errors)
+            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+                max_idx = non_spec_state_indices_tensor.max().item()
+                print(
+                    f"[SYNC-4] {self.prefix}: prefill ssm_state.shape={ssm_state.shape}, "
+                    f"indices={non_spec_state_indices_tensor.tolist()}, "
+                    f"max_idx={max_idx}, num_cache_lines={num_cache_lines}, "
+                    f"has_initial_state={has_initial_state.tolist()}, "
+                    f"num_prefills={attn_metadata.num_prefills}",
+                    flush=True,
+                )
+                if max_idx >= ssm_state.shape[0]:
+                    print(
+                        f"[OOB] {self.prefix}: max_idx={max_idx} >= ssm_state.shape[0]={ssm_state.shape[0]}!",
+                        flush=True,
+                    )
             initial_state = ssm_state[non_spec_state_indices_tensor].contiguous()
             initial_state[~has_initial_state, ...] = 0
             # self._debug_tensor("initial_state", initial_state)
@@ -1935,6 +2055,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
+            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+                torch.cuda.synchronize()
+                print(f"[SYNC-5] {self.prefix}: post-chunk_gated_delta_rule sync OK", flush=True)
             # self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
             # self._debug_tensor("last_state", last_state)
             # # Debug prefill state - get seq_len from query_start_loc
@@ -2231,6 +2354,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
+        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-6] {self.prefix}: pre-kda_attention sync OK", flush=True)
+
         torch.ops.vllm.kda_attention(
             q,
             k,
@@ -2275,9 +2402,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
 
         # During FULL CUDA graph capture the dummy batch size can exceed
         # the number of allocated KV cache blocks.  Clamp to avoid
-        # out-of-bounds access.  At inference time this is a no-op.
+        # out-of-bounds access.
+        # IMPORTANT: Only clamp during CUDA graph capture — see GDN comment.
         num_cache_lines = conv_state_q.size(0)
-        if num_actual_tokens > num_cache_lines:
+        if cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
             num_actual_tokens = num_cache_lines
 
         if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
