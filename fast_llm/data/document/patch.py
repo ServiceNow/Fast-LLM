@@ -95,9 +95,10 @@ class PatchBatch(Batch, PatchDocument):
                 positions=self.positions[begin:end],
                 namespace=config.namespace,
             )
-            pad_size = 0
             unpadded_length = end - begin
-
+            lengths = [end - begin]
+            sequence_k_past = begin
+            first_document_begin = begin
         else:
             # Here `begin` and `end` refer to token rather than patch positions,
             # so we build a filter from the token map to get the corresponding patch positions.
@@ -120,34 +121,51 @@ class PatchBatch(Batch, PatchDocument):
                 namespace=config.namespace,
             )
 
-        patch_begin = 0
-        lengths = []
-        for length in self.lengths:
-            patch_end = patch_begin + length
-            filtered_length = end - begin if is_meta else patch_filter[patch_begin:patch_end].sum().item()
-            if filtered_length > 0:
-                if not lengths:
-                    sequence_k_past = patch_end - filtered_length
-                    first_document_begin = patch_begin
-                lengths.append(filtered_length)
-            if patch_end >= end:
-                break
-            elif len(lengths) > 1:
-                # We assume the token map is ordered, so only the first and last patch may be cropped.
-                Assert.eq(filtered_length, length)
-            patch_begin = patch_end
+            patch_begin = 0
+            # We assume the token map is ordered, so only the first and last patch may be cropped.
+            done = False
+            lengths = []
+            for length in self.lengths:
+                patch_end = patch_begin + length
+                document_patch_filter = patch_filter[patch_begin:patch_end]
+                filtered_length = document_patch_filter.sum().item()
+                if filtered_length > 0:
+                    assert not done
+                    filtered = document_patch_filter.nonzero()
+                    filter_begin = filtered[0].item()
+                    filter_end = filtered[-1].item() + 1
+                    Assert.eq(filtered_length, filter_end - filter_begin)
+                    if filter_begin > 0:
+                        # Only the first patch may be cropped at the beginning.
+                        assert not lengths
+                    if filter_end < length:
+                        # TODO: Support non-causal cropping (needs to know about the future too).
+                        assert not config.causal
+                        # Last patch is cropped at the end, future patches should be completely cropped.
+                        done = True
+                    if not lengths:
+                        sequence_k_past = patch_begin + filter_begin
+                        first_document_begin = patch_begin
+                    lengths.append(filtered_length)
 
-        if pad_size > 0:
-            lengths.append(pad_size)
+                elif lengths:
+                    # Last patch already seen, mark as done.
+                    done = True
+
+                patch_begin = patch_end
+
+            if pad_size > 0:
+                lengths.append(pad_size)
 
         LengthModelInputPreprocessor(
             lengths=lengths,
             sequence_k_past=sequence_k_past,
             first_document_begin=first_document_begin,
-            last_document_end=patch_end + pad_size,
+            # TODO:
+            last_document_end=end,
             device=self.patches.device,
             unpadded_length=unpadded_length,
-            sequence_length=len(self.patches),
+            sequence_length=len(model_input.patches),
         ).preprocess(model_input, config)
 
         if is_meta:

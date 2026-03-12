@@ -683,8 +683,7 @@ update_and_add_testing_config(
     },
     compare_factor=6.0,
     # Micro-sequence split and sequence-first not supported.
-    # TODO: Gradient accumulation works but comparison is broken.
-    skip_tests=("sdp", "ms", GRAD_ACC),
+    skip_tests=("sdp", "ms"),
     auto_model_class=transformers.AutoModelForImageTextToText,
 )
 
@@ -701,6 +700,7 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        # Same as llama
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=10.0,  # High diff for fp16 and bf16 due to rms_norm_gated from fla
@@ -773,7 +773,8 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        # Tested through apriel2_hybrid.
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=10.0,  # High diff for fp16 and bf16 due to rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
@@ -811,7 +812,8 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        # Tested through apriel2_hybrid.
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=15.0,  # similar to gdn with compare_factor 2 fails fp16 and bf16 tests in the normalization layer when using rms_norm_gated from fla
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
@@ -906,7 +908,7 @@ update_and_add_testing_config(
 update_and_add_testing_config(
     # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
     # Uses the same decoder as apriel2_text but adds vision capabilities.
-    "apriel2_attn",
+    "llava",
     "apriel2_multimodal",
     model_type="multimodal",
     updates={
@@ -926,6 +928,7 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        # Same as llava.
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
     compare_factor=6.0,
