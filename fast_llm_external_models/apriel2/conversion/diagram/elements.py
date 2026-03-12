@@ -9,9 +9,10 @@ All render methods are generators yielding svg.Element.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, assert_never
+from typing import Any, Literal, assert_never
 
 import svg as S
 
@@ -54,6 +55,7 @@ class Box:
     w: float | None = None
     h: float | None = None
     bold: bool = False
+    fill: str | None = None
 
     def measure(self, th: Theme) -> Size:
         w = self.w or th.geo.inner_w
@@ -67,10 +69,13 @@ class Box:
             "box-embedding", "box-activation", "box-transparent",
         )
         shadow_cls = "box-shadow-muted" if is_muted else "box-shadow"
+        main_kwargs: dict[str, Any] = dict(x=bb.x, y=bb.y, width=bb.w, height=bb.h, rx=th.geo.rx)
+        if self.fill is not None:
+            main_kwargs["fill"] = self.fill
         els: list[S.Element] = [
             S.Rect(x=bb.x + 3, y=bb.y + 3, width=bb.w, height=bb.h,
                    rx=th.geo.rx, class_=[shadow_cls]),
-            S.Rect(x=bb.x, y=bb.y, width=bb.w, height=bb.h, rx=th.geo.rx),
+            S.Rect(**main_kwargs),
             S.Rect(x=bb.x + 2, y=bb.y + 1, width=bb.w - 4, height=6,
                    rx=5, class_=["box-sheen"]),
             S.Text(x=bb.cx, y=bb.cy, text=self.label, class_=txt_cls),
@@ -210,14 +215,52 @@ class ValueLabel:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def defs(th: Theme) -> S.Defs:
-    """Dot-grid background pattern."""
+def _make_stripe_pattern(mixer_types: list[str], th: Theme, pattern_id: str) -> S.Pattern:
+    """Create a diagonal stripe pattern with one stripe per mixer type."""
+    stripe_w = 8
+    colors = [th.pal.mixer(mt)[0] for mt in mixer_types]
+    total_w = len(colors) * stripe_w
+    rects = [
+        S.Rect(x=i * stripe_w, y=0, width=stripe_w, height=1, fill=c)
+        for i, c in enumerate(colors)
+    ]
+    return S.Pattern(
+        id=pattern_id, width=total_w, height=1,
+        patternUnits="userSpaceOnUse",
+        patternTransform="rotate(-55)",
+        elements=rects,
+    )
+
+
+def defs(th: Theme, arch: ArchitectureModel | None = None) -> S.Defs:
+    """Dot-grid background pattern and super-mixer stripe pattern.
+
+    The stripe pattern uses only the mixer types actually present across
+    all stochastic specs in *arch* (union). Falls back to the four
+    canonical types when *arch* is not provided.
+    """
+    # Collect union of all mixer types from stochastic specs
+    if arch is not None:
+        mixer_types: list[str] = []
+        seen: set[str] = set()
+        for _, spec in arch.unique_block_specs:
+            if isinstance(spec.mixer, StochasticMixerSpec):
+                for _, sub_mixer in spec.mixer.sub_mixers:
+                    if sub_mixer.mixer_type not in seen:
+                        seen.add(sub_mixer.mixer_type)
+                        mixer_types.append(sub_mixer.mixer_type)
+        if not mixer_types:
+            mixer_types = ["attention", "gdn", "kda", "mamba"]
+    else:
+        mixer_types = ["attention", "gdn", "kda", "mamba"]
+
     return S.Defs(elements=[
         S.Pattern(
             id="dotgrid", width=20, height=20,
             patternUnits="userSpaceOnUse",
             elements=[S.Circle(cx=10, cy=10, r=0.8, fill="#d4cfc8", opacity=0.5)],
         ),
+        _make_stripe_pattern(mixer_types, th, "super-mixer-stripes"),
     ])
 
 
@@ -248,6 +291,23 @@ def _arrow_left(x: float, y: float, sz: float = 4) -> S.Path:
         d=[S.MoveTo(x + sz, y - sz), S.LineTo(x, y), S.LineTo(x + sz, y + sz)],
         class_=["arrow"],
     )
+
+
+def _arrow_right(x: float, y: float, sz: float = 4) -> S.Path:
+    """Right-pointing arrowhead tip at (x, y): a small V opening leftward."""
+    return S.Path(
+        d=[S.MoveTo(x - sz, y - sz), S.LineTo(x, y), S.LineTo(x - sz, y + sz)],
+        class_=["arrow"],
+    )
+
+
+def _offset_from_circle(cx: float, cy: float, tx: float, ty: float, r: float) -> tuple[float, float]:
+    """Point on circle (cx,cy,r) in the direction of (tx,ty)."""
+    dx, dy = tx - cx, ty - cy
+    d = math.hypot(dx, dy)
+    if d < 1e-6:
+        return cx, cy - r  # degenerate: default to upward
+    return cx + r * dx / d, cy + r * dy / d
 
 
 def connector_bezier(x1: float, y1: float, x2: float, y2: float) -> S.Path:
@@ -283,7 +343,7 @@ def _mixer_short_name(spec: BlockSpec) -> str:
     """Derive a short display label for a block spec's mixer type."""
     mixer = spec.mixer
     if isinstance(mixer, StochasticMixerSpec):
-        return "stochastic"
+        return "Super"
     return {
         "attention": "attn",
         "sliding_window": "SWA",
@@ -440,7 +500,13 @@ class ArchitectureOverview:
         # ── Decoder cells inside frame ──────────────────────────────
         y = content_bb.y
         for i, item in enumerate(dec_items):
-            bx = Box(item.label, item.css, w=box_w, h=cell_h)
+            fill = None
+            if item.spec is not None and isinstance(item.spec.mixer, StochasticMixerSpec):
+                mixer_types = [m.mixer_type for _, m in item.spec.mixer.sub_mixers]
+                pattern_id = "overview-stripes-" + "-".join(mixer_types)
+                yield S.Defs(elements=[_make_stripe_pattern(mixer_types, th, pattern_id)])
+                fill = f"url(#{pattern_id})"
+            bx = Box(item.label, item.css, w=box_w, h=cell_h, fill=fill)
             yield from bx.render(BBox(box_x, y, box_w, cell_h), th)
 
             # Upward flow arrow between decoder cells
@@ -576,7 +642,13 @@ class VisionEncoderColumn:
 
         y = bb.y
         for i, item in enumerate(items):
-            bx = Box(item.label, item.css, w=box_w, h=cell_h)
+            fill = None
+            if item.spec is not None and isinstance(item.spec.mixer, StochasticMixerSpec):
+                mixer_types = [m.mixer_type for _, m in item.spec.mixer.sub_mixers]
+                pattern_id = "vision-overview-stripes-" + "-".join(mixer_types)
+                yield S.Defs(elements=[_make_stripe_pattern(mixer_types, th, pattern_id)])
+                fill = f"url(#{pattern_id})"
+            bx = Box(item.label, item.css, w=box_w, h=cell_h, fill=fill)
             yield from bx.render(BBox(bb.x, y, box_w, cell_h), th)
 
             # Upward flow line between cells
@@ -611,7 +683,7 @@ class VisionEncoderColumn:
 def _mixer_box(mixer: MixerSpec | StochasticMixerSpec, th: Theme) -> Box:
     """Create the correct Box for a mixer spec."""
     if isinstance(mixer, StochasticMixerSpec):
-        return Box("Stochastic Mixer", "box-stochastic", bold=True)
+        return Box("Super Mixer", "box-stochastic", bold=True)
 
     css_map = {
         "attention": "box-attention",
@@ -722,7 +794,13 @@ class DecoderBlock:
         cur_y += sr * 2 + g
 
         # ── Mixer ─────────────────────────────────────────────────
-        mixer = _mixer_box(self.mixer, th)
+        if isinstance(self.mixer, StochasticMixerSpec):
+            mixer_types = [m.mixer_type for _, m in self.mixer.sub_mixers]
+            pattern_id = "block-stripes-" + "-".join(mixer_types)
+            elements.append(S.Defs(elements=[_make_stripe_pattern(mixer_types, th, pattern_id)]))
+            mixer = Box("Super Mixer", "box-stochastic", bold=True, fill=f"url(#{pattern_id})")
+        else:
+            mixer = _mixer_box(self.mixer, th)
         msz = mixer.measure(th)
         mixer_bb = BBox(ix, cur_y, iw, msz.h)
         _collect(mixer.render(mixer_bb, th))
@@ -822,6 +900,7 @@ class DecoderBlock:
 def _render_detail_frame(
     x: float, y: float, w: float, h: float,
     title: str, css: str, th: Theme,
+    title_fill: str | None = None,
 ) -> tuple[S.G, BBox]:
     """Titled outer box: colored title strip + white content area.
 
@@ -838,7 +917,7 @@ def _render_detail_frame(
             S.Rect(x=x, y=y, width=w, height=h, rx=rx, class_=["detail-content"]),
         ]), content_bb
     # Title strip: rounded top corners, square bottom
-    title_path = S.Path(
+    title_path_kwargs: dict = dict(
         d=[
             S.MoveTo(x, y + title_h),
             S.LineTo(x, y + rx),
@@ -850,6 +929,9 @@ def _render_detail_frame(
         ],
         class_=["detail-title"],
     )
+    if title_fill is not None:
+        title_path_kwargs["fill"] = title_fill
+    title_path = S.Path(**title_path_kwargs)
     # Content area: square top, rounded bottom corners
     content_path = S.Path(
         d=[
@@ -1026,6 +1108,7 @@ class DetailEnvelope:
 
     def render_envelope(
         self, bb: BBox, content_w: float, content_h: float, th: Theme,
+        title_fill: str | None = None,
     ) -> EnvelopeResult:
         """Compute positions and create the frame. Returns EnvelopeResult for phased rendering."""
         g = th.geo.gap
@@ -1041,7 +1124,7 @@ class DetailEnvelope:
         frame_bb = BBox(frame_x, frame_y, frame_w, frame_h)
         frame_group, content_bb = _render_detail_frame(
             frame_x, frame_y, frame_w, frame_h,
-            self.title, self.css, th,
+            self.title, self.css, th, title_fill=title_fill,
         )
 
         cx = content_bb.cx
@@ -2274,34 +2357,244 @@ def _mixer_spec_css(mixer: MixerSpec) -> str:
 
 
 @dataclass
-class StochasticMixerPanel:
-    """Stochastic mixer dispatch breakdown showing sub-mixer options."""
+class SPNTSwitch:
+    """Circuit-breaker / SPNT switch schematic.
 
-    spec: StochasticMixerSpec
+    Bottom-to-top flow::
+
+        ─── "hidden states" output ───
+                │
+                ● junction dot (merge point)
+               ╱│╲
+              │ │ │ │       wires converge (fan-in)
+            [Attn] │ │      ← staggered mixer boxes
+              │[GDN] │
+              │  │[KDA]
+              │  │  │
+              ○  ○  ●  ○   ← contact points (open=○, closed=●)
+                 ╲          ← arm thrown to selected contact
+                  ╲
+      placement[i] → ● pivot (relay pole)
+                │
+        ─── "hidden states" input ───
+    """
+
+    sub_mixers: tuple[tuple[str, MixerSpec], ...]
+    main_mixer_name: str
     w: float | None = None
+
+    # Layout constants
+    _DOT_R: float = 4.0        # Radius for both pivot and junction dots
+    _ARM_H: float = 30.0       # Vertical arm: pivot→contacts AND box-tops→junction
+    _CONTACT_R: float = 4.0
+    _BOX_W: float = 92.0
+    _ARM_WIDTH: float = 2.5
+    _CONTROL_LABEL_GAP: float = 8.0
+    _COL_SPACING: float = 55.0
+
+    def _n(self) -> int:
+        return len(self.sub_mixers)
+
+    def _content_w(self, th: Theme) -> float:
+        """Content width of mixer boxes (envelope adds g padding)."""
+        n = self._n()
+        w = max(0, n - 1) * self._COL_SPACING + self._BOX_W
+        if self.w is not None:
+            w = max(w, self.w)
+        return w
 
     def _box_h(self, th: Theme) -> float:
         return th.geo.box_h
 
-    def _inner_gap(self) -> float:
-        return 8.0
+    def _stagger_step(self, th: Theme) -> float:
+        """Vertical offset between zig-zag rows."""
+        return self._box_h(th) + th.geo.gap
+
+    def _stagger_h(self, th: Theme) -> float:
+        """Total height of staggered mixer box region."""
+        n = self._n()
+        bh = self._box_h(th)
+        if n <= 1:
+            return bh
+        # Zig-zag: two rows (top and bottom)
+        return bh + self._stagger_step(th)
+
+    def measure(self, th: Theme) -> Size:
+        g = th.geo.gap
+        content_h = (
+            self._DOT_R           # pivot (bottom half hangs at bb.bottom)
+            + self._ARM_H         # pivot center → contact center
+            + self._CONTACT_R + g # contact top → lowest box bottom
+            + self._stagger_h(th) # mixer boxes
+            + g                   # gap between box tops and fan-in turn
+            + self._ARM_H         # highest box top → junction center
+            + self._DOT_R         # junction (top half at bb.y)
+        )
+        return Size(self._content_w(th), content_h)
+
+    def _col_xs(self, bb: BBox, th: Theme) -> list[float]:
+        """X center for each mixer column (bb already inset by g)."""
+        n = self._n()
+        start_x = bb.x + self._BOX_W / 2
+        return [start_x + i * self._COL_SPACING for i in range(n)]
+
+    def _main_index(self) -> int:
+        for i, (name, _) in enumerate(self.sub_mixers):
+            if name == self.main_mixer_name:
+                return i
+        return 0
+
+    def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
+        bh = self._box_h(th)
+        g = th.geo.gap
+        col_xs = self._col_xs(bb, th)
+        pal = th.pal
+        stagger_step = self._stagger_step(th)
+
+        # ── Vertical zones (bottom-to-top within bb, symmetric) ──
+        pivot_y = bb.bottom - self._DOT_R                        # pivot center
+        contact_y = pivot_y - self._ARM_H                        # contact row center
+        stagger_base_y = contact_y - self._CONTACT_R - g - self._stagger_h(th)  # top of staggered boxes
+        junction_y = bb.y + self._DOT_R                          # junction center
+        turn_y = stagger_base_y - g  # fan-in turning point (g above top-row boxes)
+
+        pivot_cx = bb.cx
+        main_idx = self._main_index()
+
+        # ── Compute mixer box positions ──────────────
+        mixer_bbs: list[BBox] = []
+        half_box_w = self._BOX_W / 2
+        for i, (name, mixer) in enumerate(self.sub_mixers):
+            cx = col_xs[i]
+            box_top = stagger_base_y + (i % 2) * stagger_step
+            box_bb = BBox(cx - half_box_w, box_top, self._BOX_W, bh)
+            mixer_bbs.append(box_bb)
+
+        # ── 1. Wires (behind everything) ─────────────
+
+        # Switching arm (angled line to closed contact)
+        closed_x = col_xs[main_idx]
+        arm_x1, arm_y1 = _offset_from_circle(pivot_cx, pivot_y, closed_x, contact_y, self._DOT_R)
+        yield S.Line(
+            x1=arm_x1, y1=arm_y1,
+            x2=closed_x, y2=contact_y,
+            stroke=pal.wire, stroke_width=self._ARM_WIDTH,
+            class_=["arrow"],
+        )
+
+        # Contact-to-box vertical wires
+        for i, (name, mixer) in enumerate(self.sub_mixers):
+            cx = col_xs[i]
+            yield S.Line(
+                x1=cx, y1=contact_y - self._CONTACT_R,
+                x2=cx, y2=mixer_bbs[i].bottom,
+                class_=["arrow"],
+            )
+
+        # Fan-in polylines from box tops to junction
+        for i, mbb in enumerate(mixer_bbs):
+            cx = col_xs[i]
+            jx, jy = _offset_from_circle(bb.cx, junction_y, cx, turn_y, self._DOT_R)
+            if mbb.y > turn_y + 1:
+                # Continuous polyline: vertical + diagonal
+                yield S.Path(
+                    d=[S.MoveTo(cx, mbb.y), S.LineTo(cx, turn_y), S.LineTo(jx, jy)],
+                    class_=["arrow"],
+                )
+            else:
+                # Single diagonal (top-row box, only g of vertical)
+                yield S.Line(
+                    x1=cx, y1=turn_y,
+                    x2=jx, y2=jy,
+                    class_=["arrow"],
+                )
+
+        # ── 2. Pivot dot ────────────────────────────
+        yield S.Circle(
+            cx=pivot_cx, cy=pivot_y, r=self._DOT_R,
+            fill=pal.wire, class_=["arrow"],
+        )
+
+        # ── 3. Contact circles ──────────────────────
+        for i, (name, mixer) in enumerate(self.sub_mixers):
+            cx = col_xs[i]
+            fill_col, _ = pal.mixer(mixer.mixer_type)
+            if name == self.main_mixer_name:
+                yield S.Circle(cx=cx, cy=contact_y, r=self._CONTACT_R,
+                               fill=fill_col, stroke=pal.wire, stroke_width=1.2)
+            else:
+                yield S.Circle(cx=cx, cy=contact_y, r=self._CONTACT_R,
+                               fill="none", stroke=pal.wire, stroke_width=1.2)
+
+        # ── 4. Mixer boxes (on top of wires) ────────
+        for i, (name, mixer) in enumerate(self.sub_mixers):
+            css = _mixer_spec_css(mixer)
+            label = name
+            if name == self.main_mixer_name:
+                label += " \u2605"
+            box = Box(label, css, w=self._BOX_W, h=bh, bold=True)
+            yield from box.render(mixer_bbs[i], th)
+
+        # ── 5. Junction dot (on top of fan-in) ──────
+        yield S.Circle(
+            cx=bb.cx, cy=junction_y, r=self._DOT_R,
+            fill=pal.detail_bg, stroke=pal.wire, stroke_width=1.2,
+            class_=["arrow"],
+        )
+
+
+    def mixer_bboxes(self, bb: BBox, th: Theme) -> list[tuple[BBox, MixerSpec]]:
+        """Return (bbox, MixerSpec) for each staggered mixer box."""
+        bh = self._box_h(th)
+        g = th.geo.gap
+        col_xs = self._col_xs(bb, th)
+        half_box_w = self._BOX_W / 2
+        stagger_step = self._stagger_step(th)
+
+        pivot_y = bb.bottom - self._DOT_R
+        contact_y = pivot_y - self._ARM_H
+        stagger_base_y = contact_y - self._CONTACT_R - g - self._stagger_h(th)
+
+        result: list[tuple[BBox, MixerSpec]] = []
+        for i, (_, mixer) in enumerate(self.sub_mixers):
+            cx = col_xs[i]
+            box_top = stagger_base_y + (i % 2) * stagger_step
+            box_bb = BBox(cx - half_box_w, box_top, self._BOX_W, bh)
+            result.append((box_bb, mixer))
+        return result
+
+
+@dataclass
+class StochasticMixerPanel:
+    """Super Mixer detail panel with SPNT switch schematic."""
+
+    spec: StochasticMixerSpec
+    w: float | None = None
 
     def _envelope(self) -> DetailEnvelope:
         return DetailEnvelope(
-            "Stochastic mixer dispatch", "detail-stochastic",
+            "Super Mixer", "detail-stochastic",
             output_labels=[ExternalLabel("hidden states")],
             input_labels=[ExternalLabel("hidden states")],
         )
 
+    def _switch(self) -> SPNTSwitch:
+        return SPNTSwitch(
+            sub_mixers=self.spec.sub_mixers,
+            main_mixer_name=self.spec.main_mixer_name,
+        )
+
     def _content_size(self, th: Theme) -> tuple[float, float]:
-        """Return (content_w, content_h) for the sub-mixer boxes."""
-        w = self.w or th.geo.stack_w
+        """Return (content_w, content_h) for the SPNT switch + placement label."""
         g = th.geo.gap
-        bh = self._box_h(th)
-        gap = self._inner_gap()
-        n = len(self.spec.sub_mixers)
-        content_h = n * bh + max(0, n - 1) * gap
-        content_w = w - 2 * g
+        switch = self._switch()
+        switch_sz = switch.measure(th)
+        vl = ValueLabel("placement")
+        vl_sz = vl.measure(th)
+        # Label starts 2g from pivot dot's right edge (pivot is at switch center)
+        label_right = switch_sz.w / 2 + switch._DOT_R + 2 * g + vl_sz.w
+        content_w = max(switch_sz.w, label_right)
+        content_h = switch_sz.h
         return content_w, content_h
 
     def measure(self, th: Theme) -> Size:
@@ -2309,30 +2602,61 @@ class StochasticMixerPanel:
         return self._envelope().measure_envelope(content_w, content_h, th)
 
     def render(self, bb: BBox, th: Theme) -> Iterator[S.Element]:
-        bh = self._box_h(th)
-        gap = self._inner_gap()
         content_w, content_h = self._content_size(th)
 
+        # Per-spec stripe pattern using only this panel's sub-mixer types
+        mixer_types = [m.mixer_type for _, m in self.spec.sub_mixers]
+        pattern_id = "super-stripes-" + "-".join(mixer_types)
+        yield S.Defs(elements=[_make_stripe_pattern(mixer_types, th, pattern_id)])
+
         envelope = self._envelope()
-        env = envelope.render_envelope(bb, content_w, content_h, th)
+        env = envelope.render_envelope(
+            bb, content_w, content_h, th,
+            title_fill=f"url(#{pattern_id})",
+        )
+
+        g = th.geo.gap
+        switch = self._switch()
+        switch_sz = switch.measure(th)
+
+        # Spine x aligned with switch center, not full content center
+        spine_x = env.content_bb.x + switch_sz.w / 2
+        env.spine_cx = spine_x  # override so phase3/phase4 labels align with switch center
 
         yield from env.phase1_behind_title()
         yield from env.phase2_frame()
+        # Top g-long line: content_bb.y → title_bottom (inside frame padding)
+        yield S.Line(x1=spine_x, y1=env.content_bb.y, x2=spine_x, y2=env.content_bb.y - g, class_=["arrow"])
         yield from env.phase3_exit_arrow_and_output_labels()
 
-        # Sub-mixer boxes
-        inner_w = env.content_bb.w
-        box_y = env.content_bb.y
-        for name, sub_mixer in self.spec.sub_mixers:
-            css = _mixer_spec_css(sub_mixer)
-            label = name
-            if name == self.spec.main_mixer_name:
-                label += " \u2605"
-            box = Box(label, css, w=inner_w, h=bh)
-            box_bb = BBox(env.content_bb.x, box_y, inner_w, bh)
-            yield from box.render(box_bb, th)
-            box_y += bh + gap
+        # Render SPNT switch inside content area (left portion)
+        switch_bb = BBox(env.content_bb.x, env.content_bb.y, switch_sz.w, env.content_bb.h)
 
+        # Compute pivot and label positions (needed for arrow drawn behind)
+        pivot_y = switch_bb.bottom - switch._DOT_R
+        pivot_cx = switch_bb.cx
+        vl = ValueLabel("placement")
+        vl_sz = vl.measure(th)
+        vl_x = pivot_cx + switch._DOT_R + 2 * g
+        vl_y = pivot_y - vl_sz.h / 2
+
+        # Arrow line + arrowhead FIRST (behind pivot dot and label)
+        dot_edge_x = pivot_cx + switch._DOT_R
+        yield S.Line(
+            x1=vl_x, y1=pivot_y,
+            x2=dot_edge_x, y2=pivot_y,
+            class_=["arrow"],
+        )
+        yield _arrow_left(dot_edge_x, pivot_y, sz=3)
+
+        # Switch (pivot dot) on top of arrow
+        yield from switch.render(switch_bb, th)
+
+        # Placement label on top of arrow
+        yield from vl.render(BBox(vl_x, vl_y, vl_sz.w, vl_sz.h), th)
+
+        # Bottom g-long line: content_bb.bottom → frame_bottom (inside frame padding)
+        yield S.Line(x1=spine_x, y1=env.content_bb.bottom, x2=spine_x, y2=env.frame_bb.bottom, class_=["arrow"])
         # Entry arrow + input labels
         yield from env.phase4_entry_arrow_and_input_labels()
 
@@ -2340,17 +2664,16 @@ class StochasticMixerPanel:
         """Return (bbox, MixerSpec) for each sub-mixer box."""
         g = th.geo.gap
         title_h = th.geo.title_h
-        bh = self._box_h(th)
-        gap = self._inner_gap()
-        inner_w = bb.w - 2 * g
         output_area_h = self._envelope()._output_area_h(th)
 
-        result: list[tuple[BBox, MixerSpec]] = []
-        box_y = bb.y + output_area_h + title_h + g
-        for _name, sub_mixer in self.spec.sub_mixers:
-            result.append((BBox(bb.x + g, box_y, inner_w, bh), sub_mixer))
-            box_y += bh + gap
-        return result
+        # Reconstruct content_bb as the envelope would
+        content_bb = BBox(
+            bb.x + g,
+            bb.y + output_area_h + title_h + g,
+            bb.w - 2 * g,
+            bb.h - output_area_h - self._envelope()._input_area_h(th) - title_h - 2 * g,
+        )
+        return self._switch().mixer_bboxes(content_bb, th)
 
 
 def detail_for_mixer(mixer: MixerSpec) -> AttentionDetail | GDNDetail | KDADetail | MambaDetail | None:

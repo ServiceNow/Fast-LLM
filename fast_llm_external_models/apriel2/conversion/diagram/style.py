@@ -209,7 +209,7 @@ text.mono {{ font-family: {mono}; }}
 .box-gate      {{ fill: {gate}; stroke: {gate_t}; stroke-width: 2.2; }}
 .box-gate > text {{ fill: {gate_t}; stroke: none; }}
 .box-stochastic {{
-  fill: {stoch}; stroke: {stoch_t}; stroke-dasharray: 6 3;
+  fill: url(#super-mixer-stripes); stroke: {stoch_t}; stroke-width: 2.2;
 }}
 .box-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
 
@@ -237,7 +237,7 @@ text.mono {{ font-family: {mono}; }}
 .detail-mamba {{ fill: {mamba}; stroke: {mamba}; stroke-width: {sw_det}; }}
 .detail-mamba > text {{ fill: {mamba_t}; stroke: none; }}
 
-.detail-stochastic {{ fill: {stoch}; stroke: {stoch}; stroke-width: {sw_det}; stroke-dasharray: 6 3; }}
+.detail-stochastic {{ fill: url(#super-mixer-stripes); stroke: {stoch_t}; stroke-width: {sw_det}; }}
 .detail-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
 
 .detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw_det}; }}

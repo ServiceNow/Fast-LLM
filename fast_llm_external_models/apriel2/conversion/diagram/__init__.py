@@ -102,7 +102,7 @@ def generate_diagram(
 
     svg_elements: list[S.Element] = [
         S.Style(text=th.stylesheet()),
-        defs(th),
+        defs(th, arch),
         S.Rect(x=0, y=0, width=total_w, height=total_h, rx=th.geo.rx, class_=["background"]),
         S.Rect(x=0, y=0, width=total_w, height=total_h, rx=th.geo.rx, fill="url(#dotgrid)"),
         translated,

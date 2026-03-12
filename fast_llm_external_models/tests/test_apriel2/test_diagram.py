@@ -1898,13 +1898,13 @@ class TestStochasticMixerPanel:
         assert sz.w > 0
 
     def test_render_has_title(self):
-        """'Stochastic' appears in rendered SVG."""
+        """'Super Mixer' appears in rendered SVG."""
         spec = self._make_spec()
         panel = StochasticMixerPanel(spec)
         sz = panel.measure(TH)
         elements = list(panel.render(BBox(0, 0, sz.w, sz.h), TH))
         svg_str = "".join(str(e) for e in elements)
-        assert "Stochastic" in svg_str
+        assert "Super Mixer" in svg_str
 
     def test_render_sub_mixer_boxes(self):
         """Each sub-mixer name appears in rendered SVG."""
@@ -2096,6 +2096,8 @@ class TestGenerateDiagram:
         svg = generate_diagram(config)
         assert "<defs>" in svg
         assert "dotgrid" in svg
+        # Stripe pattern is always present (falls back to canonical types)
+        assert "super-mixer-stripes" in svg
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2399,22 +2401,22 @@ class TestLayoutIncludesStack:
         assert "LM Head" in svg
 
     def test_stochastic_has_dispatch_column(self):
-        """When stochastic blocks exist, 'Stochastic' appears in SVG."""
+        """When stochastic blocks exist, 'Super Mixer' appears in SVG."""
         config = _stochastic_supernet_config()
         svg = generate_diagram(config)
-        assert "Stochastic" in svg
+        assert "Super Mixer" in svg
 
     def test_no_stochastic_no_column(self):
-        """When no stochastic blocks, 'Stochastic Dispatch' absent."""
+        """When no stochastic blocks, 'Super Mixer' absent."""
         config = _fixed_attention_config(4)
         svg = generate_diagram(config)
-        assert "Stochastic Dispatch" not in svg
+        assert "Super Mixer" not in svg
 
     def test_comprehensive_has_dispatch(self):
-        """Comprehensive config shows stochastic panel."""
+        """Comprehensive config shows super mixer panel."""
         config = _comprehensive_config()
         svg = generate_diagram(config)
-        assert "Stochastic" in svg
+        assert "Super Mixer" in svg
 
 
 class TestBackgroundClearance:
