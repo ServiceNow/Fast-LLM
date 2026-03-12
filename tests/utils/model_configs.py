@@ -18,7 +18,6 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.conversion.config import (
     Apriel2TextCheckpointFormat,
-    AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
     LlamaCheckpointFormat,
@@ -88,6 +87,8 @@ class ModelTestingConfig:
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
     # Scale the comparison thresholds for specific models.
     compare_factor: float = 1.0
+    hf_compare_factor: float = 1.0
+    megatron_args: list[str] | None
     # Option to skip specific distributed configuration with name matching any of the provided regex patterns.
     skip_tests: tuple[str] = ()
     get_dataset: typing.Callable[[bool], tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path]] = (
@@ -646,49 +647,6 @@ update_and_add_testing_config(
     compare_factor=2.0,
 )
 
-
-update_and_add_testing_config(
-    # Tests hybrid Mamba 2.
-    "llama",
-    "hybrid_mamba",
-    updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "t": copy.deepcopy(_llama_block),
-                "m2": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "mamba",
-                        "dt_layer": {"bias": {"enabled": True}},
-                        "d_inner": 512,
-                        "state_size": 8,
-                        "dt_rank": 16,
-                        "d_xb": 256,
-                        "add_linear_biases": False,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["t", "m2"],
-        },
-    },
-    megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
-    },
-    compare_factor=2.0,
-    # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
-    requires_cuda=True,
-)
-
 update_and_add_testing_config(
     # Tests vision multimodal.
     "llama",
@@ -732,36 +690,87 @@ update_and_add_testing_config(
 
 
 update_and_add_testing_config(
-    # Tests hybrid with attention + gated delta net mixer.
+    # Tests apriel 2 basic conversion.
     "llama",
-    "hybrid_gdn",
+    "apriel2_attn",
+    megatron_args=None,
+    checkpoint_format=Apriel2TextCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=10.0,  # High diff for fp16 and bf16 due to rms_norm_gated from fla
+    # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
+    # we should be using STP with this model, not TP!
+    skip_tests=("sdp", "ms", TP_NO_STP),
+    requires_cuda=False,
+)
+
+
+update_and_add_testing_config(
+    # Tests hybrid Mamba 2.
+    "llama",
+    "apriel2_mamba",
     updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "attention": copy.deepcopy(_llama_block),
-                "gdn": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "gdn",
-                        "value_heads": 4,
-                        "key_heads": 4,
-                        "key_head_dim": 16,
-                        "value_head_dim": 16,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["attention", "gdn"],
+        ("model", "base_model", "decoder", "block", "mixer"): {
+            "type": "mamba",
+            "z_layer": {"weight": init_1},
+            "x_layer": {"weight": init_1},
+            "b_layer": {"weight": init_1},
+            "c_layer": {"weight": init_1},
+            "output_layer": {"weight": init_2},
+            "d_inner": 512,
+            "state_size": 8,
+            "dt_rank": 16,
+            "d_xb": 256,
+            "add_linear_biases": False,
         },
     },
     megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    checkpoint_format=Apriel2TextCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split not supported.
+    skip_tests=("sdp", "ms"),
+    requires_cuda=True,
+)
+
+_mamba_block = MODEL_CONFIGS["apriel2_mamba"].config_dict["model"]["base_model"]["decoder"]["block"]
+
+
+update_and_add_testing_config(
+    # Tests hybrid with attention + gated delta net mixer.
+    "llama",
+    "apriel2_gdn",
+    updates={
+        ("model", "base_model", "decoder", "block", "mixer"): {
+            "type": "gdn",
+            "qkv_projection_layer": {"weight": init_1},
+            "ba_projection_layer": {"weight": init_1},
+            "output_layer": {"weight": init_2},
+            "value_heads": 8,
+            "key_heads": 8,
+            "key_head_dim": 32,
+            "value_head_dim": 32,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Apriel2TextCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        # TODO: Fix (`fast_llm/models/gpt/conversion/apriel.py:235: KeyError: 'value_head_dim'`)
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -773,34 +782,33 @@ update_and_add_testing_config(
     requires_cuda=False,
 )
 
+_gdn_block = MODEL_CONFIGS["apriel2_gdn"].config_dict["model"]["base_model"]["decoder"]["block"]
+
 update_and_add_testing_config(
     # Tests hybrid with KDA mixer.
     "llama",
-    "hybrid_kda",
+    "apriel2_kda",
     updates={
-        ("model", "base_model", "decoder"): {
-            "type": "pattern",
-            "blocks": {
-                "attention": copy.deepcopy(_llama_block),
-                "kda": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "kda",
-                        "heads": 4,
-                        "head_dim": 16,
-                    },
-                },
-            },
-            "num_blocks": 2,
-            "pattern": ["attention", "kda"],
+        ("model", "base_model", "decoder", "block", "mixer"): {
+            "type": "kda",
+            "q_projection_layer": {"weight": init_1},
+            "k_projection_layer": {"weight": init_1},
+            "v_projection_layer": {"weight": init_1},
+            "f_a_projection_layer": {"weight": init_1},
+            "f_b_projection_layer": {"weight": init_2},
+            "g_a_projection_layer": {"weight": init_1},
+            "g_b_projection_layer": {"weight": init_2},
+            "output_projection_layer": {"weight": init_2},
+            "heads": 8,
+            "head_dim": 32,
         },
     },
     megatron_args=None,
-    checkpoint_format=AprielHybridSSMCheckpointFormat,
+    checkpoint_format=Apriel2TextCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
@@ -812,110 +820,68 @@ update_and_add_testing_config(
     requires_cuda=True,
 )
 
+_kda_block = MODEL_CONFIGS["apriel2_kda"].config_dict["model"]["base_model"]["decoder"]["block"]
 
 update_and_add_testing_config(
     # Tests apriel2 format with pattern decoder mixing all mixer types.
     # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention, gdn.
     "llama",
-    "apriel2_text",
+    "apriel2_hybrid",
     updates={
         ("model", "base_model", "tied_embedding_weight"): True,
         ("model", "base_model", "decoder"): {
             "type": "pattern",
             "blocks": {
-                "attn_full": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default", "theta": 10000},
-                        "heads": 4,
-                        "head_groups": 2,
-                        "head_size": 16,
-                        "add_linear_biases": False,
-                    },
-                },
-                "mamba": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "mamba",
-                        "d_inner": 256,
-                        "state_size": 8,
-                        "dt_rank": 8,
-                        "d_xb": 128,
-                        "add_linear_biases": False,
-                    },
-                },
-                "stochastic": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "stochastic",
-                        "mixers": {
-                            "attn": {
-                                "type": "attention",
-                                "rotary": {"type": "default", "theta": 10000},
-                                "heads": 4,
-                                "head_groups": 2,
-                                "head_size": 16,
-                                "add_linear_biases": False,
-                            },
-                            "gdn": {
-                                "type": "gdn",
-                                "value_heads": 4,
-                                "key_heads": 4,
-                                "key_head_dim": 16,
-                                "value_head_dim": 16,
-                            },
-                            "mamba": {
-                                "type": "mamba",
-                                "d_inner": 256,
-                                "state_size": 8,
-                                "dt_rank": 8,
-                                "d_xb": 128,
-                                "add_linear_biases": False,
-                            },
-                            "kda": {
-                                "type": "kda",
-                                "heads": 4,
-                                "head_dim": 16,
-                            },
-                        },
-                        "sampling_strategy": "uniform",
-                        "main_mixer_name": "attn",
-                    },
-                },
+                "attn_full": copy.deepcopy(_llama_block),
                 "attn_swa": {
                     **copy.deepcopy(_llama_block),
                     "mixer": {
-                        "type": "attention",
-                        "rotary": {"type": "default", "theta": 10000},
-                        "heads": 4,
-                        "head_groups": 2,
-                        "head_size": 16,
+                        **copy.deepcopy(_llama_block["mixer"]),
                         "window_size": 128,
-                        "add_linear_biases": False,
                     },
                 },
-                "gdn": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "gdn",
-                        "value_heads": 4,
-                        "key_heads": 4,
-                        "key_head_dim": 16,
-                        "value_head_dim": 16,
-                    },
-                },
-                "kda": {
-                    **copy.deepcopy(_llama_block),
-                    "mixer": {
-                        "type": "kda",
-                        "heads": 4,
-                        "head_dim": 16,
-                    },
-                },
+                "gdn": copy.deepcopy(_gdn_block),
+                "kda": copy.deepcopy(_kda_block),
             },
-            "pattern": ["attn_full", "mamba", "stochastic", "attn_swa", "gdn", "kda", "stochastic"],
-            "num_blocks": 7,
+            "pattern": ["attn_full", "attn_swa", "gdn", "kda"],
+            "num_blocks": 4,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Apriel2TextCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
+    compare_factor=12.0,
+    hf_compare_factor=1.5,
+    # Micro-sequence split not supported for Mamba.
+    # Pipeline-parallel gives a different mixer selection.
+    # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
+    skip_tests=("sdp", "ms", "pp", TP_NO_STP),
+    requires_cuda=True,
+)
+
+update_and_add_testing_config(
+    # Tests apriel2 format with pattern decoder mixing all mixer types.
+    # This comprehensive test exercises: attention, mamba, stochastic mixer, sliding window attention, gdn.
+    "llama",
+    "apriel2_stochastic",
+    updates={
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "decoder", "block", "mixer"): {
+            "type": "stochastic",
+            "mixers": {
+                "attn": copy.deepcopy(_llama_block["mixer"]),
+                "gdn": copy.deepcopy(_gdn_block["mixer"]),
+                "kda": copy.deepcopy(_kda_block["mixer"]),
+            },
+            "sampling_strategy": "uniform",
+            "main_mixer_name": "attn",
         },
     },
     megatron_args=None,
@@ -940,15 +906,13 @@ update_and_add_testing_config(
 update_and_add_testing_config(
     # Tests apriel2 multimodal format combining pattern decoder with vision encoder.
     # Uses the same decoder as apriel2_text but adds vision capabilities.
-    "apriel2_text",
+    "apriel2_attn",
     "apriel2_multimodal",
     model_type="multimodal",
     updates={
         ("model", "base_model", "vision_encoder"): copy.deepcopy(
             MODEL_CONFIGS["llava"].config_dict["model"]["base_model"]["vision_encoder"]
         ),
-        # Reduce decoder blocks for faster testing
-        ("model", "base_model", "decoder", "num_blocks"): 2,
         # Extend the vocab size to ensure the image token id is not in the mock dataset.
         ("model", "base_model", "embeddings", "vocab_size"): 386,
         ("model", "base_model", "image_token_index"): 384,

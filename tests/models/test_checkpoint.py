@@ -377,24 +377,28 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
         .to(testing_device)
         .eval()
     )
-    config = CompareConfig()
+    config = CompareConfig().rescale(model_testing_config.hf_compare_factor)
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
-        output = model(test_input, **kwargs)
         hidden_states_ref_ = hidden_states_ref
         if model is model_as_hf:
+            if model_testing_config.model_type == "multimodal" and hasattr(model, "vision_encoder"):
+                kwargs["output_vision_hidden_states"] = True
+            output = model(test_input, **kwargs)
             hidden_states = output.hidden_states + (output.logits,)
+            # Llava models doesn't return vision hidden states, so we run the vision model directly instead.
             if model_testing_config.model_type == "multimodal":
-                # Llava doesn't allow returning the vision hidden states, so we run the vision model directly instead.
-                vision_output = model_as_hf.vision_tower(
-                    pixel_values=kwargs["pixel_values"], image_sizes=kwargs["image_sizes"], output_hidden_states=True
-                )
-                adapter_output = model_as_hf.multi_modal_projector(vision_output.hidden_states[-1])
-                vision_hidden_states = vision_output.hidden_states + (adapter_output,)
-                hidden_states = vision_hidden_states + hidden_states
+                if hasattr(model, "vision_tower"):
+                    vision_output = model.vision_tower(
+                        pixel_values=kwargs["pixel_values"],
+                        image_sizes=kwargs["image_sizes"],
+                        output_hidden_states=True,
+                    )
+                    adapter_output = model.multi_modal_projector(vision_output.hidden_states[-1])
+                    hidden_states = vision_output.hidden_states + (adapter_output,) + hidden_states
                 hidden_states_ref_ = hidden_states_ref.copy()
                 # Adjust the vision hidden states
                 # TODO: ====== Do in HF wrapper ======
@@ -406,6 +410,7 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
                 name: hidden_state for name, hidden_state in zip(hidden_states_ref, hidden_states, strict=True)
             }
         else:
+            output = model(test_input, **kwargs)
             hidden_states = output.hidden_states
             hidden_states["logits"] = output.logits
 

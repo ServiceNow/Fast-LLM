@@ -163,6 +163,8 @@ def log_tensor[T](
                 min=v_float.min().item(),
                 max=v_float.max().item(),
             )
+            if TensorLogs.config.full_tensors:
+                stats["tensor"] = tensor
         txt.extend(
             [
                 ("mu", format_number(stats["mu"] * scale), 10),
@@ -210,6 +212,8 @@ def log_tensor[T](
         prefix = "" if prefix is None else f" {prefix}="
         len_ += col_len + len(prefix) + 1
         out = f"{f'{out}{prefix}{str(val)}':{len_}s}"
+        if TensorLogs.config.full_tensors:
+            out = f"{out}\nTensor:\n{tensor}"
     if TensorLogs.config.show and log_fn is not None:
         return log(out, log_fn=log_fn)
 

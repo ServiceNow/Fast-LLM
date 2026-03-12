@@ -126,10 +126,10 @@ class LanguageModelBatch(TokenBatch):
                     labels[span_begin:span_end] = -100
 
             # Mask cross-document predictions.
-            cropped_lengths, _, _ = self._get_cropped_lengths(label_begin, label_end)
+            cropped_lengths, _, _ = self._get_cropped_lengths(begin, label_end)
             document_begin = cropped_lengths[0]
             for length in cropped_lengths[1:]:
-                labels[document_begin : document_begin + prediction_distance] = -100
+                labels[max(document_begin - prediction_distance, 0) : document_begin] = -100
                 document_begin += length
 
             # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
