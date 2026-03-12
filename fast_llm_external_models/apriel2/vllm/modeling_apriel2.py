@@ -17,6 +17,7 @@ from typing import Callable, Literal
 
 import torch
 import triton
+import vllm.compilation.monitor as _compile_monitor
 import vllm.model_executor.layers.kda  # noqa: F401
 from einops import rearrange
 from torch import nn
@@ -24,7 +25,7 @@ from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from vllm import __version_tuple__ as _vllm_version
 from vllm.compilation.decorators import support_torch_compile
-from vllm.compilation.monitor import cudagraph_capturing_enabled, validate_cudagraph_capturing_enabled
+from vllm.compilation.monitor import validate_cudagraph_capturing_enabled
 from vllm.config import CacheConfig, ModelConfig, SpeculativeConfig, VllmConfig, get_current_vllm_config
 from vllm.distributed import divide, get_pp_group, get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
 from vllm.distributed.device_communicators.pynccl_allocator import set_graph_pool_id
@@ -1319,7 +1320,11 @@ def stochastic_mixer_dispatch(
         from vllm.config.compilation import CUDAGraphMode
 
         runtime_mode = forward_context.cudagraph_runtime_mode
-        if cudagraph_capturing_enabled and runtime_mode is not None and runtime_mode != CUDAGraphMode.NONE:
+        if (
+            _compile_monitor.cudagraph_capturing_enabled
+            and runtime_mode is not None
+            and runtime_mode != CUDAGraphMode.NONE
+        ):
             _capture_all_mixers_for_num_tokens(stochastic_mixer, cache, hidden_states, output, positions, num_tokens)
             return
 
@@ -1806,7 +1811,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             device=hidden_states.device,
         )
 
-        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
             torch.cuda.synchronize()
             print(f"[SYNC-1] {self.prefix}: pre-custom-op sync OK", flush=True)
 
@@ -1901,7 +1906,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
 
-        if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
+        if DEBUG_STATE_INDICES and not _compile_monitor.cudagraph_capturing_enabled:
             indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
             unique = {i for i in indices if i >= 0}
             dup = len(indices) - len(unique) - indices.count(-1)
@@ -1932,7 +1937,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # conv1d/recurrent kernels to read out-of-bounds via cache_indices
         # that still reference the full batch.
         num_cache_lines = conv_state.size(0)
-        if cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
+        if _compile_monitor.cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
             num_actual_tokens = num_cache_lines
 
         mixed_qkv = mixed_qkv[:num_actual_tokens]
@@ -1954,6 +1959,23 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             mixed_qkv_T = mixed_qkv.transpose(0, 1)
             # self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
 
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+                max_ci = non_spec_state_indices_tensor.max().item()
+                print(
+                    f"[PRE-CONV] {self.prefix}: conv_state.shape={conv_state.shape}, "
+                    f"x.shape={mixed_qkv_T.shape}, "
+                    f"cache_indices={non_spec_state_indices_tensor.tolist()} (max={max_ci}), "
+                    f"num_cache_lines={num_cache_lines}, "
+                    f"query_start_loc={non_spec_query_start_loc.tolist()}, "
+                    f"has_initial_state={has_initial_state.tolist()}, "
+                    f"num_prefills={attn_metadata.num_prefills}",
+                    flush=True,
+                )
+                if max_ci >= num_cache_lines:
+                    print(
+                        f"[OOB-CONV] {self.prefix}: cache_index {max_ci} >= num_cache_lines {num_cache_lines}!",
+                        flush=True,
+                    )
             mixed_qkv = causal_conv1d_fn(
                 mixed_qkv_T,
                 conv_weights,
@@ -1965,7 +1987,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 query_start_loc=non_spec_query_start_loc,
                 metadata=attn_metadata,
             ).transpose(0, 1)
-            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
                 torch.cuda.synchronize()
                 print(f"[SYNC-2] {self.prefix}: post-causal_conv1d_fn sync OK", flush=True)
         else:
@@ -2001,7 +2023,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # self._debug_tensor("dt_bias", self.dt_bias)
 
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
-        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
             torch.cuda.synchronize()
             print(f"[SYNC-3] {self.prefix}: post-fused_gdn_gating sync OK", flush=True)
         # self._debug_tensor("g (from gating)", g)
@@ -2010,8 +2032,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
             # self._debug_print("Using chunk_gated_delta_rule (prefill)")
-            # Bounds check + diagnostics (sync-3 already caught async errors)
-            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
                 max_idx = non_spec_state_indices_tensor.max().item()
                 print(
                     f"[SYNC-4] {self.prefix}: prefill ssm_state.shape={ssm_state.shape}, "
@@ -2055,7 +2076,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
-            if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
                 torch.cuda.synchronize()
                 print(f"[SYNC-5] {self.prefix}: post-chunk_gated_delta_rule sync OK", flush=True)
             # self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
@@ -2354,7 +2375,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
-        if not torch.compiler.is_compiling() and not cudagraph_capturing_enabled:
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
             torch.cuda.synchronize()
             print(f"[SYNC-6] {self.prefix}: pre-kda_attention sync OK", flush=True)
 
@@ -2405,10 +2426,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         # out-of-bounds access.
         # IMPORTANT: Only clamp during CUDA graph capture — see GDN comment.
         num_cache_lines = conv_state_q.size(0)
-        if cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
+        if _compile_monitor.cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
             num_actual_tokens = num_cache_lines
 
-        if DEBUG_STATE_INDICES and not cudagraph_capturing_enabled:
+        if DEBUG_STATE_INDICES and not _compile_monitor.cudagraph_capturing_enabled:
             indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
             unique = {i for i in indices if i >= 0}
             dup = len(indices) - len(unique) - indices.count(-1)
