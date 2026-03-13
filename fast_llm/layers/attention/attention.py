@@ -237,7 +237,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         )
 
     def _query_key_value_forward(
-        self, input_: torch.Tensor
+        self, input_: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, typing.Any]]:
         key_value, key_value_context = self.key_value.forward_only(input_)
 
@@ -246,21 +246,27 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         if self._config.head_groups == 1 and self._sequence_parallel:
             key_value, handle = gather_op(key_value, group=self._parallel_dim.group, dim=0, async_op=True)
 
+        query, query_context = self.query.forward_only(input_)
+
+        if handle:
+            # TODO: This is probably unnecessary.
+            handle.wait()
+
+        query, key_value, rotary_context = self._rotary.forward_only(
+            query.unflatten(1, (self._local_heads, self._config.head_size)),
+            key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size)),
+            kwargs,
+        )
+
         if self._sequence_data_parallel_dim.group:
-            if handle:
-                # TODO: This is probably unnecessary.
-                handle.wait()
             # sequence dim may not be zero, but this needs to be handled after `handle.wait()`
             key_value, handle = gather_op(
                 key_value, group=self._sequence_data_parallel_dim.group, dim=0, async_op=True
             )
-
-        query, query_context = self.query.forward_only(input_)
-
         if handle:
             handle.wait()
 
-        context = {"query": query_context, "key_value": key_value_context}
+        context = {"query": query_context, "key_value": key_value_context, "rotary": rotary_context}
         return query, key_value, context
 
     def _query_key_value_backward(
@@ -274,11 +280,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             async_op=True,
         )
 
+        rotary_context = context.pop("rotary")
+        query_grad, _ = self._rotary.backward(query_grad, None, rotary_context)
+
         # TODO: Overlap with both.
-        input_grad = self.query.backward(query_grad, context.pop("query"))
+        input_grad = self.query.backward(query_grad.flatten(1), context.pop("query"))
 
         if handle:
             handle.wait()
+
+        _, key_value_grad = self._rotary.backward(None, key_value_grad, rotary_context)
+        key_value_grad = key_value_grad.flatten(1)
 
         if self._config.head_groups == 1 and (group := self._parallel_dim.group):
             if self._sequence_parallel:
@@ -296,10 +308,15 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        query, key_value = self._query_key_value(input_)
-        query = query.unflatten(-1, (self._local_heads, self._config.head_size))
-        key_value = key_value.unflatten(-1, (2 * self._local_head_groups, self._config.head_size))
-        query, key_value = self._rotary(query, key_value, kwargs)
+        self._debug(input_, "attn_input", (kwargs[AttentionKwargs.hidden_token_dim], self._hidden_dim), kwargs)
+        query, key_value = self._query_key_value(input_, kwargs)
+
+        self._debug(
+            key_value.chunk(2, dim=1)[0],
+            "key_rotary_input",
+            (kwargs[AttentionKwargs.key_value_token_dim], *self._kv_dims),
+            kwargs,
+        )
 
         # TODO: These get unnecessarily big with lots of small documents.
         if (past_key_values := kwargs.get(AttentionKwargs.past_key_values)) is not None:
@@ -316,10 +333,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         key_value = key_value[: kwargs[AttentionKwargs.sequence_k_dim].size]
         key, value = key_value.chunk(2, dim=1)
 
-        self._debug(
-            query, "query_rotary_input", (token_dim := kwargs[AttentionKwargs.token_dim], *self._query_dims), kwargs
-        )
-        self._debug(key, "key_rotary_input", (token_dim, *self._kv_dims), kwargs)
         with set_generator(self._distributed.tp_generator):
             if self._implementation == AttentionImplementation.flash:
                 input_ = self._attn_flash(query, key, value, kwargs)
@@ -328,13 +341,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 input_ = self._attn_backup(query, key, value, kwargs)
             else:
                 raise NotImplementedError(self._implementation)
-
-        self._debug(query, "query", (token_dim, *self._query_dims), kwargs)
-        self._debug(key, "key", (token_dim, *self._kv_dims), kwargs)
-        self._debug(value, "value", (token_dim, *self._kv_dims), kwargs)
+        input_ = input_.flatten(1)
+        self._debug(query, "query", (token_dim := kwargs[AttentionKwargs.token_dim], *self._query_dims), kwargs)
+        self._debug(key, "key", (sequence_k_dim := kwargs[AttentionKwargs.sequence_k_dim], *self._kv_dims), kwargs)
+        self._debug(value, "value", (sequence_k_dim, *self._kv_dims), kwargs)
         self._debug(input_, "context", (token_dim, self._dense_dim), kwargs)
 
-        out, bias = self.dense(input_.flatten(1))
+        out, bias = self.dense(input_)
         self._debug(
             out,
             None,

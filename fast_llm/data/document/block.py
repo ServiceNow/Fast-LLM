@@ -18,6 +18,7 @@ class BlockModelInput(ModelInput):
     token_dim: TensorDim = None
     hidden_token_dim: TensorDim = None
     sequence_k_dim: TensorDim = None
+    key_value_token_dim: TensorDim = None
     unpadded_length: int = None  # Number of tokens in the current input excluding padding at the end.
     sequence_length: int = None  # Total number of tokens across all inputs, including padding.
     lengths: list[int] = None
@@ -35,6 +36,7 @@ class BlockModelInput(ModelInput):
             LanguageModelKwargs.token_dim: self.token_dim,
             LanguageModelKwargs.hidden_token_dim: self.hidden_token_dim,
             LanguageModelKwargs.sequence_k_dim: self.sequence_k_dim,
+            LanguageModelKwargs.key_value_token_dim: self.key_value_token_dim,
             LanguageModelKwargs.num_tokens: self.unpadded_length,
             LanguageModelKwargs.sequence_length: self.sequence_length,
             LanguageModelKwargs.lengths: self.lengths,
@@ -77,6 +79,18 @@ class LengthModelInputPreprocessor:
             if config.distributed.sequence_tensor_parallel
             else model_input.token_dim
         )
+
+        # Key-value token dim after sequence-data-parallel gather.
+        model_input.key_value_token_dim = (
+            TensorDim(
+                "key_value_token",
+                self.length * data_dim.size,
+                config.distributed.get_distributed_dim(DistributedDimNames.batch_data),
+            )
+            if config.distributed.sequence_data_parallel > 1
+            else model_input.token_dim
+        )
+        # Key-value token dim as seen by the attention layer, after concatenating the past and cropping the future.
         model_input.sequence_k_dim = TensorDim("sequence_k", self.sequence_k_past + self.length)
 
         if not config.causal:

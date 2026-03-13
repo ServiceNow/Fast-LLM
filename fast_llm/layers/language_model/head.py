@@ -259,7 +259,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         self._debug(
             logits,
             f"logits{"" if self._config.cross_entropy_splits == 1 else f"_{split_index}"}",
-            (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim),
+            (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._vocab_dim),
             kwargs,
             scale=self._config.logits_scale_factor,
         )

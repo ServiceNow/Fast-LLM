@@ -71,9 +71,12 @@ def triton_rotary_(
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     # TODO: Improve block size heuristics.
     out = input_
-    assert input_.stride(-1) == 1, f"{input_.shape} {input_.stride()}"
+    if input_.stride(-1) != 1:
+        # TODO: Make a transposed version to avoid contiguous call in key backward.
+        input_ = input_.contiguous()
     if input_.ndim == 3:
         input_ = input_.unsqueeze(0)
+        frequencies = frequencies.unsqueeze(0)
     if is_key_value:
         input_ = input_.chunk(2, dim=-2)[0]
     batch_size, seq_len, num_heads, head_size = input_.shape
@@ -107,7 +110,6 @@ def triton_rotary_forward_(
 
 
 def triton_rotary_backward_(grad_output: torch.Tensor, context: tuple[torch.Tensor, bool]) -> torch.Tensor:
-    # TODO: Make a transposed version to avoid contiguous call in key backward.
     frequencies, is_key_value = context
     if grad_output.stride(-1) != 1:
         grad_output = grad_output.contiguous()

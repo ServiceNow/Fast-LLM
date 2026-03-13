@@ -208,6 +208,8 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "tensor_logs": {
                 "save": True,
                 "show": False,
+                # Uncomment to save whole tensors for debugging
+                # "full_tensors": True,
             },
             # Triton kernels are extremely slow in interpreter mode.
             "enable_triton_kernels": torch.cuda.is_available(),

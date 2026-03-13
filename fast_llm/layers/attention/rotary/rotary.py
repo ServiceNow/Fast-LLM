@@ -7,7 +7,7 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton.rotary import triton_rotary_autograd_
+from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
@@ -44,7 +44,7 @@ def rotary_embeddings_complex(tensor: torch.Tensor, frequencies: torch.Tensor) -
 
 @torch.compile
 def rotary_embeddings_real(
-    tensor: torch.Tensor, frequencies: torch.Tensor, is_key_value: bool = False
+    tensor: torch.Tensor, frequencies: torch.Tensor, is_key_value: bool = False, backward: bool = False
 ) -> torch.Tensor:
     """
     Apply rotary embeddings to a tensor.
@@ -54,16 +54,42 @@ def rotary_embeddings_real(
     tensor_re, tensor_im = torch.chunk(tensor, 2, dim=-1)
     frequencies_re, frequencies_im = torch.chunk(frequencies, 2, dim=-1)
 
-    out = torch.cat(
-        [
-            tensor_re * frequencies_re - tensor_im * frequencies_im,
-            tensor_im * frequencies_re + tensor_re * frequencies_im,
-        ],
-        dim=-1,
-    ).to(tensor.dtype)
+    if backward:
+        out = torch.cat(
+            [
+                tensor_re * frequencies_re + tensor_im * frequencies_im,
+                tensor_im * frequencies_re - tensor_re * frequencies_im,
+            ],
+            dim=-1,
+        ).to(tensor.dtype)
+    else:
+        out = torch.cat(
+            [
+                tensor_re * frequencies_re - tensor_im * frequencies_im,
+                tensor_im * frequencies_re + tensor_re * frequencies_im,
+            ],
+            dim=-1,
+        ).to(tensor.dtype)
     if is_key_value:
         out = torch.cat([out, value], dim=-2)
     return out
+
+
+class _RotaryFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx, query: torch.Tensor, key_value: torch.Tensor, kwargs: dict[str, typing.Any], rotary: "Rotary"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        query, key_value, context = rotary.forward_only(query, key_value, kwargs)
+        ctx.rotary = rotary
+        ctx.context = context
+        return query, key_value
+
+    @staticmethod
+    def backward(
+        ctx, query_grad: torch.Tensor, key_value_grad: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, None, None]:
+        return ctx.rotary.backward(query_grad, key_value_grad, ctx.context)
 
 
 class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module):
@@ -75,10 +101,21 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
         super().__init__(config)
         self._head_size = head_size_dim.global_size
 
-    @abc.abstractmethod
     def forward(
-        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, query: torch.Tensor | None, key: torch.Tensor | None, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        return _RotaryFunction.apply(query, key, kwargs, self)
+
+    @abc.abstractmethod
+    def forward_only(
+        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, typing.Any]:
+        pass
+
+    @abc.abstractmethod
+    def backward(
+        self, query_grad: torch.Tensor | None, key_value_grad: torch.Tensor | None, context: typing.Any
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         pass
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
@@ -87,12 +124,51 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
 
 class NoRotary[ConfigType: NoRotaryConfig](Rotary[ConfigType]):
     def forward(
-        self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
+        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return query, key
+        return query, key_value
+
+    def forward_only(
+        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, typing.Any]:
+        return query, key_value, None
+
+    def backward(
+        self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: typing.Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return query_grad, key_value_grad
 
 
-class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
+class RotaryBase[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
+    @classmethod
+    def _forward(
+        cls,
+        query: torch.Tensor | None,
+        key_value: torch.Tensor | None,
+        frequencies: torch.Tensor,
+        backward: bool = False,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        rotary_fn = triton_rotary_ if TritonConfig.enabled(frequencies.device) else rotary_embeddings_real
+        query = None if query is None else rotary_fn(query, frequencies, backward=backward)
+        key_value = (
+            None if key_value is None else rotary_fn(key_value, frequencies, is_key_value=True, backward=backward)
+        )
+        return query, key_value
+
+    def forward_only(
+        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor]:
+        frequencies: torch.Tensor = kwargs[AttentionKwargs.rotary_freq]
+        query, key_value = self._forward(query, key_value, frequencies, backward=False)
+        return query, key_value, frequencies
+
+    def backward(
+        self, query_grad: torch.Tensor | None, key_value_grad: torch.Tensor | None, context: torch.Tensor
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        return self._forward(query_grad, key_value_grad, context, backward=True)
+
+
+class DefaultRotary[ConfigType: DefaultRotaryConfig](RotaryBase[ConfigType]):
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
@@ -102,14 +178,6 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
         kwargs[AttentionKwargs.rotary_freq] = self._rotary_embedding_frequencies[
             sequence_k - kwargs[AttentionKwargs.token_dim].size : sequence_k
         ]
-
-    def forward(
-        self, query: torch.Tensor, key_value: torch.Tensor, kwargs: dict[str, typing.Any]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        rotary_fn = triton_rotary_autograd_ if TritonConfig.enabled(query.device) else rotary_embeddings_real
-        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq])
-        key_value = rotary_fn(key_value, kwargs[AttentionKwargs.rotary_freq], is_key_value=True)
-        return query, key_value
 
     def _create_tensors(self, sequence_length: int, device: torch.device) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
@@ -201,7 +269,7 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
         )
 
 
-class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
+class Rotary2D[ConfigType: Rotary2DConfig](RotaryBase[ConfigType]):
     _frequencies: torch.Tensor
     _config: ConfigType
 
@@ -234,11 +302,3 @@ class Rotary2D[ConfigType: Rotary2DConfig](Rotary[ConfigType]):
             torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
         ).contiguous()
         kwargs[AttentionKwargs.rotary_freq] = frequencies
-
-    def forward(
-        self, query: torch.Tensor, key_value: torch.Tensor, kwargs: dict[str, typing.Any]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        rotary_fn = triton_rotary_autograd_ if TritonConfig.enabled(query.device) else rotary_embeddings_real
-        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq])
-        key_value = rotary_fn(key_value, kwargs[AttentionKwargs.rotary_freq], is_key_value=True)
-        return query, key_value

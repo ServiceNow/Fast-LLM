@@ -164,7 +164,7 @@ def log_tensor[T](
                 max=v_float.max().item(),
             )
             if TensorLogs.config.full_tensors:
-                stats["tensor"] = tensor
+                stats["tensor"] = tensor.clone()
         txt.extend(
             [
                 ("mu", format_number(stats["mu"] * scale), 10),
