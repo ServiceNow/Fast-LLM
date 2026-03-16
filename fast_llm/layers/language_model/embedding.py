@@ -152,7 +152,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 dtype=self._residual_dtype,
             )
         if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
-            # Language model: input_ contains duplicate token ids. TODO: ===== remove ======
+            # Language model: input_ contains duplicate token ids. TODO: remove
             input_ = None
 
         out = self._forward(

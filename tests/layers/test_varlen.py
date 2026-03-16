@@ -101,8 +101,6 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig, lengths: list[in
         out_refs.append(out)
     out_ref = torch.cat(out_refs, dim=0)
 
-    print(out_packed.shape)
-
     Assert.rms_close_relative(out_packed, out_ref, 1e-3, 1e-4)
 
     for name, parameter, grad_packed in zip(names, parameters, grads_packed, strict=True):

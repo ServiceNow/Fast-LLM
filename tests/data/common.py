@@ -40,7 +40,6 @@ def get_sampling_data(
             truncate_documents=truncate_documents,
             preprocessing=preprocessing,
             cache_directory=cache_directory,
-            distributed_config=DistributedConfig(use_cuda=torch.cuda.is_available()),
             dataset_name=phase.value,
         ),
         num_samples,

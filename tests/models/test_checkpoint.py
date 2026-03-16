@@ -401,7 +401,7 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
                     hidden_states = vision_output.hidden_states + (adapter_output,) + hidden_states
                 hidden_states_ref_ = hidden_states_ref.copy()
                 # Adjust the vision hidden states
-                # TODO: ====== Do in HF wrapper ======
+                # TODO: Do in HF wrapper
                 for name, hidden_state in hidden_states_ref.items():
                     if name.startswith("vision_encoder"):
                         hidden_states_ref_[name] = hidden_state.flatten(0, 1)[:46].unsqueeze(0)

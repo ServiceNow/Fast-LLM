@@ -279,7 +279,7 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
     vision_model_converter_class: typing.ClassVar[type[LlavaVisionModelConverter]] = LlavaVisionModelConverter
     # TODO: Make it flexible?
     language_model_converter_class: typing.ClassVar[type[LlavaLanguageModelConverter]] = LlavaLanguageModelConverter
-    # TODO: ====== Is tie_word_embeddings supported? ======
+    # TODO: Is tie_word_embeddings supported?
 
     @classmethod
     def import_config(cls, config: dict) -> dict:

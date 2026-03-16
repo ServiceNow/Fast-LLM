@@ -14,8 +14,6 @@ if typing.TYPE_CHECKING:
 
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
-    # _sampling_parameters: dict[str, SamplingParameters]
-    # _preprocessing: dict[str, PreprocessingConfig]
     _cache_directory: pathlib.Path | None
     _is_setup: bool = False
 

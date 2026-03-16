@@ -28,7 +28,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
 
     _datasets: dict[str, SampledDataset]
-    # _sampling_parameters: dict[str, SamplingParameters]
     _preprocessing: dict[str, LanguageModelBatchPreprocessingConfig]
 
     def __init__(

@@ -60,7 +60,7 @@ class BlendedDataset[
         sampled = self._get_sampled(index)
         # Then get the present sample.
         dataset_index = self._get_next_dataset(index, sampled)
-        # TODO: ====== Can we mix documents from multiple datasets? ======
+        # TODO: Can we mix documents from multiple datasets?
         return self._datasets[dataset_index][sampled[dataset_index].item()]
 
     def _get_sampled(self, num_samples: int) -> torch.Tensor:

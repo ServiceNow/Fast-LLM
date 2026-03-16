@@ -63,11 +63,3 @@ class ModelInput(Document):
 @dataclasses.dataclass(kw_only=True)
 class Batch(Document):
     pass
-
-    # @abc.abstractmethod
-    # def __len__(self) -> int:
-    #    pass
-
-    # @abc.abstractmethod
-    # def crop(self, begin: int, end: int) -> typing.Self:
-    #    pass

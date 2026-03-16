@@ -360,7 +360,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
-        # TODO: ====== Account for varlen =======
+        # TODO: Account for varlen
         sequence_q_dim: TensorDim = kwargs[AttentionKwargs.token_dim]
         sequence_k_dim: TensorDim = kwargs[AttentionKwargs.sequence_k_dim]
 

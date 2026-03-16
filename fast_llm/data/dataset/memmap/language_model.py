@@ -12,7 +12,6 @@ from fast_llm.data.dataset.memmap.patch import PatchReader, PatchWriter
 from fast_llm.data.dataset.memmap.range import RangeReader, RangeWriter
 from fast_llm.data.dataset.memmap.token import TokenWriter
 from fast_llm.data.document.abstract import Document
-from fast_llm.data.document.config import ImageNormalizationConfig
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert
 
@@ -26,8 +25,6 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
         self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
         self._image_patches = self._config.image_patches.get_reader(buffer)
-        # TODO: ======= Move to model preprocessing ======
-        self._image_normalization_config = ImageNormalizationConfig()
 
     @property
     def num_tokens(self) -> int:
@@ -35,8 +32,6 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
 
     def get_document(self, index: int, begin: int, end: int) -> Document:
         image_patches = self._image_patches.get_document(index, begin, end)
-        if image_patches is not None:
-            image_patches.patches = self._image_normalization_config.normalize(image_patches.patches)
         return LanguageModelDocument(
             **dataclasses.asdict(self._tokens.get_document(index, begin, end)),
             loss_masking_spans=self._loss_masking_spans.get_document(index, begin, end),

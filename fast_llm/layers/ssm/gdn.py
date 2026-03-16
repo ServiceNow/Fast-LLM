@@ -256,7 +256,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         # TODO: fuse some of the reshapes into rearranges
         hidden_states = input_
 
-        # TODO: ====== Merge qkvz and ba ======
+        # TODO: Merge qkvz and ba?
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
 

@@ -52,13 +52,11 @@ class SamplingConfigBase(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    # TODO: ===== Implement ======
-    maximum_document_length: int = Field(
+    maximum_document_length: int | None = Field(
         default=None,
         desc="Maximum number of tokens in a document."
         " Document exceeding this size will be truncated or dropped depending on `truncate_documents`.",
         hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
     )
     truncate_documents: bool | None = Field(
         default=True,
@@ -70,11 +68,6 @@ class SamplingConfigBase(Config):
         hint=FieldHint.feature,
     )
 
-    def _validate(self) -> None:
-        if self.maximum_document_length is None:
-            self.maximum_document_length = self.micro_batch_size
-        super()._validate()
-
 
 @config_class()
 class SamplingConfig(SamplingConfigBase):
@@ -84,7 +77,6 @@ class SamplingConfig(SamplingConfigBase):
 
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
-    # TODO: ===== Already in `preprocessing` ======
     predicted_tokens: int = Field(default=1)
     cache_directory: pathlib.Path | None = Field(default=None)
     dataset_name: str = Field(default="dataset")
@@ -95,6 +87,7 @@ class SamplingConfig(SamplingConfigBase):
     def _validate(self):
         # Using itertools.count to make the field mutable.
         self._rank_counter = itertools.count()
+        super()._validate()
 
     def is_running_next(self) -> bool:
         # Counter that loops over ranks to try to distribute workloads evenly between ranks.
@@ -103,6 +96,13 @@ class SamplingConfig(SamplingConfigBase):
     @functools.cached_property
     def sample_size(self) -> int:
         return self.micro_batch_size + self.predicted_tokens
+
+    @functools.cached_property
+    def sampling_maximum_document_length(self) -> int:
+        if self.maximum_document_length is None:
+            return self.sample_size
+        else:
+            return min(self.maximum_document_length, self.sample_size)
 
 
 @config_class()

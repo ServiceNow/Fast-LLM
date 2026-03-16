@@ -102,14 +102,14 @@ class PatchBatch(Batch, PatchDocument):
         else:
             # Here `begin` and `end` refer to token rather than patch positions,
             # so we build a filter from the token map to get the corresponding patch positions.
-            # TODO: ====== Should it actually refer to patch positions so model inputs have balanced sizes?? ======
+            # TODO: Should it actually refer to patch positions so model inputs have balanced sizes?
             patch_filter = (self.token_map >= begin) & (self.token_map < end)
             patches = self.patches[patch_filter]
             if config.normalization is not None:
                 patches = config.normalization.normalize(patches)
             patches = patches.to(config.distributed.compute_dtype.torch)
 
-            # TODO: ====== Avoid excessive padding ======
+            # TODO: Avoid excessive padding
             unpadded_length = len(patches)
             pad_size = end - begin - unpadded_length
             model_input = PatchModelInput(

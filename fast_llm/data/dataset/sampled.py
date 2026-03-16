@@ -124,11 +124,11 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes > self._config.sample_size
+            long_docs_filter = document_sizes > self._config.sampling_maximum_document_length
             ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
-                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._config.sample_size} tokens and will be ignored.",
+                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._config.sampling_maximum_document_length} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
             tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
@@ -369,7 +369,7 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             document_size = self._indexed_dataset.get_document_size(document_index)
 
             if not self._config.truncate_documents:
-                if document_size > self._config.sample_size:
+                if document_size > self._config.sampling_maximum_document_length:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
@@ -389,12 +389,22 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                documents.append(
-                    self._indexed_dataset.get_document(
-                        document_index,
-                        begin=token_start_index_in_document,
-                        end=token_end_index_in_document,
-                    )
+                # If cropping is enabled, split long documents into chunks not exceeding the specified maximum length.
+                documents.extend(
+                    [
+                        self._indexed_dataset.get_document(
+                            document_index,
+                            begin=begin,
+                            end=min(
+                                begin + self._config.sampling_maximum_document_length, token_end_index_in_document
+                            ),
+                        )
+                        for begin in range(
+                            token_start_index_in_document,
+                            token_end_index_in_document,
+                            self._config.sampling_maximum_document_length,
+                        )
+                    ]
                 )
 
             # Go to the next document.

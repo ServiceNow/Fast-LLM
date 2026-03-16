@@ -199,7 +199,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         Same as in gdn, the idea is to always do forward pass in a packed way, which is required for varlen support.
         """
 
-        # TODO: ===== Merge q,k,v into a single tensor ======
+        # TODO: Merge q,k,v into a single tensor?
         q = self.q_proj(input_)
         k = self.k_proj(input_)
         v = self.v_proj(input_)

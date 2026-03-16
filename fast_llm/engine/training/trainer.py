@@ -120,7 +120,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 phase=PhaseType.training,
             )
             self._data.sample_dataset(
-                PhaseType.training,
+                str(PhaseType.training),
                 preprocessing_config,
                 self._config.training.train_iters * self._schedule.samples_per_batch,
             )
