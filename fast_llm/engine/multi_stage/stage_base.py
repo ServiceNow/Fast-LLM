@@ -15,7 +15,7 @@ from fast_llm.engine.multi_stage.fsdp import FSDP
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.logging import log_generator
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -238,28 +238,28 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         for i, fsdp in enumerate(self._fsdps):
             if not fsdp.requires_grad:
                 continue
+            buffer_begin = 0
             for parameter_name in fsdp.parameter_names:
                 # If needed, chunk the parameter on the first dimension.
-                parameter_meta = fsdp.get_parameter_meta(parameter_name)
+                parameter_meta: ParameterMeta = fsdp.get_parameter_meta(parameter_name)
+                Assert.eq(buffer_begin, fsdp.get_parameter_begin_in_buffer(parameter_meta.tensor_name))
                 if not parameter_meta.requires_grad:
                     continue
-                chunk_size = div(parameter_meta.numel(), len(parameter_meta.lr_scale))
-                buffer_begin = fsdp.get_parameter_begin_in_buffer(parameter_meta.tensor_name)
-                for i, lr_scale in enumerate(parameter_meta.lr_scale):
-                    begin = fsdp.index_buffer_to_shard(buffer_begin + i * chunk_size)
-                    end = fsdp.index_buffer_to_shard(buffer_begin + (i + 1) * chunk_size)
-                    if lr_scale == 0 or begin == end:
-                        continue
-                    optimizer_params = (parameter_meta.param_weight_decay, lr_scale)
-                    if optimizer_params in grouped_parameter_slices:
-                        last_slice = grouped_parameter_slices[optimizer_params][-1]
-                        if begin == last_slice.stop:
-                            grouped_parameter_slices[optimizer_params][-1] = slice(last_slice.start, end)
-                            continue
-                    else:
-                        grouped_parameter_slices[optimizer_params] = []
-                    grouped_parameter_slices[optimizer_params].append(slice(begin, end))
 
+                for parameter_meta_ in parameter_meta.metas_for_grad:
+                    # Metas for grad are contiguous.
+                    buffer_end = buffer_begin + parameter_meta_.numel()
+                    if buffer_begin == buffer_end:
+                        pass
+                    elif (
+                        optimizer_params := (parameter_meta_._param_weight_decay, parameter_meta_.lr_scale)
+                    ) not in grouped_parameter_slices:
+                        grouped_parameter_slices[optimizer_params] = [slice(buffer_begin, buffer_end)]
+                    elif buffer_begin == (last_slice := grouped_parameter_slices[optimizer_params][-1]).stop:
+                        grouped_parameter_slices[optimizer_params][-1] = slice(last_slice.start, buffer_end)
+                    else:
+                        grouped_parameter_slices[optimizer_params].append(slice(buffer_begin, buffer_end))
+                    buffer_begin = buffer_end
             param_groups += [
                 param_group_cls(
                     name=f"wd_{weight_decay}_lr_scale_{lr_scale}",  # noqa
@@ -351,9 +351,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         reorder_index = sorted(
             range(len(parameter_metas)),
             key=lambda i: (
-                parameter_metas[i].param_weight_decay,
-                parameter_metas[i].param_weight_decay == parameter_metas[i].is_tensor_parallel,
-                parameter_metas[i].param_weight_decay != parameter_metas[i].sequence_tensor_parallel,
+                parameter_metas[i]._param_weight_decay,
+                parameter_metas[i]._param_weight_decay == parameter_metas[i].is_tensor_parallel,
+                parameter_metas[i]._param_weight_decay != parameter_metas[i].sequence_tensor_parallel,
             ),
         )
         reordered_metas = [parameter_metas[i] for i in reorder_index]
