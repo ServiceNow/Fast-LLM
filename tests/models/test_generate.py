@@ -10,6 +10,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
 
 
@@ -151,7 +152,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=False)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=False)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=False
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -163,7 +166,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=True)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=True)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=True
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -241,13 +246,19 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
     # Not really testing, anything, but handles dependencies more easily than a fixture.
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
-    run_test_script_for_all_models(
-        [
+    if torch.cuda.device_count() < 1:
+        pytest.skip(f"Not enough gpus to run the test")
+
+    distr_config = DistributedTestingConfig(
+        name="test_export_for_generate",
+        config_args=[
             "training.train_iters=1",
             f"training.export.format={model_testing_config.checkpoint_format.name}",
             "training.export.interval=1",
         ],
+        num_gpus=1,
     )
+    run_test_script_for_all_models(distr_config)
 
 
 @pytest.mark.slow
@@ -334,7 +345,7 @@ def _test_forward_return_hidden_states(
 
     inputs_ids = torch.randint(
         1,
-        fast_llm_model.config.fast_llm_config.base_model.vocab_size if vocab_size is None else vocab_size,
+        fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size if vocab_size is None else vocab_size,
         [1, 10],
         dtype=torch.int64,
         generator=torch.Generator().manual_seed(42),
@@ -345,8 +356,7 @@ def _test_forward_return_hidden_states(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
 
-    # hidden_states include embeddings layer
-    assert len(res_fast_llm.hidden_states) - 1 == len(fast_llm_model.config.fast_llm_config.base_model.decoder)
+    assert len(res_fast_llm.hidden_states) == fast_llm_model.config.fast_llm_config.base_model.decoder.num_blocks
 
 
 @pytest.mark.extra_slow
