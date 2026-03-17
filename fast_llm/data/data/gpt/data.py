@@ -8,8 +8,8 @@ import torch.utils.data
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.data.data_loader import SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.data_loader import SampledDatasetIterator
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTSamplingData

@@ -10,6 +10,7 @@ from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparato
 from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
 from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import padded_cumsum
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_FILE, TOKENIZER_PATH
 
@@ -184,6 +185,8 @@ def _get_test_dataset(
     hf_path = path / "hf"
 
     if not config_only and not all(config_path.is_file() for config_path in config_paths):
+        # Not supported for parallel tests, but dataset should already exist anyway.
+        assert DistributedConfig.default_world_size == 1
         dataset = _get_hf_test_dataset(
             seed=seed,
             num_documents=num_documents,
@@ -322,9 +325,10 @@ def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
+        num_documents=200,
         max_loss_masking_spans=5,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 18, "test": 2},
         config_only=config_only,
     )
 
@@ -333,6 +337,7 @@ def get_multimodal_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset_multimodal",
         seed=1234,
+        num_documents=200,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         max_images=2,
         image_patch_config=ImagePatchConfig(
@@ -343,6 +348,6 @@ def get_multimodal_test_dataset(config_only: bool = False):
             image_break_token=None,
             image_end_token=None,
         ),
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 18, "test": 2},
         config_only=config_only,
     )

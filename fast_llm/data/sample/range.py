@@ -52,7 +52,7 @@ class RangeSample(Sample):
         return self.sample_size
 
     def get_padding(self, size: int) -> typing.Self:
-        return RangeSample([], size)
+        return self.__class__([], size)
 
 
 class RangeBatch(Batch):
