@@ -258,16 +258,15 @@ class LlavaHeadConverter(MistralHeadConverter):
         cls,
         config: LanguageModelHeadConfig,
         exported_config: dict,
-        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
         return [
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
-                f"{fast_llm_prefix}.final_norm",
+                f"head.final_norm",
                 f"language_model.model.norm",
             ),
             get_parameter_converter(
-                f"{fast_llm_prefix}.output_weights",
+                f"head.output_weights",
                 "language_model.lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
             ),
@@ -320,7 +319,7 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
                 config.decoder, "decoder", "language_model.model.layers"
             ),
             *cls.language_model_converter_class.head_converter_class.get_converters(
-                config.head, {"tie_word_embeddings": False}, "head"
+                config.head, {"tie_word_embeddings": False}
             ),
         ]
 

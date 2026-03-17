@@ -13,9 +13,6 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossConfig](LanguageModelLoss[ConfigType]):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def forward_backward(
         self,
         logits: "torch.Tensor",
@@ -41,11 +38,6 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
 
 
 class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossConfig](LanguageModelLoss[ConfigType]):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self._prediction_distance > 0:
-            raise NotImplementedError()
-
     def forward_backward(
         self,
         logits: "torch.Tensor",

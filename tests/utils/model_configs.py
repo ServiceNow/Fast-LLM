@@ -470,13 +470,8 @@ update_and_add_testing_config(
     "llama",
     "mtp_llama",
     updates={
-        ("model", "base_model", "head"): {
-            "type": "multi_token_prediction",
-            "block": _llama_block,
-            "head": MODEL_CONFIGS["llama"].config_dict["model"]["base_model"]["head"],
-            "prediction_heads": 2,
-        },
         ("model", "base_model", "decoder", "num_blocks"): 1,
+        ("model", "base_model", "head", "prediction_heads"): 1,
     },
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,

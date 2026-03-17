@@ -35,7 +35,7 @@ def test_attention_implementations(cross_document_attention: bool, causal: bool,
     kwargs = {
         AttentionKwargs.device: device,
         AttentionKwargs.sequence_length: 100,
-        AttentionKwargs.sequence_lengths: [
+        AttentionKwargs.lengths: [
             [20, 32, 10, 11, 9, 18],
             [100],
             [2, 8, 22, 7, 6, 5, 1, 10, 4, 11, 3, 8, 4, 9],

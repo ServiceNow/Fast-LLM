@@ -168,8 +168,8 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
         for reference_model in self.reference_models.values():
             Assert.geq(
-                reference_model.model.base_model.head.max_prediction_distance,
-                self.model.base_model.head.max_prediction_distance,
+                reference_model.model.base_model.head.prediction_heads,
+                self.model.base_model.head.prediction_heads,
             )
             Assert.empty(reference_model.model.base_model.get_reference_models())
             Assert.eq(

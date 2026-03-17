@@ -102,7 +102,6 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return None if loss_mask is None else self._prepare_target(loss_mask, kwargs, split_index)
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
-        assert self._prediction_distance == 0
         Assert.incl(
             logits_name := self.module_name.rsplit(".", 2)[0] + f".logits",
             reference_hidden_states := kwargs[f"reference_{reference_model}_hidden_states"],

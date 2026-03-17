@@ -1,4 +1,3 @@
-import abc
 import functools
 import logging
 import typing
@@ -14,12 +13,11 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
-from fast_llm.layers.block.block import Block, BlockBase
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LM_HEAD_LOSS_NAME,
     LanguageModelEmbeddingsConfig,
-    LanguageModelHeadBaseConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
@@ -32,15 +30,7 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](BlockBase[ConfigType]):
-    heads: "list[LanguageModelHead]"
-
-    @abc.abstractmethod
-    def get_output_weights(self) -> list[torch.Tensor]:
-        pass
-
-
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType], Block):
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -58,7 +48,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         lr_scale: float | None,
         peft: PeftConfig | None,
         prediction_distance: int = 0,
-        prediction_heads: int = 1,
         loss_coefficient: float = 1.0,
     ):
         super().__init__(
@@ -68,11 +57,9 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             lr_scale=lr_scale,
             peft=peft,
         )
-        Assert.in_range(prediction_distance, 0, prediction_heads)
+        Assert.in_range(prediction_distance, 0, self._config.prediction_heads)
         self._prediction_distance = prediction_distance
-        self._prediction_heads = prediction_heads
-        self._loss_coefficient = loss_coefficient
-        self._is_last_head = self._prediction_distance == self._prediction_heads - 1
+        self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
 
         self._vocab_parallel = self._distributed_config.tensor_parallel > 1 and embeddings_config.vocab_parallel
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -99,17 +86,22 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         loss_configs = (
             self._config.losses if self._config.losses else {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
         )
+        loss_coefficient = (
+            1.0
+            if self._config.prediction_loss_coefficient is None
+            else self._config.prediction_loss_coefficient[self._prediction_distance]
+        )
         self.losses = torch.nn.ModuleList(
             [
                 loss_config.get_layer(
                     distributed_config,
                     self._get_full_loss_name(name),
                     self._prediction_distance,
-                    self._prediction_heads,
+                    self._config.prediction_heads,
                     self._vocab_parallel,
                     self._config.cross_entropy_splits,
                     self._config.logits_scale_factor,
-                    self._loss_coefficient,
+                    loss_coefficient,
                 )
                 for name, loss_config in loss_configs.items()
             ]
@@ -305,8 +297,3 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
     @functools.cached_property
     def _total_loss_name(self) -> str:
         return self._get_full_loss_name(LM_HEAD_LOSS_NAME)
-
-    @property
-    def heads(self) -> "list[LanguageModelHead]":
-        # For compatibility with MTP.
-        return [self]
