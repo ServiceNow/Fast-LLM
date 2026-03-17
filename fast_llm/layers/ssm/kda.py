@@ -11,7 +11,6 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
 from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig
@@ -229,7 +228,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         """
         Same as in gdn, the idea is to always do forward pass in a packed way, whcih is required for varlen support.
         """
-        sequence_first = kwargs[BlockKwargs.sequence_first]
         hidden_states = input_
 
         # TODO: can be made more efficeint by rearranging hidden states directly and only once
@@ -238,11 +236,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
-
-        if sequence_first:
-            q = q.transpose(0, 1)
-            k = k.transpose(0, 1)
-            v = v.transpose(0, 1)
 
         batch_size, sequence_length, _ = q.size()
         q = rearrange(q, "b s ... -> (b s) ...").unsqueeze(0)
@@ -257,8 +250,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         v = self._apply_conv(v, self.v_conv, seq_idx)
 
         g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
-        if sequence_first:
-            g_kernel = g_kernel.transpose(0, 1)
         g_kernel = self._reshape_heads(g_kernel)
         g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
 
@@ -268,8 +259,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         q = self._reshape_heads(q)
         k = self._reshape_heads(k)
         v = self._reshape_heads(v)
-        if sequence_first:
-            beta = beta.transpose(0, 1)
         beta = rearrange(beta, "b s h -> (b s) h").unsqueeze(0)
 
         # need to install nightly triton for this to work on H100, see https://github.com/fla-org/flash-linear-attention/blob/main/FAQs.md
@@ -290,14 +279,10 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
 
         g_out = self.g_b_proj(self.g_a_proj(hidden_states))  # bs x seq x n_local_heads x head dim
         g_out = self._reshape_heads(g_out)
-        if sequence_first:
-            g_out = g_out.transpose(0, 1)
 
         attn_out = rearrange(attn_out.squeeze(0), "(b s) h d -> b s h d", b=batch_size, s=sequence_length)
         attn_out = self.norm(attn_out, g_out)
         attn_out = rearrange(attn_out, "b s h d -> b s (h d)")
-        if sequence_first:
-            attn_out = attn_out.transpose(0, 1)
         attn_out = self.o_proj(attn_out)
 
         return attn_out

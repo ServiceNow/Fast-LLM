@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
@@ -28,7 +29,6 @@ class LMHeadTestConfig:
     logits_scale_factor: float = 1.0
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
-    sequence_first: bool = False
     loss_masking: bool = False
     prediction_heads: int = 1
     tied_embedding_weight: bool = False
@@ -88,22 +88,15 @@ class LMHeadTestConfig:
     def get_inputs(self) -> tuple[torch.Tensor, dict[str, typing.Any]]:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         input_ = torch.randn(
-            (
-                (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE)
-                if self.sequence_first
-                else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE)
-            ),
+            (BATCH_SIZE * SEQUENCE_LENGTH, HIDDEN_SIZE),
             dtype=(torch.float32 if self.full_precision_residual else self.compute_dtype.torch),
             device=device,
             requires_grad=True,
         )
-        label_shape = (
-            (SEQUENCE_LENGTH + self.prediction_heads - 1, BATCH_SIZE)
-            if self.sequence_first
-            else (BATCH_SIZE, SEQUENCE_LENGTH + self.prediction_heads - 1)
-        )
+        label_shape = (BATCH_SIZE * (SEQUENCE_LENGTH + self.prediction_heads - 1),)
         kwargs: dict[str, typing.Any] = {
-            AttentionKwargs.sequence_first: self.sequence_first,
+            AttentionKwargs.batch_dim: TensorDim("batch", BATCH_SIZE),
+            AttentionKwargs.sequence_q_dim: TensorDim("sequence_q", SEQUENCE_LENGTH),
             AttentionKwargs.grad_output: 1.0,
         }
         if self.loss_masking:
@@ -122,11 +115,13 @@ class LMHeadTestConfig:
 
         if self.distillation_loss is not False:
             assert self.prediction_heads == 1
-            kwargs[f"distillation_logits"] = torch.randn(
-                input_.shape[:-1] + (VOCAB_SIZE,),
-                dtype=input_.dtype,
-                device=device,
-            )
+            kwargs[f"reference_distillation_hidden_states"] = {
+                "head.logits": torch.randn(
+                    input_.shape[:-1] + (VOCAB_SIZE,),
+                    dtype=input_.dtype,
+                    device=device,
+                )
+            }
         return input_, kwargs
 
     def get_reference_outputs(
@@ -153,28 +148,25 @@ class LMHeadTestConfig:
         losses = {}
 
         if self.actual_label_loss is not False:
-            if self.sequence_first:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    head._prediction_distance : head._prediction_distance + logits.size(0)
+            labels = (
+                kwargs[LanguageModelKwargs.labels]
+                .view(BATCH_SIZE, (SEQUENCE_LENGTH + self.prediction_heads - 1))[
+                    :, head._prediction_distance : head._prediction_distance + SEQUENCE_LENGTH
                 ]
-            else:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    :, head._prediction_distance : head._prediction_distance + logits.size(1)
-                ]
-            label_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2), labels.flatten(), reduction="none"
-            ).mean()
+                .flatten()
+            )
+            label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
             losses["label"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2),
-                torch.softmax(kwargs[f"distillation_logits"].flatten(0, -2), -1),
+                logits,
+                torch.softmax(kwargs[f"reference_distillation_hidden_states"]["head.logits"], -1),
                 reduction="none",
             )
             if LanguageModelKwargs.loss_mask in kwargs:
-                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask].flatten()
+                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask]
             distillation_loss = distillation_loss.mean()
             losses["distillation"] = distillation_loss.detach()
             total_loss = total_loss + float(self.distillation_loss) * distillation_loss
@@ -220,7 +212,6 @@ def _add_configs(base_name: str, **kwargs):
 _add_configs("default")
 _add_configs("bfloat16", compute_dtype=DataType.bfloat16)
 _add_configs("full_precision_residual", full_precision_residual=True)
-_add_configs("sequence_first", sequence_first=True)
 _add_configs("logit_scaling", logits_scale_factor=5.0)
 _add_configs("tied_embedding_weight", tied_embedding_weight=True)
 _add_configs("multi_token_prediction", prediction_heads=2)
@@ -240,7 +231,7 @@ _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distill
         for _lm_head_test_config in _lm_head_test_configs
     ],
 )
-def test_lm_head(test_config):
+def test_lm_head(test_config: LMHeadTestConfig):
     model_config = test_config.get_config()
     model, distributed = get_base_model(model_config)
     input_, kwargs = test_config.get_inputs()

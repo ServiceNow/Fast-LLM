@@ -220,13 +220,7 @@ class TestLossMaskIntegration:
         labels = kwargs[LanguageModelKwargs.labels]
 
         # Get labels for sample 1 (all should be -100)
-        # Handle sequence_first dimension ordering
-        if labels.shape[0] > labels.shape[1]:
-            # sequence_first=True: shape is (seq, batch)
-            sample1_labels = labels[:, 1]
-        else:
-            # sequence_first=False: shape is (batch, seq)
-            sample1_labels = labels[1, :]
+        sample1_labels = labels[8:]
 
         assert torch.all(sample1_labels == -100), f"All labels in padding sample should be -100, got {sample1_labels}"
 

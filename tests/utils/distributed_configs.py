@@ -123,14 +123,6 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         num_gpus=1,
         compare_config=_fp16_compare,
     ),
-    # Sequence-first baseline
-    DistributedTestingConfig(
-        name="sf",
-        compare="simple",
-        config_args=["model.base_model.sequence_first=True"],
-        num_gpus=1,
-        compare_config=_compare_layer_mismatch,
-    ),
     # Cross-entropy splits.
     DistributedTestingConfig(
         name="ce4",
@@ -170,14 +162,6 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         config_args=["batch.depth_first_micro_batches=2", "batch.breadth_first_micro_batches=2"],
         num_gpus=1,
         compare_config=_compare_layer_match,
-    ),
-    # Sequence-first gradient accumulation baseline.
-    DistributedTestingConfig(
-        name="df4_sf",
-        compare="simple",
-        config_args=["batch.depth_first_micro_batches=4", "model.base_model.sequence_first=True"],
-        num_gpus=1,
-        compare_config=_compare_layer_mismatch,
     ),
 ]
 
@@ -221,7 +205,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Sequence-data-parallel
     DistributedTestingConfig(
         name="sdp2",
-        compare="sf",
+        compare="simple",
         config_args=["model.distributed.sequence_data_parallel=2"],
         num_gpus=2,
         compare_config=_compare_layer_match,
@@ -238,7 +222,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Simple sequence-tensor-parallel
     DistributedTestingConfig(
         name="stp2",
-        compare="sf",
+        compare="simple",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
@@ -260,7 +244,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Cross-entropy splits
     DistributedTestingConfig(
         name="stp2_ce4",
-        compare="sf",
+        compare="simple",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
@@ -274,7 +258,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Simple
     DistributedTestingConfig(
         name="dp2_stp2",
-        compare="sf",
+        compare="simple",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
@@ -285,7 +269,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Breadth-first micro-batches
     DistributedTestingConfig(
         name="sdp2_stp2_bf4",
-        compare="df4_sf",
+        compare="df4",
         config_args=[
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
@@ -298,7 +282,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Sequence-data-parallel
     DistributedTestingConfig(
         name="sdp2_stp2",
-        compare="sf",
+        compare="simple",
         config_args=[
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
@@ -358,10 +342,10 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare_config=_compare_layer_match,
     ),
     # ===== 2d configs (Tensor + Pipeline)
-    # Simple [sf, mb]
+    # Simple [mb]
     DistributedTestingConfig(
         name="stp2_pp2s1_bf4",
-        compare="df4_sf",
+        compare="df4",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",

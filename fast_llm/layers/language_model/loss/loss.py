@@ -11,7 +11,7 @@ from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, 
 from fast_llm.utils import Assert
 
 
-class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[ConfigType]):
+class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[ConfigType], torch.nn.Module):
     def __init__(
         self,
         config: ConfigType,
@@ -62,19 +62,17 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         split_index: int = 0,
         *,
         multi_token_format: bool = False,
+        sequence_parallel: bool = True,
     ) -> torch.Tensor | None:
         # MTP shift
         if multi_token_format and self._prediction_heads > 1:
-            sequence_first: bool = kwargs[LanguageModelLossKwargs.sequence_first]
-            sequence_q_length = target.size(1 - sequence_first) + 1 - self._prediction_heads
-            target_slice = slice(self._prediction_distance, self._prediction_distance + sequence_q_length)
-            target = target[target_slice] if sequence_first else target[:, target_slice]
-
-        # Flatten the batch and sequence dimensions.
-        target = target.flatten(0, 1)
+            sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
+            target = target.unflatten(
+                0, (kwargs[LanguageModelKwargs.batch_dim].size, sequence_q + self._prediction_heads - 1)
+            )[:, self._prediction_distance : self._prediction_distance + sequence_q].flatten(0, 1)
 
         # Get the local chunk.
-        if self._sequence_parallel:
+        if sequence_parallel and self._sequence_parallel:
             target = split_op(target, self._parallel_dim.group, 0)
 
         # Get the chunk for the current split.
@@ -104,7 +102,13 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return None if loss_mask is None else self._prepare_target(loss_mask, kwargs, split_index)
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
-        return self._prepare_target(kwargs[f"{reference_model}_logits"], kwargs, split_index)
+        assert self._prediction_distance == 0
+        Assert.incl(
+            logits_name := self.module_name.rsplit(".", 2)[0] + f".logits",
+            reference_hidden_states := kwargs[f"reference_{reference_model}_hidden_states"],
+        )
+        # The logits are already sequence-parallel if needed, we don't want to split again.
+        return self._prepare_target(reference_hidden_states[logits_name], kwargs, split_index, sequence_parallel=False)
 
 
 def loss_forward_backward(

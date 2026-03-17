@@ -135,20 +135,20 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             # The transformers will save the present keys and values to this list.
             kwargs[AttentionKwargs.presents] = []
 
-        kwargs["global_logits"] = True
-
         self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
-        if kwargs[AttentionKwargs.sequence_first]:
-            logits = kwargs["logits"].transpose(0, 1)
-        else:
-            logits = kwargs["logits"]
+        # TODO: Handle MTP.
+        logits_meta, logits = kwargs[AttentionKwargs.hidden_states]["head.logits"]
+        logits, _ = logits_meta.local_to_global(logits)
+        logits = logits.unflatten(
+            0, (kwargs[AttentionKwargs.batch_dim].global_size, kwargs[AttentionKwargs.sequence_q_dim].global_size)
+        )
 
         if output_hidden_states:
             hidden_states = {
                 key: tensor if meta is None else meta.local_to_global(tensor)[0]
-                for key, (meta, tensor) in kwargs["hidden_states"].items()
+                for key, (meta, tensor) in kwargs[AttentionKwargs.hidden_states].items()
             }
         else:
             hidden_states = None

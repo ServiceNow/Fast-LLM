@@ -12,7 +12,6 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
 from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
@@ -301,16 +300,12 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         -
         """
 
-        sequence_first = kwargs[BlockKwargs.sequence_first]
         # in sequence parallel TP the input here is already scattered across sequence dimension
         # TODO: fuse soome of the reshapes into rearranges
         hidden_states = input_
 
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
-        if sequence_first:
-            projected_states_qkvz = projected_states_qkvz.transpose(0, 1)
-            projected_states_ba = projected_states_ba.transpose(0, 1)
 
         batch_size, sequence_length = projected_states_qkvz.shape[:2]
 
@@ -371,8 +366,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         core_attn_out = self.norm(core_attn_out, z)
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
-        if sequence_first:
-            core_attn_out = core_attn_out.transpose(0, 1)
         output = self.out_proj(core_attn_out)
 
         return output

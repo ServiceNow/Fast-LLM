@@ -7,7 +7,6 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
@@ -15,8 +14,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
-from fast_llm.layers.block.block import Block
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.block import Block, BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
     LM_HEAD_LOSS_NAME,
@@ -34,13 +32,15 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](Block[ConfigType]):
+class LanguageModelHeadBase[ConfigType: LanguageModelHeadBaseConfig](BlockBase[ConfigType]):
+    heads: "list[LanguageModelHead]"
+
     @abc.abstractmethod
     def get_output_weights(self) -> list[torch.Tensor]:
         pass
 
 
-class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType]):
+class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBase[ConfigType], Block):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     TODO: Cleanup (dynamic type? composition?)
@@ -99,19 +99,21 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         loss_configs = (
             self._config.losses if self._config.losses else {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
         )
-        self._losses = [
-            loss_config.get_layer(
-                distributed_config,
-                self._get_full_loss_name(name),
-                self._prediction_distance,
-                self._prediction_heads,
-                self._vocab_parallel,
-                self._config.cross_entropy_splits,
-                self._config.logits_scale_factor,
-                self._loss_coefficient,
-            )
-            for name, loss_config in loss_configs.items()
-        ]
+        self.losses = torch.nn.ModuleList(
+            [
+                loss_config.get_layer(
+                    distributed_config,
+                    self._get_full_loss_name(name),
+                    self._prediction_distance,
+                    self._prediction_heads,
+                    self._vocab_parallel,
+                    self._config.cross_entropy_splits,
+                    self._config.logits_scale_factor,
+                    self._loss_coefficient,
+                )
+                for name, loss_config in loss_configs.items()
+            ]
+        )
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Add marginal compute? (loss)
@@ -168,7 +170,12 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             ln_output = self.final_norm(input_)
             # Transformers expect normalized outputs for the last transformer layer,
             # so we add the norm output to the hidden states.
-            self._debug(ln_output, "final_norm", kwargs.get(LanguageModelKwargs.hidden_dims), kwargs)
+            self._debug(
+                ln_output,
+                "final_norm",
+                (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim),
+                kwargs,
+            )
         loss, ln_output_grad = self._logits_loss_forward_backward(ln_output.detach(), kwargs, losses)
         if ln_output_grad is None:
             return loss, None
@@ -185,18 +192,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         if not self.training:
             logits, _ = self._logits_loss_forward_backward_partial(input_, kwargs, return_logits=True)
-            # TODO: Make a proper way of returning the model output.
-            logits = logits.detach()
-            if kwargs.get("global_logits"):
-                if self._vocab_parallel:
-                    logits = gather_op(logits, self._parallel_dim.group, 2)
-                elif self._sequence_parallel_logits:
-                    logits = gather_op(
-                        logits, self._parallel_dim.group, 0 if kwargs[LanguageModelKwargs.sequence_first] else 1
-                    )
-            kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = (
-                logits.detach()
-            )
+            self._debug(logits, "logits", (kwargs[LanguageModelKwargs.hidden_token_dim], self._vocab_dim), kwargs)
             return None, None
 
         input_ = input_.flatten(0, -2)
@@ -230,7 +226,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         total_loss = sum(
             (loss_.weight / self._config.cross_entropy_splits) * loss_dict[loss_.name]
-            for loss_ in self._losses
+            for loss_ in self.losses
             if loss_.weight != 0.0 and loss_.name in loss_dict
         )
 
@@ -240,7 +236,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
 
         if all_losses_dict is not None:
             all_losses_dict[self._total_loss_name].append(total_loss)
-            if len(self._losses) > 1 or any(loss_.weight != 1.0 for loss_ in self._losses):
+            if len(self.losses) > 1 or any(loss_.weight != 1.0 for loss_ in self.losses):
                 for name, loss_value in loss_dict.items():
                     if self._config.cross_entropy_splits != 1:
                         loss_value /= self._config.cross_entropy_splits
@@ -265,24 +261,19 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
-
-        sequence_dim = BlockDimNames.sequence_q_tp if self._sequence_parallel_logits else BlockDimNames.sequence_q
-        if LanguageModelKwargs.hidden_dims in kwargs:
-            batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
-            dims = (
-                (sequence_dim, batch_dim, self._vocab_dim)
-                if kwargs[LanguageModelKwargs.sequence_first]
-                else (batch_dim, sequence_dim, self._vocab_dim)
-            )
-        else:
-            dims = None
-        self._debug(logits, "logits", dims, kwargs, scale=self._config.logits_scale_factor)
+        self._debug(
+            logits,
+            f"logits{"" if self._config.cross_entropy_splits == 1 else f"_{split_index}"}",
+            (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim),
+            kwargs,
+            scale=self._config.logits_scale_factor,
+        )
 
         if return_logits:
             return logits, None
 
         losses, grad = {}, None
-        for loss in self._losses:
+        for loss in self.losses:
             # losses are returned unscaled but the grads are already scaled
             loss_value, grad = loss.forward_backward(
                 logits,
@@ -304,7 +295,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
                     count=count,
                     dtype=DataType.float32,
                 )
-                for loss in self._losses
+                for loss in self.losses
             ),
         ]
 
@@ -316,6 +307,6 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         return self._get_full_loss_name(LM_HEAD_LOSS_NAME)
 
     @property
-    def heads(self):
+    def heads(self) -> "list[LanguageModelHead]":
         # For compatibility with MTP.
         return [self]
