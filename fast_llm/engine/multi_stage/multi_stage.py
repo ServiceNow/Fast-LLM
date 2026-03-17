@@ -4,7 +4,6 @@ import typing
 import warnings
 
 import torch
-from torch._C._distributed_c10d import ProcessGroup
 
 from fast_llm.config import Configurable
 from fast_llm.engine.base_model.base_model import BaseModel
@@ -611,7 +610,7 @@ class TiedParameter:
     # Whether the local rank is involved at all.
     on_device: bool
     # Process group for reduction.
-    group: ProcessGroup | None = dataclasses.field(repr=False, init=False)
+    group: torch.distributed.ProcessGroup | None = dataclasses.field(repr=False, init=False)
     all_ranks: set[int]
     # The index of the main stage.
     main_stage: int

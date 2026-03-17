@@ -33,7 +33,7 @@ _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 _CHECKPOINT_AND_EVAL_ARGS = [
     "training.checkpoint.interval=1",
     "training.evaluators.validation.interval=2",
-    "training.evaluators.validation.evaluator.iterations=1",
+    "training.evaluators.validation.iterations=1",
 ]
 
 
@@ -231,14 +231,14 @@ def load_and_compare_checkpoints(model_testing_config):
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained(
-    model_testing_config, run_test_script_base_path, get_convert_path, load_and_compare_checkpoints
+    model_testing_config, run_test_script_base_path, get_convert_path, load_and_compare_checkpoints, testing_device
 ):
     # Test that loadind a pretrained model from either converted checkpoint always yields the exact same model.
     reference_config = model_testing_config.model_config_class.from_dict(
         yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
     )
     reference_shard = safetensors.torch.load_file(
-        get_convert_path() / "rank_0.safetensors", device="cuda" if torch.cuda.is_available() else "cpu"
+        get_convert_path() / "rank_0.safetensors", device=str(testing_device)
     )[_WEIGHT_SHARD_SAVE_NAME]
     load_and_compare_checkpoints(
         FastLLMCheckpointFormat,
@@ -304,8 +304,7 @@ def test_load_pretrained(
 
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
-def test_huggingface_model(model_testing_config, get_convert_path):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def test_huggingface_model(model_testing_config, get_convert_path, testing_device):
     distributed_update = {("distributed", "use_cuda"): torch.cuda.is_available()}
     if model_testing_config.checkpoint_format is None:
         return
@@ -331,11 +330,11 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         384,
         size=(4, 100),
         dtype=torch.int64,
-        device=device,
+        device=testing_device,
     )
-    kwargs = {}
+    kwargs = {"output_hidden_states": True}
     if model_testing_config.model_type == "multimodal":
-        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(device)
+        kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(testing_device)
         kwargs["image_sizes"] = torch.tensor(
             [
                 [20, 20],  # Full image, 25 patches
@@ -361,6 +360,8 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         # Last one cropped out.
 
     output_ref = model_ref(test_input, **kwargs)
+    hidden_states_ref = output_ref.hidden_states
+    hidden_states_ref["logits"] = output_ref.logits
     model_from_fast_llm = hf_class.from_pretrained(fast_llm_path, distributed_update).eval()
     model_from_hf = hf_class.from_pretrained(
         CheckpointLoadConfig(
@@ -373,23 +374,57 @@ def test_huggingface_model(model_testing_config, get_convert_path):
     errors = []
     model_as_hf = (
         model_testing_config.auto_model_class.from_pretrained(hf_path, trust_remote_code=True)
-        .to("cuda" if torch.cuda.is_available() else "cpu")
+        .to(testing_device)
         .eval()
     )
+    config = CompareConfig().rescale(model_testing_config.hf_compare_factor)
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
-        output = model(test_input, **kwargs)
-        # TODO: Make a generic comparison util.
-        CompareConfig().compare_tensors(
-            {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},
-            {"samples": output.logits, "shape": output.logits.shape, "step": 0},
-            errors,
-            name,
-            "logits",
-        )
+        hidden_states_ref_ = hidden_states_ref
+        if model is model_as_hf:
+            if model_testing_config.model_type == "multimodal" and hasattr(model, "vision_encoder"):
+                kwargs["output_vision_hidden_states"] = True
+            output = model(test_input, **kwargs)
+            hidden_states = output.hidden_states + (output.logits,)
+            # Llava models doesn't return vision hidden states, so we run the vision model directly instead.
+            if model_testing_config.model_type == "multimodal":
+                if hasattr(model, "vision_tower"):
+                    vision_output = model.vision_tower(
+                        pixel_values=kwargs["pixel_values"],
+                        image_sizes=kwargs["image_sizes"],
+                        output_hidden_states=True,
+                    )
+                    adapter_output = model.multi_modal_projector(vision_output.hidden_states[-1])
+                    hidden_states = vision_output.hidden_states + (adapter_output,) + hidden_states
+                hidden_states_ref_ = hidden_states_ref.copy()
+                # Adjust the vision hidden states
+                # TODO: Do in HF wrapper
+                for name, hidden_state in hidden_states_ref.items():
+                    if name.startswith("vision_encoder"):
+                        hidden_states_ref_[name] = hidden_state.flatten(0, 1)[:46].unsqueeze(0)
+
+            hidden_states = {
+                name: hidden_state for name, hidden_state in zip(hidden_states_ref, hidden_states, strict=True)
+            }
+        else:
+            output = model(test_input, **kwargs)
+            hidden_states = output.hidden_states
+            hidden_states["logits"] = output.logits
+
+        Assert.eq(hidden_states_ref_.keys(), hidden_states.keys())
+
+        for tensor_name, hidden_state_ref in hidden_states_ref_.items():
+            hidden_state = hidden_states[tensor_name]
+            config.compare_tensors(
+                {"samples": hidden_state_ref, "shape": hidden_state_ref.shape, "step": 0},
+                {"samples": hidden_state, "shape": hidden_state.shape, "step": 0},
+                errors,
+                name,
+                tensor_name,
+            )
 
     if errors:
         for error in errors:

@@ -8,6 +8,7 @@ import shutil
 import pytest
 import xdist.scheduler
 
+from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
@@ -136,6 +137,8 @@ def pytest_configure(config):
     # Skip slow autotune for tests. The default config has the highest block size, so this shouldn't hide any bug.
     os.environ["FAST_LLM_SKIP_TRITON_AUTOTUNE"] = "TRUE"
 
+    configure_logging()
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items: list[pytest.Function]):
@@ -256,7 +259,7 @@ def pytest_runtest_call(item: pytest.Function):
     if torch.cuda.is_available():
         # Empty cache to check is cuda is still working (TODO: Is there a better way? Can we kill the worker?)
         try:
-            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         except RuntimeError:
             pytest.skip("Cuda runtime unavailable due to an error in an earlier test.")
     manager.handle_missing(item)
@@ -279,3 +282,8 @@ def pytest_xdist_make_scheduler(config, log):
     # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
     assert config.getvalue("dist") == "load"
     return xdist.scheduler.LoadGroupScheduling(config, log)
+
+
+@pytest.fixture(scope="session")
+def testing_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")

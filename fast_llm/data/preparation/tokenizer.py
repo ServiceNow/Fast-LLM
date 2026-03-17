@@ -2,8 +2,7 @@ import functools
 import pathlib
 import typing
 
-from fast_llm.config import Configurable, Field, FieldHint, config_class
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.config import Config, Configurable, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -11,10 +10,11 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     import numpy as np
     import torch
+    import transformers
 
 
-@config_class(dynamic_type={PreprocessingConfig: "tokenizer"})
-class TokenizerConfig(PreprocessingConfig):
+@config_class()
+class TokenizerConfig(Config):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
@@ -52,7 +52,7 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         from transformers import AutoTokenizer
 
         log_main_rank(f"> loading tokenizer from {config.path} ...")
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer: "transformers.PreTrainedTokenizer" = AutoTokenizer.from_pretrained(
             pretrained_model_name_or_path=self._config.path,
             errors="replace",
             max_len=None,
@@ -70,10 +70,15 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
 
     @functools.cached_property
     def vocab_size(self) -> int:
-        out = len(self.tokenizer)
-        if self._config.max_vocab_size is not None:
-            out = min(out, self._config.max_vocab_size)
-        return out
+        return (
+            self._tokenizer_vocab_size
+            if self._config.max_vocab_size is None
+            else min(self._tokenizer_vocab_size, self._config.max_vocab_size)
+        )
+
+    @functools.cached_property
+    def _tokenizer_vocab_size(self) -> int:
+        return len(self.tokenizer)
 
     @property
     def vocab(self) -> dict[str, int]:
@@ -99,7 +104,11 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
             tokens = (
                 torch.tensor(
                     tokens,
-                    dtype=torch.int64 if len(self.tokenizer) > torch.iinfo(data_type.torch).max else data_type.torch,
+                    dtype=(
+                        torch.int64
+                        if self._tokenizer_vocab_size > torch.iinfo(data_type.torch).max
+                        else data_type.torch
+                    ),
                 )
                 % self._config.max_vocab_size
             ).to(data_type.torch)

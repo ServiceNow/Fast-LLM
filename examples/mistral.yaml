@@ -5,18 +5,14 @@ training:
     interval: 10
   evaluators:
     validation:
-      evaluator:
-        type: loss
-        iterations: null
-  test_iters: 0
-batch:
-  sequence_length: 4096
-  micro_batch_size: 2
-  batch_size: 64
+      type: loss
+      iterations: null
 data:
   datasets:
     training:
       type: random
+  micro_batch_size: 8192
+  maximum_document_length: 4096
 optimizer:
   learning_rate:
     base: 1.0e-05

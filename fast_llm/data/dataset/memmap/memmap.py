@@ -5,34 +5,28 @@ import typing
 import numpy as np
 import torch
 
-from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import (
-    MemmapIndexDatasetReaderConfig,
-    MemmapIndexedDatasetReader,
-    MemmapWriter,
-    Sample,
+from fast_llm.data.dataset.memmap.abstract import MemmapIndexedDatasetReader, MemmapWriter
+from fast_llm.data.dataset.memmap.config import MemmapIndexDatasetReaderConfig
+from fast_llm.data.document.abstract import (
+    Document,
 )
 
 FILE_HEADER = b"fast_llm_prepared_dataset"
 
 
-class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
+class MemmapDataset[DocumentType: Document](IndexedDataset[DocumentType]):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset.
     """
 
-    @staticmethod
-    def read_reader_config(path: pathlib.Path | str) -> MemmapIndexDatasetReaderConfig:
-        """
-        Read the MemmapIndexDatasetReaderConfig from a memmap file.
-        """
-        # Import reader configs to register them in the dynamic class registry
-        from fast_llm.data.sample.language_model import LanguageModelReaderConfig  # noqa: F401
-        from fast_llm.data.sample.patch import PatchReaderConfig  # noqa: F401
-        from fast_llm.data.sample.range import RangeReaderConfig  # noqa: F401
-        from fast_llm.data.sample.token import TokenReaderConfig  # noqa: F401
+    def __init__(self, name: str, path: pathlib.Path | str):
+        self._init(name, path)
+
+    def _init(self, name: str, path: pathlib.Path | str) -> None:
+        super().__init__()
+        self._name = name
+        self._path = path
 
         path = pathlib.Path(path) if isinstance(path, str) else path
         with path.open("rb") as stream:
@@ -42,43 +36,24 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             stream.seek(int.from_bytes(stream.read(8), signed=False))
             # Read the reader config.
             config_bytes = stream.read(int.from_bytes(stream.read(4), signed=False))
-            return MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
-
-    def __init__(
-        self,
-        name: str,
-        path: pathlib.Path | str,
-        preprocessing: PreprocessingConfig,
-    ):
-        self._init(name, path, preprocessing)
-
-    def _init(self, name: str, path: pathlib.Path | str, preprocessing: PreprocessingConfig) -> None:
-        super().__init__()
-        self._name = name
-        self._path = path
-        self._preprocessing = preprocessing
-
-        reader_config = self.read_reader_config(self._path)
+            reader_config = MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
 
         self._memmap = np.memmap(self._path, mode="r")
-        self._reader = reader_config.get_reader(memoryview(self._memmap), self._preprocessing)
+        self._reader = reader_config.get_reader(memoryview(self._memmap))
 
-    def __getstate__(self) -> tuple[str, pathlib.Path, dict, MemmapIndexDatasetReaderConfig]:
+    def __getstate__(self) -> tuple[str, pathlib.Path]:
         # We pass the reader config to force its import in data loader workers.
-        return self._name, self._path, self._preprocessing.to_dict(), self._reader.config
+        return self._name, self._path
 
-    def __setstate__(self, state: tuple[str, pathlib.Path, dict, MemmapIndexDatasetReaderConfig]):
-        name, path, preprocessing, _ = state
-        self._init(name, path, PreprocessingConfig.from_dict(preprocessing))
+    def __setstate__(self, state: tuple[str, pathlib.Path]):
+        self._init(*state)
 
     def __del__(self):
         if hasattr(self, "_memmap"):
             self._memmap._mmap.close()  # noqa
             del self._memmap
 
-    def get_document(
-        self, index: int, begin: int = 0, end: int | None = None, parameters: SamplingParameters | None = None
-    ) -> SampleType:
+    def get_document(self, index: int, begin: int = 0, end: int | None = None) -> DocumentType:
         if end is None:
             end = self._reader.get_document_size(index)
         return self._reader.get_document(index, begin, end)
@@ -108,11 +83,10 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
     def write_dataset(
         cls,
         path: pathlib.Path,
-        documents: typing.Iterable[Sample],
+        documents: typing.Iterable[Document],
         writer_class: type[MemmapWriter],
-        preprocessing_config: PreprocessingConfig | None = None,
     ) -> MemmapIndexDatasetReaderConfig:
-        # TODO: Match `writer_class` with `SampleType`?
+        # TODO: Match `writer_class` with `DocumentType`?
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as stream:
             # Write the file type header.
@@ -122,7 +96,7 @@ class MemmapDataset[SampleType: Sample](IndexedDataset[SampleType]):
             start = stream.tell()
             stream.seek(start + 8)
             # Write the data.
-            reader_config = writer_class.write_dataset(stream, documents, preprocessing_config)
+            reader_config = writer_class.write_dataset(stream, documents)
             # Write the reader config.
             config_offset = stream.tell()
             reader_config_bytes = json.dumps(reader_config.to_dict()).encode("utf-8")

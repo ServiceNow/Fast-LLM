@@ -617,7 +617,7 @@ class AprielHybridCausalOutput(ModelOutput):
 
     loss: Optional[torch.FloatTensor] = None
     logits: Optional[torch.FloatTensor] = None
-    all_hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
+    hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
     last_hidden_state: Optional[torch.FloatTensor] = None
     attention_weights: Optional[torch.FloatTensor] = None
     past_key_values: Optional[Cache] = None
@@ -1686,7 +1686,7 @@ class AprielHybridSSMForCausalLM(AprielHybridSSMPreTrainedModel, GenerationMixin
         return AprielHybridCausalOutput(
             loss=loss,
             logits=logits,
-            all_hidden_states=outputs.hidden_states,
+            hidden_states=outputs.hidden_states,
             past_key_values=outputs.past_key_values,
         )
 

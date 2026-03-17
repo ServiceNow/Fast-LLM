@@ -5,7 +5,7 @@ import torch
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig
-from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
 
 
 @dataclasses.dataclass()
@@ -36,7 +36,7 @@ def copy_dense_to_sparse_kernel(
     block_size: tl_constexpr,
 ):
     dense_row = tl.program_id(0)
-    offsets = tl.arange(0, block_size) + block_size * tl.program_id(1)
+    offsets = tl_arange(0, block_size) + block_size * tl.program_id(1)
     mask = None if num_columns % block_size == 0 else offsets < num_columns
     out = tl.load(input_ptr + dense_row * num_columns + offsets, mask=mask)
     # Write to each expert.
@@ -78,7 +78,7 @@ def copy_sparse_to_dense_kernel(
     block_size: tl_constexpr,
 ):
     dense_row = tl.program_id(0)
-    offsets = tl.arange(0, block_size) + block_size * tl.program_id(1)
+    offsets = tl_arange(0, block_size) + block_size * tl.program_id(1)
     mask = None if num_columns % block_size == 0 else offsets < num_columns
     out = tl.zeros((block_size,), tl.float32)
     # Sum over experts.
@@ -125,7 +125,7 @@ def copy_sparse_to_dense_grad_score_kernel(
 
     grad_output_ptr += dense_row * num_columns
     input_ptr += sparse_row * num_columns
-    offsets = tl.arange(0, block_size)
+    offsets = tl_arange(0, block_size)
 
     if num_columns % block_size == 0:
         grad_scores = tl.load(input_ptr + offsets).to(tl.float32) * tl.load(grad_output_ptr + offsets).to(tl.float32)
@@ -216,8 +216,8 @@ def sparse_map_kernel(
     we use a one-hot representation to get the quantities we want.
     TODO: Next triton release will support tl.histogram, maybe argsort.
     """
-    block_range = tl.arange(0, block_size)
-    expert_range = tl.arange(0, block_size_expert)
+    block_range = tl_arange(0, block_size)
+    expert_range = tl_arange(0, block_size_expert)
     expert_mask = None if block_size_expert == num_experts else expert_range < num_experts
 
     if num_sparse_rows >= block_size:
@@ -256,7 +256,7 @@ def sparse_map_kernel(
     if sparse_rows_ptr is not None:
         # Assign a new unique index to each row so that it lies in the range (expert_begin, expert_end)
         # for its assigned expert.
-        block_range = tl.arange(0, block_size)
+        block_range = tl_arange(0, block_size)
         for i in range(tl.cdiv(num_sparse_rows, block_size)):
             if num_sparse_rows % block_size == 0:
                 mask = None
@@ -307,7 +307,8 @@ def get_sparse_map(
     num_rows_unpadded = num_rows_dense * num_experts_per_token
     max_rows = (num_rows_unpadded + num_experts * pad_to_multiple) // pad_to_multiple * pad_to_multiple
     dtype = torch.int16 if max_rows < 32768 else torch.int32
-    if (use_triton is None and TritonConfig.TRITON_ENABLED) or use_triton:
+
+    if TritonConfig.enabled(top_experts.device, use_triton):
         expert_ends, expert_pad_begins = top_experts.new_empty((2 * num_experts,), dtype=dtype).chunk(2)
         sparse_rows = expert_ends.new_empty(num_rows_dense, num_experts_per_token)
         sparse_map_kernel[(triton.cdiv(num_rows_dense, block_size),)](

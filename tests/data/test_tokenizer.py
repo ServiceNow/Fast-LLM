@@ -1,6 +1,6 @@
 import pytest
 
-from fast_llm.data.preprocessing.tokenizer import Tokenizer, TokenizerConfig
+from fast_llm.data.preparation.tokenizer import Tokenizer, TokenizerConfig
 from fast_llm.utils import Assert
 from tests.utils.dataset import download_santacoder_tokenizer
 from tests.utils.global_variables import TOKENIZER_PATH
@@ -297,6 +297,6 @@ def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_los
     ),
 )
 def test_train_mask_to_loss_spans(train_mask, expected_loss_spans):
-    from fast_llm.data.preprocessing.tokenizer import _train_mask_to_loss_spans
+    from fast_llm.data.preparation.tokenizer import _train_mask_to_loss_spans
 
     Assert.eq(_train_mask_to_loss_spans(train_mask), expected_loss_spans)

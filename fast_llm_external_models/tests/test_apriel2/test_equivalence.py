@@ -244,7 +244,7 @@ class TestComponentIsolation:
             src_features = get_pixtral_vision_features(source, inputs.pixel_values)
 
             # Apriel2 vision features (flatten to match Pixtral format)
-            tgt_features = target.get_image_features(inputs.pixel_values)
+            tgt_features, _ = target.get_image_features(inputs.pixel_values)
             tgt_features = tgt_features.view(-1, tgt_features.shape[-1])
 
         assert_equivalent(src_features, tgt_features, f"{variant}/{input_config}/vision_encoder")
@@ -481,12 +481,12 @@ class TestDiagnostics:
         with torch.no_grad():
             # Batch processing
             batch_src = get_pixtral_vision_features(source, pixel_values)
-            batch_tgt = target.get_image_features(pixel_values).view(-1, batch_src.shape[-1])
+            batch_tgt, _ = target.get_image_features(pixel_values).view(-1, batch_src.shape[-1])
 
             # Sequential processing
             singles_src = [get_pixtral_vision_features(source, pixel_values[i : i + 1]) for i in range(3)]
             singles_tgt = [
-                target.get_image_features(pixel_values[i : i + 1]).view(-1, batch_src.shape[-1]) for i in range(3)
+                target.get_image_features(pixel_values[i : i + 1])[0].view(-1, batch_src.shape[-1]) for i in range(3)
             ]
 
             single_concat_src = torch.cat(singles_src, dim=0)

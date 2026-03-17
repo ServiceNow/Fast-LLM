@@ -41,10 +41,9 @@ MAX_SEED = 2**64
 
 
 class PhaseType(enum.StrEnum):
-    training = "Training"
-    validation = "Validation"
-    test = "Test"
-    inference = "Inference"
+    training = "training"
+    validation = "validation"
+    inference = "inference"
 
     @property
     def is_training(self) -> bool:
@@ -232,6 +231,12 @@ class DistributedConfig(Config):
         desc="Enable CUDA device.",
         hint=FieldHint.expert,
     )
+    force_cpu_initialization: bool = Field(
+        default=False,
+        desc="Initialize on cpu even if cuda is enabled. Useful for matching cpu and cuda runs.",
+        hint=FieldHint.expert,
+    )
+
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
     # TODO: Rename to compute_dtype (not just for training), move elsewhere
     compute_dtype: DataType = Field(
@@ -277,7 +282,7 @@ class DistributedConfig(Config):
     valid_seed_shift: int = Field(
         default=_BIG_PRIMES[9], desc="Seed shift for extra randomness.", hint=FieldHint.optional
     )
-    test_seed_shift: int = Field(
+    inference_seed_shift: int = Field(
         default=_BIG_PRIMES[10], desc="Seed shift for extra randomness.", hint=FieldHint.optional
     )
     # (slower, uses more memory, mainly for debug)
