@@ -48,6 +48,7 @@ class BlockKwargs:
     hidden_states = "hidden_states"
     output_hidden_states = "output_hidden_states"
     activation_mask = "activation_mask"
+    num_blocks_in_sequence = "num_blocks_in_sequence"
 
 
 @config_class(registry=True)
