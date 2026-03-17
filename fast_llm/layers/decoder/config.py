@@ -21,6 +21,8 @@ class StochasticMixerKwargs(BlockKwargs):
 
     mixer_name = "stochastic_mixer_name"
     generator = "stochastic_mixer_generator"
+    layout = "stochastic_mixer_layout"
+    layout_counter = "stochastic_mixer_layout_counter"
 
 
 @config_class()
@@ -91,6 +93,7 @@ class StochasticMixerSamplingStrategy(enum.StrEnum):
 
     uniform = "uniform"
     weighted = "weighted"
+    full_layout = "full_layout"
 
 
 @config_class(registry=True)
@@ -124,7 +127,8 @@ class StochasticMixerConfig(MixerConfig):
 
     _abstract = False
 
-    mixers: dict[str, MixerConfig] = Field(
+    mixers: dict[str, MixerConfig] | None = Field(
+        default=None,
         desc="Dict of mixer options to sample from (must contain at least 1). "
         "Keys are mixer names used for debugging and namespacing.",
         hint=FieldHint.architecture,
@@ -162,7 +166,9 @@ class StochasticMixerConfig(MixerConfig):
     def _validate(self) -> None:
         super()._validate()
 
-        # Validate mixers dict is not empty
+        # Validate mixers dict is provided and not empty
+        if self.mixers is None:
+            raise ValueError("mixers must be provided for StochasticMixerConfig")
         Assert.gt(len(self.mixers), 0)
 
         # Set main_mixer_name to first mixer if not specified
@@ -173,6 +179,10 @@ class StochasticMixerConfig(MixerConfig):
         # Validate main mixer name exists
         if self.main_mixer_name not in self.mixers:
             raise ValueError(f"main_mixer_name '{self.main_mixer_name}' not found in mixers")
+
+        # Validate full_layout incompatibilities
+        if self.sampling_strategy == StochasticMixerSamplingStrategy.full_layout and self.sampling_weights is not None:
+            raise ValueError("sampling_weights is not compatible with full_layout sampling strategy")
 
         # Validate and normalize sampling weights
         if self.sampling_weights is not None:

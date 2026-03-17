@@ -66,7 +66,9 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
             }
         )
 
-        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.uniform:
+        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
+            self._sampling_probs = None
+        elif self._config.sampling_strategy == StochasticMixerSamplingStrategy.uniform:
             self._sampling_probs = torch.ones(len(self.mixers), device="cpu") / len(self.mixers)
         elif self._config.sampling_strategy == StochasticMixerSamplingStrategy.weighted:
             if self._config.sampling_weights is None:
@@ -107,6 +109,13 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
     def _sample_mixer_name(self, kwargs: dict[str, typing.Any]) -> str:
         if not self.training:
             return self._config.main_mixer_name
+
+        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
+            layout = kwargs[StochasticMixerKwargs.layout]
+            counter = kwargs[StochasticMixerKwargs.layout_counter]
+            idx = counter[0]
+            counter[0] += 1
+            return layout[idx]
 
         generator = kwargs[StochasticMixerKwargs.generator]
         mixer_idx = torch.multinomial(self._sampling_probs, num_samples=1, generator=generator).item()
@@ -150,6 +159,33 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
+    def _sample_allocation(self, num_layers: int, generator: torch.Generator) -> list[int]:
+        """
+        Sample a composition of num_layers into num_mixers bins uniformly.
+
+        Uses stars-and-bars: picks (M-1) bar positions from {0, ..., N+M-2},
+        giving each mixer a count. All integer partitions are equally likely.
+        """
+        M = len(self.mixers)
+        N = num_layers
+        if M == 1:
+            return [N]
+        bars = torch.randperm(N + M - 1, generator=generator)[: M - 1].sort().values
+        padded = torch.cat([torch.tensor([-1]), bars, torch.tensor([N + M - 1])])
+        counts = (padded[1:] - padded[:-1] - 1).tolist()
+        return counts
+
+    def _sample_placement(self, counts: list[int], num_layers: int, generator: torch.Generator) -> list[str]:
+        """
+        Given per-mixer counts, create a shuffled layout.
+        """
+        mixer_names = list(self.mixers.keys())
+        layout = []
+        for name, count in zip(mixer_names, counts):
+            layout.extend([name] * count)
+        perm = torch.randperm(num_layers, generator=generator)
+        return [layout[i] for i in perm.tolist()]
+
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         from fast_llm.engine.distributed.config import MAX_SEED
         from fast_llm.layers.block.config import BlockKwargs
@@ -159,6 +195,13 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         seed = (self._distributed_config.seed + self._config.seed_shift + iteration) % MAX_SEED
         generator.manual_seed(seed)
         kwargs[StochasticMixerKwargs.generator] = generator
+
+        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
+            num_layers = kwargs[BlockKwargs.num_blocks_in_sequence]
+            counts = self._sample_allocation(num_layers, generator)
+            layout = self._sample_placement(counts, num_layers, generator)
+            kwargs[StochasticMixerKwargs.layout] = layout
+            kwargs[StochasticMixerKwargs.layout_counter] = [0]
 
         for mixer in self.mixers.values():
             mixer.preprocess(kwargs)
@@ -173,8 +216,12 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         """
         usages = [mixer.get_compute_usage(input_, kwargs, config) for mixer in self.mixers.values()]
 
-        # Weight by sampling probability and return the expected value
-        expected_usage = sum(usage * prob.item() for usage, prob in zip(usages, self._sampling_probs))
+        if self._sampling_probs is not None:
+            # Weight by sampling probability and return the expected value
+            expected_usage = sum(usage * prob.item() for usage, prob in zip(usages, self._sampling_probs))
+        else:
+            # full_layout: uniform over compositions, so equal expected weight per mixer
+            expected_usage = sum(usages) / len(usages)
 
         return int(expected_usage)
 
