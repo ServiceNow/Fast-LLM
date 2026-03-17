@@ -43,6 +43,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 

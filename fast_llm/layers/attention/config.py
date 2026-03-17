@@ -1,10 +1,8 @@
 import enum
 import logging
 import typing
-import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
@@ -131,9 +129,6 @@ class AttentionConfig(MixerConfig):
 
     def _validate(self) -> None:
         super()._validate()
-
-        if not TritonConfig.TRITON_ENABLED:
-            warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.multiple(self.heads, self.head_groups)
 

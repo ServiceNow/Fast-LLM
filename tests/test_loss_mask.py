@@ -15,7 +15,7 @@ from fast_llm.data.sample.token import TokenBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, GPTModelConfig
-from tests.utils.utils import get_base_model, requires_cuda
+from tests.utils.utils import get_base_model
 
 
 def create_test_batch(
@@ -46,7 +46,7 @@ def get_minimal_model():
                 "embeddings": {"vocab_size": 1000},
                 "hidden_size": 64,
             },
-            "distributed": {},
+            "distributed": {"use_cuda": torch.cuda.is_available()},
         },
     )
     model, distributed = get_base_model(config)
@@ -82,7 +82,6 @@ def run_preprocess_batch(model, distributed_config, batch: LanguageModelBatch, p
     )
 
 
-@requires_cuda
 class TestLossMaskIntegration:
     """
     Integration tests for loss_mask computation in preprocess_batch.

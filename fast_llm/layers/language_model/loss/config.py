@@ -1,8 +1,9 @@
 import typing
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType
+from fast_llm.functional.config import EntropyLossType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
@@ -77,12 +78,18 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
     )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `label`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
 
     @property
     def loss_class(self) -> "type[LanguageModelLabelEntropyLoss]":
@@ -100,11 +107,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
-    )
     reference_model: str = Field(
         default="teacher",
         desc="Name of the reference model for knowledge distillation.",
@@ -116,6 +118,18 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
     )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `distillation`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
 
     @property
     def loss_class(self) -> "type[LanguageModelDistillationLoss]":
@@ -160,6 +174,12 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
     _abstract: typing.ClassVar[bool] = False
+
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
 
     @property
     def loss_class(self) -> "type[LanguageModelZLoss]":

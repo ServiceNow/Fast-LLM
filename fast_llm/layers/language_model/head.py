@@ -284,15 +284,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](LanguageModelHeadBa
         losses, grad = {}, None
         for loss in self._losses:
             # losses are returned unscaled but the grads are already scaled
-            loss_value, grad_ = loss.forward_backward(
+            loss_value, grad = loss.forward_backward(
                 logits,
                 kwargs,
                 split_index,
+                grad,
             )
             losses[loss.name] = loss_value.detach()
-            if grad_ is not None:
-                # TODO: Accumulate grads in-place to reduce memory and compute overhead.
-                grad = grad_ if grad is None else grad + grad_
 
         return losses, output_parallel_linear_backward(grad, context) if self.training else None
 
