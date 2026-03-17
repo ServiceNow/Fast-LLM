@@ -9,7 +9,7 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import BlockBase
-from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.block.config import BlockKwargs, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 
 
@@ -56,6 +56,7 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
         return self._layers_with_namespace
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        kwargs[BlockKwargs.num_blocks_in_sequence] = self._config.num_blocks
         self._layers_with_namespace[0].preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
@@ -110,7 +111,8 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
         return self._layers_with_namespace
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        for _, index in self._config.preprocessing_layers.items():
+        for name, index in self._config.preprocessing_layers.items():
+            kwargs[BlockKwargs.num_blocks_in_sequence] = self._config.expanded_pattern.count(name)
             self._layers_with_namespace[index].preprocess(kwargs)
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
