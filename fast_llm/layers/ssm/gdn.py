@@ -9,7 +9,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
@@ -166,15 +165,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         z_dim = CompositeTensorDim("gdn_z", (self._value_heads_dim, self._value_head_dim))
         qkvz_dim = ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim))
-        # for Qwen's layour use soemthing like this instead:
-        # n_vheads_per_k_head = self._config.value_heads // self._config.key_heads
-        # head_size = 2 * self._config.key_head_dim + 2 * self._config.value_head_dim * n_vheads_per_k_head
-        # n_heads = self._config.key_heads
-        # qkvz_dim = TensorDim(e
-        #     "gdn_qkvz",
-        #     n_heads * head_size,
-        #     self._parallel_dim if n_heads > 1 else None,
-        # )
         ba_dim = ConcatenatedTensorDim(
             "gdn_ba",
             (
@@ -182,13 +172,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 CompositeTensorDim("gdn_alpha", (self._value_heads_dim,)),
             ),
         )
-        # for Qwen's layour use something like this instead:
-        # ba_dim = TensorDim(
-        #     "gdn_ba",
-        #     2 * self._config.value_heads,
-        #     self._parallel_dim if 2 * self._config.value_heads > 1 else None,
-        # )
-
         qkv_channels_dim = ConcatenatedTensorDim("gdn_qkv", (query_dim, key_dim, value_dim))
 
         self.in_proj_qkvz = self._config.qkv_projection_layer.get_layer(
@@ -273,7 +256,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         # TODO: fuse some of the reshapes into rearranges
         hidden_states = input_
 
-        # TODO: ====== Merge qkvz and ba ======
+        # TODO: Merge qkvz and ba?
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
 
@@ -293,7 +276,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         query_key_value = self.convolution(
             query_key_value,
             document_index=kwargs[MixerKwargs.document_index_q].unsqueeze(0),
-            lengths=[length for lengths in kwargs[MixerKwargs.lengths] for length in lengths],
+            lengths=kwargs[MixerKwargs.lengths],
         )
         # 1, qkv_total, sequence -> 1, sequence, qkv_total
         query_key_value = query_key_value.transpose(1, 2)
@@ -337,13 +320,8 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
     def _calculate_g(self, alpha: torch.Tensor) -> torch.Tensor:
         return -self.A_log.float().exp() * torch.nn.functional.softplus(alpha.float() + self.dt_bias)
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        preprocess_for_varlen(
-            kwargs,
-            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-            return_cu_seqlens=True,
-            return_seq_idx=True,
-        )
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_cumulative_sequence_lengths": True, "return_document_index": True}
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()

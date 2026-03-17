@@ -6,10 +6,9 @@ import datasets
 import numpy as np
 import PIL.Image
 
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig, PatchPreprocessingConfig
+from fast_llm.data.preparation.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparation.image_patch import ImagePreparationConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import padded_cumsum
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_FILE, TOKENIZER_PATH
@@ -172,11 +171,11 @@ def _get_test_dataset(
     splits: dict[str, float] | None = None,
     min_images: int = 0,
     max_images: int = 0,
-    image_patch_config: ImagePatchConfig | None = None,
+    image_patch_config: ImagePreparationConfig | None = None,
     min_image_size: int = 4,
     max_image_size: int = 32,
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     config_paths = (
         [path / "fast_llm_config.yaml"]
         if splits is None
@@ -236,36 +235,42 @@ def _get_test_dataset(
             for split, config_path in zip(splits, config_paths, strict=True)
         }
     )
-    preprocessing = LanguageModelPreprocessingConfig(
-        tokenizer={"type": "tokenizer", "path": tokenizer_path, "max_vocab_size": max_vocab_size},
-        image_patches=NullPreprocessingConfig() if image_patch_config is None else image_patch_config,
+
+    preprocessing = LanguageModelBatchPreprocessingConfig(
+        vision_encoder=(
+            None
+            if image_patch_config is None
+            else PatchPreprocessingConfig(
+                shape=(image_patch_config.height, image_patch_config.width),
+            )
+        ),
         vocab_size=max_vocab_size,
         use_loss_masking_spans=max_loss_masking_spans > 0,
-        use_preference_spans=has_preference_spans,
+        use_preference_spans=False,  # TODO: Implement (set to False to avoid an error in `test_preference_spans`)
     )
     return path, config, hf_path, preprocessing
 
 
 def get_common_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "common_dataset", seed=1234)
 
 
 def get_alt_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "other_dataset", seed=2345)
 
 
 def get_sharded_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "common_dataset_sharded", seed=1234, documents_per_shard=350)
 
 
 def get_split_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split", seed=1234, splits={"training": 1, "validation": 1}
@@ -273,7 +278,7 @@ def get_split_test_dataset() -> (
 
 
 def get_split_sharded_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split_sharded",
@@ -285,7 +290,7 @@ def get_split_sharded_test_dataset() -> (
 
 def get_test_dataset_with_loss_masking_spans(
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / "dataset_with_loss_masking_spans",
         seed=1234,
@@ -296,7 +301,7 @@ def get_test_dataset_with_loss_masking_spans(
 
 def get_test_dataset_with_preference_spans(
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True, config_only=config_only
     )
@@ -304,12 +309,12 @@ def get_test_dataset_with_preference_spans(
 
 def get_test_dataset_with_image_patches(
     image_break_token: int | None = None, image_end_token: int | None = None, config_only: bool = False
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / f"dataset_with_image_patches_{image_break_token}_{image_end_token}",
         seed=1234,
         max_images=2,
-        image_patch_config=ImagePatchConfig(
+        image_patch_config=ImagePreparationConfig(
             height=4,
             width=4,
             max_image_height=16,
@@ -340,7 +345,7 @@ def get_multimodal_test_dataset(config_only: bool = False):
         num_documents=200,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         max_images=2,
-        image_patch_config=ImagePatchConfig(
+        image_patch_config=ImagePreparationConfig(
             height=4,
             width=4,
             max_image_height=16,

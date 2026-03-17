@@ -15,7 +15,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import BlockWithBiasConfig, DecoderBlockConfig
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +205,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 self.mlp.get_compute_usage(input_, kwargs, config),
             )
         )
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return safe_merge_dicts(self.mixer.get_preprocessing_config(), self.mlp.get_preprocessing_config())
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self.mixer.preprocess(kwargs)

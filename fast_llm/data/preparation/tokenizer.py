@@ -2,8 +2,7 @@ import functools
 import pathlib
 import typing
 
-from fast_llm.config import Configurable, Field, FieldHint, config_class
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
+from fast_llm.config import Config, Configurable, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -14,8 +13,8 @@ if typing.TYPE_CHECKING:
     import transformers
 
 
-@config_class(dynamic_type={PreprocessingConfig: "tokenizer"})
-class TokenizerConfig(PreprocessingConfig):
+@config_class()
+class TokenizerConfig(Config):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.

@@ -75,6 +75,7 @@ class TensorLogsConfig(Config):
         hint=FieldHint.logging,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+    full_tensors: bool = Field(default=False, desc="Save and/or print entire tensors.")
 
 
 class TensorLogs:

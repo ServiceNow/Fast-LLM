@@ -8,13 +8,14 @@ import numpy as np
 import torch
 import yaml
 
+from fast_llm.config import FieldVerboseLevel
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import SamplingData, ShufflingType
+from fast_llm.data.dataset.config import SamplingConfig, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, compare_nested
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
@@ -66,23 +67,21 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
+class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A sampled dataset.
     """
 
     def __init__(
-        self,
-        indexed_dataset: IndexedDataset[SampleType],
-        sampling: SamplingData,
+        self, indexed_dataset: IndexedDataset[DocumentType], config: SamplingConfig, num_samples: int, seed: int
     ):
         self._indexed_dataset = indexed_dataset
-        self._config = sampling.config
-        self._parameters = sampling.parameters
-        self._truncate_documents = sampling.parameters.truncate_documents
+        self._config = config
+        self._num_samples = num_samples
+        self._seed = seed
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
-        if sampling.cache_directory is None:
+        if self._config.cache_directory is None:
             self._document_shuffling = MemmapArray()
             self._token_cumsum_shuffled = MemmapArray()
             self._token_cumsum_unshuffled = MemmapArray()
@@ -95,9 +94,8 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             self._sample()
         else:
             base_path = (
-                sampling.cache_directory
-                / f"{self.name}_ns_{self._parameters.num_samples}_sl_{self._parameters.sequence_length}"
-                f"_s_{self._config.seed}"
+                self._config.cache_directory / f"{self.name}_ns_{self._num_samples}_sl_{self._config.micro_batch_size}"
+                f"_s_{self._seed}"
             )
             # TODO: Names are confusing
             self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
@@ -106,7 +104,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             self._yaml_path = base_path.with_suffix(".yaml")
 
             # Sample or validate the dataset of a given rank.
-            if sampling.distributed.config.rank == sampling.get_next_rank():
+            if self._config.is_running_next():
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `Data`.
@@ -121,37 +119,33 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         tokens_per_epoch = document_sizes.sum().item()
 
         # Calculate basic stats.
-        if not self._truncate_documents:
+        if not self._config.truncate_documents:
             assert _extension_available, (
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes > self._parameters.sequence_length + 1
+            long_docs_filter = document_sizes > self._config.sampling_maximum_document_length
             ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
-                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
+                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._config.sampling_maximum_document_length} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
             tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
             if tokens_per_epoch == 0:
                 raise RuntimeError(
-                    f" > No documents shorter than {self._parameters.sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
+                    f" > No documents shorter than {self._config.sample_size} tokens found in dataset {self._indexed_dataset.name}."
                 )
 
         # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
         # but in case of truncations we also include those last labels in the following sample,
         # so we need `sequence_length * num_samples + extra_tokens` tokens in total.
-        if self._truncate_documents:
+        if self._config.truncate_documents:
             num_epochs = math.ceil(
-                (self._parameters.sequence_length * self._parameters.num_samples + self._parameters.extra_tokens)
-                / tokens_per_epoch
+                (self._config.micro_batch_size * self._num_samples + self._config.predicted_tokens) / tokens_per_epoch
             )
         else:
-            num_epochs = math.ceil(
-                ((self._parameters.sequence_length + self._parameters.extra_tokens) * self._parameters.num_samples)
-                / tokens_per_epoch
-            )
+            num_epochs = math.ceil((self._config.sample_size * self._num_samples) / tokens_per_epoch)
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -170,29 +164,33 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 "documents_per_epoch": documents_per_epoch,
                 "tokens_per_epoch": tokens_per_epoch,
             },
-            "num_samples": self._parameters.num_samples,
+            "num_samples": self._num_samples,
             "unshuffled_epochs": unshuffled_epochs,
-            "sequence_length": self._parameters.sequence_length,
-            "truncate_documents": self._truncate_documents,
-            "config": self._config.to_dict(),
+            "sequence_length": self._config.micro_batch_size,
+            "truncate_documents": self._config.truncate_documents,
+            "config": self._config.to_dict(verbose=FieldVerboseLevel.everything),
         }
-        if self._truncate_documents:
+        del yaml_data["config"]["rank"]
+        del yaml_data["config"]["preprocessing"]
+        del yaml_data["config"]["cache_directory"]
+        if self._config.truncate_documents:
             yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
 
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             # Hack to make sure unshuffled tokens are loaded
-            if not self._truncate_documents:
+            if not self._config.truncate_documents:
                 yaml_data["unshuffled_tokens"] = loaded_yaml_data["unshuffled_tokens"]
             self._load_yaml_data(yaml_data)
 
-            if loaded_yaml_data != yaml_data:
+            if errors := compare_nested(loaded_yaml_data, yaml_data):
                 raise RuntimeError(
                     f"Invalid dataset cache for dataset {self.name}."
                     " If this is due to an intended configuration change,"
                     " please delete the cache before continuing."
                     f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
                     f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                    f"\nDifferences:\n{"\n".join(errors)}"
                 )
             # Dataset is already sampled, skip.
             logger.info(f"Using existing sampling for dataset {self.name}")
@@ -216,7 +214,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
         # This generates a document shuffling index `all_document_index`, the unshuffled part is trivial
         #   so we only evaluate and store the shuffled part `document_shuffling`.
         if self._config.shuffle == ShufflingType.full:
-            generator.manual_seed(self._config.seed)
+            generator.manual_seed(self._seed)
             # Equivalent to `shuffle(range(documents_per_epoch * num_epochs)) % documents_per_epoch`
             document_shuffling = (
                 torch.randperm(
@@ -235,7 +233,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 device=self._device,
             )
             for i in range(shuffled_epochs):
-                generator.manual_seed(self._config.seed + i * 571)
+                generator.manual_seed(self._seed + i * 571)
                 torch.randperm(
                     documents_per_epoch,
                     generator=generator,
@@ -259,13 +257,13 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 document_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
-                dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
+                dtype=get_unsigned_integer_type((2 - self._config.truncate_documents) * tokens_per_epoch * num_epochs),
             )
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled)
         else:
             unshuffled_tokens = 0
 
-        if not self._truncate_documents:
+        if not self._config.truncate_documents:
             yaml_data["unshuffled_tokens"] = unshuffled_tokens
         self._load_yaml_data(yaml_data)
         if self._yaml_path is not None:
@@ -282,7 +280,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 ],
                 offset=self._unshuffled_tokens,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
-                dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
+                dtype=get_unsigned_integer_type((2 - self._config.truncate_documents) * tokens_per_epoch * num_epochs),
             )
             self._token_cumsum_shuffled.save(token_cumsum_shuffled)
             self._document_shuffling.save(
@@ -294,7 +292,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             del document_shuffling
 
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: DataType) -> tuple[np.ndarray, int | None]:
-        if self._truncate_documents:
+        if self._config.truncate_documents:
             # Create the output tensor.
             out = sizes.new_empty(sizes.numel() // TOKEN_CUMSUM_RATE + 1, dtype=dtype.torch)
             # Get partial sums for regular intervals, excluding the last incomplete interval.
@@ -310,24 +308,18 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             # Crop unnecessary entries.
             out = out[
                 : torch.clamp_min_(
-                    torch.searchsorted(
-                        out, self._parameters.num_samples * self._parameters.sequence_length, side="right"
-                    ),
+                    torch.searchsorted(out, self._num_samples * self._config.micro_batch_size, side="right"),
                     0,
                 )
             ]
             return out.numpy(force=self._config.gpu), None
         else:
             # TODO: dynamically handle int64 or int32 in CPP
-            out = build_padded_token_cumsum(
-                sizes.cpu().numpy(), (self._parameters.sequence_length + 1), TOKEN_CUMSUM_RATE, offset
-            )
+            out = build_padded_token_cumsum(sizes.cpu().numpy(), self._config.sample_size, TOKEN_CUMSUM_RATE, offset)
             num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(
-                    np.searchsorted(
-                        out, self._parameters.num_samples * (self._parameters.sequence_length + 1), side="right"
-                    ),
+                    np.searchsorted(out, self._num_samples * self._config.sample_size, side="right"),
                     0,
                     None,
                 )
@@ -335,9 +327,9 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
             return out, num_tokens
 
     def __len__(self) -> int:
-        return self._parameters.num_samples
+        return self._num_samples
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> list[DocumentType]:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -347,13 +339,10 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
-        sample_length = (
-            self._parameters.sequence_length
-            if self._truncate_documents
-            else self._parameters.sequence_length + self._parameters.extra_tokens
+        token_start = index * (
+            self._config.micro_batch_size if self._config.truncate_documents else self._config.sample_size
         )
-        token_start = index * sample_length
-        token_end = token_start + self._parameters.sequence_length + self._parameters.extra_tokens
+        token_end = token_start + self._config.sample_size
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
@@ -369,7 +358,7 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
         token_count = token_start_array[token_start_cumsum_index].item()
 
-        documents: list[SampleType] = []
+        documents: list[DocumentType] = []
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -379,17 +368,16 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
 
             document_size = self._indexed_dataset.get_document_size(document_index)
 
-            if not self._truncate_documents:
-                if document_size > self._parameters.sequence_length + 1:
+            if not self._config.truncate_documents:
+                if document_size > self._config.sampling_maximum_document_length:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
-                tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
+                tokens_in_sample = token_count % self._config.sample_size
+                if document_size + tokens_in_sample > self._config.sample_size:
                     # Document belongs to the next sample, need to account for padding.
-                    padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
+                    padding_size = self._config.sample_size - tokens_in_sample
                     if token_count > token_start:
-                        documents.append(documents[-1].get_padding(padding_size))
                         Assert.eq(token_count + padding_size, token_end)
                         break
                     else:
@@ -401,20 +389,28 @@ class SampledIndexedDataset[SampleType: Sample](SampledDataset[SampleType]):
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                documents.append(
-                    self._indexed_dataset.get_document(
-                        document_index,
-                        begin=token_start_index_in_document,
-                        end=token_end_index_in_document,
-                        parameters=self._parameters,
-                    )
+                # If cropping is enabled, split long documents into chunks not exceeding the specified maximum length.
+                documents.extend(
+                    [
+                        self._indexed_dataset.get_document(
+                            document_index,
+                            begin=begin,
+                            end=min(
+                                begin + self._config.sampling_maximum_document_length, token_end_index_in_document
+                            ),
+                        )
+                        for begin in range(
+                            token_start_index_in_document,
+                            token_end_index_in_document,
+                            self._config.sampling_maximum_document_length,
+                        )
+                    ]
                 )
 
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
-
-        return documents[0].from_documents(documents)
+        return documents
 
     @property
     def name(self) -> str:

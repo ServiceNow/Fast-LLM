@@ -52,6 +52,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         fast_llm_config = config.fast_llm_config
         config.fast_llm_config = None
         super().__init__(config, **kwargs)
+        self._fast_llm_model = fast_llm_model
         config.fast_llm_config = fast_llm_config
 
         self._inference_runner = self.runner_class(fast_llm_model, runner)

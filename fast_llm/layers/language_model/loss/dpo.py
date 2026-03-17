@@ -9,14 +9,17 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss, loss_for
 class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModelLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._num_splits > 1:
             raise NotImplementedError()
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._vocab_parallel:
             raise NotImplementedError()
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"use_preference_spans": True}
 
     def forward_backward(
         self,
@@ -73,7 +76,7 @@ def dpo_loss(
         reference_log_probabilities, chosen_spans
     ) - _get_target_log_probability_for_spans(reference_log_probabilities, rejected_spans)
 
-    # TODO: ====== Shouldn't the sigmoid be computed independently for each document? =======
+    # TODO: Shouldn't the sigmoid be computed independently for each document?
     return -torch.nn.functional.logsigmoid(beta * (policy_log_ratios - reference_log_ratios)).mean()
 
 

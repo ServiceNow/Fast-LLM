@@ -9,7 +9,6 @@ from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.vision.config import VisionMultiModalModelConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
-    GPTBatchConfig,
     GPTModelConfig,
     GPTTrainerConfig,
     PretrainedGPTModelConfig,
@@ -26,11 +25,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.multimodal.trainer import MultiModalTrainer
 
 logger = logging.getLogger(__name__)
-
-
-@config_class()
-class MultiModalBatchConfig(GPTBatchConfig):
-    pass
 
 
 @config_class()
@@ -80,7 +74,6 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
-    batch: MultiModalBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldUpdate()
 

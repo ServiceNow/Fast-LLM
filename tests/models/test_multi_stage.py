@@ -38,7 +38,11 @@ def test_frozen_weights(model_testing_config):
         model_frozen._num_stages,
     )
     frozen_parameter_counts = [
-        sum(p.numel() for p in layer.unwrap().mlp.parameters()) if layer.module_name.startswith("decoder") else 0
+        (
+            sum(p.numel() for p in layer.unwrap().mlp.parameters())
+            if layer.module_name.startswith("decoder") or layer.module_name.startswith("multi_token_prediction.block")
+            else 0
+        )
         for layer in model_ref.base_model.get_layers()
     ]
 

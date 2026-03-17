@@ -2,11 +2,12 @@ import pytest
 import torch
 import transformers
 
+from fast_llm.data.document.block import BlockModelInput, LengthModelInputPreprocessor
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.layers.ssm.kda import _kda_available
@@ -64,21 +65,32 @@ def _compare_mixers(
         requires_grad=False,
     )
 
+    model_input = BlockModelInput()
+    LengthModelInputPreprocessor(
+        lengths=[SEQUENCE_LENGTH for _ in range(hidden_states.size(0))],
+        sequence_k_past=0,
+        first_document_begin=0,
+        last_document_end=BATCH_SIZE * SEQUENCE_LENGTH,
+        device=distributed.device,
+        unpadded_length=BATCH_SIZE * SEQUENCE_LENGTH,
+        sequence_length=BATCH_SIZE * SEQUENCE_LENGTH,
+    ).preprocess(
+        model_input,
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **fast_llm_layer.get_preprocessing_config(),
+        ),
+    )
+    kwargs = model_input.to_kwargs()
+
     hf_layer.train()
     hf_out = hf_layer(hidden_states)
     if isinstance(hf_out, tuple):
         (hf_out,) = hf_out
 
-    sequence_lengths = [[SEQUENCE_LENGTH] for _ in range(hidden_states.size(0))]
-    fast_kwargs = {
-        BlockKwargs.device: distributed.device,
-        BlockKwargs.lengths: sequence_lengths,
-        BlockKwargs.sequence_q_dim: TensorDim("", SEQUENCE_LENGTH),
-        BlockKwargs.sequence_k_dim: TensorDim("", SEQUENCE_LENGTH),
-    }
     fast_llm_layer.train()
-    fast_llm_layer.preprocess(fast_kwargs)
-    fast_out = fast_llm_layer(hidden_states.flatten(0, 1), fast_kwargs).view_as(hidden_states)
+    fast_out = fast_llm_layer(hidden_states.flatten(0, 1), kwargs).view_as(hidden_states)
 
     Assert.rms_close_relative(fast_out, hf_out, threshold, 1e-5)
 
@@ -88,12 +100,18 @@ def _compare_mixers(
 @pytest.mark.skipif(not is_fast_path_available, reason="GDN deps missing")
 def test_gdn(testing_device):
     dtype = torch.bfloat16
+
+    NUM_V_HEADS = 4
+    NUM_K_HEADS = 2
+    HEAD_DIM = 4
+    KERNEL_SIZE = 4
+
     config_common = {
-        "value_heads": 4,
-        "key_heads": 2,
-        "key_head_dim": 4,
-        "value_head_dim": 4,
-        "convolution_layer": {"kernel_size": 4, "activation": "silu"},
+        "value_heads": NUM_V_HEADS,
+        "key_heads": NUM_K_HEADS,
+        "key_head_dim": HEAD_DIM,
+        "value_head_dim": HEAD_DIM,
+        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
     }
 
     hf_layer = (
@@ -108,10 +126,14 @@ def test_gdn(testing_device):
 @pytest.mark.slow
 @pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")
 def test_kda():
+    NUM_HEADS = 4
+    HEAD_DIM = 4
+    KERNEL_SIZE = 4
+
     kda_config = {
-        "heads": 4,
-        "head_dim": 4,
-        "convolution_layer": {"kernel_size": 4, "activation": "silu"},
+        "heads": NUM_HEADS,
+        "head_dim": HEAD_DIM,
+        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
         "normalization": {"epsilon": 1e-5, "activation": "sigmoid"},
     }
 

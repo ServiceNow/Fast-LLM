@@ -18,7 +18,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         distributed_config: DistributedConfig,
         *,
         name: str,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
         num_splits: int = 1,
@@ -26,7 +26,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         weight: float = 1.0,
     ):
         super().__init__(config)
-        Assert.in_range(prediction_distance, 0, prediction_heads)
+        Assert.in_range_incl(prediction_distance, 1, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
         self._name = name
@@ -47,6 +47,11 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
+    def get_preprocessing_config(
+        self,
+    ) -> dict[str, typing.Any]:
+        return {}
+
     @property
     def name(self) -> str:
         return self._name
@@ -61,16 +66,8 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
         *,
-        multi_token_format: bool = False,
         sequence_parallel: bool = True,
     ) -> torch.Tensor | None:
-        # MTP shift
-        if multi_token_format and self._prediction_heads > 1:
-            sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-            target = target.unflatten(
-                0, (kwargs[LanguageModelKwargs.batch_dim].size, sequence_q + self._prediction_heads - 1)
-            )[:, self._prediction_distance : self._prediction_distance + sequence_q].flatten(0, 1)
-
         # Get the local chunk.
         if sequence_parallel and self._sequence_parallel:
             target = split_op(target, self._parallel_dim.group, 0)
@@ -94,12 +91,16 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(
-            kwargs[LanguageModelLossKwargs.labels], kwargs, split_index, multi_token_format=True
+            kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1], kwargs, split_index
         )
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-        return None if loss_mask is None else self._prepare_target(loss_mask, kwargs, split_index)
+        return (
+            None
+            if loss_mask is None
+            else self._prepare_target(loss_mask[self._prediction_distance - 1], kwargs, split_index)
+        )
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
         Assert.incl(

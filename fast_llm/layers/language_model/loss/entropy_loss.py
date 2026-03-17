@@ -60,3 +60,6 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             target_format=TargetFormat.logits,
             entropy_loss_type=self._config.loss_type,
         )
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_prediction_mask": True}

@@ -9,7 +9,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDi
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig
@@ -200,13 +199,13 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         Same as in gdn, the idea is to always do forward pass in a packed way, which is required for varlen support.
         """
 
-        # TODO: ===== Merge q,k,v into a single tensor ======
+        # TODO: Merge q,k,v into a single tensor?
         q = self.q_proj(input_)
         k = self.k_proj(input_)
         v = self.v_proj(input_)
 
         document_index = kwargs[MixerKwargs.document_index_q].unsqueeze(0)
-        lengths = [length for lengths in kwargs[MixerKwargs.lengths] for length in lengths]
+        lengths = kwargs[MixerKwargs.lengths]
         # Move sequence dim to last so the convolution acts on it, add pretend batch dimension.
         q = (
             self.q_conv(q.unsqueeze(0).transpose(1, 2), document_index=document_index, lengths=lengths)
@@ -249,10 +248,5 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        preprocess_for_varlen(
-            kwargs,
-            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-            return_cu_seqlens=True,
-            return_seq_idx=True,
-        )
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_cumulative_sequence_lengths": True, "return_document_index": True}

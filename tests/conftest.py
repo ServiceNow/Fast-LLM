@@ -8,6 +8,7 @@ import shutil
 import pytest
 import xdist.scheduler
 
+from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
@@ -135,6 +136,8 @@ def pytest_configure(config):
 
     # Skip slow autotune for tests. The default config has the highest block size, so this shouldn't hide any bug.
     os.environ["FAST_LLM_SKIP_TRITON_AUTOTUNE"] = "TRUE"
+
+    configure_logging()
 
 
 @pytest.hookimpl(trylast=True)

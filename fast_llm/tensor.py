@@ -302,7 +302,7 @@ class ParameterMeta(TensorMeta):
             tensor_contents=(f"wd={self.param_weight_decay}", f"lr_scale={self.lr_scale}", *tensor_contents)
         )
 
-    def init_parameter(self, tensor: torch.Tensor, distributed: Distributed) -> None:
+    def init_parameter(self, tensor: torch.Tensor, distributed: Distributed, debug: bool = False) -> None:
         assert self.param_init_method is not None
         if (
             distributed.config.tensor_parallel == 1
@@ -312,6 +312,12 @@ class ParameterMeta(TensorMeta):
             generator = distributed.pp_init_generator
         else:
             generator = distributed.tp_init_generator if self.is_tensor_parallel else distributed.pp_init_generator
+        if debug:
+            from fast_llm.logging import log_generator
+
+            log_generator(
+                f"Initializing parameter `{self.tensor_name}` (shape={self.shape}, device={tensor.device})", generator
+            )
         self.param_init_method(self, tensor, generator)
 
     @property
