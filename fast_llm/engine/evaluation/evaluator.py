@@ -152,13 +152,11 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         )
 
         log_main_rank(
-            "\n".join(
-                format_metrics(
-                    metrics,
-                    self._loss_definitions,
-                    PhaseType.validation,
-                    dataset_name=self._name,
-                )
+            format_metrics(
+                metrics,
+                self._loss_definitions,
+                PhaseType.validation,
+                dataset_name=self._name,
             )
         )
 

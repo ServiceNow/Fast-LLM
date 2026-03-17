@@ -2839,7 +2839,7 @@ class Apriel2VisionEncoder(nn.Module):
 
         # Reshape back to [batch, num_patches, text_hidden]
         image_features = image_features.squeeze(0).view(batch_size, num_patches_per_image, -1)
-        return image_features, (patch_embeds, *all_hidden_states, image_features)
+        return image_features, (*all_hidden_states, hidden_states, image_features)
 
 
 class SimpleMLP(nn.Module):

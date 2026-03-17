@@ -35,8 +35,8 @@ _MEMORY_METRIC_FORMAT = (
 )
 
 _VALIDATION_METRIC_FORMAT_KEYS = _MEMORY_METRIC_FORMAT_KEYS | {
-    "iteration",
-    "train_iters",
+    "completed_steps",
+    "total_steps",
     "consumed_samples",
     "consumed_tokens",
     "step_time_ms",
@@ -47,8 +47,7 @@ _VALIDATION_METRIC_FORMAT_KEYS = _MEMORY_METRIC_FORMAT_KEYS | {
 }
 
 _VALIDATION_METRIC_FORMATS = (
-    "{phase}{dataset_name} @ iteration {iteration:6.0f}/{train_iters:6.0f}"
-    " | consumed samples: {consumed_samples:12,.0f}"
+    "{phase}{dataset_name} @ step {completed_steps:6.0f}/{total_steps:6.0f}"
     " | consumed tokens: {consumed_tokens:16,.0f}"
     " | batch size: {batch_size:3.0f}"
     " | step time: {step_time_ms:.2f} ms"

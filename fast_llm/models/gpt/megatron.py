@@ -15,7 +15,7 @@ if typing.TYPE_CHECKING:
 def get_init_megatron(
     meta: "ParameterMeta", config: DecoderBlockConfig, hidden_size: int
 ) -> typing.Callable[["torch.Tensor", "Distributed"], None]:
-    def init_megatron(tensor: "torch.Tensor", distributed: "Distributed") -> None:
+    def init_megatron(tensor: "torch.Tensor", distributed: "Distributed", debug: bool = False) -> None:
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:
             # Generator unused.
