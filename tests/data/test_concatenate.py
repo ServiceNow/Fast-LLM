@@ -5,7 +5,7 @@ from tests.data.common import (
     compare_indexed_dataset_tokens,
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_data,
+    get_sampling_config,
     get_test_data_and_compare_samples,
 )
 from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_SAMPLES, COMMON_DATASET_TOKENS
@@ -37,7 +37,7 @@ def test_gpt_concatenate():
         3 * COMMON_DATASET_TOKENS,
         {j * COMMON_DATASET_LENGTH + i: sample for j in range(3) for i, sample in COMMON_DATASET_SAMPLES.items()},
     )
-    sampled = dataset.sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    sampled = dataset.sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_CONCATENATED_SAMPLES)
 
     # Test in data.

@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import typing
@@ -28,6 +29,7 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._process_group = init_extra_process_group(
                 backend=str(self._config.broadcast.backend),
                 init_method=init_method,
+                timeout=datetime.timedelta(seconds=self._config.timeout),
                 world_size=config.broadcast.external_world_size + 1,
                 rank=0,
                 # TODO: make it settable from config

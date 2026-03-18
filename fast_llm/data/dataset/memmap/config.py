@@ -9,13 +9,10 @@ import torch
 
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig
-from fast_llm.data.dataset.memmap.token_data import TokenDataReader, TokenDataWriter
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
 if typing.TYPE_CHECKING:
-    pass
-
     from fast_llm.data.dataset.indexed import IndexedDataset
     from fast_llm.data.dataset.memmap.abstract import (
         MemmapIndexedDatasetReader,
@@ -27,6 +24,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.memmap.patch import PatchReader, PatchWriter
     from fast_llm.data.dataset.memmap.range import RangeReader, RangeWriter
     from fast_llm.data.dataset.memmap.token import TokenReader, TokenWriter
+    from fast_llm.data.dataset.memmap.token_data import TokenDataReader, TokenDataWriter
     from fast_llm.data.document.abstract import Document
 
 logger = logging.getLogger(__name__)

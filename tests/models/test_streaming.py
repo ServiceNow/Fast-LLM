@@ -155,7 +155,9 @@ def _run_model_streaming_configs(
                         model_testing_config.config_dict
                     )
                     with (
-                        redis_batch_producer(training_config.callbacks["streaming"], training_config.batch)
+                        redis_batch_producer(
+                            training_config.callbacks["streaming"], training_config.data.micro_batch_size
+                        )
                         if test_context.rank == config.num_gpus
                         else contextlib.nullcontext()
                     ):

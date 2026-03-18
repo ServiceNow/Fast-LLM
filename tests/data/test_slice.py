@@ -4,7 +4,7 @@ from fast_llm.data.document.language_model import LanguageModelDocument
 from tests.data.common import (
     compare_indexed_dataset_tokens,
     get_dataset_config,
-    get_sampling_data,
+    get_sampling_config,
     get_test_data_and_compare_samples,
     validate_indexed_dataset_sampling,
 )
@@ -39,7 +39,7 @@ def test_gpt_slice():
         DatasetSliceConfig[LanguageModelDocument],
     ).build()
     compare_indexed_dataset_tokens(dataset, 75, 3399, {i - 25: sample for i, sample in COMMON_DATASET_SAMPLES.items()})
-    sampled = dataset.sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    sampled = dataset.sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_SLICE_VALIDATION_SAMPLES)
 
     # Test in data with multiple phases.

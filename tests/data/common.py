@@ -17,7 +17,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.utils import Assert, div
 
 
-def get_sampling_data(
+def get_sampling_config(
     num_samples: int,
     *,
     seed: int = 54983,

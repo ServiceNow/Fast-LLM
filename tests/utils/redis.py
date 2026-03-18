@@ -1,7 +1,5 @@
 import contextlib
 import itertools
-import pathlib
-import socket
 import threading
 import time
 
@@ -11,24 +9,11 @@ from fast_llm.data.dataset.config import (
     REDIS_DATA_STREAM,
     REDIS_GROUP_NAME,
     RedisConfig,
-    SamplingConfig,
-    SamplingData,
-    SamplingParameters,
-    StreamingDatasetConfig,
 )
 from fast_llm.data.dataset.streaming import RedisStreamingDocumentData
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.models.gpt.config import GPTBatchConfig
 
 
-def find_free_port():
-    """Find a free TCP port and return it."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-
-def wait_until_stream_empty(
+def _wait_until_stream_empty(
     redis_client,
     stream_key,
     consumer_group,
@@ -51,17 +36,8 @@ def wait_until_stream_empty(
         time.sleep(0.05)
 
 
-def get_consumer_count(redis_client, stop_event, config: StreamingDatasetConfig):
-    while not stop_event.is_set():
-        res = redis_client.hget(f"{REDIS_DATA_STREAM}:consumer_count", "0")
-        if res is None:
-            time.sleep(0.05)
-            continue
-        return int(res)
-
-
 @contextlib.contextmanager
-def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
+def redis_batch_producer(config: RedisConfig, sequence_length):
     with fake_redis_server(config):
         stop_event = threading.Event()
         client = config.get_client()
@@ -72,12 +48,10 @@ def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
                     break
                 client.xadd(
                     REDIS_DATA_STREAM,
-                    RedisStreamingDocumentData.from_dict(
-                        {"tokens": [sample_index] * batch_config.sequence_length}
-                    ).to_message(),
+                    RedisStreamingDocumentData.from_dict({"tokens": [sample_index] * sequence_length}).to_message(),
                 )
                 if sample_index % 5 == 0:
-                    wait_until_stream_empty(client, REDIS_DATA_STREAM, REDIS_GROUP_NAME, stop_event)
+                    _wait_until_stream_empty(client, REDIS_DATA_STREAM, REDIS_GROUP_NAME, stop_event)
 
         thread = threading.Thread(target=producer_loop, daemon=True)
         thread.start()
@@ -88,22 +62,6 @@ def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
             stop_event.set()
             thread.join(timeout=1)
             client.close()
-
-
-def make_sampling(sequence_length, num_samples, distributed):
-    return SamplingData(
-        parameters=SamplingParameters(
-            sequence_length=sequence_length,
-            extra_tokens=0,
-            num_samples=num_samples,
-            truncate_documents=False,
-        ),
-        config=SamplingConfig(),
-        distributed=distributed,
-        dataset_name="test",
-        cache_directory=pathlib.Path("/tmp"),
-        preprocessing=LanguageModelPreprocessingConfig(),
-    )
 
 
 @contextlib.contextmanager
@@ -126,6 +84,7 @@ def fake_redis_server(config: RedisConfig):
     fakeredis._tcp_server.TCPFakeRequestHandler.handle = safe_handle
 
     server = fakeredis.TcpFakeServer((config.host, config.port), server_type="redis")
+    print(f"Starting fake redis server at {config.host}:{config.port}")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -133,6 +92,7 @@ def fake_redis_server(config: RedisConfig):
         yield
     finally:
         # ----- Teardown -----
+        print(f"Shutting down fake redis server server at {config.host}:{config.port}")
         server.shutdown()
         server.server_close()
         thread.join()

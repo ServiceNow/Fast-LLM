@@ -9,7 +9,7 @@ from fast_llm.data.document.language_model import LanguageModelBatch, LanguageMo
 from fast_llm.utils import Assert
 from tests.data.common import (
     get_dataset_config,
-    get_sampling_data,
+    get_sampling_config,
     get_test_data_and_compare_samples,
     validate_indexed_dataset_sampling,
 )
@@ -40,7 +40,7 @@ def test_gpt_sampled():
     _, config, _, preprocessing = get_common_test_dataset()
     sampled = get_dataset_config(
         dataset_config := config, GPTDatasetFromFileConfig[LanguageModelDocument]
-    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
 
     # Test in data.
@@ -97,7 +97,7 @@ def test_gpt_sample(seed, shuffle):
     # Loop instead of parametrizing for the check below.
     for num_samples in (20, 10, 6, 5, 2, 1):
         sampled = TEST_DATASET.sample(
-            *get_sampling_data(
+            *get_sampling_config(
                 num_samples,
                 sequence_length=5,
                 seed=seed,
@@ -154,7 +154,7 @@ def test_gpt_sample_padding():
                 seq_size += doc_size
                 total_tokens += doc_size
         dataset = SimpleGPTIndexedDataset(samples)
-        sampling = get_sampling_data(
+        sampling = get_sampling_config(
             num_samples=len(expected_samples),
             sequence_length=sequence_length,
             seed=np.random.randint(100000),

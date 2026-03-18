@@ -8,21 +8,18 @@ import pytest
 import redis
 import torch
 
-from fast_llm.config import NoAutoValidate
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.config import REDIS_DATA_STREAM, RedisConfig, SamplingParameters, StreamingDatasetConfig
+from fast_llm.data.dataset.config import REDIS_DATA_STREAM, RedisConfig, SamplingConfig, StreamingDatasetConfig
 from fast_llm.data.dataset.streaming import RedisStreamingDataset, RedisStreamingDocumentData
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 from tests.conftest import WorkerResources
-from tests.data.common import get_sampling_data
-from tests.utils.redis import make_sampling, redis_batch_producer
+from tests.utils.redis import redis_batch_producer
 from tests.utils.subtest import DistributedTestContext
 
 logger = logging.getLogger(__name__)
@@ -40,73 +37,65 @@ def fake_redis(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("documents", "preprocessing"),
+    "documents",
     [
-        ((range(3),), {}),
-        ((range(3), range(3, 6)), {}),
-        ((range(3), range(5), [9, 4]), {}),
-        (({"tokens": list(range(5)), "loss_masking_spans": [(0, 1), (2, 3)]},), {"use_loss_masking_spans": True}),
+        (range(3),),
+        (range(3), range(3, 6)),
+        (range(3), range(5), [9, 4]),
+        ({"tokens": list(range(5)), "loss_masking_spans": [(0, 1), (2, 3)]},),
+        ({"tokens": list(range(8)), "chosen_span": (0, 2), "rejected_span": (3, 5)},),
         (
-            ({"tokens": list(range(8)), "chosen_span": (0, 2), "rejected_span": (3, 5)},),
-            {"use_preference_spans": True},
-        ),
-        (
-            (
-                {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
-                {"tokens": list(range(4)), "advantage": 0.7, "old_log_probabilities": [1, 2, 3, 4]},
-            ),
-            {"use_grpo_data": True},
+            {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
+            {"tokens": list(range(4)), "advantage": 0.7, "old_log_probabilities": [1, 2, 3, 4]},
         ),
     ],
 )
 def test_streaming_dataset(
     fake_redis: fakeredis.FakeRedis,
     documents: tuple[list[int] | dict[str, typing.Any], ...],
-    preprocessing: dict,
     worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
-    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
-    dataset_iterator = RedisStreamingDataset(stream_config, DistributedConfig()).iterate(
-        get_sampling_data(len(documents), preprocessing=LanguageModelPreprocessingConfig.from_dict(preprocessing))
-    )
+    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port, timeout=1)
+    dataset_iterator = RedisStreamingDataset(stream_config).iterate(SamplingConfig(), len(documents), 0)
     documents = [document if isinstance(document, dict) else {"tokens": list(document)} for document in documents]
     for document in documents:
         fake_redis.xadd(REDIS_DATA_STREAM, RedisStreamingDocumentData.from_dict(document).to_message())
     for document in documents:
-        sample = next(dataset_iterator)
-        assert isinstance(sample, LanguageModelSample)
-        Assert.eq(sample.tokens.tokens.tolist(), document["tokens"])
-        Assert.eq(sample.tokens.lengths, [len(document["tokens"])])
+        sampled_document: LanguageModelDocument = next(dataset_iterator)
+        assert isinstance(sampled_document, LanguageModelDocument)
+        Assert.eq(sampled_document.tokens.tolist(), document["tokens"])
 
         if "loss_masking_spans" in document:
-            Assert.eq(sample.loss_masking_spans.ranges, document["loss_masking_spans"])
+            Assert.eq(sampled_document.loss_masking_spans.ranges, document["loss_masking_spans"])
         else:
-            assert sample.loss_masking_spans is None
+            assert sampled_document.loss_masking_spans is None
 
         if "chosen_span" in document:
-            Assert.eq(sample.chosen_spans.ranges, [document["chosen_span"]])
+            Assert.eq(sampled_document.chosen_spans.ranges, [document["chosen_span"]])
         else:
-            assert sample.chosen_spans is None
+            assert sampled_document.chosen_spans is None
 
         if "rejected_span" in document:
-            Assert.eq(sample.rejected_spans.ranges, [document["rejected_span"]])
+            Assert.eq(sampled_document.rejected_spans.ranges, [document["rejected_span"]])
         else:
-            assert sample.rejected_spans is None
+            assert sampled_document.rejected_spans is None
 
-        assert sample.image_patches is None
+        assert sampled_document.image_patches is None
 
         if "advantage" in document:
             Assert.rms_close(
-                sample.advantages.data, torch.full([len(document["tokens"])], document["advantage"]), 1e-8
+                sampled_document.advantages.data, torch.full([len(document["tokens"])], document["advantage"]), 1e-8
             )
         else:
-            assert sample.advantages is None
+            assert sampled_document.advantages is None
 
         if "old_log_probabilities" in document:
-            Assert.rms_close(sample.old_log_probabilities.data, torch.tensor(document["old_log_probabilities"]), 1e-8)
+            Assert.rms_close(
+                sampled_document.old_log_probabilities.data, torch.tensor(document["old_log_probabilities"]), 1e-8
+            )
         else:
-            assert sample.old_log_probabilities is None
+            assert sampled_document.old_log_probabilities is None
 
 
 @pytest.mark.parametrize(
@@ -136,32 +125,31 @@ def test_streaming_sampled_dataset(
     worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
-    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port)
-    distributed = Distributed(DistributedConfig(use_cuda=False))
     dataset_iterator = iter(
-        RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(5, 1, distributed))
+        StreamingDatasetConfig(port=worker_resources.torchrun_port, timeout=1).build_and_sample(
+            SamplingConfig(truncate_documents=False, micro_batch_size=5, predicted_tokens=0), 1, 0
+        )
     )
     for message in messages:
         fake_redis.xadd(
             REDIS_DATA_STREAM, RedisStreamingDocumentData.from_dict({"tokens": list(message)}).to_message()
         )
     for expected_sample, expected_lengths_ in zip(expected_samples, expected_lengths, strict=True):
-        sample = next(dataset_iterator)
-        assert isinstance(sample, LanguageModelSample)
-        Assert.eq(sample.tokens.tokens.tolist(), list(expected_sample))
-        Assert.eq(sample.tokens.lengths, expected_lengths_)
-        assert sample.loss_masking_spans is None
-        assert sample.chosen_spans is None
-        assert sample.rejected_spans is None
+        documents = next(dataset_iterator)
+        batch = LanguageModelBatch.from_documents(documents, pad_to_size=5)
+        Assert.eq(batch.tokens.tolist(), list(expected_sample))
+        Assert.eq(batch.lengths, expected_lengths_)
+        assert batch.loss_masking_spans is None
+        assert batch.advantages is None
+        assert batch.old_log_probabilities is None
 
 
-_NUM_BATCHES = 1
+_NUM_BATCHES = 2
+_SEQUENCE_LENGTH = 10
 
 
-def _get_distributed_and_batch_config(
-    distributed_config_dict: dict[str, typing.Any], world_size: int = 1
-) -> tuple[DistributedConfig, GPTBatchConfig]:
-    distributed_config = DistributedConfig.from_dict(
+def _get_distributed_config(distributed_config_dict: dict[str, typing.Any], world_size: int = 1) -> DistributedConfig:
+    return DistributedConfig.from_dict(
         distributed_config_dict,
         {
             "world_size": world_size,
@@ -170,43 +158,40 @@ def _get_distributed_and_batch_config(
             "backend": DistributedBackend.gloo,
         },
     )
-    with NoAutoValidate():
-        batch_config = GPTBatchConfig(micro_batch_size=2, sequence_length=10)
-        batch_config.setup(distributed_config=distributed_config)
-    batch_config.validate()
-    return distributed_config, batch_config
 
 
-def _run_test_data_streaming(
-    path: pathlib.Path, distributed_config: DistributedConfig, batch_config: GPTBatchConfig, port: int
-):
-    redis_config = RedisConfig(port=port + 100)
+def _run_test_data_streaming(path: pathlib.Path, distributed_config: DistributedConfig, port: int):
+    redis_config = RedisConfig(port=port + 100, timeout=1)
 
-    data = GPTData(GPTDataConfig(datasets={"train": {"type": "streaming", "port": port + 100}}), distributed_config)
+    data = GPTData(
+        GPTDataConfig(
+            datasets={"train": {"type": "streaming", "port": port + 100}},
+            micro_batch_size=_SEQUENCE_LENGTH,
+            truncate_documents=False,
+        ),
+        distributed_config,
+    )
+    data.setup(path / "cache")
+
     distributed = Distributed(distributed_config)
     with (
-        redis_batch_producer(redis_config, batch_config) if distributed_config.rank == 0 else contextlib.nullcontext()
+        redis_batch_producer(redis_config, _SEQUENCE_LENGTH)
+        if distributed_config.rank == 0
+        else contextlib.nullcontext()
     ):
-        data.setup(
-            distributed=distributed,
-            sampling_parameters={
-                "train": SamplingParameters(
-                    sequence_length=batch_config.sequence_length,
-                    extra_tokens=0,
-                    num_samples=batch_config.batch_size * _NUM_BATCHES,
-                    truncate_documents=False,
-                )
-            },
-            preprocessing=LanguageModelPreprocessingConfig(),
-            cache_directory=path / "cache",
-            timeout=5,
+        safe_barrier(distributed.world_group, "streaming test begin")
+        data.sample_dataset(
+            "train",
+            LanguageModelBatchPreprocessingConfig(predicted_tokens=0),
+            distributed_config.batch_data_parallel * _NUM_BATCHES,
         )
-
-        data_iter = data.get_iterator(batch_config, "train", consumed_samples=0, num_workers=0, prefetch_factor=None)
+        data_iter = data.get_iterator(
+            "train", consumed_samples=0, num_workers=0, prefetch_factor=None, timeout=5, preprocess=False
+        )
         batches = [next(data_iter) for _ in range(_NUM_BATCHES)]
         path.mkdir(parents=True, exist_ok=True)
         torch.save(
-            torch.stack([batch.tokens.tokens[:, 0] for batch in batches]),
+            torch.stack([batch.tokens for batch in batches]),
             path / f"rank_{distributed_config.batch_data_rank}_"
             f"{distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).rank}.pt",
         )
@@ -214,15 +199,11 @@ def _run_test_data_streaming(
         safe_barrier(distributed.world_group, "streaming test end")
 
 
-def check_data_streaming_results(
-    path: pathlib.Path,
-    distributed_config: DistributedConfig,
-    batch_config: GPTBatchConfig,
-):
+def check_data_streaming_results(path: pathlib.Path, distributed_config: DistributedConfig):
     sample_indexes = set()
     for batch_data_rank in range(distributed_config.batch_data_parallel):
         batches_tokens = torch.load(path / f"rank_{batch_data_rank}_0.pt")
-        Assert.eq(batches_tokens.shape, (_NUM_BATCHES, batch_config.micro_batch_size))
+        Assert.eq(batches_tokens.shape, (_NUM_BATCHES, _SEQUENCE_LENGTH))
         for model_and_sequence_data_rank in range(
             1, distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).size
         ):
@@ -230,7 +211,7 @@ def check_data_streaming_results(
                 torch.load(path / f"rank_{batch_data_rank}_{model_and_sequence_data_rank}.pt"), batches_tokens
             )
         sample_indexes.update(batches_tokens.flatten().tolist())
-    Assert.eq(len(sample_indexes), _NUM_BATCHES * batch_config.batch_size)
+    Assert.eq(len(sample_indexes), distributed_config.batch_data_parallel * _NUM_BATCHES)
 
 
 def _run_test_data_streaming_distributed(
@@ -239,20 +220,19 @@ def _run_test_data_streaming_distributed(
     # Import all dynamic classes. TODO: needed?
     import fast_llm.cli  # noqa
 
-    print(_DISTRIBUTED_TESTING_CONFIGS)
     for name, num_gpus, distributed_config_dict in _DISTRIBUTED_TESTING_CONFIGS:
         with test_context.subtest(base_path, name, num_gpus) as subtest:
-            print(name, subtest.do_run)
+            logger.info(name, subtest.do_run)
             if subtest.do_run:
-                distributed_config, batch_config = _get_distributed_and_batch_config(distributed_config_dict, num_gpus)
-                _run_test_data_streaming(base_path / name, distributed_config, batch_config, port)
+                distributed_config = _get_distributed_config(distributed_config_dict, num_gpus)
+                _run_test_data_streaming(base_path / name, distributed_config, port)
 
 
 def test_data_streaming(result_path, worker_resources):
-    distributed_config, batch_config = _get_distributed_and_batch_config({})
+    distributed_config = _get_distributed_config({})
     path = result_path / "data_streaming/single_gpu"
-    _run_test_data_streaming(path, distributed_config, batch_config, worker_resources.torchrun_port)
-    check_data_streaming_results(path, distributed_config, batch_config)
+    _run_test_data_streaming(path, distributed_config, worker_resources.torchrun_port)
+    check_data_streaming_results(path, distributed_config)
 
 
 _DISTRIBUTED_TESTING_CONFIGS = [
@@ -286,5 +266,5 @@ def test_run_data_streaming_distributed(run_parallel_script, result_path, worker
 @pytest.mark.parametrize(("name", "num_gpus", "distributed_config_dict"), _DISTRIBUTED_TESTING_CONFIGS)
 def test_data_streaming_distributed(result_path, name, num_gpus, distributed_config_dict, report_subtest):
     report_subtest(path := result_path / f"data_streaming/{name}", num_gpus, use_cuda=False)
-    distributed_config, batch_config = _get_distributed_and_batch_config(distributed_config_dict, num_gpus)
-    check_data_streaming_results(path, distributed_config, batch_config)
+    distributed_config = _get_distributed_config(distributed_config_dict, num_gpus)
+    check_data_streaming_results(path, distributed_config)

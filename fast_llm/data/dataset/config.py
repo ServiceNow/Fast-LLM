@@ -275,6 +275,7 @@ class RedisConfig(Config):
         desc="Port number on which the Redis server is running.",
         hint=FieldHint.core,
     )
+    timeout: float = Field(default=600.0, desc="Timeout (seconds) for sending and receiving data.")
 
     def get_client(self):
         import redis

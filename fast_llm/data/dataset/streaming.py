@@ -1,5 +1,6 @@
 import functools
 import json
+import time
 import typing
 
 import redis
@@ -10,7 +11,7 @@ from fast_llm.data.dataset.abstract import SamplableIterableDataset
 from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, SamplingConfig, StreamingDatasetConfig
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.range import RangeDocument
-from fast_llm.data.document.token_data import TokenDataSample
+from fast_llm.data.document.token_data import TokenDataDocument
 from fast_llm.utils import Assert
 
 
@@ -96,10 +97,10 @@ class RedisStreamingDocumentData(Config):
             advantages=(
                 None
                 if self.advantage is None
-                else TokenDataSample(torch.full([sample_size], self.advantage, dtype=torch.float32))
+                else TokenDataDocument(data=torch.full([sample_size], self.advantage, dtype=torch.float32))
             ),
             old_log_probabilities=(
-                None if self.old_log_probabilities is None else TokenDataSample(self.old_log_probabilities)
+                None if self.old_log_probabilities is None else TokenDataDocument(data=self.old_log_probabilities)
             ),
         )
 
@@ -138,6 +139,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: La
             else:
                 raise
 
+        start_time = time.time()
         while True:
             # XREADGROUP reads from the consumer group
             # COUNT: max number of messages to fetch at once
@@ -158,3 +160,6 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: La
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
                         yield RedisStreamingDocumentData.from_message(message).to_document()
+
+            if (t := time.time() - start_time) > self._config.timeout:
+                raise TimeoutError(f"No document received after {t} seconds")

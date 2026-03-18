@@ -16,7 +16,7 @@ from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument, LanguageModelInput
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,10 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
         )
         if self._datasets[dataset_name].requires_broadcast:
-            data_loader = DistributedDataLoaderWrapper(data_loader, self._distributed.model_and_sequence_data_group)
+            data_loader = DistributedDataLoaderWrapper(
+                data_loader,
+                self._distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).group,
+            )
 
         return iter(data_loader)
 
