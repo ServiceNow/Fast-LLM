@@ -50,6 +50,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # Compute num_labels_in_seq on the full (batch, seq) labels before any parallelism
         # split, then apply the same flatten -> sequence-parallel split -> cross-entropy-split
@@ -63,34 +64,38 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         if self._num_splits > 1:
             num_labels_in_seq = num_labels_in_seq.chunk(self._num_splits)[split_index]
 
-        loss, grad, new_logprobs_mean = grpo_loss_forward_backward(
+        loss, grad, new_logprobs_mean = fused_grpo_loss_forward_backward(
             logits,
             self._get_labels(kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], kwargs, split_index),
-            num_labels_in_seq,
+            grad_logits=grad_logits,
             grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             epsilon_low=self._config.epsilon_low,
             epsilon_high=self._config.epsilon_high,
             logits_scale_factor=self._logits_scale_factor,
+            num_labels_in_seq=num_labels_in_seq,
         )
         kwargs[f"_metric_{self._name}_new_logprobs"] = new_logprobs_mean
         return loss, grad
 
 
 @torch.compile
-def grpo_loss_forward_backward(
+def fused_grpo_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
     advantages: torch.Tensor,  # (*batch,)
     old_log_probabilities: torch.Tensor,  # (*batch,)
-    num_labels_in_seq: torch.Tensor,  # (*batch,) — response-span length broadcast per token, 0 for non-response
-    grad_output: float | None,
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,
     epsilon_low: float = 0.2,
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
+    num_labels_in_seq: (
+        torch.Tensor | None
+    ) = None,  # (*batch,) — response-span length broadcast per token, 0 for non-response
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
     loss_mask = target >= 0
@@ -114,11 +119,9 @@ def grpo_loss_forward_backward(
     # Dividing by num_labels_in_seq (span length broadcast per token) and summing over masked
     # tokens gives mean logprob per sequence; summing those across sequences matches the deepspeed
     # convention exactly (segments are redundant once num_labels_in_seq is correct).
-    new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq).sum()
+    new_logprobs_mean = None if num_labels_in_seq is None else (new_log_probs * loss_mask / num_labels_in_seq).sum()
 
-    if grad_output is None:
-        grad = None
-    else:
+    if grad_output is not None:
         # loss[a>=0] = -a * min(x, 1 + epsilon_high)  =>  grad[a>=0] = -a * (x <= 1 + epsilon_high)
         # loss[a<=0] = a * max(x, 1 - epsilon_low)  =>  grad[a<=0] = a * (x >= 1 - epsilon_low)
         probability_ratio_grad = (
@@ -140,4 +143,9 @@ def grpo_loss_forward_backward(
         )
         grad = grad.to(logits.dtype)
 
-    return loss, grad, new_logprobs_mean
+        if grad_logits is None:
+            grad_logits = grad
+        else:
+            grad_logits.add_(grad)
+
+    return loss, grad_logits, new_logprobs_mean
