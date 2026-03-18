@@ -4,15 +4,15 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.preparator.config import DatasetPreparatorConfig
-from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
+from fast_llm.data.preparation.config import DatasetPreparatorConfig
+from fast_llm.data.preparation.image_patch import ImagePreparationConfig
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
+    from fast_llm.data.preparation.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 
 
 @config_class(registry=True)
@@ -304,7 +304,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )
-    image_patches: ImagePatchConfig = Field(
+    image_patches: ImagePreparationConfig = Field(
         desc="Configuration for the image patches, if enabled.",
         hint=FieldHint.feature,
     )
@@ -321,6 +321,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
 
     @classmethod
     def get_dataset_preparator_class(cls) -> type["GPTMemmapDatasetPreparator"]:
-        from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
+        from fast_llm.data.preparation.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 
         return GPTMemmapDatasetPreparator

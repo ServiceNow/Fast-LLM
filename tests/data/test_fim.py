@@ -24,7 +24,6 @@ def test_gpt_fim():
     # Make sure the FIM wrapper works in a simple case and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     # The test tokenizer doesn't have fim tokens, so we work around it.
-    sampling_config = get_sampling_data(8, sequence_length=5, preprocessing=preprocessing)
     sampled = get_dataset_config(
         dataset_config := {
             "type": "fim",
@@ -37,7 +36,7 @@ def test_gpt_fim():
             "suffix_token": "z",
         },
         GPTFimSampledDatasetConfig,
-    ).build_and_sample(sampling_config)
+    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_FIM_SAMPLES)
 
     get_test_data_and_compare_samples(

@@ -7,18 +7,15 @@ import torch.utils.data
 
 from fast_llm.config import Config, Configurable, Field, config_class
 from fast_llm.data.dataset.abstract import SamplableIterableDataset
-from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, SamplingData, StreamingDatasetConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.range import RangeSample
-from fast_llm.data.sample.token import TokenSample
-from fast_llm.data.sample.token_data import TokenDataSample
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, SamplingConfig, StreamingDatasetConfig
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.range import RangeDocument
+from fast_llm.data.document.token_data import TokenDataSample
 from fast_llm.utils import Assert
 
 
 @config_class()
-class RedisDocument(Config):
+class RedisStreamingDocumentData(Config):
     """
     Schema for sending and receiving documents through redis, and the associated handling code.
     """
@@ -84,42 +81,36 @@ class RedisDocument(Config):
             message["data"] = json.dumps(data)
         return message
 
-    def to_sample(self, preprocessing: LanguageModelPreprocessingConfig | None):
+    def to_document(self):
         sample_size = len(self.tokens)
         # TODO: Check explicitly that required data is available?
-        return LanguageModelSample(
-            tokens=TokenSample(self.tokens, [sample_size]),
+        return LanguageModelDocument(
+            tokens=self.tokens,
             loss_masking_spans=(
-                RangeSample([(begin, end) for begin, end in self.loss_masking_spans], sample_size)
-                if preprocessing.use_loss_masking_spans
+                RangeDocument(ranges=[(begin, end) for begin, end in self.loss_masking_spans])
+                if self.loss_masking_spans
                 else None
             ),
-            chosen_spans=RangeSample([self.chosen_span], sample_size) if preprocessing.use_preference_spans else None,
-            rejected_spans=(
-                RangeSample([self.rejected_span], sample_size) if preprocessing.use_preference_spans else None
-            ),
+            chosen_spans=RangeDocument(ranges=[self.chosen_span]) if self.chosen_span else None,
+            rejected_spans=RangeDocument(ranges=[self.rejected_span]) if self.rejected_span else None,
             advantages=(
-                TokenDataSample(torch.full([sample_size], self.advantage, dtype=torch.float32))
-                if preprocessing.use_advantages
-                else None
+                None
+                if self.advantage is None
+                else TokenDataSample(torch.full([sample_size], self.advantage, dtype=torch.float32))
             ),
             old_log_probabilities=(
-                TokenDataSample(self.old_log_probabilities) if preprocessing.use_old_log_probabilities else None
+                None if self.old_log_probabilities is None else TokenDataSample(self.old_log_probabilities)
             ),
         )
 
 
-class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: LanguageModelSample](
-    Configurable[ConfigType], SamplableIterableDataset[SampleType]
+class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: LanguageModelDocument](
+    Configurable[ConfigType], SamplableIterableDataset[DocumentType]
 ):
-    def __init__(self, config: ConfigType, distributed_config: DistributedConfig):
+    def __init__(self, config: ConfigType):
         super().__init__(config)
         self._name = f"redis[{config.host}:{config.port}]({REDIS_DATA_STREAM}|{REDIS_GROUP_NAME})[data]"
         self._config = config
-        self._rank = distributed_config.batch_data_rank
-        self.is_batch_data_group_leader = (
-            distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).rank == 0
-        )
 
     @property
     def requires_broadcast(self) -> bool:
@@ -129,13 +120,10 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
     def name(self) -> str:
         return self._name
 
-    def iterate(self, sampling: SamplingData) -> typing.Iterator[SampleType]:
+    def iterate(self, config: SamplingConfig, num_samples: int, seed: int) -> typing.Iterator[DocumentType]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None and worker_info.num_workers > 1:
             raise RuntimeError("StreamingDataset can work only with one instance per rank")
-
-        if not self.is_batch_data_group_leader:
-            raise RuntimeError("Must be only called on the batch data group leader")
 
         client = redis.Redis(host=self._config.host, port=self._config.port)
 
@@ -156,7 +144,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
             # BLOCK: wait for new messages (milliseconds)
             messages = client.xreadgroup(
                 groupname=REDIS_GROUP_NAME,
-                consumername=f"fast_llm_consumer_{self._rank}",
+                consumername=f"fast_llm_consumer_{config.rank}",
                 # ">" reads only new messages that have not been delivered to any consumer
                 streams={REDIS_DATA_STREAM: ">"},
                 count=1,
@@ -169,4 +157,4 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, SampleType: Lang
                 for stream_key, messages_ in messages:
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
-                        yield RedisDocument.from_message(message).to_sample(sampling.preprocessing)
+                        yield RedisStreamingDocumentData.from_message(message).to_document()

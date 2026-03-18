@@ -1,4 +1,3 @@
-import dataclasses
 import enum
 import functools
 import itertools
@@ -7,16 +6,14 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
-    from fast_llm.data.sample.language_model import LanguageModelSample
-    from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +30,11 @@ class ShufflingType(str, enum.Enum):
 
 
 @config_class()
-class SamplingConfig(Config):
+class SamplingConfigBase(Config):
     """
     A dataset-dependent configuration for sampling.
     """
 
-    seed: int = Field(
-        default=784569,
-        desc="Seed for random sampling.",
-        hint=FieldHint.feature,
-    )
     gpu: bool = Field(
         default=True,
         desc="Enable fast sampling on GPU."
@@ -55,82 +47,97 @@ class SamplingConfig(Config):
         desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
-
-
-@dataclasses.dataclass(kw_only=True)
-class SamplingParameters:
-    """
-    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
-    """
-
-    sequence_length: int
-    num_samples: int
-    truncate_documents: bool = True
-    # How many extra tokens to add to the sequence length.
-    # This is used to provide labels even for the last tokens in the sequence.
-    extra_tokens: int = 1
-
-
-@dataclasses.dataclass(kw_only=True)
-class SamplingData:
-    """
-    Holds all the necessary information for sampling, including dataset-dependent ones (`SamplingConfig`),
-    usage-dependent ones (`SamplingParameters`), and others set by the `Data`.
-    """
-
-    # TODO: Have a separate configuration (subset?) for `build`?
-    config: SamplingConfig
-    parameters: SamplingParameters
-    cache_directory: pathlib.Path | None
-    # TODO: This prevents the sampling config from being pickled in multiprocessing.
-    distributed: "Distributed"
-    dataset_name: str
-    preprocessing: PreprocessingConfig
-    # Using a mutable rather than an int so it's shared with all copies made with `update`.
-    _rank_counter: typing.Iterator[int] = itertools.count
-
-    def update_config(self, update: SamplingConfig):
-        return dataclasses.replace(
-            self, config=self.config.from_dict(self.config, update.to_dict(), update_type=UpdateType.update)
-        )
-
-    def get_next_rank(self) -> int:
-        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
-        return next(self._rank_counter()) % self.distributed.config.world_size
+    micro_batch_size: int = Field(
+        default=2048,
+        desc="Size of individual micro-batches.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    maximum_document_length: int | None = Field(
+        default=None,
+        desc="Maximum number of tokens in a document."
+        " Document exceeding this size will be truncated or dropped depending on `truncate_documents`.",
+        hint=FieldHint.core,
+    )
+    truncate_documents: bool | None = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
+        hint=FieldHint.feature,
+    )
 
 
 @config_class()
-class DatasetConfig[SampleType: Sample](Config):
+class SamplingConfig(SamplingConfigBase):
+    """
+    Holds all the necessary information for sampling.
+    """
+
+    # How many extra tokens to add to the sequence length.
+    # This is used to provide labels even for the last tokens in the sequence.
+    predicted_tokens: int = Field(default=1)
+    cache_directory: pathlib.Path | None = Field(default=None)
+    dataset_name: str = Field(default="dataset")
+    world_size: int = Field(default=1)
+    rank: int = Field(default=0)
+    _rank_counter: typing.Iterator[int] = Field(init=False)
+
+    def _validate(self):
+        # Using itertools.count to make the field mutable.
+        self._rank_counter = itertools.count()
+        super()._validate()
+
+    def is_running_next(self) -> bool:
+        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
+        return next(self._rank_counter) % self.world_size == self.rank
+
+    @functools.cached_property
+    def sample_size(self) -> int:
+        return self.micro_batch_size + self.predicted_tokens
+
+    @functools.cached_property
+    def sampling_maximum_document_length(self) -> int:
+        if self.maximum_document_length is None:
+            return self.sample_size
+        else:
+            return min(self.maximum_document_length, self.sample_size)
+
+
+@config_class()
+class DatasetConfig[DocumentType: Document](Config):
     _abstract: typing.ClassVar[bool] = True
 
 
 @config_class(registry=True)
-class SampledDatasetConfig[SampleType: Sample](DatasetConfig[SampleType]):
+class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     """
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         raise NotImplementedError()
 
 
 @config_class()
-class SamplableDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    def build(self, preprocessing: PreprocessingConfig) -> SamplableDataset[SampleType]:
+class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    def build(self) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
-        return self.build(sampling.preprocessing).sample(sampling)
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        return self.build().sample(config, num_samples, seed)
 
 
 @config_class()
-class IndexedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
+class IndexedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
+    def build(self) -> "IndexedDataset[DocumentType]":
         raise NotImplementedError()
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "concatenated"})
-class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+class ConcatenatedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
     """
     Concatenate multiple indexed datasets as if they were one.
     TODO: Make a post-sampling version? (staged training)
@@ -142,21 +149,21 @@ class ConcatenatedDatasetConfig[SampleType: Sample](SamplableDatasetConfig[Sampl
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[IndexedDatasetConfig[SampleType]] = Field(
+    datasets: list[IndexedDatasetConfig[DocumentType]] = Field(
         default_factory=list,
         desc="The datasets to concatenate.",
         hint=FieldHint.core,
         valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "ConcatenatedDataset":
+    def build(self) -> "ConcatenatedDataset":
         from fast_llm.data.dataset.indexed import ConcatenatedDataset
 
-        return ConcatenatedDataset(self.name, [dataset.build(preprocessing) for dataset in self.datasets])
+        return ConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "slice"})
-class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType]):
+class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
     """
     Use a fraction of an indexed dataset, specified by the range (begin, end).
     Typically used to subsample a dataset, or to reserve part of the dataset for validation and/or testing.
@@ -166,7 +173,7 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
     """
 
     _abstract = False
-    dataset: IndexedDatasetConfig[SampleType] = Field(
+    dataset: IndexedDatasetConfig[DocumentType] = Field(
         default=None,
         desc="The dataset to split.",
         hint=FieldHint.core,
@@ -182,12 +189,12 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "DatasetSlice":
+    def build(self) -> "DatasetSlice":
         from fast_llm.data.dataset.indexed import DatasetSlice
 
-        dataset = self.dataset.build(preprocessing)
+        dataset = self.dataset.build()
         size = len(dataset)
-        return DatasetSlice[SampleType](
+        return DatasetSlice[DocumentType](
             f"{dataset.name}_{self.begin}_{self.end}",
             dataset,
             round(self.begin * size),
@@ -195,36 +202,15 @@ class DatasetSliceConfig[SampleType: Sample](SamplableDatasetConfig[SampleType])
         )
 
 
-@config_class(dynamic_type={SampledDatasetConfig: "sampled"})
-class SampledDatasetUpdateConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
-    """
-    Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
-    Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
-    """
-
-    _abstract = True
-    sampling: SamplingConfig = Field(
-        desc="Optional override to sampling configuration parameters.",
-        hint=FieldHint.core,
-    )
-    dataset: SampledDatasetConfig[SampleType] = Field(
-        desc="The dataset to sample from.",
-        hint=FieldHint.core,
-    )
-
-    def build_and_sample(self, data: SamplingData) -> SampledDataset[SampleType]:
-        return self.dataset.build_and_sample(data.update_config(self.sampling))
-
-
 @config_class(dynamic_type={SampledDatasetConfig: "blended"})
-class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType]):
+class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
     _abstract = False
     name: str = Field(
         default="blended",
         desc="The name of the dataset.",
         hint=FieldHint.core,
     )
-    datasets: list[SampledDatasetConfig[SampleType]] = Field(
+    datasets: list[SampledDatasetConfig[DocumentType]] = Field(
         default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
@@ -241,10 +227,7 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
         Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
 
-    def build_and_sample(
-        self,
-        sampling: SamplingData,
-    ) -> SampledDataset[SampleType]:
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
@@ -252,53 +235,21 @@ class BlendedDatasetConfig[SampleType: Sample](SampledDatasetConfig[SampleType])
         sampled_datasets = [
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
-                dataclasses.replace(
-                    sampling,
-                    parameters=dataclasses.replace(
-                        sampling.parameters,
-                        num_samples=math.ceil(weight * sampling.parameters.num_samples) + 1,
-                    ),
-                    # TODO: Seed may not be unique for nested blended datasets.
-                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * 697}),
-                ),
+                config,
+                num_samples=math.ceil(weight * num_samples) + 1,
+                # TODO: Seed may not be unique for nested blended datasets.
+                seed=seed + i * 697,
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
         # Blend the datasets.
-        return BlendedDataset[SampleType](
+        return BlendedDataset[DocumentType](
             self.name,
             sampled_datasets,
             self.weights,
-            sampling,
+            config,
+            num_samples,
         )
-
-
-@config_class(dynamic_type={SampledDatasetConfig: "memmap"})
-class MemmapDatasetConfig[SampleType: Sample](IndexedDatasetConfig[SampleType]):
-    _abstract: typing.ClassVar[bool] = False
-    path: pathlib.Path = Field(
-        default=None,
-        desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
-        hint=FieldHint.core,
-    )
-
-    def build(self, preprocessing: PreprocessingConfig) -> "IndexedDataset[SampleType]":
-        name = str(self.path).replace("/", "__")
-        if self.path.is_file():
-            from fast_llm.data.dataset.memmap import MemmapDataset
-
-            return MemmapDataset[SampleType](name, self.path, preprocessing)
-        elif self.path.with_suffix(".bin").is_file() and self.path.with_suffix(".idx").is_file():
-            logger.warning(
-                "Using the legacy memmap dataset format."
-                " This format is deprecated and will be removed in a future release."
-                " Please recreate the dataset in the new memmap format."
-            )
-            from fast_llm.data.dataset.gpt.legacy_memmap import LegacyMemmapDataset
-
-            return LegacyMemmapDataset[SampleType](name, self.path, preprocessing)
-        else:
-            raise FileNotFoundError(self.path)
 
 
 REDIS_DATA_STREAM = "fast_llm_streaming"
@@ -332,16 +283,14 @@ class RedisConfig(Config):
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "streaming"})
-class StreamingDatasetConfig[SampleType: LanguageModelSample](RedisConfig, SamplableDatasetConfig[SampleType]):
+class StreamingDatasetConfig[DocumentType: LanguageModelDocument](RedisConfig, SamplableDatasetConfig[DocumentType]):
     """
     Configuration for a streaming dataset that reads training data from a Redis stream.
     """
 
     _abstract = False
 
-    def build_and_sample(self, sampling: SamplingData) -> SampledDataset[SampleType]:
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         from fast_llm.data.dataset.streaming import RedisStreamingDataset
 
-        return RedisStreamingDataset[StreamingDatasetConfig, SampleType](self, sampling.distributed.config).sample(
-            sampling
-        )
+        return RedisStreamingDataset[StreamingDatasetConfig, DocumentType](self).sample(config, num_samples, seed)

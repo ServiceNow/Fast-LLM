@@ -43,7 +43,7 @@ class LanguageModelLossConfig(Config):
         self,
         distributed_config: DistributedConfig,
         name: str,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
         num_splits: int = 1,

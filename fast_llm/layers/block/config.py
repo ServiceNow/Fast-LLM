@@ -32,13 +32,14 @@ class BlockDimNames:
 
 class BlockKwargs:
     batch_dim = "batch_dim"
-    sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
+    key_value_token_dim = "key_value_token_dim"
     token_dim = "token_dim"
+    num_tokens = "num_tokens"
     hidden_token_dim = "hidden_token_dim"
     # TODO: These are confusing
     sequence_length = "sequence_length"
-    lengths = "sequence_lengths"
+    lengths = "lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
     activation_distillation_targets = "activation_distillation_targets"

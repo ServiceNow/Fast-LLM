@@ -306,30 +306,21 @@ class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormaliz
     A gated RMS normalization layer.
     """
 
-    def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
-        super().__init__(config, hidden_dim, lr_scale)
-
-        if rms_norm_gated is not None:
-            self._forward_gated = self._forward_fla
-        else:
-            self._forward_gated = self._forward_local
-
     def forward(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        return self._forward_gated(input_.view(-1, *self._normalized_shape), gate).view_as(input_)
-
-    def _forward_fla(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        return rms_norm_gated(
-            input_,
-            gate,
-            self.weight,
-            None,
-            activation=self._config.activation.hf_name,
-            eps=self._config.epsilon,
-            residual=None,
-            prenorm=False,
-            residual_in_fp32=False,
-        )
-
-    def _forward_local(self, input_: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        normalized = self._forward(input_)
-        return normalized * self._config.activation.activation_fn(gate)
+        out = input_.view(-1, *self._normalized_shape)
+        gate = gate.reshape_as(out)
+        if rms_norm_gated is None:
+            out = self._forward(out) * self._config.activation.activation_fn(gate)
+        else:
+            out = rms_norm_gated(
+                out,
+                gate,
+                self.weight,
+                None,
+                activation=self._config.activation.hf_name,
+                eps=self._config.epsilon,
+                residual=None,
+                prenorm=False,
+                residual_in_fp32=False,
+            )
+        return out.view_as(input_)

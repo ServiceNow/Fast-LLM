@@ -21,12 +21,12 @@ class MixerKwargs(BlockKwargs):
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
     document_index_q = "document_index_q"
+    document_index_k = "document_index_k"
     position_ids = "position_ids"
 
 
 class AttentionKwargs(MixerKwargs):
-    rotary_freq_q = "rotary_freq_q"
-    rotary_freq_k = "rotary_freq_k"
+    rotary_freq = "rotary_freq"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
     # TODO: Review these
@@ -118,12 +118,6 @@ class AttentionConfig(MixerConfig):
     implementation: AttentionImplementation = Field(
         default=AttentionImplementation.auto,
         desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
-        hint=FieldHint.feature,
-    )
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Allow for cross-document attention.",
-        doc="Disable to prevent attention between tokens belonging to different documents.",
         hint=FieldHint.feature,
     )
 

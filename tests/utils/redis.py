@@ -16,7 +16,7 @@ from fast_llm.data.dataset.config import (
     SamplingParameters,
     StreamingDatasetConfig,
 )
-from fast_llm.data.dataset.streaming import RedisDocument
+from fast_llm.data.dataset.streaming import RedisStreamingDocumentData
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.models.gpt.config import GPTBatchConfig
 
@@ -72,7 +72,9 @@ def redis_batch_producer(config: RedisConfig, batch_config: GPTBatchConfig):
                     break
                 client.xadd(
                     REDIS_DATA_STREAM,
-                    RedisDocument.from_dict({"tokens": [sample_index] * batch_config.sequence_length}).to_message(),
+                    RedisStreamingDocumentData.from_dict(
+                        {"tokens": [sample_index] * batch_config.sequence_length}
+                    ).to_message(),
                 )
                 if sample_index % 5 == 0:
                     wait_until_stream_empty(client, REDIS_DATA_STREAM, REDIS_GROUP_NAME, stop_event)

@@ -24,6 +24,7 @@ def test_rotary_2d(testing_device):
         2, len(patch_positions), num_heads, head_dim, dtype=torch.float32, device=testing_device
     ).normal_()
     key = torch.empty_like(query).normal_()
+    value = torch.empty_like(query).normal_()
 
     pixtral_config = transformers.PixtralVisionConfig(hidden_size=head_dim * num_heads, num_attention_heads=num_heads)
     pixtral_rotary = transformers.models.pixtral.modeling_pixtral.PixtralRotaryEmbedding(pixtral_config).to(
@@ -42,7 +43,10 @@ def test_rotary_2d(testing_device):
     fast_llm_rotary = Rotary2DConfig().get_layer(TensorDim("head_dim", head_dim))
     kwargs = {VisionKwargs.patch_positions: patch_positions, AttentionKwargs.device: testing_device}
     fast_llm_rotary.preprocess(kwargs)
-    output_fast_llm_query, output_fast_llm_key = fast_llm_rotary.forward(query, key, kwargs)
-
+    output_fast_llm_query, output_fast_llm_key_value = fast_llm_rotary.forward(
+        query, torch.cat([key, value], dim=-2), kwargs
+    )
+    output_fast_llm_key, output_fast_llm_value_ = output_fast_llm_key_value.chunk(2, dim=-2)
     Assert.rms_close(output_pixtral_query, output_fast_llm_query, 1e-5)
     Assert.rms_close(output_pixtral_key, output_fast_llm_key, 1e-5)
+    Assert.all_equal(output_fast_llm_value_, value)

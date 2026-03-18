@@ -1,7 +1,6 @@
 import collections
 import datetime
 import enum
-import functools
 import json
 import logging
 import math
@@ -23,26 +22,23 @@ from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
     DatasetSliceConfig,
     IndexedDatasetConfig,
-    MemmapDatasetConfig,
     SampledDatasetConfig,
 )
-from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import (
+from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig, MemmapIndexDatasetReaderConfig
+from fast_llm.data.dataset.memmap.language_model import LanguageModelWriter
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.document.patch import PatchDocument
+from fast_llm.data.document.range import RangeDocument
+from fast_llm.data.document.token_data import TokenDataDocument
+from fast_llm.data.preparation.config import DatasetPreparator
+from fast_llm.data.preparation.gpt_memmap.config import (
     ConversationSourceConfig,
     DocumentSourceConfig,
     GPTMemmapDatasetPreparatorConfig,
     LanguageModelSourceConfig,
 )
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import Tokenizer
-from fast_llm.data.sample.abstract import MemmapIndexDatasetReaderConfig
-from fast_llm.data.sample.language_model import LanguageModelSample, LanguageModelWriter
-from fast_llm.data.sample.patch import PatchSample
-from fast_llm.data.sample.range import RangeSample
-from fast_llm.data.sample.token import TokenSample
-from fast_llm.data.sample.token_data import TokenDataSample
+from fast_llm.data.preparation.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import normalize_probabilities, padded_cumsum
@@ -60,7 +56,7 @@ class SpanType(enum.StrEnum):
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
     _tokenizer: Tokenizer
     _data_type: DataType
-    _sample_type: typing.ClassVar[type[LanguageModelSample]] = LanguageModelSample
+    _sample_type: typing.ClassVar[type[LanguageModelDocument]] = LanguageModelDocument
     _config: GPTMemmapDatasetPreparatorConfig
 
     def __init__(self, config: ConfigType):
@@ -209,24 +205,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for sample in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_index}", unit="docs")
             ),
             LanguageModelWriter,
-            self._preprocessing_config,
         )
         return MemmapDatasetConfig.from_dict({"type": "memmap", "path": file_name}), reader_config
 
-    @functools.cached_property
-    def _preprocessing_config(self) -> LanguageModelPreprocessingConfig:
-        return LanguageModelPreprocessingConfig(
-            tokenizer=self._config.tokenizer,
-            vocab_size=self._tokenizer.vocab_size,
-            image_patches=(
-                self._config.image_patches if self._source_schema.has_images else NullPreprocessingConfig()
-            ),
-            use_loss_masking_spans=self._source_schema.has_loss_masking_span,
-            use_preference_spans=self._source_schema.has_preference_spans,
-            use_grpo_data=self._source_schema.has_grpo_data,
-        )
-
-    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelSample:
+    def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelDocument:
         token_spans_by_type = collections.defaultdict(list)
         image_patches = image_token_maps = image_position_ids = patch_counts = advantages = old_log_probabilities = (
             None
@@ -340,34 +322,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             advantages = torch.full_like(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
             old_log_probabilities = torch.zeros_like(tokens, dtype=torch.float32)
 
-        sample_size = len(tokens)
-
-        return LanguageModelSample(
-            TokenSample(tokens, [sample_size]),
+        return LanguageModelDocument(
+            tokens=tokens,
             loss_masking_spans=(
-                RangeSample(token_spans_by_type[SpanType.loss_masking], sample_size)
+                RangeDocument(ranges=token_spans_by_type[SpanType.loss_masking])
                 if self._source_schema.has_loss_masking_span
                 else None
             ),
             chosen_spans=(
-                RangeSample(token_spans_by_type[SpanType.chosen], sample_size)
+                RangeDocument(ranges=token_spans_by_type[SpanType.chosen])
                 if self._source_schema.has_preference_spans
                 else None
             ),
             rejected_spans=(
                 # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
-                RangeSample([(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]], sample_size)
+                RangeDocument(ranges=[(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]])
                 if self._source_schema.has_preference_spans
                 else None
             ),
             image_patches=(
-                PatchSample(image_patches, image_token_maps, image_position_ids, sample_size, patch_counts)
+                PatchDocument(
+                    patches=image_patches,
+                    token_map=image_token_maps,
+                    positions=image_position_ids,
+                    lengths=patch_counts,
+                )
                 if self._source_schema.has_images
                 else None
             ),
-            advantages=TokenDataSample(advantages) if self._source_schema.has_grpo_data else None,
+            advantages=TokenDataDocument(data=advantages) if self._source_schema.has_grpo_data else None,
             old_log_probabilities=(
-                TokenDataSample(old_log_probabilities) if self._source_schema.has_grpo_data else None
+                TokenDataDocument(data=old_log_probabilities) if self._source_schema.has_grpo_data else None
             ),
         )
 
@@ -473,9 +458,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
-                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build(
-                        self._preprocessing_config
-                    )
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
                     begin_index, end_index, metadata = dataset.reader.get_split(
                         split_begin_in_dataset, split_end_in_dataset
                     )

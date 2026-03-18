@@ -3,15 +3,14 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
-from fast_llm.data.dataset.memmap import MemmapDataset
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.dataset.memmap.memmap import MemmapDataset
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.utils import Assert
 from tests.data.common import get_dataset_config
 from tests.data.test_preparator import COMMON_DATASET_LENGTH
-from tests.utils.dataset import get_common_test_dataset, get_test_dataset_with_preference_spans
+from tests.utils.dataset import get_test_dataset_with_preference_spans
 from tests.utils.global_variables import TOKENIZER_NAME
 
 DATASET_WITH_PREFERENCE_SPAN_TOKENS = 62163
@@ -40,10 +39,8 @@ TOKEN_PREFERENCE_SPANS = {
 
 @pytest.mark.slow
 def test_gpt_data_with_spans():
-    _, config, hf_path, preprocessing = get_test_dataset_with_preference_spans()
-    dataset: MemmapDataset[LanguageModelSample] = get_dataset_config(config, GPTDatasetFromFileConfig).build(
-        preprocessing
-    )
+    _, config, hf_path, _ = get_test_dataset_with_preference_spans()
+    dataset: MemmapDataset[LanguageModelDocument] = get_dataset_config(config, GPTDatasetFromFileConfig).build()
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -82,15 +79,15 @@ def test_gpt_data_with_spans():
             (token_length_cumsum[4], token_length_cumsum[5]),
         ]
 
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
+        document = dataset.get_document(index)
         token_spans = document.chosen_spans.ranges + document.rejected_spans.ranges
 
         # Compare tokens and token spans.
-        Assert.all_equal(document.tokens.tokens, expected_tokens)
+        Assert.all_equal(document.tokens, expected_tokens)
         Assert.eq(token_spans, expected_token_spans)
 
         # Compare text.
-        text, text_spans = tokenizer.detokenize_with_spans(document.tokens.tokens, True, True, token_spans=token_spans)
+        text, text_spans = tokenizer.detokenize_with_spans(document.tokens, True, True, token_spans=token_spans)
         Assert.eq(text, expected_text)
         Assert.eq(text_spans, expected_text_spans)
 
@@ -101,14 +98,6 @@ def test_gpt_data_with_spans():
             DATASET_WITH_PREFERENCE_SPAN_TEXT[index],
         )
 
-        document = dataset.get_document(index, parameters=SamplingParameters(num_samples=0, sequence_length=0))
-        Assert.eq(document.tokens.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
+        document = dataset.get_document(index)
+        Assert.eq(document.tokens.tolist(), DATASET_WITH_PREFERENCE_SPAN_SAMPLES[index])
         Assert.eq(document.chosen_spans.ranges + document.rejected_spans.ranges, TOKEN_PREFERENCE_SPANS[index])
-
-
-@pytest.mark.slow
-def test_gpt_data_with_missing_preference_spans():
-    path, config, hf_path, _ = get_common_test_dataset()
-    _, _, _, preprocessing = get_test_dataset_with_preference_spans(config_only=True)
-    with pytest.raises(AssertionError, match="The dataset is missing required preference spans"):
-        get_dataset_config(config, GPTDatasetFromFileConfig).build(preprocessing)

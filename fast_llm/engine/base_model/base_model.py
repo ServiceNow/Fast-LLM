@@ -5,10 +5,12 @@ import typing
 import torch.nn
 
 from fast_llm.config import Configurable
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.utils import safe_merge_dicts
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.runner import InferenceRunner
@@ -52,6 +54,11 @@ class LayerBase(torch.nn.Module, abc.ABC):
             if layer is not self:
                 losses += layer.get_loss_definitions(count)
         return losses
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            *(layer.get_preprocessing_config() for layer in self.get_layers() if layer is not self)
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         for layer in self.get_layers():
@@ -106,6 +113,9 @@ class LayerBaseWithNamespace(LayerBase):
         Wrap individual layers so the namespace is used in forward.
         """
         return self._layers_with_namespace
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return self._layer.get_preprocessing_config()
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -166,20 +176,15 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         self._reference_models: dict[str, "InferenceRunner"] = {}
 
     @abc.abstractmethod
-    def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
-        # TODO Remove (Move batch splitting elsewhere)
-        pass
-
-    @abc.abstractmethod
     def preprocess_batch(
         self,
-        batch: typing.Any,
-        preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
+        model_inputs: list[ModelInput],
         *,
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
+        device: torch.device | None,
     ) -> list[tuple[torch.Tensor, dict]]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass

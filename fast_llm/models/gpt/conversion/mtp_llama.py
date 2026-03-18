@@ -5,7 +5,7 @@ from transformers import PretrainedConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig, LanguageModelHeadConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
@@ -35,17 +35,22 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
     @classmethod
     def get_converters(
         cls,
-        config: LanguageModelHeadConfig,
+        config: LanguageModelConfig,
         exported_config: dict,
     ) -> list[WeightConverter]:
-        return super().get_converters(config, exported_config) + [
-            cls.normalization_converter_class.get_converters(
-                config.head.normalization,
-                f"multi_token_prediction.heads.{prediction_distance - 1}.final_norm",
-                f"model.mtp_norms.{prediction_distance}",
+        converters = super().get_converters(config, exported_config)
+        for prediction_distance in range(2, config.head.prediction_heads + 1):
+            converters += cls.block_converter_class.get_converters(
+                config.decoder.last_block_config,
+                f"multi_token_prediction.blocks.{prediction_distance-2}",
+                f"model.mtp_heads.{prediction_distance - 1}",
             )
-            for prediction_distance in range(1, config.prediction_heads)
-        ]
+            converters += cls.normalization_converter_class.get_converters(
+                config.head.normalization,
+                f"multi_token_prediction.heads.{prediction_distance - 2}.final_norm",
+                f"model.mtp_norms.{prediction_distance - 1}",
+            )
+        return converters
 
 
 class MTPLlamaDecoderConverter(LlamaDecoderConverter):

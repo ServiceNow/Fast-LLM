@@ -73,16 +73,16 @@ def test_triton_add(testing_device):
 
 @requires_triton
 @pytest.mark.parametrize(
-    ("batch_size", "sequence_length", "num_heads", "head_size"),
-    [(4, 32, 2, 16), (1, 32, 1, 16), (2, 64, 2, 96), (3, 59, 7, 22)],
+    ("num_tokens", "num_heads", "head_size"),
+    [(128, 2, 16), (32, 1, 16), (128, 2, 96), (59, 7, 22)],
 )
-def test_triton_rotary(batch_size, sequence_length, num_heads, head_size, testing_device):
-    x = torch.randn(batch_size, sequence_length, num_heads, head_size, dtype=torch.float32, device=testing_device)
+def test_triton_rotary(num_tokens, num_heads, head_size, testing_device):
+    x = torch.randn(num_tokens, num_heads, head_size, dtype=torch.float32, device=testing_device)
     frequencies = (
         DefaultRotaryConfig()
         .get_layer(TensorDim("", head_size))
         ._get_frequencies(
-            sequence_length,
+            num_tokens,
             head_size,
             device=testing_device,
         )
@@ -92,17 +92,17 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, head_size, testin
 
     y_complex = convert_rotary_complex_to_real(
         rotary_embeddings_complex(
-            convert_rotary_real_to_complex(x, head_size, 3),
-            torch.view_as_complex(convert_rotary_real_to_complex(frequencies, head_size, 3).unflatten(-1, (-1, 2))),
+            convert_rotary_real_to_complex(x, head_size, 2),
+            torch.view_as_complex(convert_rotary_real_to_complex(frequencies, head_size, 2).unflatten(-1, (-1, 2))),
         ),
         head_size,
-        3,
+        2,
     )
 
-    y_triton = triton_rotary_(x, frequencies)
+    triton_rotary_(x, frequencies)
 
     Assert.rms_close(y_real, y_complex, 1e-4)
-    Assert.rms_close(y_real, y_triton, 1e-4)
+    Assert.rms_close(y_real, x, 1e-4)
 
 
 @requires_triton

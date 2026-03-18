@@ -2,14 +2,13 @@ import numpy as np
 import torch
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType]):
+class GPTFimDataset[DocumentType: LanguageModelDocument](SampledDataset[DocumentType]):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
@@ -18,8 +17,9 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
     def __init__(
         self,
         config: FimConfig,
-        dataset: SampledDataset[SampleType],
-        sampling: GPTSamplingData,
+        dataset: SampledDataset[DocumentType],
+        sampling: GPTSamplingConfig,
+        seed: int,
     ):
         if sampling.preprocessing.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
@@ -28,7 +28,7 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
         self._config = config
         self._dataset = dataset
 
-        self._seed = sampling.config.seed
+        self._seed = seed
         self._tokenizer = self._config.tokenizer.get_tokenizer()
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
@@ -43,18 +43,26 @@ class GPTFimDataset[SampleType: LanguageModelSample](SampledDataset[SampleType])
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> list[DocumentType]:
         # TODO: Use torch methods to avoid back and forth.
-        return LanguageModelSample(
-            TokenSample(
-                torch.from_numpy(
+        documents = self._dataset[index]
+        for document in documents:
+            assert document.loss_masking_spans is None
+            assert document.chosen_spans is None
+            assert document.rejected_spans is None
+            assert document.image_patches is None
+
+        return [
+            LanguageModelDocument(
+                tokens=torch.from_numpy(
                     self._fim(
-                        self._dataset[index].tokens.tokens.numpy(),
+                        document.tokens.numpy(),
                         np.random.RandomState(seed=(self._seed + index) % MAX_SEED),
                     )
                 )
             )
-        )
+            for document in documents
+        ]
 
     @property
     def name(self) -> str:

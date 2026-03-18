@@ -8,12 +8,10 @@ from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
@@ -82,7 +80,6 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         mask_inputs: bool,
         embedding_map: torch.Tensor,
     ) -> torch.Tensor:
-        Assert.eq(position_ids is None, self.position_embeddings_weight is None)
         group = self._parallel_dim.group
         if self._vocab_parallel:
             token_mask = (token_ids >= self._vocab_start_index) * (token_ids < self._vocab_end_index)
@@ -155,21 +152,15 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                 dtype=self._residual_dtype,
             )
         if (embedding_map := kwargs.get(LanguageModelKwargs.embedding_map)) is None:
-            # Language model: input_ contains token ids.
-            token_ids = input_
+            # Language model: input_ contains duplicate token ids. TODO: remove
             input_ = None
-        else:
-            # Multimodal case: input_ contains encoder output, token ids stores in kwargs.
-            # TODO: Support multiple encoders.
-            # TODO: Support pipeline-parallel.
-            token_ids = kwargs.get(LanguageModelKwargs.token_ids)
 
         out = self._forward(
             input_,
-            token_ids,
+            kwargs[LanguageModelKwargs.token_ids],
             kwargs.get(LanguageModelKwargs.position_ids),
-            # TODO ====== Vision ====== Review input masking.
-            kwargs.get(LanguageModelKwargs.mask_inputs),
+            # Masking is needed with image tokens or padding.
+            input_ is not None or kwargs[LanguageModelKwargs.num_tokens] < kwargs[LanguageModelKwargs.token_dim].size,
             embedding_map,
         )
         self._debug(out, None, (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim), kwargs)
@@ -179,15 +170,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         # TODO: Add marginal compute? (embeddings)
         return 0
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        if not self._config.position_embeddings.enabled:
-            return
-        # TODO: Move to data preprocessing.
-        if self._config.cross_document_position_embeddings:
-            sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
-            sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
-            kwargs[LanguageModelKwargs.position_ids] = torch.arange(
-                sequence_k - sequence_q, sequence_k, device=self._distributed.device, dtype=torch.int64
-            ).repeat(kwargs[LanguageModelKwargs.batch_dim].size)
-        else:
-            preprocess_for_varlen(kwargs, self._distributed.device, return_position_ids=True)
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        out = {"vocab_size": self._config.vocab_size}
+        if self._config.position_embeddings.enabled:
+            out["return_position_index"] = True
+        return out

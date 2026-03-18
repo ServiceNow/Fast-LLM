@@ -231,8 +231,12 @@ class Run:
 _run: Run | None = None
 
 
+def run_exists() -> bool:
+    return _run is not None
+
+
 def get_run() -> Run:
-    assert _run is not None
+    assert run_exists()
     return _run
 
 

@@ -80,6 +80,11 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         kwargs[f"_metric_{self._name}_new_logprobs"] = new_logprobs_mean
         return loss, grad
 
+    def get_preprocessing_config(
+        self,
+    ) -> dict[str, typing.Any]:
+        return {"use_grpo_data": True}
+
 
 @torch.compile
 def fused_grpo_loss_forward_backward(

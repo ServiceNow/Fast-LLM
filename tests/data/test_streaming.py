@@ -13,7 +13,7 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.config import REDIS_DATA_STREAM, RedisConfig, SamplingParameters, StreamingDatasetConfig
-from fast_llm.data.dataset.streaming import RedisDocument, RedisStreamingDataset
+from fast_llm.data.dataset.streaming import RedisStreamingDataset, RedisStreamingDocumentData
 from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
 from fast_llm.data.sample.language_model import LanguageModelSample
 from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig, DistributedDimNames
@@ -72,7 +72,7 @@ def test_streaming_dataset(
     )
     documents = [document if isinstance(document, dict) else {"tokens": list(document)} for document in documents]
     for document in documents:
-        fake_redis.xadd(REDIS_DATA_STREAM, RedisDocument.from_dict(document).to_message())
+        fake_redis.xadd(REDIS_DATA_STREAM, RedisStreamingDocumentData.from_dict(document).to_message())
     for document in documents:
         sample = next(dataset_iterator)
         assert isinstance(sample, LanguageModelSample)
@@ -142,7 +142,9 @@ def test_streaming_sampled_dataset(
         RedisStreamingDataset(stream_config, distributed.config).sample(make_sampling(5, 1, distributed))
     )
     for message in messages:
-        fake_redis.xadd(REDIS_DATA_STREAM, RedisDocument.from_dict({"tokens": list(message)}).to_message())
+        fake_redis.xadd(
+            REDIS_DATA_STREAM, RedisStreamingDocumentData.from_dict({"tokens": list(message)}).to_message()
+        )
     for expected_sample, expected_lengths_ in zip(expected_samples, expected_lengths, strict=True):
         sample = next(dataset_iterator)
         assert isinstance(sample, LanguageModelSample)

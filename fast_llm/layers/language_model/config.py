@@ -27,7 +27,6 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     # TODO: These are generic
     phase = "phase"
     loss_mask = "loss_mask"
-    mask_inputs = "mask_inputs"
 
 
 LM_HEAD_LOSS_NAME = "lm_head_loss"
@@ -56,13 +55,6 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    cross_document_position_embeddings: bool = Field(
-        default=True,
-        desc="Allow for cross-document position embeddings.",
-        doc="Disable to reset position ids at the beginning of each document.",
-        hint=FieldHint.feature,
-    )
-
     dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the embedding layer.",

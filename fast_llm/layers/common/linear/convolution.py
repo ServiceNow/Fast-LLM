@@ -48,7 +48,7 @@ class CausalConv1d(torch.nn.Module):
                 bias=self.bias,
                 groups=self.weight.size(0),
                 padding=self.weight.size(2) - 1,
-            )[..., : input_.size(1)]
+            )[..., : input_.size(-1)]
         )
 
     def _forward_causal_conv1d(

@@ -77,7 +77,9 @@ class DebugLayer:
         tensor: torch.Tensor | None,
         name: str,
         dims: tuple[TensorDim | str | None, ...] | None,
-    ) -> TensorMeta:
+    ) -> TensorMeta | None:
+        if tensor is None:
+            return None
         if dims is None:
             dims = tuple(f"dim_{i}" for i in range(tensor.ndim))
         return TensorMeta.from_dims(
