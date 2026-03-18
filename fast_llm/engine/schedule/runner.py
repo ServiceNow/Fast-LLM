@@ -339,15 +339,15 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,
+                    extra_kwargs={
+                        "grad_output": grad_output,
+                        "micro_batch": micro_batch,
+                        "num_micro_batches": batch_config.sequential_micro_batches,
+                        "micro_batch_splits": batch_config.micro_batch_splits,
+                    },
                 )
             for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
-                kwargs.update(
-                    grad_output=grad_output,
-                    micro_batch=micro_batch,
-                    micro_batch_split=micro_batch_split,
-                    num_micro_batches=batch_config.sequential_micro_batches,
-                    micro_batch_splits=batch_config.micro_batch_splits,
-                )
+                kwargs.update(micro_batch_split=micro_batch_split)
                 data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_

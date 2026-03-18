@@ -166,16 +166,11 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
-        #   -> (batch/sequence, sequence/batch, local_inner_projection)
-        inner_projection = self.in_proj(input_)
-        dt = self.dt_proj(self.dt_in_proj(input_))
-        # Standardize to (batch, sequence, local_inner_projection)
-        if kwargs[BlockKwargs.sequence_first]:
-            inner_projection = inner_projection.transpose(0, 1)
-            dt = dt.transpose(0, 1)
-
-        sequence_length = inner_projection.size(1)
+        sequence_length = kwargs[BlockKwargs.sequence_q_dim].size
+        token_shape = (kwargs[BlockKwargs.batch_dim].size, kwargs[BlockKwargs.sequence_q_dim].size)
+        # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
+        inner_projection = self.in_proj(input_).unflatten(0, token_shape)
+        dt = self.dt_proj(self.dt_in_proj(input_)).unflatten(0, token_shape)
 
         z, x, b, c = torch.split(
             inner_projection,
@@ -245,13 +240,10 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
-        if kwargs[BlockKwargs.sequence_first]:
-            # TODO: Is contiguous needed?
-            y = y.transpose(0, 1).contiguous()
-        # (batch/sequence, sequence/batch, local_heads * state)
-        #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        out, bias = self.out_proj(y)
-        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+        # (batch, sequence, local_heads * state)
+        #   -> (local_tokens, hidden)
+        out, bias = self.out_proj(y.flatten(0, 1))
+        self._debug(out, None, (kwargs.get(BlockKwargs.hidden_token_dim), self._hidden_dim), kwargs)
         return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:

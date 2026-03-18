@@ -45,8 +45,7 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     """
     Check that Gated Delta Net forward/backward match with and without packing.
     """
-    hidden_size = 32
-    hidden_dim = TensorDim("hidden", hidden_size)
+    hidden_dim = TensorDim("hidden", hidden_size := 32)
     distributed = Distributed(
         distributed_config := DistributedConfig(compute_dtype=DataType.float16, use_cuda=torch.cuda.is_available())
     )
@@ -68,20 +67,19 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
 
     kwargs = {
         BlockKwargs.device: distributed.device,
-        BlockKwargs.sequence_first: False,
-        BlockKwargs.hidden_dims: (hidden_dim,),
     }
 
     kwargs_packed = {
         **kwargs,
         BlockKwargs.sequence_lengths: sequence_lengths,
         BlockKwargs.sequence_length: seq_len,
+        BlockKwargs.batch_dim: TensorDim("", batch_size),
         BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
         BlockKwargs.sequence_k_dim: TensorDim("", seq_len),
     }
     mixer.preprocess(kwargs_packed)
 
-    out_packed, context = stage.forward(hidden_states, kwargs_packed)
+    out_packed, context = stage.forward(hidden_states.flatten(0, 1), kwargs_packed)
     stage.backward(torch.ones_like(out_packed), context)
 
     names, parameters = zip(*list(mixer.named_parameters()))
@@ -97,14 +95,15 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
                 **kwargs,
                 BlockKwargs.sequence_lengths: [[seq_len_]],
                 BlockKwargs.sequence_length: seq_len_,
+                BlockKwargs.batch_dim: TensorDim("", 1),
                 BlockKwargs.sequence_q_dim: TensorDim("", seq_len_),
                 BlockKwargs.sequence_k_dim: TensorDim("", seq_len_),
             }
             mixer.preprocess(kwargs_seq)
-            out, context = stage.forward(seq.unsqueeze(0), kwargs_seq)
+            out, context = stage.forward(seq, kwargs_seq)
             stage.backward(torch.ones_like(out), context)
             out_refs.append(out)
-    out_ref = torch.cat(out_refs, dim=1).view_as(out_packed)
+    out_ref = torch.cat(out_refs, dim=0).view_as(out_packed)
 
     Assert.rms_close_relative(out_packed, out_ref, 1e-3, 1e-4)
 

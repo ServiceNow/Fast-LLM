@@ -7,12 +7,12 @@ from fast_llm.engine.base_model.base_model import Layer, LayerWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, MultiTokenPredictionConfig
+from fast_llm.layers.language_model.head import LanguageModelHeadBase
 
 
-class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](BlockBase[ConfigType]):
+class MultiTokenPrediction[ConfigType: MultiTokenPredictionConfig](LanguageModelHeadBase[ConfigType]):
     _config: ConfigType
 
     def __init__(
