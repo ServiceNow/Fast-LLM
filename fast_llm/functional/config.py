@@ -14,6 +14,19 @@ class TritonConfig:
     POINTWISE_BLOCK_SIZE = 1024
     MAX_BLOCK_SIZE_BYTES = 65536
 
+    @classmethod
+    def enabled(cls, device: "torch.device|None" = None, default: bool | None = None) -> bool:
+        if default is False:
+            return False
+        from fast_llm.functional.triton import triton_available, triton_interpret
+
+        available = triton_available and (device is None or device.type == "cuda" or triton_interpret)
+        if default is None:
+            default = available and cls.TRITON_ENABLED
+        else:
+            assert available
+        return default
+
 
 class MLPRecomputeLevel(enum.StrEnum):
     none = "none"

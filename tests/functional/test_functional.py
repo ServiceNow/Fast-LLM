@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert
@@ -19,12 +20,12 @@ def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans
 @pytest.mark.parametrize(
     "activation", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
 )
-def test_mlp_recomputation(gated, activation):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokens = 1024
-    hidden_size = 2048
-    intermediate_size = 4096
-    std = 1 / 64
+def test_mlp_recomputation(gated, activation, testing_device):
+    device = torch.device(testing_device)
+    tokens = 64
+    hidden_size = 128
+    intermediate_size = 256
+    std = 1 / 16
     input_ = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
     output_grad = torch.randn(tokens, hidden_size, device=device, requires_grad=True)
     weight_1 = torch.normal(0, std, (intermediate_size * (gated + 1), hidden_size), device=device, requires_grad=True)
@@ -53,7 +54,20 @@ def test_mlp_recomputation(gated, activation):
             param.grad = None
             param.grad_buffer = torch.empty_like(param)
             param.param_grad_is_zero = True
-        output = mlp_autograd(input_, None, *params, gated, activation, None, False, True, recompute_level, True)
+        output = mlp_autograd(
+            input_,
+            None,
+            *params,
+            gated,
+            activation,
+            None,
+            False,
+            True,
+            recompute_level,
+            True,
+            None,
+            triton_available and torch.cuda.is_available(),
+        )
         output.backward(output_grad)
         if i == 0:
             Assert.rms_close(output, output_ref, 1e-5)
@@ -74,8 +88,8 @@ def test_mlp_recomputation(gated, activation):
 # Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
 @pytest.mark.slow
 @pytest.mark.skip("Dropless MoE is broken")
-def test_dropless_mlp():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def test_dropless_mlp(testing_device):
+    device = torch.device(testing_device)
     num_experts = 4
     experts_per_token = 4
     tokens = 256

@@ -14,6 +14,7 @@ def torch_entropy_loss_forward_backward(
     logits_scale_factor: float,
     target_format: TargetFormat,
     entropy_loss_type: EntropyLossType,
+    group: ProcessGroup | None = None,
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (), (*batch, vocab)
     """
@@ -21,7 +22,7 @@ def torch_entropy_loss_forward_backward(
     The cross-entropy kernels themselves are well-optimized, but the need for explicit casting
     and separate forward and backward kernels lead to poor performance.
     """
-
+    assert group is None
     # Torch methods require flattened batch dimension.
     target = target.flatten() if target_format == TargetFormat.labels else target.flatten(0, -2)
     if target_format == TargetFormat.labels:
@@ -120,7 +121,7 @@ def fused_softmax_base(
 
 
 @torch.compile
-def _fused_reverse_kl_base(
+def _fused_reverse_kl_base_from_distribution(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch, vocab)
     grad_output: float | None,
@@ -160,7 +161,7 @@ def _fused_reverse_kl_base(
 
 
 @torch.compile
-def _fused_cross_entropy_base(
+def _fused_cross_entropy_base_from_distribution(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch, vocab)
     grad_output: float | None,
@@ -182,7 +183,7 @@ def _fused_cross_entropy_base(
     # KL loss = mean(log(sum_exp_logits) - sum(probabilities * (logits - log_probabilities))
     if return_kl_loss:
         if target_format == TargetFormat.logits:
-            target_log_probability = target_logits_norm - sum_exp_target_logits.log().unsqueeze(-1)
+            target_log_probability = target_logits_norm
         else:
             target_log_probability = torch.log(target)
         logits_norm = logits_norm - target_log_probability
@@ -193,6 +194,8 @@ def _fused_cross_entropy_base(
         all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
+    if return_kl_loss and target_format == TargetFormat.logits:
+        per_sample_loss = per_sample_loss - sum_exp_target_logits.log()
 
     if grad_output is None:
         grad = None
@@ -275,12 +278,13 @@ def fused_entropy_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,) or (*batch, vocab)
     loss_mask: torch.Tensor | None,  # (*batch,)
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    entropy_loss_type: EntropyLossType,
-    group: ProcessGroup | None = None,
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
+    group: torch.distributed.ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
     temperature: float = 1.0,
+    target_format: TargetFormat = TargetFormat.labels,
+    entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -301,7 +305,7 @@ def fused_entropy_loss_forward_backward(
             group,
         )
     elif entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl):
-        per_sample_loss, grad = _fused_cross_entropy_base(
+        per_sample_loss, grad = _fused_cross_entropy_base_from_distribution(
             logits,
             target,
             grad_output,
@@ -312,7 +316,7 @@ def fused_entropy_loss_forward_backward(
             return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
         )
     elif entropy_loss_type == EntropyLossType.reverse_kl:
-        per_sample_loss, grad = _fused_reverse_kl_base(
+        per_sample_loss, grad = _fused_reverse_kl_base_from_distribution(
             logits,
             target,
             grad_output,
@@ -332,5 +336,9 @@ def fused_entropy_loss_forward_backward(
         if loss_mask is not None:
             grad = grad * loss_mask.unsqueeze(-1)
         grad = grad.to(logits.dtype)
+        if grad_logits is None:
+            grad_logits = grad
+        else:
+            grad_logits.add_(grad)
 
-    return loss, grad
+    return loss, grad_logits
