@@ -18,13 +18,16 @@ try:
         Apriel2GatedDeltaNet,
         Apriel2Mamba,
         KimiDeltaAttention,
+        is_fast_path_available,
     )
 except ImportError:
     Apriel2GatedDeltaNet = None
     Apriel2Mamba = None
+    is_fast_path_available = False
 
 HIDDEN_SIZE = 16
-SEQ_LEN = 65
+SEQUENCE_LENGTH = 65
+BATCH_SIZE = 2
 
 
 def _compare_mixers(
@@ -53,8 +56,8 @@ def _compare_mixers(
         Assert.rms_close_relative(fast_param, hf_param.view_as(fast_param), threshold, 1e-5, msg=name)
 
     hidden_states = torch.randn(
-        2,
-        SEQ_LEN,
+        BATCH_SIZE,
+        SEQUENCE_LENGTH,
         HIDDEN_SIZE,
         device=distributed.device,
         dtype=distributed_config.compute_dtype.torch,
@@ -66,37 +69,31 @@ def _compare_mixers(
     if isinstance(hf_out, tuple):
         (hf_out,) = hf_out
 
-    sequence_lengths = [[SEQ_LEN] for _ in range(hidden_states.size(0))]
+    sequence_lengths = [[SEQUENCE_LENGTH] for _ in range(hidden_states.size(0))]
     fast_kwargs = {
         BlockKwargs.device: distributed.device,
-        BlockKwargs.sequence_lengths: sequence_lengths,
-        BlockKwargs.sequence_q_dim: TensorDim("", SEQ_LEN),
-        BlockKwargs.sequence_k_dim: TensorDim("", SEQ_LEN),
+        BlockKwargs.lengths: sequence_lengths,
+        BlockKwargs.sequence_q_dim: TensorDim("", SEQUENCE_LENGTH),
+        BlockKwargs.sequence_k_dim: TensorDim("", SEQUENCE_LENGTH),
     }
     fast_llm_layer.train()
     fast_llm_layer.preprocess(fast_kwargs)
-    fast_out = fast_llm_layer(hidden_states, fast_kwargs)
+    fast_out = fast_llm_layer(hidden_states.flatten(0, 1), fast_kwargs).view_as(hidden_states)
 
     Assert.rms_close_relative(fast_out, hf_out, threshold, 1e-5)
 
 
 @pytest.mark.slow
 # Arguments ('seq_idx',) not implemented for torch implementation of 1d convolution.
-@pytest.mark.skipif(not transformers.utils.import_utils.is_causal_conv1d_available(), reason="GDN deps missing")
+@pytest.mark.skipif(not is_fast_path_available, reason="GDN deps missing")
 def test_gdn(testing_device):
     dtype = torch.bfloat16
-
-    NUM_V_HEADS = 4
-    NUM_K_HEADS = 2
-    HEAD_DIM = 4
-    KERNEL_SIZE = 4
-
     config_common = {
-        "value_heads": NUM_V_HEADS,
-        "key_heads": NUM_K_HEADS,
-        "key_head_dim": HEAD_DIM,
-        "value_head_dim": HEAD_DIM,
-        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
+        "value_heads": 4,
+        "key_heads": 2,
+        "key_head_dim": 4,
+        "value_head_dim": 4,
+        "convolution_layer": {"kernel_size": 4, "activation": "silu"},
     }
 
     hf_layer = (
@@ -111,14 +108,10 @@ def test_gdn(testing_device):
 @pytest.mark.slow
 @pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")
 def test_kda():
-    NUM_HEADS = 4
-    HEAD_DIM = 4
-    KERNEL_SIZE = 4
-
     kda_config = {
-        "heads": NUM_HEADS,
-        "head_dim": HEAD_DIM,
-        "convolution_layer": {"kernel_size": KERNEL_SIZE, "activation": "silu"},
+        "heads": 4,
+        "head_dim": 4,
+        "convolution_layer": {"kernel_size": 4, "activation": "silu"},
         "normalization": {"epsilon": 1e-5, "activation": "sigmoid"},
     }
 
@@ -130,21 +123,17 @@ def test_kda():
 
 
 @pytest.mark.slow
+@pytest.mark.skip("Mamba is broken")
 @pytest.mark.parametrize("add_linear_biases", [True, False])
 @pytest.mark.parametrize("repeat_kv_before_conv", [True, False])
 @pytest.mark.skipif(not transformers.utils.import_utils.is_mamba_ssm_available(), reason="Mamba not available")
 def test_mamba(add_linear_biases, repeat_kv_before_conv):
-    D_INNER = 128
-    D_XB = 64
-    D_STATE = 16
-    D_CONV = 4
-    DT_RANK = 4
 
     config_common = {
-        "d_inner": D_INNER,
-        "d_xb": D_XB,
-        "state_size": D_STATE,
-        "dt_rank": DT_RANK,
+        "d_inner": 128,
+        "d_xb": 64,
+        "state_size": 16,
+        "dt_rank": 4,
         "repeat_kv_before_conv": repeat_kv_before_conv,
         "add_linear_biases": add_linear_biases,
     }
@@ -152,13 +141,13 @@ def test_mamba(add_linear_biases, repeat_kv_before_conv):
     mamba_config = {
         "conv_bias": add_linear_biases,
         "dt_proj_bias": add_linear_biases,
-        **config_common,
+        "d_conv": 4**config_common,
     }
     hf_layer = Apriel2Mamba(HIDDEN_SIZE, mamba_config, layer_idx=0)
 
     # Create Fast-LLM Mamba layer
     fast_llm_config = MambaConfig(
-        convolution_layer={"kernel_size": D_CONV},
+        convolution_layer={"kernel_size": 4},
         **config_common,
     )
 

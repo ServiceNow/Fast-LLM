@@ -1,4 +1,3 @@
-import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -14,7 +13,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-    from fast_llm.layers.language_model.head import LanguageModelHead, LanguageModelHeadBase
+    from fast_llm.layers.language_model.head import LanguageModelHead
     from fast_llm.layers.language_model.language_model import LanguageModel
     from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
@@ -95,41 +94,8 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
         return LanguageModelEmbedding
 
 
-@config_class(registry=True)
-class LanguageModelHeadBaseConfig(BlockConfig):
-    @classmethod
-    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
-        if cls is LanguageModelHeadBaseConfig and cls.get_subclass(default.get("type")) is None:
-            # Default subclass.
-            return LanguageModelHeadConfig._from_dict(default, strict)
-        return super()._from_dict(default, strict=strict)
-
-    def get_layer(
-        self,
-        distributed_config: DistributedConfig,
-        embeddings_config: LanguageModelEmbeddingsConfig,
-        *,
-        hidden_dim: TensorDim,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-    ) -> "LanguageModelHeadBase":
-        return self.layer_class(
-            self,
-            distributed_config,
-            embeddings_config,
-            hidden_dim=hidden_dim,
-            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
-            peft=peft,
-        )
-
-    @property
-    @abc.abstractmethod
-    def max_prediction_distance(self) -> int:
-        pass
-
-
-@config_class(dynamic_type={LanguageModelHeadBaseConfig: "language_model_head"})
-class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
+@config_class()
+class LanguageModelHeadConfig(BlockConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
         desc="Configuration for the final normalization layer.",
@@ -160,63 +126,6 @@ class LanguageModelHeadConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-
-    def get_layer(
-        self,
-        distributed_config: DistributedConfig,
-        embeddings_config: LanguageModelEmbeddingsConfig,
-        *,
-        hidden_dim: TensorDim,
-        lr_scale: float | None,
-        peft: PeftConfig | None,
-        prediction_distance: int = 0,
-        prediction_heads: int = 1,
-        loss_coefficient: float = 1.0,
-    ):
-        return self.layer_class(
-            self,
-            distributed_config,
-            embeddings_config,
-            hidden_dim=hidden_dim,
-            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
-            peft=peft,
-            prediction_distance=prediction_distance,
-            prediction_heads=prediction_heads,
-            loss_coefficient=loss_coefficient,
-        )
-
-    @property
-    def layer_class(self) -> "type[LanguageModelHead]":
-        from fast_llm.layers.language_model.head import LanguageModelHead
-
-        return LanguageModelHead
-
-    def _validate(self) -> None:
-        super()._validate()
-        assert LM_HEAD_LOSS_NAME not in self.losses
-
-    @property
-    def max_prediction_distance(self) -> int:
-        return 1
-
-    def get_reference_models(self) -> set[str]:
-        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}
-
-
-@config_class(dynamic_type={LanguageModelHeadBaseConfig: "multi_token_prediction"})
-class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
-    _abstract = False
-    # Needs to be `DecoderBlockConfig` for the `return_input` interface.
-    # TODO: Make a generic wrapper for returning input instead?
-    block: DecoderBlockConfig = Field(
-        desc="Configuration for the decoder block before each head.",
-        hint=FieldHint.architecture,
-    )
-    # TODO: Generalize? (needs the extra initialization arguments)
-    head: LanguageModelHeadConfig = Field(
-        desc="Configuration for the multi-token-prediction heads.",
-        hint=FieldHint.architecture,
-    )
     prediction_heads: int = Field(
         default=1,
         desc="Prediction heads.",
@@ -230,22 +139,42 @@ class MultiTokenPredictionConfig(LanguageModelHeadBaseConfig):
         hint=FieldHint.feature,
     )
 
-    def _validate(self) -> None:
-        super()._validate()
-        if isinstance(self.prediction_loss_coefficient, list):
-            Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
-            for coeff in self.prediction_loss_coefficient:
-                Assert.geq(coeff, 0)
-
-    @property
-    def layer_class(self) -> "type[MultiTokenPrediction]":
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        embeddings_config: LanguageModelEmbeddingsConfig,
+        *,
+        hidden_dim: TensorDim,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        block_config: DecoderBlockConfig | None = None,
+    ) -> "tuple[LanguageModelHead, MultiTokenPrediction]":
+        from fast_llm.layers.language_model.head import LanguageModelHead
         from fast_llm.layers.language_model.multi_token_prediction import MultiTokenPrediction
 
-        return MultiTokenPrediction
+        return LanguageModelHead(
+            self,
+            distributed_config,
+            embeddings_config,
+            hidden_dim=hidden_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+        ), MultiTokenPrediction(
+            self,
+            distributed_config,
+            embeddings_config,
+            hidden_dim=hidden_dim,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+            block_config=block_config,
+        )
 
-    @property
-    def max_prediction_distance(self) -> int:
-        return self.prediction_heads
+    def _validate(self) -> None:
+        super()._validate()
+        assert LM_HEAD_LOSS_NAME not in self.losses
+
+    def get_reference_models(self) -> set[str]:
+        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}
 
 
 @config_class()
@@ -258,7 +187,7 @@ class LanguageModelConfig(BlockConfig):
         hint=FieldHint.architecture,
         desc="Configuration for the language model embeddings.",
     )
-    head: LanguageModelHeadBaseConfig = Field(
+    head: LanguageModelHeadConfig = Field(
         hint=FieldHint.architecture, desc="Configuration for the language model head(s)."
     )
     tied_embedding_weight: bool = Field(

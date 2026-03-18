@@ -488,16 +488,15 @@ class LlamaHeadConverter:
         cls,
         config: LanguageModelHeadConfig,
         exported_config: dict,
-        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
         return [
             *cls.normalization_converter_class.get_converters(
                 config.normalization,
-                f"{fast_llm_prefix}.final_norm",
+                f"head.final_norm",
                 f"model.norm",
             ),
             get_parameter_converter(
-                f"{fast_llm_prefix}.output_weights",
+                f"head.output_weights",
                 "lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
                 drop_on_export=exported_config["tie_word_embeddings"],
@@ -539,7 +538,7 @@ class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
         return [
             *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
             *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config.head, exported_config, "head"),
+            *cls.head_converter_class.get_converters(config.head, exported_config),
         ]
 
 

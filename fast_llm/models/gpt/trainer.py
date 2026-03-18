@@ -25,7 +25,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             {
                 "sequence_length": self._config.batch.sequence_length,
                 "truncate_documents": self._config.batch.truncate_documents,
-                "extra_tokens": self._config.model.base_model.head.max_prediction_distance,
+                "extra_tokens": self._config.model.base_model.head.prediction_heads,
             }
         )
         return parameters if _return_dict else SamplingParameters(**parameters)

@@ -324,7 +324,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         token_dims = (kwargs[AttentionKwargs.batch_dim], kwargs[AttentionKwargs.sequence_q_dim])
         token_shape = tuple(dim.size for dim in token_dims)
         query = query.unflatten(0, token_shape)
-        key_value = key_value.unflatten(0, token_shape)
+        key_value = key_value.unflatten(0, (token_shape[0], token_shape[1] * self._sequence_data_parallel_dim.size))
 
         # TODO: Move the rest to function.
 
@@ -457,7 +457,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             seq_ids = torch.stack(
                 [
                     torch.cat([torch.full((x,), i, device=device) for i, x in enumerate(sample_lens)])
-                    for sample_lens in kwargs[AttentionKwargs.sequence_lengths]
+                    for sample_lens in kwargs[AttentionKwargs.lengths]
                 ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None])[

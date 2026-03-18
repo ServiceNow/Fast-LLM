@@ -167,7 +167,7 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         assert _mamba_available
 
         sequence_length = kwargs[BlockKwargs.sequence_q_dim].size
-        token_shape = (kwargs[BlockKwargs.batch_dim].size, kwargs[BlockKwargs.sequence_q_dim].size)
+        token_shape = (div(input_.size(0), sequence_length), sequence_length)
         # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
         inner_projection = self.in_proj(input_).unflatten(0, token_shape)
         dt = self.dt_proj(self.dt_in_proj(input_)).unflatten(0, token_shape)
@@ -184,7 +184,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
         convolution_kwargs = (
-            {} if self._config.cross_document_attention else {"seq_idx": kwargs[MixerKwargs.seq_idx].unsqueeze(0)}
+            {}
+            if self._config.cross_document_attention
+            else {"seq_idx": kwargs[MixerKwargs.document_index_q].unsqueeze(0)}
         )
         if self._config.repeat_kv_before_conv:
             x = self.convolution(
