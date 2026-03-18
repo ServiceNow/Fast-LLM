@@ -277,20 +277,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     ).ranges
 
                 if batch.advantages is not None:
-                    kwargs[LanguageModelKwargs.advantages] = batch.advantages.crop(labels_begin, labels_end).data
-                    if kwargs[AttentionKwargs.sequence_first]:
-                        kwargs[LanguageModelKwargs.advantages] = (
-                            kwargs[LanguageModelKwargs.advantages].transpose(0, 1).contiguous()
-                        )
+                    kwargs[LanguageModelKwargs.advantages] = batch.advantages.crop(
+                        labels_begin, labels_end
+                    ).data.flatten(0, 1)
 
                 if batch.old_log_probabilities is not None:
                     kwargs[LanguageModelKwargs.old_log_probabilities] = batch.old_log_probabilities.crop(
                         labels_begin, labels_end
-                    ).data
-                    if kwargs[AttentionKwargs.sequence_first]:
-                        kwargs[LanguageModelKwargs.old_log_probabilities] = (
-                            kwargs[LanguageModelKwargs.old_log_probabilities].transpose(0, 1).contiguous()
-                        )
+                    ).data.flatten(0, 1)
 
             tokens = cropped_tokens.tokens.flatten(0, 1)
             self.preprocess(kwargs)

@@ -57,7 +57,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         # transforms that _prepare_target applies to all other target tensors.
         # This gives the correct span lengths even when sequence parallelism slices the sequence
         # across TP ranks.
-        full_loss_mask = (kwargs[LanguageModelLossKwargs.labels] >= 0).flatten(0, 1)
+        full_loss_mask = kwargs[LanguageModelLossKwargs.labels] >= 0
         num_labels_in_seq = _compute_num_labels_in_seq(full_loss_mask)
         if self._sequence_parallel:
             num_labels_in_seq = split_op(num_labels_in_seq, self._parallel_dim.group, 0)

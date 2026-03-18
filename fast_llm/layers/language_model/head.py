@@ -296,7 +296,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
 
     @functools.cached_property
     def _all_extra_metric_names(self) -> set[str]:
-        return {metric for loss in self._losses for metric in loss.extra_metric_names}
+        return {metric for loss in self.losses for metric in loss.extra_metric_names}
 
     def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
         return [
@@ -317,7 +317,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     count=count,
                     dtype=DataType.float32,
                 )
-                for loss in self._losses
+                for loss in self.losses
                 for metric_name in loss.extra_metric_names
             ),
         ]
