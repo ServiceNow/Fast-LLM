@@ -2,8 +2,8 @@ import json
 import logging
 import typing
 
-import torch.distributed
-
+from fast_llm.core.distributed import broadcast as _broadcast
+from fast_llm.core.distributed import broadcast_object as _broadcast_object
 from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
@@ -29,7 +29,7 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._process_group = ProcessGroupPool(
                 rank=0,
                 world_size=world_size,
-                local_world_size=world_size,
+                local_world_size=1,
                 timeout=self._config.timeout,
                 use_cuda=self._config.broadcast.backend == DistributedBackend.nccl,
                 init_method=init_method,
@@ -62,7 +62,7 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
 
     def _clear(self):
         if hasattr(self, "_process_group"):
-            torch.distributed.destroy_process_group(self._process_group)
+            self._process_group.shutdown()
             del self._process_group
 
     def _broadcast_weights(self, step: int):
@@ -73,10 +73,8 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.export, {}):
             if self._do_broadcast:
                 # TODO: ====== Broadcast metadata in advance =======
-                meta = [(shard_name, layer_name, tensor.shape, tensor.dtype)]
-                torch.distributed.broadcast_object_list(meta, group=self._process_group, group_src=0)
-                torch.distributed.broadcast(tensor, group=self._process_group, group_src=0)
+                _broadcast_object((shard_name, layer_name, tensor.shape, tensor.dtype), self._process_group, src=0)
+                _broadcast(tensor, 0, self._process_group)
         # Broadcast end of weights broadcast
         if self._do_broadcast:
-            meta = [None]
-            torch.distributed.broadcast_object_list(meta, group=self._process_group, group_src=0)
+            _broadcast_object(None, self._process_group, src=0)
