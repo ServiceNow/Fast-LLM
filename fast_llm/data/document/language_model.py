@@ -94,6 +94,15 @@ class LanguageModelBatch(TokenBatch):
         batch.old_log_probabilities = TokenDataBatch.from_documents(
             [document.old_log_probabilities for document in documents], lengths
         )
+        # Pad TokenDataBatches to match the (possibly padded) token batch size.
+        # Padding positions have label=-100 and are masked in the loss, so padding with 0.0 is safe.
+        if pad_to_size is not None:
+            for attr in ("advantages", "old_log_probabilities"):
+                tdb = getattr(batch, attr)
+                if tdb is not None:
+                    deficit = pad_to_size - len(tdb.data)
+                    if deficit > 0:
+                        setattr(batch, attr, TokenDataBatch(data=torch.nn.functional.pad(tdb.data, (0, deficit))))
         return batch
 
     def get_model_inputs(self, config: LanguageModelBatchPreprocessingConfig) -> list[LanguageModelInput]:
@@ -162,9 +171,11 @@ class LanguageModelBatch(TokenBatch):
 
                 # Compute num_labels_in_seq per document: for each document segment, broadcast
                 # the count of response tokens (labels >= 0) to all token positions in that segment.
-                # cropped_lengths already computed above for cross-document masking.
+                # Must use label_begin:label_end range (not begin:label_end) so segment lengths
+                # sum to end-begin (= model input length), not end-begin+prediction_distance.
+                label_cropped_lengths, _, _ = self._get_cropped_lengths(label_begin, label_end)
                 parts, pos = [], 0
-                for length in cropped_lengths:
+                for length in label_cropped_lengths:
                     n = max(float((labels[pos : pos + length] >= 0).sum()), 1.0)
                     parts.append(torch.full([length], n, dtype=torch.float32))
                     pos += length
