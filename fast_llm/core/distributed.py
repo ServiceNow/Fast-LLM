@@ -24,15 +24,6 @@ from torch.distributed import (  # noqa
     reduce_scatter,
     reduce_scatter_tensor,
 )
-from torch.distributed.distributed_c10d import (
-    Backend,
-    PrefixStore,
-    Store,
-    _new_process_group_helper,
-    _world,
-    default_pg_timeout,
-    rendezvous,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -338,58 +329,3 @@ def scatter_object(
         output_tensor = torch.empty(max_size, dtype=torch.uint8, device=device)
         scatter(output_tensor, None, src=src, group=group)
         return _tensor_to_object(output_tensor[:size])
-
-
-# Copy from pytorch to allow creating multiple main groups.
-# https://github.com/pytorch/pytorch/blob/main/torch/distributed/distributed_c10d.py
-# copy from PipelineRL
-def init_extra_process_group(
-    backend: str | Backend | None = None,
-    init_method: str | None = None,
-    timeout: datetime.timedelta | None = None,
-    world_size: int = -1,
-    rank: int = -1,
-    store: Store | None = None,
-    group_name: str = None,
-    pg_options: typing.Any | None = None,
-):
-    assert (store is None) or (init_method is None), "Cannot specify both init_method and store."
-
-    if store is not None:
-        assert world_size > 0, "world_size must be positive if using store"
-        assert rank >= 0, "rank must be non-negative if using store"
-    elif init_method is None:
-        init_method = "env://"
-
-    if backend:
-        backend = Backend(backend)
-    else:
-        backend = Backend("undefined")
-
-    if timeout is None:
-        timeout = default_pg_timeout
-
-    # backward compatible API
-    if store is None:
-        rendezvous_iterator = rendezvous(init_method, rank, world_size, timeout=timeout)
-        store, rank, world_size = next(rendezvous_iterator)
-        store.set_timeout(timeout)
-
-        # Use a PrefixStore to avoid accidental overrides of keys used by
-        # different systems (e.g. RPC) in case the store is multi-tenant.
-        store = PrefixStore(group_name, store)
-
-    pg, _ = _new_process_group_helper(
-        world_size,
-        rank,
-        [],
-        backend,
-        store,
-        group_name=group_name,
-        backend_options=pg_options,
-        timeout=timeout,
-    )
-
-    _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
-
-    return pg

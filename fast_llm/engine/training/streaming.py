@@ -1,11 +1,11 @@
-import datetime
 import json
 import logging
 import typing
 
 import torch.distributed
 
-from fast_llm.core.distributed import init_extra_process_group
+from fast_llm.engine.distributed.config import DistributedBackend
+from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig, TrainerCallback
 
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 REDIS_TRAINING_STREAM = "fast_llm_events"
 REDIS_TRAINING_FIELD = "event"
-WEIGHTS_BROADCAST_PG_NAME = "fast_llm_weights_broadcast"
 
 
 class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](TrainerCallback[ConfigType]):
@@ -26,15 +25,16 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._client = self._config.get_client()
             init_method = f"tcp://{config.broadcast.host}:{config.broadcast.port}"
             logger.info(f"Waiting for weights broadcast rendezvous at {init_method} ...")
-            self._process_group = init_extra_process_group(
-                backend=str(self._config.broadcast.backend),
-                init_method=init_method,
-                timeout=datetime.timedelta(seconds=self._config.timeout),
-                world_size=config.broadcast.external_world_size + 1,
+            world_size = config.broadcast.external_world_size + 1
+            self._process_group = ProcessGroupPool(
                 rank=0,
-                # TODO: make it settable from config
-                group_name=WEIGHTS_BROADCAST_PG_NAME,
-            )
+                world_size=world_size,
+                local_world_size=world_size,
+                timeout=self._config.timeout,
+                use_cuda=self._config.broadcast.backend == DistributedBackend.nccl,
+                init_method=init_method,
+                backend=self._config.broadcast.backend,
+            ).get_process_group(range(world_size), 0)
             logger.info(f"Weights broadcast rendezvous at {init_method} connected")
 
     def run_begin(self, step: int):

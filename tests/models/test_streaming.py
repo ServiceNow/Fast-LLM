@@ -9,9 +9,10 @@ import pytest
 import safetensors
 import torch
 
-from fast_llm.core.distributed import init_extra_process_group
+from fast_llm.engine.distributed.config import DistributedBackend
+from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig
-from fast_llm.engine.training.streaming import REDIS_TRAINING_FIELD, REDIS_TRAINING_STREAM, WEIGHTS_BROADCAST_PG_NAME
+from fast_llm.engine.training.streaming import REDIS_TRAINING_FIELD, REDIS_TRAINING_STREAM
 from fast_llm.utils import Assert
 from tests.conftest import WorkerResources
 from tests.models.test_checkpoint import compare_safetensor_files
@@ -68,13 +69,17 @@ def _run_event_consumer(
     field = REDIS_TRAINING_FIELD.encode()
     # TODO: Create a custom process group instead.
     try:
-        process_group = init_extra_process_group(
-            backend="nccl",
+        world_size = streaming_config.broadcast.external_world_size + 1
+        backend = DistributedBackend.nccl if torch.cuda.is_available() else DistributedBackend.gloo
+        process_group = ProcessGroupPool(
+            rank=0,
+            world_size=world_size,
+            local_world_size=world_size,
+            timeout=streaming_config.timeout,
+            use_cuda=backend == DistributedBackend.nccl,
             init_method=init_method,
-            world_size=streaming_config.broadcast.external_world_size + 1,
-            rank=consumer_index + 1,
-            group_name=WEIGHTS_BROADCAST_PG_NAME,
-        )
+            backend=backend,
+        ).get_process_group(range(world_size), 0)
         last_id = "0-0"
         while True:
             result = client.xread(

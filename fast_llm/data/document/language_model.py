@@ -30,6 +30,8 @@ class LanguageModelDocument(TokenDocument):
 class LanguageModelTargetInput(ModelInput):
     tokens: torch.Tensor | None = None
     mask: torch.Tensor | None = None
+    advantages: torch.Tensor | None = None
+    old_log_probabilities: torch.Tensor | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -149,7 +151,7 @@ class LanguageModelBatch(TokenBatch):
                 mask=labels > 0 if config.return_prediction_mask else None,
             )
 
-            if config.use_grpo_data:
+            if config.use_grpo_data and not model_input.is_meta:
                 target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
 
                 target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(

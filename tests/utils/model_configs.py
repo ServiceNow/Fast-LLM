@@ -697,10 +697,7 @@ update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "llama_grpo",
-    updates={
-        ("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}},
-        ("batch", "use_grpo_data"): True,
-    },
+    updates={("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}}},
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,

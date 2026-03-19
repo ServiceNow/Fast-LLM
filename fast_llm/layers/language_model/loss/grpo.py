@@ -2,12 +2,12 @@ import typing
 
 import torch
 
-from fast_llm.core.ops import split_op
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
+@torch.compile
 def _compute_num_labels_in_seq(loss_mask: torch.Tensor) -> torch.Tensor:
     """For each response token, compute the total number of response tokens in its contiguous span.
 
@@ -36,11 +36,6 @@ def _compute_num_labels_in_seq(loss_mask: torch.Tensor) -> torch.Tensor:
 
 
 class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelLoss[ConfigType]):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self._prediction_distance > 0:
-            raise NotImplementedError()
-
     @property
     def extra_metric_names(self) -> list[str]:
         return ["new_logprobs"]
@@ -57,18 +52,23 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         # transforms that _prepare_target applies to all other target tensors.
         # This gives the correct span lengths even when sequence parallelism slices the sequence
         # across TP ranks.
-        full_loss_mask = kwargs[LanguageModelLossKwargs.labels] >= 0
-        num_labels_in_seq = _compute_num_labels_in_seq(full_loss_mask)
-        if self._sequence_parallel:
-            num_labels_in_seq = split_op(num_labels_in_seq, self._parallel_dim.group, 0)
-        if self._num_splits > 1:
-            num_labels_in_seq = num_labels_in_seq.chunk(self._num_splits)[split_index]
+        num_labels_in_seq = self._prepare_target(
+            _compute_num_labels_in_seq(kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1] >= 0),
+            kwargs,
+            split_index,
+        )
 
         loss, grad, new_logprobs_mean = fused_grpo_loss_forward_backward(
             logits,
             self._get_labels(kwargs, split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], kwargs, split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], kwargs, split_index),
+            self._prepare_target(
+                kwargs[LanguageModelLossKwargs.advantages][self._prediction_distance - 1], kwargs, split_index
+            ),
+            self._prepare_target(
+                kwargs[LanguageModelLossKwargs.old_log_probabilities][self._prediction_distance - 1],
+                kwargs,
+                split_index,
+            ),
             grad_logits=grad_logits,
             grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,

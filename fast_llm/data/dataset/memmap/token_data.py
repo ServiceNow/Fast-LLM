@@ -24,7 +24,7 @@ class TokenDataReader[ConfigType: TokenDataReaderConfig](MemmapReader[ConfigType
 
     def get_document(self, index: int, begin: int, end: int) -> TokenDataDocument:
         begin_ = self._size_cumsums[index].item()
-        return TokenDataDocument(self._data[begin_ + begin : begin_ + end])
+        return TokenDataDocument(data=self._data[begin_ + begin : begin_ + end])
 
     def get_split(self, begin_index: int, end_index: int) -> dict[str, typing.Any]:
         Assert.custom(lambda x: x == sorted(x), [0, begin_index, end_index, self._config.num_documents])

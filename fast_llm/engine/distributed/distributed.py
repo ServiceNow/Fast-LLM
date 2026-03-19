@@ -106,12 +106,12 @@ class ProcessGroupPool:
                 return group
 
         prefix = (
-            f"range_{global_ranks.start}_{global_ranks.stop}_{global_ranks.step}"
+            f"range_{global_ranks.start}_{global_ranks.stop}_{global_ranks.step}/"
             if isinstance(global_ranks, range)
-            else f"ranks_{"_".join(str(rank) for rank in global_ranks)}"
+            else f"ranks_{"_".join(str(rank) for rank in global_ranks)}/"
         )
         group = self._backend.process_group_class(
-            torch.distributed.PrefixStore(prefix + "/", self.store),
+            torch.distributed.PrefixStore(prefix, self.store),
             group_rank,
             group_size,
             datetime.timedelta(seconds=self._timeout),

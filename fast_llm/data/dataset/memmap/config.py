@@ -5,8 +5,6 @@ import math
 import pathlib
 import typing
 
-import torch
-
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.data.dataset.config import IndexedDatasetConfig, SampledDatasetConfig
 from fast_llm.engine.config_utils.data_type import DataType
@@ -358,6 +356,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
     image_patches: MemmapReaderBaseConfig = Field()
+    advantages: MemmapReaderBaseConfig = Field()
+    old_log_probabilities: MemmapReaderBaseConfig = Field()
 
     def _validate(self) -> None:
         super()._validate()
@@ -374,11 +374,19 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
     @functools.cached_property
     def has_preference_spans(self) -> bool:
-        return isinstance(self.chosen_spans, RangeReaderConfig)
+        has_preference_spans = isinstance(self.chosen_spans, RangeReaderConfig)
+        Assert.eq(has_preference_spans, isinstance(self.rejected_spans, RangeReaderConfig))
+        return has_preference_spans
 
     @functools.cached_property
     def has_image_patches(self) -> bool:
         return isinstance(self.image_patches, PatchReaderConfig)
+
+    @functools.cached_property
+    def has_grpo_data(self) -> bool:
+        has_grpo_data = isinstance(self.advantages, TokenDataReaderConfig)
+        Assert.eq(has_grpo_data, isinstance(self.old_log_probabilities, TokenDataReaderConfig))
+        return has_grpo_data
 
     @functools.cached_property
     def patch_shape(self) -> tuple[int, int, int]:
@@ -409,19 +417,23 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.chosen_spans.expected_buffer_size
             + self.rejected_spans.expected_buffer_size
             + self.image_patches.expected_buffer_size
+            + self.advantages.expected_buffer_size
+            + self.old_log_probabilities.expected_buffer_size
         )
 
     def get_metadata(self) -> dict[str, typing.Any]:
         out = super().get_metadata()
         out["tokens"] = self.tokens.get_metadata()
-        if not isinstance(self.loss_masking_spans, NullReaderConfig):
+        if self.has_loss_masking_spans:
             out["loss_masking_spans"] = self.loss_masking_spans.get_metadata()
-        if not isinstance(self.chosen_spans, NullReaderConfig):
+        if self.has_preference_spans:
             out["chosen_spans"] = self.chosen_spans.get_metadata()
-        if not isinstance(self.rejected_spans, NullReaderConfig):
             out["rejected_spans"] = self.rejected_spans.get_metadata()
-        if not isinstance(self.image_patches, NullReaderConfig):
+        if self.has_image_patches:
             out["image_patches"] = self.image_patches.get_metadata()
+        if self.has_grpo_data:
+            out["advantages"] = self.advantages.get_metadata()
+            out["old_log_probabilities"] = self.old_log_probabilities.get_metadata()
         return out
 
     @classmethod
@@ -443,6 +455,14 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         if "image_patches" in metadata[0]:
             out["image_patches"] = PatchReaderConfig.blend_metadata(
                 [metadata_["image_patches"] for metadata_ in metadata]
+            )
+        if "advantages" in metadata[0]:
+            out["advantages"] = TokenDataReaderConfig.blend_metadata(
+                [metadata_["advantages"] for metadata_ in metadata]
+            )
+        if "old_log_probabilities" in metadata[0]:
+            out["old_log_probabilities"] = TokenDataReaderConfig.blend_metadata(
+                [metadata_["old_log_probabilities"] for metadata_ in metadata]
             )
         return out
 
@@ -466,14 +486,20 @@ class TokenDataReaderConfig(MemmapReaderConfig):
 
     @property
     def reader_class(self) -> "type[TokenDataReader]":
+        from fast_llm.data.dataset.memmap.token_data import TokenDataReader
+
         return TokenDataReader
 
     @property
     def writer_class(self) -> "type[TokenDataWriter]":
+        from fast_llm.data.dataset.memmap.token_data import TokenDataWriter
+
         return TokenDataWriter
 
     @property
     def _expected_buffer_size(self) -> int:
+        import torch
+
         return (
             self.num_tokens * self.data_type.torch.itemsize * self.size
             + (self.num_documents + 1) * torch.int64.itemsize

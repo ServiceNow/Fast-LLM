@@ -9,11 +9,11 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.document.abstract import Document
-from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.data.document.language_model import LanguageModelDocument
 
 logger = logging.getLogger(__name__)
 
