@@ -7,34 +7,6 @@ from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConf
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
-@torch.compile
-def _compute_num_labels_in_seq(loss_mask: torch.Tensor) -> torch.Tensor:
-    """For each response token, compute the total number of response tokens in its contiguous span.
-
-    Non-response tokens get 0. Fully vectorized.
-
-    In a packed sequence of chat conversations, each contiguous block of response tokens
-    (loss_mask == 1) corresponds to one sequence's completion. This mirrors pipelinerl's
-    ``num_labels_in_seq``: a per-token constant equal to the span length, used to convert
-    a sum of logprobs over a span into a per-sequence mean.
-
-    Args:
-        loss_mask: 1D bool tensor (True = response token).
-    Returns:
-        1D float tensor, same length.
-    """
-    # Assign a unique ID to each contiguous response span; non-response tokens get ID 0.
-    prev = torch.cat([loss_mask.new_zeros(1), loss_mask[:-1]])
-    span_id = (loss_mask & ~prev).int().cumsum(0) * loss_mask.int()
-
-    # Count tokens per span with a single scatter_add, then broadcast back.
-    n = int(span_id.max().item()) + 1
-    counts = torch.zeros(n, dtype=torch.float, device=loss_mask.device)
-    counts.scatter_add_(0, span_id, torch.ones(len(span_id), dtype=torch.float, device=loss_mask.device))
-    counts[0] = 1  # non-response positions get denominator=1 so 0/1=0 (avoids 0/0=nan)
-    return counts[span_id]
-
-
 class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelLoss[ConfigType]):
     @property
     def extra_metric_names(self) -> list[str]:
@@ -53,7 +25,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         # This gives the correct span lengths even when sequence parallelism slices the sequence
         # across TP ranks.
         num_labels_in_seq = self._prepare_target(
-            _compute_num_labels_in_seq(kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1] >= 0),
+            kwargs[LanguageModelLossKwargs.num_labels_in_seq][self._prediction_distance - 1],
             kwargs,
             split_index,
         )
@@ -77,7 +49,9 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             logits_scale_factor=self._logits_scale_factor,
             num_labels_in_seq=num_labels_in_seq,
         )
-        kwargs[f"_metric_{self._name}_new_logprobs"] = new_logprobs_mean
+        # new_logprobs is a sum-type metric that accumulates correctly across splits.
+        # Pre-multiply by num_splits to cancel the head's per-split division.
+        kwargs[f"_metric_{self._name}_new_logprobs"] = new_logprobs_mean * self._num_splits
         return loss, grad
 
     def get_preprocessing_config(

@@ -130,16 +130,18 @@ class LMHeadTestConfig:
                 )
             }
         if self.grpo_loss is not False:
-            kwargs[LanguageModelLossKwargs.advantages] = torch.randn(
-                input_.shape[:-1],
-                dtype=torch.float32,
-                device=device,
-            )
-            kwargs[LanguageModelLossKwargs.old_log_probabilities] = torch.randn(
-                input_.shape[:-1],
-                dtype=torch.float32,
-                device=device,
-            )
+            kwargs[LanguageModelLossKwargs.advantages] = [
+                torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelLossKwargs.old_log_probabilities] = [
+                torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelLossKwargs.num_labels_in_seq] = [
+                torch.full(input_.shape[:-1], float((labels_ >= 0).sum()), dtype=torch.float32, device=device)
+                for labels_ in kwargs[LanguageModelKwargs.labels]
+            ]
         return input_, kwargs
 
     def get_reference_outputs(
@@ -164,9 +166,13 @@ class LMHeadTestConfig:
 
         total_loss = 0
         losses = {}
+        # Extra metrics are always logged regardless of number of losses; tracked separately.
+        extra_metrics = {}
 
         if self.actual_label_loss is not False or self.grpo_loss is not False:
             labels = kwargs[LanguageModelKwargs.labels][head._prediction_distance - 1]
+
+        if self.actual_label_loss is not False:
             label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
             losses["label"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
@@ -197,11 +203,20 @@ class LMHeadTestConfig:
             grpo_loss = reference_grpo_loss(
                 logits,
                 labels,
-                kwargs[LanguageModelLossKwargs.advantages],
-                kwargs[LanguageModelLossKwargs.old_log_probabilities],
+                kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
             )
             losses["grpo_loss"] = grpo_loss.detach()
             total_loss = total_loss + float(self.grpo_loss) * grpo_loss
+            # new_logprobs: sum of per-sequence mean log-probs (always logged as extra metric)
+            loss_mask_ = labels >= 0
+            n = max(float(loss_mask_.sum()), 1.0)
+            log_probs = (
+                torch.nn.functional.log_softmax(logits.float(), -1)
+                .gather(-1, (labels * loss_mask_).unsqueeze(-1))
+                .squeeze(-1)
+            )
+            extra_metrics["new_logprobs"] = (log_probs * loss_mask_ / n).sum().detach()
 
         total_loss.backward()
 
@@ -209,6 +224,7 @@ class LMHeadTestConfig:
             losses[LM_HEAD_LOSS_NAME] = total_loss.detach()
         else:
             losses = {LM_HEAD_LOSS_NAME: total_loss.detach()}
+        losses.update(extra_metrics)
 
         if head._prediction_distance > 1:
             losses = {f"{name}_{head._prediction_distance}": loss for name, loss in losses.items()}

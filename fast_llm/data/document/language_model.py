@@ -32,6 +32,7 @@ class LanguageModelTargetInput(ModelInput):
     mask: torch.Tensor | None = None
     advantages: torch.Tensor | None = None
     old_log_probabilities: torch.Tensor | None = None
+    num_labels_in_seq: torch.Tensor | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -56,6 +57,7 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.hidden_states: self.hidden_states,
             LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
             LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
+            LanguageModelKwargs.num_labels_in_seq: [target.num_labels_in_seq for target in self.targets],
         }
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
@@ -157,6 +159,16 @@ class LanguageModelBatch(TokenBatch):
                 target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
                     label_begin, label_end
                 )
+
+                # Compute num_labels_in_seq per document: for each document segment, broadcast
+                # the count of response tokens (labels >= 0) to all token positions in that segment.
+                # cropped_lengths already computed above for cross-document masking.
+                parts, pos = [], 0
+                for length in cropped_lengths:
+                    n = max(float((labels[pos : pos + length] >= 0).sum()), 1.0)
+                    parts.append(torch.full([length], n, dtype=torch.float32))
+                    pos += length
+                target_input.num_labels_in_seq = torch.cat(parts)
 
             model_input.targets.append(target_input)
 
