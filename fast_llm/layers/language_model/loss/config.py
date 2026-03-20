@@ -26,7 +26,7 @@ class LanguageModelLossKwargs(BlockKwargs):
     rejected_spans = "rejected_spans"
     advantages = "advantages"
     old_log_probabilities = "old_log_probabilities"
-    num_labels_in_seq = "num_labels_in_seq"
+    label_counts = "num_labels_in_seq"
 
 
 @config_class(registry=True)
@@ -50,6 +50,7 @@ class LanguageModelLossConfig(Config):
         num_splits: int = 1,
         logits_scale_factor: float = 1.0,
         weight: float = 1.0,
+        register_loss: bool = False,
     ):
         return self.loss_class(
             self,
@@ -61,6 +62,7 @@ class LanguageModelLossConfig(Config):
             num_splits=num_splits,
             logits_scale_factor=logits_scale_factor,
             weight=weight,
+            register_loss=register_loss,
         )
 
     @property

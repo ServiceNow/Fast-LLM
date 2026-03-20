@@ -18,6 +18,10 @@ class TokenDocument(Document):
     def __len__(self) -> int:
         return len(self.tokens)
 
+    @property
+    def device(self) -> torch.device:
+        return self.tokens.device
+
 
 @dataclasses.dataclass(kw_only=True)
 class TokenModelInput(BlockModelInput, TokenDocument):
@@ -79,7 +83,7 @@ class TokenBatch(Batch, TokenDocument):
             sequence_k_past=begin,
             first_document_begin=first_document_begin,
             last_document_end=last_document_end,
-            device=self.tokens.device,
+            device=self.device,
             unpadded_length=min(end, self.unpadded_length) - begin,
             sequence_length=len(self.tokens),
         ).preprocess(model_input, config)

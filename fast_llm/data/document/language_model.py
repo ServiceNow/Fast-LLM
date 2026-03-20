@@ -32,7 +32,7 @@ class LanguageModelTargetInput(ModelInput):
     mask: torch.Tensor | None = None
     advantages: torch.Tensor | None = None
     old_log_probabilities: torch.Tensor | None = None
-    num_labels_in_seq: torch.Tensor | None = None
+    label_counts: torch.Tensor | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -57,7 +57,7 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.hidden_states: self.hidden_states,
             LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
             LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
-            LanguageModelKwargs.num_labels_in_seq: [target.num_labels_in_seq for target in self.targets],
+            LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
         }
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
@@ -90,19 +90,12 @@ class LanguageModelBatch(TokenBatch):
             [document.loss_masking_spans for document in documents], lengths
         )
         batch.image_patches = PatchBatch.from_documents([document.image_patches for document in documents], lengths)
-        batch.advantages = TokenDataBatch.from_documents([document.advantages for document in documents], lengths)
-        batch.old_log_probabilities = TokenDataBatch.from_documents(
-            [document.old_log_probabilities for document in documents], lengths
+        batch.advantages = TokenDataBatch.from_documents(
+            [document.advantages for document in documents], lengths, pad_to_size
         )
-        # Pad TokenDataBatches to match the (possibly padded) token batch size.
-        # Padding positions have label=-100 and are masked in the loss, so padding with 0.0 is safe.
-        if pad_to_size is not None:
-            for attr in ("advantages", "old_log_probabilities"):
-                tdb = getattr(batch, attr)
-                if tdb is not None:
-                    deficit = pad_to_size - len(tdb.data)
-                    if deficit > 0:
-                        setattr(batch, attr, TokenDataBatch(data=torch.nn.functional.pad(tdb.data, (0, deficit))))
+        batch.old_log_probabilities = TokenDataBatch.from_documents(
+            [document.old_log_probabilities for document in documents], lengths, pad_to_size
+        )
         return batch
 
     def get_model_inputs(self, config: LanguageModelBatchPreprocessingConfig) -> list[LanguageModelInput]:
@@ -142,7 +135,13 @@ class LanguageModelBatch(TokenBatch):
         for prediction_distance in range(1, config.num_labels + 1):
             label_begin = begin + prediction_distance
             label_end = end + prediction_distance
-            labels = self.tokens[label_begin:label_end].clone()
+            cropped_lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, label_end)
+            if config.return_label_counts:
+                # To get the actual label count, we need to compute labels for entire documents.
+                cropped_lengths, _, _ = self._get_cropped_lengths(first_document_begin, last_document_end)
+                labels = self.tokens[first_document_begin:last_document_end].clone()
+            else:
+                labels = self.tokens[label_begin:label_end].clone()
 
             # Apply loss masking spans.
             if config.use_loss_masking_spans and self.loss_masking_spans is not None:
@@ -150,36 +149,42 @@ class LanguageModelBatch(TokenBatch):
                     labels[span_begin:span_end] = -100
 
             # Mask cross-document predictions.
-            cropped_lengths, _, _ = self._get_cropped_lengths(begin, label_end)
             document_begin = cropped_lengths[0]
             for length in cropped_lengths[1:]:
                 labels[max(document_begin - prediction_distance, 0) : document_begin] = -100
                 document_begin += length
 
+            if config.return_label_counts:
+                # Count the number of non-masked labels in each document through cumulative sums.
+                mask = labels > 0
+                mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
+                length_cumsum = torch.tensor([0] + cropped_lengths, device=self.device).cumsum(0)
+                label_count_cumsum = mask_cumsum[length_cumsum]
+                labels_per_document = label_count_cumsum[1:] - label_count_cumsum[:-1]
+                # Expand to one entry per label, which is typically what we need.
+                label_counts = torch.searchsorted(
+                    labels_per_document, torch.arange(len(mask), device=self.device), side="right", out_int32=True
+                )
+                # Now that we have the label counts, trim back to the actual label range.
+                labels = labels[label_begin - first_document_begin : label_end - first_document_begin]
+                mask = (
+                    mask[label_begin - first_document_begin : label_end - first_document_begin]
+                    if config.return_prediction_mask
+                    else None
+                )
+                label_counts = label_counts[label_begin - first_document_begin : label_end - first_document_begin]
+            else:
+                mask = labels > 0 if config.return_prediction_mask else None
+                label_counts = False
+
             # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
-            target_input = LanguageModelTargetInput(
-                tokens=labels,
-                mask=labels > 0 if config.return_prediction_mask else None,
-            )
+            target_input = LanguageModelTargetInput(tokens=labels, mask=mask, label_counts=label_counts)
 
             if config.use_grpo_data and not model_input.is_meta:
                 target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
-
                 target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
                     label_begin, label_end
                 )
-
-                # Compute num_labels_in_seq per document: for each document segment, broadcast
-                # the count of response tokens (labels >= 0) to all token positions in that segment.
-                # Must use label_begin:label_end range (not begin:label_end) so segment lengths
-                # sum to end-begin (= model input length), not end-begin+prediction_distance.
-                label_cropped_lengths, _, _ = self._get_cropped_lengths(label_begin, label_end)
-                parts, pos = [], 0
-                for length in label_cropped_lengths:
-                    n = max(float((labels[pos : pos + length] >= 0).sum()), 1.0)
-                    parts.append(torch.full([length], n, dtype=torch.float32))
-                    pos += length
-                target_input.num_labels_in_seq = torch.cat(parts)
 
             model_input.targets.append(target_input)
 

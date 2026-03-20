@@ -1,63 +1,65 @@
+import functools
 import typing
 
 import torch
 
+from fast_llm.engine.base_model.config import LossDef
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelLoss[ConfigType]):
-    @property
-    def extra_metric_names(self) -> list[str]:
-        return ["new_logprobs"]
-
-    def forward_backward(
+    def _forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        # Compute num_labels_in_seq on the full (batch, seq) labels before any parallelism
-        # split, then apply the same flatten -> sequence-parallel split -> cross-entropy-split
-        # transforms that _prepare_target applies to all other target tensors.
-        # This gives the correct span lengths even when sequence parallelism slices the sequence
-        # across TP ranks.
-        num_labels_in_seq = self._prepare_target(
-            kwargs[LanguageModelLossKwargs.num_labels_in_seq][self._prediction_distance - 1],
-            kwargs,
-            split_index,
-        )
-
         loss, grad, new_logprobs_mean = fused_grpo_loss_forward_backward(
             logits,
             self._get_labels(kwargs, split_index),
-            self._prepare_target(
-                kwargs[LanguageModelLossKwargs.advantages][self._prediction_distance - 1], kwargs, split_index
-            ),
-            self._prepare_target(
-                kwargs[LanguageModelLossKwargs.old_log_probabilities][self._prediction_distance - 1],
-                kwargs,
-                split_index,
-            ),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
             grad_logits=grad_logits,
             grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             epsilon_low=self._config.epsilon_low,
             epsilon_high=self._config.epsilon_high,
             logits_scale_factor=self._logits_scale_factor,
-            num_labels_in_seq=num_labels_in_seq,
+            num_labels_in_seq=(
+                None
+                if losses is None
+                else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+            ),
         )
-        # new_logprobs is a sum-type metric that accumulates correctly across splits.
-        # Pre-multiply by num_splits to cancel the head's per-split division.
-        kwargs[f"_metric_{self._name}_new_logprobs"] = new_logprobs_mean * self._num_splits
+
+        self._register_loss(
+            self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
+        )
         return loss, grad
+
+    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+        return super().get_loss_definitions(count) + [
+            LossDef(
+                self._logprob_metric_name,
+                formatted_name=self._logprob_metric_name,
+                count=1,  # This is an additive metric over the sequence.
+                dtype=DataType.float32,
+            )
+        ]
 
     def get_preprocessing_config(
         self,
     ) -> dict[str, typing.Any]:
-        return {"use_grpo_data": True}
+        return {"use_grpo_data": True, "return_label_counts": True}
+
+    @functools.cached_property
+    def _logprob_metric_name(self) -> str:
+        return f"{self._name}_new_logprobs"
 
 
 @torch.compile

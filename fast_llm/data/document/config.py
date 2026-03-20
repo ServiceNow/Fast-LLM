@@ -73,6 +73,7 @@ class LanguageModelBatchPreprocessingConfig(LengthPreprocessingConfig):
     use_loss_masking_spans: bool = Field(default=True)
     use_preference_spans: bool = Field(default=False)
     use_grpo_data: bool = Field(default=False)
+    return_label_counts: bool = Field(default=False)
 
     def _validate(self) -> None:
         super()._validate()

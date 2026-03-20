@@ -138,7 +138,7 @@ class LMHeadTestConfig:
                 torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
                 for _ in range(self.prediction_heads)
             ]
-            kwargs[LanguageModelLossKwargs.num_labels_in_seq] = [
+            kwargs[LanguageModelLossKwargs.label_counts] = [
                 torch.full(input_.shape[:-1], float((labels_ >= 0).sum()), dtype=torch.float32, device=device)
                 for labels_ in kwargs[LanguageModelKwargs.labels]
             ]
@@ -164,18 +164,15 @@ class LMHeadTestConfig:
         if self.logits_scale_factor is not None:
             logits = logits * self.logits_scale_factor
 
-        total_loss = 0
-        losses = {}
-        # Extra metrics are always logged regardless of number of losses; tracked separately.
-        extra_metrics = {}
+        names_losses_weights = []
 
         if self.actual_label_loss is not False or self.grpo_loss is not False:
             labels = kwargs[LanguageModelKwargs.labels][head._prediction_distance - 1]
 
         if self.actual_label_loss is not False:
             label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
-            losses["label"] = label_loss.detach()
-            total_loss = total_loss + float(self.actual_label_loss) * label_loss
+            names_losses_weights.append(("label", label_loss, float(self.actual_label_loss)))
+            # total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
@@ -188,43 +185,33 @@ class LMHeadTestConfig:
                     distillation_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
                 )
             distillation_loss = distillation_loss.mean()
-            losses["distillation"] = distillation_loss.detach()
-            total_loss = total_loss + float(self.distillation_loss) * distillation_loss
+            names_losses_weights.append(("distillation", distillation_loss, float(self.distillation_loss)))
 
         if self.z_loss is not False:
             z_loss = torch.logsumexp(logits, dim=-1) ** 2
             if LanguageModelKwargs.loss_mask in kwargs:
                 z_loss = z_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
             z_loss = z_loss.mean()
-            losses["z_loss"] = z_loss.detach()
-            total_loss = total_loss + float(self.z_loss) * z_loss
+            names_losses_weights.append(("z_loss", z_loss, float(self.z_loss)))
 
         if self.grpo_loss is not False:
-            grpo_loss = reference_grpo_loss(
+            grpo_loss, new_logprobs = reference_grpo_loss(
                 logits,
                 labels,
                 kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
                 kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
             )
-            losses["grpo_loss"] = grpo_loss.detach()
-            total_loss = total_loss + float(self.grpo_loss) * grpo_loss
-            # new_logprobs: sum of per-sequence mean log-probs (always logged as extra metric)
-            loss_mask_ = labels >= 0
-            n = max(float(loss_mask_.sum()), 1.0)
-            log_probs = (
-                torch.nn.functional.log_softmax(logits.float(), -1)
-                .gather(-1, (labels * loss_mask_).unsqueeze(-1))
-                .squeeze(-1)
-            )
-            extra_metrics["new_logprobs"] = (log_probs * loss_mask_ / n).sum().detach()
+            names_losses_weights.append(("grpo_loss", grpo_loss, float(self.grpo_loss)))
+            names_losses_weights.append(("grpo_loss_new_logprobs", new_logprobs, 0.0))
 
+        actual_losses = [loss * weight for _, loss, weight in names_losses_weights if weight != 0.0]
+        total_loss = sum(actual_losses)
         total_loss.backward()
-
-        if len(losses) > 1:
-            losses[LM_HEAD_LOSS_NAME] = total_loss.detach()
-        else:
-            losses = {LM_HEAD_LOSS_NAME: total_loss.detach()}
-        losses.update(extra_metrics)
+        losses = {LM_HEAD_LOSS_NAME: total_loss.detach()} | {
+            name: loss.detach()
+            for name, loss, weight in names_losses_weights
+            if weight != 1.0 or len(actual_losses) > 1
+        }
 
         if head._prediction_distance > 1:
             losses = {f"{name}_{head._prediction_distance}": loss for name, loss in losses.items()}
@@ -289,7 +276,9 @@ def test_lm_head(test_config: LMHeadTestConfig):
 
     for prediction_distance in range(1, model_config.base_model.head.prediction_heads + 1):
         # Prepare the LM head
-        head = model.head if prediction_distance == 1 else model.multi_token_prediction.heads[prediction_distance - 2]
+        head: LanguageModelHead = (
+            model.head if prediction_distance == 1 else model.multi_token_prediction.heads[prediction_distance - 2]
+        )
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
         is_duplicate = test_config.tied_embedding_weight or prediction_distance > 1
@@ -335,10 +324,15 @@ def test_lm_head(test_config: LMHeadTestConfig):
             1e-5 if distributed.config.compute_dtype == DataType.float32 else 1e-4
         ) * test_config.logits_scale_factor
 
-        Assert.eq(losses.keys(), ref_losses.keys())
-        for name, loss in losses.items():
-            assert len(loss) == 1, name
-        losses = {name: loss[0] for name, loss in losses.items()}
+        loss_definitions_ = head.get_loss_definitions()
+        loss_definitions = {definition.name: definition for definition in loss_definitions_}
+        Assert.eq(len(loss_definitions), len(loss_definitions_))
+        Assert.eq(losses.keys(), ref_losses.keys(), loss_definitions.keys())
+
+        losses = {
+            name: loss[0] if len(loss) == 1 else torch.stack(loss).sum() / loss_definitions[name].count
+            for name, loss in losses.items()
+        }
 
         for name, loss in losses.items():
             Assert.rms_close_relative(loss, ref_losses[name], threshold, min_threshold, msg=name)

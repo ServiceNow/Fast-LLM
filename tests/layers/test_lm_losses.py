@@ -128,7 +128,7 @@ def reference_grpo_loss(
     epsilon_low: float = 0.2,
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     logits_ = logits.float()
 
     # Log probabilities.
@@ -144,7 +144,10 @@ def reference_grpo_loss(
         probability_ratio * advantages,
         torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantages,
     )
-    return (loss * loss_mask).mean()
+    # new_logprobs: sum of per-sequence mean log-probs
+    log_probs = torch.nn.functional.log_softmax(logits_, -1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+    new_logprobs = (log_probs * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
+    return (loss * loss_mask).mean(), new_logprobs
 
 
 _BATCH_SHAPES = ((64,), (16, 8))
@@ -249,7 +252,7 @@ def _test_grpo_loss(
     )
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
-        reference_grpo_loss,
+        lambda *args, **kwargs: reference_grpo_loss(*args, **kwargs)[0],
         logits,
         target,
         advantages,
