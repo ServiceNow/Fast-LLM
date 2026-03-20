@@ -227,7 +227,7 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
         )
 
-        if _fast_gdn_available:
+        if _fast_gdn_available and distributed_config.use_cuda:
             self.chunk_gated_delta_rule = chunk_gated_delta_rule
         else:
             logger.warning(

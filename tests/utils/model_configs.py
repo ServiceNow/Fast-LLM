@@ -802,7 +802,7 @@ update_and_add_testing_config(
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
     skip_tests=("sdp", "ms", TP_NO_STP),
-    requires_cuda=False,
+    requires_cuda=True,  # GDN available on CPU, but not in the converted model (also runs very slow).
 )
 
 _gdn_block = MODEL_CONFIGS["apriel2_gdn"].config_dict["model"]["base_model"]["decoder"]["block"]
