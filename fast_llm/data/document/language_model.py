@@ -135,28 +135,28 @@ class LanguageModelBatch(TokenBatch):
         for prediction_distance in range(1, config.num_labels + 1):
             label_begin = begin + prediction_distance
             label_end = end + prediction_distance
-            cropped_lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, label_end)
-            if config.return_label_counts:
-                # To get the actual label count, we need to compute labels for entire documents.
-                cropped_lengths, _, _ = self._get_cropped_lengths(first_document_begin, last_document_end)
-                labels = self.tokens[first_document_begin:last_document_end].clone()
-            else:
-                labels = self.tokens[label_begin:label_end].clone()
+            # Keep complete documents to simplify preprocessing.
+            _, first_document_begin, last_document_end = self._get_cropped_lengths(begin, label_end)
+            cropped_lengths, _, _ = self._get_cropped_lengths(first_document_begin, last_document_end)
+            labels = self.tokens[first_document_begin:last_document_end].clone()
+            labels_in_range = labels[label_begin - first_document_begin : label_end - first_document_begin]
 
             # Apply loss masking spans.
             if config.use_loss_masking_spans and self.loss_masking_spans is not None:
-                for span_begin, span_end in self.loss_masking_spans.get_cropped_ranges(label_begin, label_end):
+                for span_begin, span_end in self.loss_masking_spans.get_cropped_ranges(
+                    first_document_begin, last_document_end
+                ):
                     labels[span_begin:span_end] = -100
 
             # Mask cross-document predictions.
-            document_begin = cropped_lengths[0]
-            for length in cropped_lengths[1:]:
-                labels[max(document_begin - prediction_distance, 0) : document_begin] = -100
+            document_begin = 0
+            for length in cropped_lengths:
+                labels[document_begin : document_begin + prediction_distance] = -100
                 document_begin += length
 
             if config.return_label_counts:
                 # Count the number of non-masked labels in each document through cumulative sums.
-                mask = labels > 0
+                mask = labels >= 0
                 mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
                 length_cumsum = torch.tensor([0] + cropped_lengths, device=self.device).cumsum(0)
                 label_count_cumsum = mask_cumsum[length_cumsum]
@@ -164,21 +164,18 @@ class LanguageModelBatch(TokenBatch):
                 # Expand to one entry per label, which is typically what we need.
                 label_counts = torch.searchsorted(
                     labels_per_document, torch.arange(len(mask), device=self.device), side="right", out_int32=True
-                )
-                # Now that we have the label counts, trim back to the actual label range.
-                labels = labels[label_begin - first_document_begin : label_end - first_document_begin]
+                )[label_begin - first_document_begin : label_end - first_document_begin]
                 mask = (
                     mask[label_begin - first_document_begin : label_end - first_document_begin]
                     if config.return_prediction_mask
                     else None
                 )
-                label_counts = label_counts[label_begin - first_document_begin : label_end - first_document_begin]
             else:
-                mask = labels > 0 if config.return_prediction_mask else None
-                label_counts = False
+                label_counts = None
+                mask = labels_in_range >= 0 if config.return_prediction_mask else None
 
             # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
-            target_input = LanguageModelTargetInput(tokens=labels, mask=mask, label_counts=label_counts)
+            target_input = LanguageModelTargetInput(tokens=labels_in_range, mask=mask, label_counts=label_counts)
 
             if config.use_grpo_data and not model_input.is_meta:
                 target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
