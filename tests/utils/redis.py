@@ -66,8 +66,6 @@ def redis_batch_producer(config: RedisConfig, sequence_length):
 
 @contextlib.contextmanager
 def fake_redis_server(config: RedisConfig):
-    # We search for free port as port from previous test can still be not free even after server shutdown
-
     # ----- Monkey-patch handler to suppress broken pipes -----
     orig_handle = fakeredis._tcp_server.TCPFakeRequestHandler.handle
 

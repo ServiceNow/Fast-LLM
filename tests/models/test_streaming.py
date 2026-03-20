@@ -132,7 +132,7 @@ def _run_model_streaming_configs(
             model_testing_config,
             None,
             updates={
-                ("data", "datasets"): {"training": {"port": port}},
+                ("data", "datasets"): {"training": {"port": port, "timeout": 1.0}},
                 ("training", "export"): {"format": model_testing_config.checkpoint_format.name, "interval": 1},
                 "callbacks": {
                     "streaming": {
@@ -143,6 +143,7 @@ def _run_model_streaming_configs(
                             "external_world_size": config.consumer_count,
                         },
                         "export": {"format": model_testing_config.checkpoint_format.name},
+                        "timeout": 1.0,
                     }
                 },
                 # Disable tensor logging.
