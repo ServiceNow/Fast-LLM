@@ -100,7 +100,11 @@ def fused_grpo_loss_forward_backward(
     # Dividing by num_labels_in_seq (span length broadcast per token) and summing over masked
     # tokens gives mean logprob per sequence; summing those across sequences matches the deepspeed
     # convention exactly (segments are redundant once num_labels_in_seq is correct).
-    new_logprobs_mean = None if num_labels_in_seq is None else (new_log_probs * loss_mask / num_labels_in_seq).sum()
+    # Clamp to avoid 0/0=nan when num_labels_in_seq=0 (padded tokens or fully masked documents)
+    # — those positions also have loss_mask=0 so they correctly contribute 0 to the sum.
+    new_logprobs_mean = (
+        None if num_labels_in_seq is None else (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
+    )
 
     if grad_output is not None:
         # loss[a>=0] = -a * min(x, 1 + epsilon_high)  =>  grad[a>=0] = -a * (x <= 1 + epsilon_high)
