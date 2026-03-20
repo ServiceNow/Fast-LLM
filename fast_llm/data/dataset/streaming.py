@@ -156,11 +156,11 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: La
                 noack=True,
             )
             if messages:
-                start_time = time.time()
                 for stream_key, messages_ in messages:
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
                         yield RedisStreamingDocumentData.from_message(message).to_document()
+                start_time = time.time()
 
-            if (t := time.time() - start_time) > self._config.timeout:
+            elif (t := time.time() - start_time) > self._config.timeout:
                 raise TimeoutError(f"No document received after {t} seconds")
