@@ -156,6 +156,7 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: La
                 noack=True,
             )
             if messages:
+                start_time = time.time()
                 for stream_key, messages_ in messages:
                     assert stream_key == REDIS_DATA_STREAM.encode()
                     for message_id, message in messages_:
