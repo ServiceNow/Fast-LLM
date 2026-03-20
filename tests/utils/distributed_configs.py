@@ -70,7 +70,7 @@ _bf16_compare = get_config(
             if torch.cuda.is_available()
             else {
                 (None, "norm"): get_config(ignore_tensors=True),
-                (None, "word_embeddings_weight"): get_config(8e-2, 1e-4),
+                (None, "embeddings_weight"): get_config(8e-2, 1e-4),
             }
         ),
         (None, "bias"): get_config(2e-2, 1e-3) if torch.cuda.is_available() else get_config(2e-2, 2e-3),
