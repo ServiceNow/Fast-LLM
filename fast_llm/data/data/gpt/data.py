@@ -7,7 +7,7 @@ import torch
 import torch.utils.data
 
 from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.data_loader import SampledDatasetIterator
+from fast_llm.data.data.data_loader import DistributedDataLoaderWrapper, SampledDatasetIterator
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingConfigBase
@@ -16,7 +16,7 @@ from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument, LanguageModelInput
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -101,23 +101,28 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Assert.incl(dataset_name, self._datasets)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
-        return iter(
-            torch.utils.data.DataLoader(
-                self._datasets[dataset_name],  # noqa
-                batch_sampler=SampledDatasetIterator(
-                    total_samples=len(self._datasets[dataset_name]),
-                    begin_index=consumed_samples,
-                    micro_batch_size=1,
-                    data_rank=self._distributed_config.batch_data_rank,
-                    data_parallel=self._distributed_config.batch_data_parallel,
-                ),
-                num_workers=num_workers,
-                prefetch_factor=prefetch_factor,
-                pin_memory=True,
-                collate_fn=functools.partial(self._collate_fn, dataset_name=dataset_name, preprocess=preprocess),
-                multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
-            )
+        data_loader = torch.utils.data.DataLoader(
+            self._datasets[dataset_name],  # noqa
+            batch_sampler=SampledDatasetIterator(
+                total_samples=len(self._datasets[dataset_name]),
+                begin_index=consumed_samples,
+                micro_batch_size=1,
+                data_rank=self._distributed_config.batch_data_rank,
+                data_parallel=self._distributed_config.batch_data_parallel,
+            ),
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor,
+            pin_memory=True,
+            collate_fn=functools.partial(self._collate_fn, dataset_name=dataset_name, preprocess=preprocess),
+            multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
         )
+        if self._datasets[dataset_name].requires_broadcast:
+            data_loader = DistributedDataLoaderWrapper(
+                data_loader,
+                self._distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).group,
+            )
+
+        return iter(data_loader)
 
     def _collate_fn(
         self,

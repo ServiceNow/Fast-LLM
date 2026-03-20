@@ -37,6 +37,7 @@ def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
     return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
 
 
+@torch.compile
 def torch_chunk_gated_delta_rule(
     query,
     key,

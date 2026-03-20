@@ -11,8 +11,6 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, get_unique
 
 if typing.TYPE_CHECKING:
-    pass
-
     from fast_llm.data.dataset.indexed import IndexedDataset
     from fast_llm.data.dataset.memmap.abstract import (
         MemmapIndexedDatasetReader,
@@ -24,6 +22,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.memmap.patch import PatchReader, PatchWriter
     from fast_llm.data.dataset.memmap.range import RangeReader, RangeWriter
     from fast_llm.data.dataset.memmap.token import TokenReader, TokenWriter
+    from fast_llm.data.dataset.memmap.token_data import TokenDataReader, TokenDataWriter
     from fast_llm.data.document.abstract import Document
 
 logger = logging.getLogger(__name__)
@@ -357,6 +356,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
     image_patches: MemmapReaderBaseConfig = Field()
+    advantages: MemmapReaderBaseConfig = Field()
+    old_log_probabilities: MemmapReaderBaseConfig = Field()
 
     def _validate(self) -> None:
         super()._validate()
@@ -373,11 +374,19 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
 
     @functools.cached_property
     def has_preference_spans(self) -> bool:
-        return isinstance(self.chosen_spans, RangeReaderConfig)
+        has_preference_spans = isinstance(self.chosen_spans, RangeReaderConfig)
+        Assert.eq(has_preference_spans, isinstance(self.rejected_spans, RangeReaderConfig))
+        return has_preference_spans
 
     @functools.cached_property
     def has_image_patches(self) -> bool:
         return isinstance(self.image_patches, PatchReaderConfig)
+
+    @functools.cached_property
+    def has_grpo_data(self) -> bool:
+        has_grpo_data = isinstance(self.advantages, TokenDataReaderConfig)
+        Assert.eq(has_grpo_data, isinstance(self.old_log_probabilities, TokenDataReaderConfig))
+        return has_grpo_data
 
     @functools.cached_property
     def patch_shape(self) -> tuple[int, int, int]:
@@ -408,19 +417,23 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.chosen_spans.expected_buffer_size
             + self.rejected_spans.expected_buffer_size
             + self.image_patches.expected_buffer_size
+            + self.advantages.expected_buffer_size
+            + self.old_log_probabilities.expected_buffer_size
         )
 
     def get_metadata(self) -> dict[str, typing.Any]:
         out = super().get_metadata()
         out["tokens"] = self.tokens.get_metadata()
-        if not isinstance(self.loss_masking_spans, NullReaderConfig):
+        if self.has_loss_masking_spans:
             out["loss_masking_spans"] = self.loss_masking_spans.get_metadata()
-        if not isinstance(self.chosen_spans, NullReaderConfig):
+        if self.has_preference_spans:
             out["chosen_spans"] = self.chosen_spans.get_metadata()
-        if not isinstance(self.rejected_spans, NullReaderConfig):
             out["rejected_spans"] = self.rejected_spans.get_metadata()
-        if not isinstance(self.image_patches, NullReaderConfig):
+        if self.has_image_patches:
             out["image_patches"] = self.image_patches.get_metadata()
+        if self.has_grpo_data:
+            out["advantages"] = self.advantages.get_metadata()
+            out["old_log_probabilities"] = self.old_log_probabilities.get_metadata()
         return out
 
     @classmethod
@@ -443,4 +456,68 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["image_patches"] = PatchReaderConfig.blend_metadata(
                 [metadata_["image_patches"] for metadata_ in metadata]
             )
+        if "advantages" in metadata[0]:
+            out["advantages"] = TokenDataReaderConfig.blend_metadata(
+                [metadata_["advantages"] for metadata_ in metadata]
+            )
+        if "old_log_probabilities" in metadata[0]:
+            out["old_log_probabilities"] = TokenDataReaderConfig.blend_metadata(
+                [metadata_["old_log_probabilities"] for metadata_ in metadata]
+            )
         return out
+
+
+@config_class(dynamic_type={MemmapReaderBaseConfig: "token_data"})
+class TokenDataReaderConfig(MemmapReaderConfig):
+    _abstract = False
+    header: typing.ClassVar[bytes] = b"token data begin"
+    footer: typing.ClassVar[bytes] = b"token data end"
+    num_documents: int = Field()
+    num_tokens: int = Field()
+    shape: tuple[int, ...] = Field()
+    data_type: DataType = Field()
+
+    def __len__(self) -> int:
+        return self.num_documents
+
+    @functools.cached_property
+    def size(self) -> int:
+        return math.prod(self.shape)
+
+    @property
+    def reader_class(self) -> "type[TokenDataReader]":
+        from fast_llm.data.dataset.memmap.token_data import TokenDataReader
+
+        return TokenDataReader
+
+    @property
+    def writer_class(self) -> "type[TokenDataWriter]":
+        from fast_llm.data.dataset.memmap.token_data import TokenDataWriter
+
+        return TokenDataWriter
+
+    @property
+    def _expected_buffer_size(self) -> int:
+        import torch
+
+        return (
+            self.num_tokens * self.data_type.torch.itemsize * self.size
+            + (self.num_documents + 1) * torch.int64.itemsize
+        )
+
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_tokens": self.num_tokens,
+            "num_documents": self.num_documents,
+            "data_type": str(self.data_type),
+            "shape": self.shape,
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata),
+            "num_documents": sum(metadata_["num_documents"] for metadata_ in metadata),
+            "data_type": get_unique(metadata_["data_type"] for metadata_ in metadata),
+            "shape": get_unique(metadata_["shape"] for metadata_ in metadata),
+        }

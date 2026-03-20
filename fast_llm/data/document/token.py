@@ -18,6 +18,10 @@ class TokenDocument(Document):
     def __len__(self) -> int:
         return len(self.tokens)
 
+    @property
+    def device(self) -> torch.device:
+        return self.tokens.device
+
 
 @dataclasses.dataclass(kw_only=True)
 class TokenModelInput(BlockModelInput, TokenDocument):
@@ -38,7 +42,7 @@ class TokenBatch(Batch, TokenDocument):
             self.unpadded_length = len(self.tokens)
 
     @classmethod
-    def from_documents(cls, documents: typing.Iterable[TokenDocument], pad_to_size: int | None = None) -> typing.Self:
+    def from_documents(cls, documents: typing.Sequence[TokenDocument], pad_to_size: int | None = None) -> typing.Self:
         tokens = [document.tokens for document in documents]
         lengths = [len(document) for document in documents]
         unpadded_length = sum(lengths)
@@ -79,7 +83,7 @@ class TokenBatch(Batch, TokenDocument):
             sequence_k_past=begin,
             first_document_begin=first_document_begin,
             last_document_end=last_document_end,
-            device=self.tokens.device,
+            device=self.device,
             unpadded_length=min(end, self.unpadded_length) - begin,
             sequence_length=len(self.tokens),
         ).preprocess(model_input, config)

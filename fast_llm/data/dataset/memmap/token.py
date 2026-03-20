@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.data.dataset.memmap.abstract import MemmapIndexedDatasetReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import TokenReaderConfig
-from fast_llm.data.document.abstract import Document
 from fast_llm.data.document.token import TokenDocument
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
@@ -23,7 +22,7 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
             self._buffer, dtype=torch.int64, count=self._config.num_documents + 1, offset=self._tokens.nbytes
         )
 
-    def get_document(self, index: int, begin: int, end: int) -> Document:
+    def get_document(self, index: int, begin: int, end: int) -> TokenDocument:
         begin_ = self._size_cumsums[index].item()
         # Torch doesn't support type promotion between signed and unsigned types, so we convert here to avoid issues.
         # Convert begin and end to int to avoid numpy dtype overflow when adding to begin_

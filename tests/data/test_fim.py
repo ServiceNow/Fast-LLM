@@ -2,7 +2,7 @@ from fast_llm.data.dataset.gpt.config import GPTFimSampledDatasetConfig
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_data,
+    get_sampling_config,
     get_test_data_and_compare_samples,
 )
 from tests.utils.dataset import get_common_test_dataset
@@ -36,7 +36,7 @@ def test_gpt_fim():
             "suffix_token": "z",
         },
         GPTFimSampledDatasetConfig,
-    ).build_and_sample(*get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_FIM_SAMPLES)
 
     get_test_data_and_compare_samples(

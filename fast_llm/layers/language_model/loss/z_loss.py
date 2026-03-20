@@ -10,10 +10,11 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
-    def forward_backward(
+    def _forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":

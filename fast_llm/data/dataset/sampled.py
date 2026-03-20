@@ -9,7 +9,7 @@ import torch
 import yaml
 
 from fast_llm.config import FieldVerboseLevel
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplingConfig, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.document.abstract import Document
@@ -108,6 +108,10 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `Data`.
+
+    @property
+    def requires_broadcast(self) -> bool:
+        return self._indexed_dataset.requires_broadcast
 
     def _sample(self) -> None:
         """
@@ -425,3 +429,57 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
+
+
+class SampledIterableDataset[DocumentType: Document](SampledDataset[DocumentType]):
+    def __init__(
+        self,
+        dataset: SamplableIterableDataset[DocumentType],
+        config: SamplingConfig,
+        num_samples: int,
+        seed: int,
+    ):
+        self._dataset = dataset
+        self._config = config
+        self._num_samples = num_samples
+        self._seed = seed
+        # TODO: ====== Bring back truncation? ======
+        assert not self._config.truncate_documents
+        self._documents: list[DocumentType] = []
+        self._current_length = 0
+        # Delay iterator creation to avoid pickling issues.
+        self._iterator: typing.Iterator[DocumentType] | None = None
+
+    @property
+    def requires_broadcast(self) -> bool:
+        # TODO: ====== fix ======
+        # return self._iterator.requires_broadcast
+        return True
+
+    def __getitem__(self, index: int) -> list[DocumentType]:
+        if self._iterator is None:
+            self._iterator = self._dataset.iterate(self._config, self._num_samples, self._seed)
+        while self._current_length < self._config.sample_size:
+            document = next(self._iterator)
+            if len(document) > self._config.sample_size:
+                logging.warning(f"Dropping document with length {len(document)} > {self._config.sample_size}.")
+                continue
+            self._documents.append(document)
+            self._current_length += len(document)
+
+        if self._current_length == self._config.sample_size:
+            documents = self._documents
+            self._documents = []
+            self._current_length = 0
+        else:
+            documents = self._documents[:-1]
+            self._documents = [self._documents[-1]]
+            self._current_length = len(self._documents[0])
+        return documents
+
+    def __len__(self) -> int:
+        return self._num_samples
+
+    @property
+    def name(self) -> str:
+        return self._dataset.name

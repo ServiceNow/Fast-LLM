@@ -17,7 +17,7 @@ class RangeDocument(Document):
 class RangeBatch(Batch, RangeDocument):
     @classmethod
     def from_documents(
-        cls, documents: typing.Iterable[RangeDocument | None], sizes: typing.Iterable[int]
+        cls, documents: typing.Sequence[RangeDocument | None], sizes: typing.Iterable[int]
     ) -> typing.Self | None:
         """
         Used to merge ranges from multiple documents, i.e. when multiple documents are packed together.

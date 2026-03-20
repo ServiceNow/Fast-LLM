@@ -9,11 +9,10 @@ from fast_llm.data.document.config import BatchPreprocessingConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.distributed.distributed import Distributed
+    pass
 
 
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
-    _distributed: "Distributed"
     _cache_directory: pathlib.Path | None
     _is_setup: bool = False
 

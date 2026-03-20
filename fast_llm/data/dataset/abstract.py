@@ -27,6 +27,14 @@ class Dataset[DocumentType: Document](abc.ABC):
             del state["__orig_class__"]
         return state
 
+    @property
+    def requires_broadcast(self) -> bool:
+        """
+        Some dataset schemes load the dataset on a batch-data-parallel group leaders,
+        then broadcast to the other devices.
+        """
+        return False
+
 
 class SampledDataset[DocumentType: Document](Dataset[DocumentType]):
     """
@@ -48,3 +56,14 @@ class SamplableDataset[DocumentType: Document](Dataset[DocumentType]):
     @abc.abstractmethod
     def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         pass
+
+
+class SamplableIterableDataset[DocumentType: Document](SamplableDataset[DocumentType]):
+    @abc.abstractmethod
+    def iterate(self, config: "SamplingConfig", num_samples: int, seed: int) -> typing.Iterator[DocumentType]:
+        pass
+
+    def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        from fast_llm.data.dataset.sampled import SampledIterableDataset
+
+        return SampledIterableDataset(self, config, num_samples, seed)

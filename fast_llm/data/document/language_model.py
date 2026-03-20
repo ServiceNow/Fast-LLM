@@ -9,6 +9,7 @@ from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.patch import PatchBatch, PatchDocument, PatchModelInput
 from fast_llm.data.document.range import RangeBatch, RangeDocument
 from fast_llm.data.document.token import TokenBatch, TokenDocument, TokenModelInput
+from fast_llm.data.document.token_data import TokenDataBatch, TokenDataDocument
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.utils import div
 
@@ -21,12 +22,17 @@ class LanguageModelDocument(TokenDocument):
     chosen_spans: RangeDocument | None = None
     rejected_spans: RangeDocument | None = None
     image_patches: PatchDocument | None = None
+    advantages: TokenDataDocument | None = None
+    old_log_probabilities: TokenDataDocument | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
 class LanguageModelTargetInput(ModelInput):
     tokens: torch.Tensor | None = None
     mask: torch.Tensor | None = None
+    advantages: torch.Tensor | None = None
+    old_log_probabilities: torch.Tensor | None = None
+    label_counts: torch.Tensor | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -49,6 +55,9 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.loss_mask: [target.mask for target in self.targets],
             LanguageModelKwargs.output_hidden_states: self.output_hidden_states,
             LanguageModelKwargs.hidden_states: self.hidden_states,
+            LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
+            LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
+            LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
         }
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
@@ -67,10 +76,12 @@ class LanguageModelBatch(TokenBatch):
     _model_input_class: typing.ClassVar[type[LanguageModelInput]] = LanguageModelInput
     loss_masking_spans: RangeBatch | None = None
     image_patches: PatchBatch | None = None
+    advantages: TokenDataBatch | None = None
+    old_log_probabilities: TokenDataBatch | None = None
 
     @classmethod
     def from_documents(
-        cls, documents: typing.Iterable[LanguageModelDocument], pad_to_size: int | None = None
+        cls, documents: typing.Sequence[LanguageModelDocument], pad_to_size: int | None = None
     ) -> typing.Self:
         batch = super().from_documents(documents, pad_to_size)
         # We don't want to use `batch.lengths` because it may include a padding length.
@@ -79,6 +90,12 @@ class LanguageModelBatch(TokenBatch):
             [document.loss_masking_spans for document in documents], lengths
         )
         batch.image_patches = PatchBatch.from_documents([document.image_patches for document in documents], lengths)
+        batch.advantages = TokenDataBatch.from_documents(
+            [document.advantages for document in documents], lengths, pad_to_size
+        )
+        batch.old_log_probabilities = TokenDataBatch.from_documents(
+            [document.old_log_probabilities for document in documents], lengths, pad_to_size
+        )
         return batch
 
     def get_model_inputs(self, config: LanguageModelBatchPreprocessingConfig) -> list[LanguageModelInput]:
@@ -118,26 +135,59 @@ class LanguageModelBatch(TokenBatch):
         for prediction_distance in range(1, config.num_labels + 1):
             label_begin = begin + prediction_distance
             label_end = end + prediction_distance
-            labels = self.tokens[label_begin:label_end].clone()
+            # Keep complete documents to simplify preprocessing.
+            _, first_document_begin, last_document_end = self._get_cropped_lengths(begin, label_end)
+            cropped_lengths, _, _ = self._get_cropped_lengths(first_document_begin, last_document_end)
+            labels = self.tokens[first_document_begin:last_document_end].clone()
+            labels_in_range = labels[label_begin - first_document_begin : label_end - first_document_begin]
 
             # Apply loss masking spans.
             if config.use_loss_masking_spans and self.loss_masking_spans is not None:
-                for span_begin, span_end in self.loss_masking_spans.get_cropped_ranges(label_begin, label_end):
+                for span_begin, span_end in self.loss_masking_spans.get_cropped_ranges(
+                    first_document_begin, last_document_end
+                ):
                     labels[span_begin:span_end] = -100
 
             # Mask cross-document predictions.
-            cropped_lengths, _, _ = self._get_cropped_lengths(begin, label_end)
-            document_begin = cropped_lengths[0]
-            for length in cropped_lengths[1:]:
-                labels[max(document_begin - prediction_distance, 0) : document_begin] = -100
+            document_begin = 0
+            for length in cropped_lengths:
+                labels[document_begin : document_begin + prediction_distance] = -100
                 document_begin += length
 
-            # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
-            model_input.targets.append(
-                LanguageModelTargetInput(
-                    tokens=labels,
-                    mask=labels > 0 if config.return_prediction_mask else None,
+            if config.return_label_counts:
+                # Count the number of non-masked labels in each document through cumulative sums.
+                mask = labels >= 0
+                mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
+                length_cumsum = torch.tensor([0] + cropped_lengths, device=self.device).cumsum(0)
+                label_count_cumsum = mask_cumsum[length_cumsum]
+                labels_per_document = label_count_cumsum[1:] - label_count_cumsum[:-1]
+                # Expand to one entry per token: find each token's document index via the sorted
+                # length cumsum, then look up that document's label count.
+                # TODO: Document index already computed in `LengthModelInputPreprocessor`.
+                document_index = torch.searchsorted(
+                    length_cumsum[1:], torch.arange(len(mask), device=self.device), side="right"
                 )
-            )
+                label_counts = labels_per_document[document_index][
+                    label_begin - first_document_begin : label_end - first_document_begin
+                ]
+                mask = (
+                    mask[label_begin - first_document_begin : label_end - first_document_begin]
+                    if config.return_prediction_mask
+                    else None
+                )
+            else:
+                label_counts = None
+                mask = labels_in_range >= 0 if config.return_prediction_mask else None
+
+            # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
+            target_input = LanguageModelTargetInput(tokens=labels_in_range, mask=mask, label_counts=label_counts)
+
+            if config.use_grpo_data and not model_input.is_meta:
+                target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
+                target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
+                    label_begin, label_end
+                )
+
+            model_input.targets.append(target_input)
 
         return model_input
