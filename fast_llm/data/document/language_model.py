@@ -125,6 +125,12 @@ class LanguageModelBatch(TokenBatch):
 
             model_inputs.append(model_input)
 
+        # num_docs is counted only on the first split (micro_sequence_index==0) to avoid
+        # double-counting documents that span a split boundary when micro_batch_splits > 1.
+        # The first split already has the correct count (or 0 for SDP rank > 0); clear the rest.
+        for model_input in model_inputs[1:]:
+            model_input.num_docs = None
+
         return model_inputs
 
     def _get_model_input(

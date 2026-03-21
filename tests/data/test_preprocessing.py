@@ -174,3 +174,44 @@ def test_num_docs_sdp_two_docs_counted_once():
     Assert.eq(model_input_rank0.num_docs, 2)
     Assert.eq(model_input_rank1.num_docs, 0)
     Assert.eq(model_input_rank0.num_docs + model_input_rank1.num_docs, 2)
+
+
+def test_num_docs_micro_batch_splits_only_first_split_counts():
+    """With micro_batch_splits=2, num_docs is non-None only on the first split.
+
+    A document that spans the split boundary would be visible in both splits'
+    cropped_lengths, so both would count it without this guard.  The runner sums
+    num_docs across all splits in context.batch; only the first split must contribute
+    to avoid double-counting.
+    """
+    # 9 tokens → 8 input tokens, divisible by micro_batch_splits=2 (4 each)
+    documents = [_make_grpo_document([1, 2, 3, 4, 5, 6, 7, 8, 9])]
+    config = LanguageModelBatchPreprocessingConfig(
+        use_grpo_data=True,
+        return_label_counts=True,
+        micro_batch_splits=2,
+    )
+    split0, split1 = LanguageModelBatch.from_documents(documents).get_model_inputs(config)
+
+    # Only the first split carries the count; the second must be None (runner treats as 0).
+    Assert.eq(split0.num_docs, 1)
+    assert split1.num_docs is None
+
+    # Simulated runner sum: 1 + (None→0) = 1, the correct denominator.
+    Assert.eq((split0.num_docs or 0) + (split1.num_docs or 0), 1)
+
+
+def test_num_docs_micro_batch_splits_two_docs():
+    """With micro_batch_splits=2 and two documents, only the first split counts both docs."""
+    # 9 tokens total → 8 input tokens, divisible by 2
+    documents = [_make_grpo_document([1, 2, 3, 4]), _make_grpo_document([5, 6, 7, 8, 9])]
+    config = LanguageModelBatchPreprocessingConfig(
+        use_grpo_data=True,
+        return_label_counts=True,
+        micro_batch_splits=2,
+    )
+    split0, split1 = LanguageModelBatch.from_documents(documents).get_model_inputs(config)
+
+    Assert.eq(split0.num_docs, 2)
+    assert split1.num_docs is None
+    Assert.eq((split0.num_docs or 0) + (split1.num_docs or 0), 2)
