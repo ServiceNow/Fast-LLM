@@ -109,6 +109,9 @@ class LossDef:
     name: str
     formatted_name: str
     # The number of times this loss is evaluated by the model for each micro-batch. Used as a denominator for averaging.
-    # TODO: Allow variable count?  Would need a reduction across PP devices.
     count: int = 1
     dtype: DataType = DataType.float32
+    # If set, normalize this metric by summing values from context.batch[i][denominator_batch_field]
+    # across micro-batches and DP ranks, instead of using count * data_parallel * num_inputs.
+    # The field must be a scalar (int or float) pre-computed before any TP/SP/PP splitting.
+    denominator_batch_field: str | None = None

@@ -287,20 +287,39 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         reduced_losses = {}
         for name, losses in context.losses.items():
+            loss_def = self._loss_definitions[name]
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    loss_count = (
-                        self._loss_definitions[name].count
-                        * self._distributed_config.data_parallel
-                        * context.schedule.config.num_inputs
-                    )
-                    reduced_loss = torch.stack(losses).sum() / loss_count
-                    if self._distributed.data_group:
-                        all_reduce(reduced_loss, group=self._distributed.data_group)
+                    denom_field = loss_def.denominator_batch_field
+                    if denom_field is not None:
+                        # Normalize by a per-micro-batch scalar from the batch data (e.g. num_docs),
+                        # computed before any TP/SP/PP splitting.  Sum numerator and denominator
+                        # independently across DP ranks so the result is a true global average.
+                        numerator = torch.stack(losses).sum()
+                        denominator = torch.tensor(
+                            sum(
+                                batch_kwargs[denom_field] or 0
+                                for batch_kwargs in context.batch.values()
+                                if denom_field in batch_kwargs
+                            ),
+                            dtype=numerator.dtype,
+                            device=numerator.device,
+                        )
+                        if self._distributed.data_group:
+                            all_reduce(numerator, group=self._distributed.data_group)
+                            all_reduce(denominator, group=self._distributed.data_group)
+                        reduced_loss = numerator / denominator.clamp(min=1)
+                    else:
+                        loss_count = (
+                            loss_def.count
+                            * self._distributed_config.data_parallel
+                            * context.schedule.config.num_inputs
+                        )
+                        reduced_loss = torch.stack(losses).sum() / loss_count
+                        if self._distributed.data_group:
+                            all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
-                    reduced_loss = torch.zeros(
-                        [1], dtype=self._loss_definitions[name].dtype.torch, device=self._distributed.device
-                    )
+                    reduced_loss = torch.zeros([1], dtype=loss_def.dtype.torch, device=self._distributed.device)
                 if self._distributed.pipeline_group:
                     all_reduce(reduced_loss, group=self._distributed.pipeline_group)
             else:

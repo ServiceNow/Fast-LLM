@@ -39,6 +39,9 @@ class LanguageModelTargetInput(ModelInput):
 class LanguageModelInput(TokenModelInput):
     targets: list[LanguageModelTargetInput] = dataclasses.field(default_factory=list)
     image_patches: PatchModelInput | None = None
+    # Number of documents with at least one response token in this micro-batch.
+    # Computed before any TP/SP/PP splitting; used to normalize per-document metrics.
+    num_docs: int | None = None
 
     def set_children_attributes(self) -> None:
         if self.image_patches is not None:
@@ -58,6 +61,7 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
             LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
             LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
+            LanguageModelKwargs.num_docs: self.num_docs,
         }
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
@@ -161,6 +165,17 @@ class LanguageModelBatch(TokenBatch):
                 length_cumsum = torch.tensor([0] + cropped_lengths, device=self.device).cumsum(0)
                 label_count_cumsum = mask_cumsum[length_cumsum]
                 labels_per_document = label_count_cumsum[1:] - label_count_cumsum[:-1]
+                # Track documents with at least one response token for per-document metric
+                # normalization. Only counted on sequence_data_rank==0 so that when the runner
+                # all_reduces the denominator across the data group (which includes SDP ranks),
+                # each document is counted exactly once even though all SDP ranks see the same
+                # documents (but process different token slices of them).
+                if model_input.num_docs is None:
+                    model_input.num_docs = (
+                        int((labels_per_document > 0).sum().item())
+                        if config.distributed.sequence_data_rank == 0
+                        else 0
+                    )
                 # Expand to one entry per token: find each token's document index via the sorted
                 # length cumsum, then look up that document's label count.
                 # TODO: Document index already computed in `LengthModelInputPreprocessor`.
