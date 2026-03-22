@@ -9,22 +9,26 @@ optimized for vLLM inference.
 
 import logging
 import math
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import islice
-from typing import Literal
+from typing import Callable, Literal
 
 import torch
 import triton
+import vllm.compilation.monitor as _compile_monitor
 import vllm.model_executor.layers.kda  # noqa: F401
 from einops import rearrange
 from torch import nn
 from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
-from vllm.attention.layer import Attention
+from vllm import __version_tuple__ as _vllm_version
 from vllm.compilation.decorators import support_torch_compile
+from vllm.compilation.monitor import validate_cudagraph_capturing_enabled
 from vllm.config import CacheConfig, ModelConfig, SpeculativeConfig, VllmConfig, get_current_vllm_config
 from vllm.distributed import divide, get_pp_group, get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
+from vllm.distributed.device_communicators.pynccl_allocator import set_graph_pool_id
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
@@ -60,11 +64,83 @@ from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 from vllm.triton_utils import tl, triton
-from vllm.utils.torch_utils import direct_register_custom_op
+from vllm.utils.torch_utils import current_stream, direct_register_custom_op
 from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
 from vllm.v1.attention.selector import get_mamba_attn_backend
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec, MambaSpec, SlidingWindowSpec
+
+if _vllm_version >= (0, 16, 0):
+    from vllm.model_executor.layers.attention import Attention
+else:
+    from vllm.attention.layer import Attention
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: fix vLLM's KV cache group_size for heterogeneous hybrid models
+# ---------------------------------------------------------------------------
+# vLLM's _get_kv_cache_groups_uniform_page_size computes
+#   group_size = min(num_layers_per_type)
+# which was designed for models with simple n:1 repeating patterns (Gemma3,
+# LLaMA4).  For Apriel2 supernets with arbitrary placement ratios (e.g. 12
+# attention + 1 GDN + 11 KDA), min = 1 creates one KV-cache group per layer
+# (24 total).  Each group triggers a metadata rebuild per forward step,
+# causing >2× throughput regression on small models.
+#
+# The fix: use max(num_layers_per_type) as group_size.  This gives at most
+# num_types groups (one per spec type).  Tensor positions without a layer of
+# a given type are simply unused by that type — no memory is wasted because
+# the physical tensor at each position is shared across types.
+def _patch_kv_cache_grouping() -> None:
+    import vllm.v1.core.kv_cache_utils as _kcu
+
+    _original = _kcu._get_kv_cache_groups_uniform_page_size
+
+    def _patched(kv_cache_spec: dict) -> list:
+        from collections import defaultdict
+        from math import ceil as _ceil
+
+        same_type_layers: defaultdict[object, list[str]] = defaultdict(list)
+        for layer_name, layer_spec in kv_cache_spec.items():
+            same_type_layers[layer_spec].append(layer_name)
+
+        min_num = min(len(v) for v in same_type_layers.values())
+        max_num = max(len(v) for v in same_type_layers.values())
+
+        if min_num > 2 or max_num < min_num * 1.25:
+            # Not a singleton/near-singleton case — use original logic.
+            return _original(kv_cache_spec)
+
+        # Singleton / near-singleton type detected.
+        # Use max_num as group_size to produce at most num_types groups.
+        group_size = max_num
+        apriel2_logger.info(
+            "KV cache grouping: using group_size=%d (max) instead of %d "
+            "(min) to avoid O(num_layers) groups with %d spec types",
+            group_size,
+            min_num,
+            len(same_type_layers),
+        )
+
+        grouped_layers = []
+        for layers in same_type_layers.values():
+            num_padding = group_size - len(layers) % group_size
+            if num_padding != group_size:
+                apriel2_logger.info(
+                    "KV cache grouping: %d padding layers for type with " "%d real layers (group_size=%d)",
+                    num_padding,
+                    len(layers),
+                    group_size,
+                )
+            num_groups = _ceil(len(layers) / group_size)
+            for i in range(num_groups):
+                grouped_layers.append(layers[i::num_groups])
+        return _kcu.create_kv_cache_group_specs(kv_cache_spec, grouped_layers)
+
+    _kcu._get_kv_cache_groups_uniform_page_size = _patched
+
+
+_patch_kv_cache_grouping()
 
 # Lazy triton allocator setup - only called when a triton kernel needs scratch memory
 _triton_allocator_installed = False
@@ -101,6 +177,272 @@ DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
 DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
 DEBUG_FINAL_NORM = False  # Debug final norm before LM head
 DEBUG_LM_HEAD = False  # Debug LM head input/output
+# Log ssm_state_indices at every GDN/KDA forward (decode only, suppressed
+# during CUDA graph capture).  Flags duplicate block IDs with "** DUPLICATE **".
+# NOTE: In FULL CUDA graph mode, model-side logging never executes during replay;
+# use the GDN metadata builder logging in gdn_attn.py instead (which also reads
+# this env var).
+DEBUG_STATE_INDICES = os.environ.get("APRIEL2_DEBUG_STATE_INDICES", "0") == "1"
+# Sync CUDA before/between GDN kernels to catch the exact source of async
+# illegal-memory-access errors.  Very slow — only for debugging.
+DEBUG_SYNC = os.environ.get("APRIEL2_DEBUG_SYNC", "0") == "1"
+
+# =============================================================================
+# CUDA Graph Modes for Stochastic Mixers
+# =============================================================================
+#
+# The Apriel2StochasticMixer wraps multiple sub-mixers (attention, GDN, KDA)
+# per layer and routes to the active one at runtime. This interacts with
+# vLLM's CUDA graph capture in several modes, controlled by env vars.
+#
+# Benchmark setup: 10 concurrent requests, all-attention layout, prompt
+# length 1, max generation length 16k, REST backend, no warmup after
+# local vLLM launch, single H100 80GB.
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 0: Fixed-layout FULL graphs (baseline, no supernet)           │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Serve a checkpoint with a predefined layout (single mixer per      │
+# │ layer). Standard vLLM FULL CUDA graph capture — no stochastic      │
+# │ dispatch involved.                                                 │
+# │                                                                    │
+# │   Weights: 26.91 GiB   KV cache: 43.50 GiB   Graphs: 0.10 GiB    │
+# │   Throughput: 583 tok/s                                           │
+# │                                                                    │
+# │ This is the upper bound — all mixer weights are collapsed into one │
+# │ per layer, leaving maximum memory for KV cache.                    │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 1: Supernet + FULL graphs + weight offload                    │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=1, APRIEL2_OFFLOAD_INACTIVE_MIXERS=1)│
+# │                                             [default]              │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ vLLM captures the entire forward as one CUDA graph per batch size. │
+# │ stochastic_mixer_dispatch is NOT a graph-splitting op: during      │
+# │ capture it calls the active mixer, baking its GPU kernels into the │
+# │ graph. On replay the same kernels execute.                         │
+# │                                                                    │
+# │ After profile_run(), inactive mixer weights are offloaded to CPU.  │
+# │ This reduces GPU weight memory to ~26.9 GiB (matching Mode 0) and │
+# │ frees ~19 GiB for KV cache. Only parameters are moved — shared    │
+# │ buffers (e.g. RotaryEmbedding cos_sin_cache) stay on GPU.         │
+# │ Offloaded mixers are also removed from nn.ModuleDict to avoid     │
+# │ torch.compile guard invalidation.                                  │
+# │                                                                    │
+# │ On layout change (set_layer_placements):                           │
+# │   1. KV cache is cleared                                          │
+# │   2. Weights are swapped layer by layer (old→CPU, new→GPU)        │
+# │   3. All captured CUDA graphs are invalidated and re-captured      │
+# │      via capture_model() (~5-15 s)                                 │
+# │                                                                    │
+# │   Weights: 26.91 GiB   KV cache: 43.50 GiB   Graphs: 0.07 GiB    │
+# │   Throughput: 516 tok/s                                            │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 1b: Supernet + FULL graphs, no offload                        │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=1, APRIEL2_OFFLOAD_INACTIVE_MIXERS=0)│
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Same as Mode 1 but all mixer weights stay on GPU. This wastes      │
+# │ ~19 GiB on inactive mixers, leaving 1.78× less KV cache.          │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: 0.09 GiB    │
+# │   Throughput: ~200 tok/s                                           │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 2: Supernet + PIECEWISE + per-mixer sub-graphs                │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=0, APRIEL2_MIXER_CUDA_GRAPHS=1) │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ stochastic_mixer_dispatch is a graph-splitting op → vLLM forces    │
+# │ PIECEWISE mode. At each dispatch point, a separate small CUDA      │
+# │ graph is cached per (mixer, batch_size) and replayed.              │
+# │                                                                    │
+# │ No re-capture needed on layout change (dispatch selects mixer at   │
+# │ runtime), but creates ~5k graphs causing GPU memory pressure.      │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: 2.43 GiB    │
+# │   Capture time: ~45 s                                              │
+# │   Throughput: ~155 tok/s                                           │
+# │                                                                    │
+# │ WARNING: Not recommended. The graph memory further reduces         │
+# │ available KV cache and capture overhead is substantial.            │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │ Mode 3: Supernet + PIECEWISE + eager dispatch                      │
+# │         (APRIEL2_FULL_CUDA_GRAPHS=0, APRIEL2_MIXER_CUDA_GRAPHS=0) │
+# ├──────────────────────────────────────────────────────────────────────┤
+# │ Same as Mode 2 but mixer forward runs fully eagerly (no per-mixer  │
+# │ graph caching). Graph breaks at every dispatch, Python selects the │
+# │ active mixer each step.                                            │
+# │                                                                    │
+# │ No re-capture needed on layout change.                             │
+# │                                                                    │
+# │   Weights: 45.92 GiB   KV cache: 24.48 GiB   Graphs: ~0 GiB        │
+# │   Throughput: 151 tok/s                                           │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# Summary (H100 80 GB, all-attention layout, 10 concurrent reqs, 16k output, prompt length 1):
+#
+#   Mode │ Supernet │ FULL │ Offload │ Per-mixer subgraph │ Weights │ KV cache │ Graphs │ tok/s
+#   ─────┼──────────┼──────┼─────────┼────────────────────┼─────────┼──────────┼────────┼──────
+#     0  │    no    │  on  │    -    │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  583
+#     1  │   yes    │  on  │   on    │         -          │ 26.9 Gi │ 43.5 Gi  │ 0.1 Gi │  516
+#    1b  │   yes    │  on  │  off    │         -          │ 45.9 Gi │ 24.5 Gi  │ 0.1 Gi │ ~200
+#     2  │   yes    │ off  │  off    │        on          │ 45.9 Gi │ 24.5 Gi  │ 2.4 Gi │ ~155
+#     3  │   yes    │ off  │  off    │        off         │ 45.9 Gi │ 24.5 Gi  │  ~0 Gi │ ~151
+#
+#   FULL = APRIEL2_FULL_CUDA_GRAPHS
+#   Offload = APRIEL2_OFFLOAD_INACTIVE_MIXERS
+#   Per-mixer subgraph = APRIEL2_MIXER_CUDA_GRAPHS
+#
+# Note: CUDA graph capture is essential for linear mixers (GDN, KDA).
+# They will be slower than attention in Mode 3 (eager dispatch) but
+# can be faster than attention in Mode 1 (FULL graphs).
+#
+# =============================================================================
+# Capture the entire forward (including stochastic dispatch) as one monolithic
+# CUDA graph per batch size.  On placement change, ALL graphs are invalidated
+# and re-captured via capture_model() (~5-15 s).  When disabled, the dispatch
+# op is registered as a graph-splitting op, forcing PIECEWISE mode where Python
+# selects the active mixer each step (no re-capture needed).
+# See Mode 1 vs Mode 2/3 in the table above.
+# Default: "1" (enabled).
+APRIEL2_FULL_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_FULL_CUDA_GRAPHS", "1") == "1"
+
+# Only relevant when APRIEL2_FULL_CUDA_GRAPHS=0 (PIECEWISE mode).
+# Caches a separate small CUDA graph per (mixer_name, batch_size) at each
+# stochastic dispatch point.  Creates ~5k graphs (~2.4 GiB), adding memory
+# pressure but slightly faster than fully-eager dispatch.
+# See Mode 2 vs Mode 3 in the table above.
+# Default: "0" (disabled — the throughput gain is marginal).
+APRIEL2_MIXER_CUDA_GRAPHS: bool = os.environ.get("APRIEL2_MIXER_CUDA_GRAPHS", "0") == "1"
+
+# Offload inactive mixer weights to CPU after profile_run(). Frees ~19 GiB
+# GPU memory for KV cache. On layout switch, weights are swapped layer by layer.
+#
+# Constraints:
+# - Cannot offload during load_weights(): torch.compile captures all parameters
+#   as graph inputs — profile_run() would crash with CPU tensors.
+# - Only moves parameters, NOT buffers: RotaryEmbedding.cos_sin_cache is shared
+#   across mixer instances (via get_rope() LRU cache); moving it corrupts the
+#   active mixer.
+# - Offloaded modules are removed from nn.ModuleDict and stored in a plain dict
+#   (_offloaded_mixers) to prevent torch.compile guard invalidation.
+#
+# Default: "1" when FULL graphs enabled (layout fixed per capture), "0" otherwise.
+APRIEL2_OFFLOAD_INACTIVE_MIXERS: bool = (
+    os.environ.get("APRIEL2_OFFLOAD_INACTIVE_MIXERS", "1" if APRIEL2_FULL_CUDA_GRAPHS else "0") == "1"
+)
+
+
+def _move_module_device(module: nn.Module, device: torch.device) -> None:
+    """Move a module's weight parameters to a device.
+
+    Uses param.data assignment (not module.to()) to preserve vLLM's
+    BasevLLMParameter metadata (_weight_loader attribute).
+
+    Only moves parameters, NOT buffers.  Buffers like RotaryEmbedding's
+    cos_sin_cache are shared across mixer instances (via get_rope() LRU cache).
+    Moving them would corrupt the active mixer's shared state.
+    """
+    for param in module.parameters():
+        param.data = param.data.to(device, non_blocking=True)
+
+
+# =============================================================================
+# Per-Mixer CUDA Graph Cache
+# =============================================================================
+
+
+@dataclass
+class MixerGraphEntry:
+    """A captured CUDA graph for one mixer at one batch size."""
+
+    graph: torch.cuda.CUDAGraph
+    input_ptr: int  # hidden_states.data_ptr() at capture time
+    output_ptr: int  # output.data_ptr() at capture time
+
+
+class MixerGraphCache:
+    """Per-mixer, per-batch-size CUDA graph cache for stochastic mixers.
+
+    Each entry is keyed by (mixer_name, num_tokens). Capture happens during
+    vLLM's capture_model() phase (when cudagraph_capturing_enabled is True
+    and NCCL is in graph-safe mode). Replay happens during normal decode.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, int], MixerGraphEntry] = {}
+        # Use a PRIVATE graph pool to avoid fragmenting vLLM's global pool.
+        # The global pool is shared with piecewise graph pieces; interleaving
+        # our ~5000 mixer captures with vLLM's piece captures degrades
+        # piecewise replay performance ~2x due to pool fragmentation.
+        self._graph_pool = torch.cuda.graph_pool_handle()
+
+    def has(self, mixer_name: str, num_tokens: int) -> bool:
+        return (mixer_name, num_tokens) in self._entries
+
+    def capture(
+        self,
+        mixer_name: str,
+        num_tokens: int,
+        mixer_fn: Callable,
+        hidden_states: torch.Tensor,
+        output: torch.Tensor,
+        positions: torch.Tensor | None,
+    ) -> None:
+        """Capture a CUDA graph for mixer_fn with the given inputs.
+
+        Must be called during vLLM's capture_model() phase.
+        """
+        validate_cudagraph_capturing_enabled()
+        key = (mixer_name, num_tokens)
+        if key in self._entries:
+            return
+
+        graph = torch.cuda.CUDAGraph()
+        if self._graph_pool is not None:
+            set_graph_pool_id(self._graph_pool)
+
+        with torch.cuda.graph(graph, pool=self._graph_pool, stream=current_stream()):
+            mixer_fn(hidden_states, output, positions=positions)
+
+        self._entries[key] = MixerGraphEntry(
+            graph=graph,
+            input_ptr=hidden_states.data_ptr(),
+            output_ptr=output.data_ptr(),
+        )
+        apriel2_logger.debug(
+            "MixerGraphCache: captured graph for (%s, %d), total=%d",
+            mixer_name,
+            num_tokens,
+            len(self._entries),
+        )
+
+    def replay(
+        self,
+        mixer_name: str,
+        num_tokens: int,
+        hidden_states: torch.Tensor,
+        output: torch.Tensor,
+    ) -> None:
+        """Replay the cached graph. Asserts pointer stability in debug mode."""
+        entry = self._entries[(mixer_name, num_tokens)]
+        if __debug__:
+            assert hidden_states.data_ptr() == entry.input_ptr, (
+                f"MixerGraphCache: hidden_states pointer changed between "
+                f"capture (0x{entry.input_ptr:x}) and replay "
+                f"(0x{hidden_states.data_ptr():x}) for ({mixer_name}, {num_tokens})"
+            )
+            assert output.data_ptr() == entry.output_ptr, (
+                f"MixerGraphCache: output pointer changed between "
+                f"capture (0x{entry.output_ptr:x}) and replay "
+                f"(0x{output.data_ptr():x}) for ({mixer_name}, {num_tokens})"
+            )
+        entry.graph.replay()
 
 
 # =============================================================================
@@ -510,17 +852,28 @@ class Apriel2Config(PretrainedConfig):
 
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
+    # Attention-type mixers that use KV cache (not recurrent state)
+    _ATTENTION_MIXER_TYPES = {"attention", "sliding_window"}
+
     @property
     def layers_block_type(self) -> list[str]:
-        """Return block types for each layer (for hybrid model detection)."""
+        """Return block types for each layer, normalized to 'attention' or 'mamba'.
+
+        vLLM's get_num_layers_by_block_type() expects these two canonical types.
+        All attention-like mixers map to 'attention'; all recurrent mixers
+        (GDN, KDA, Mamba) map to 'mamba'.
+        """
         decoder_config = self.decoder
         seq_type = decoder_config.get("type", "fixed")
         num_blocks = decoder_config.get("num_blocks", self.num_hidden_layers)
 
+        def _normalize(mixer_type: str) -> str:
+            return "attention" if mixer_type in self._ATTENTION_MIXER_TYPES else "mamba"
+
         if seq_type == "fixed":
             block_config = decoder_config.get("block", {})
             mixer_type = block_config.get("mixer", {}).get("type", "attention")
-            return [mixer_type] * num_blocks
+            return [_normalize(mixer_type)] * num_blocks
         elif seq_type == "pattern":
             pattern = decoder_config.get("pattern", ["attention"])
             blocks_config = decoder_config.get("blocks", {})
@@ -528,7 +881,7 @@ class Apriel2Config(PretrainedConfig):
             for i in range(num_blocks):
                 block_name = pattern[i % len(pattern)]
                 mixer_type = blocks_config.get(block_name, {}).get("mixer", {}).get("type", "attention")
-                result.append(mixer_type)
+                result.append(_normalize(mixer_type))
             return result
         return ["attention"] * num_blocks
 
@@ -736,7 +1089,14 @@ class Apriel2Attention(nn.Module, AttentionLayerBase):
         return loaded
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        """Return cache spec for attention with unified page size for hybrid models."""
+        """Return cache spec for attention with unified page size for hybrid models.
+
+        Returns SlidingWindowSpec for sliding-window layers and FullAttentionSpec
+        for regular attention.  This puts them in separate KV cache groups (and
+        therefore separate FlashInfer metadata builders), which avoids the
+        "Window left is not the same for all layers" error.  The monkey-patched
+        grouping function handles the potential singleton-group degeneration.
+        """
         config = vllm_config.model_config.hf_config
         block_size, _ = get_unified_page_size_for_config(config, vllm_config)
 
@@ -757,13 +1117,13 @@ class Apriel2Attention(nn.Module, AttentionLayerBase):
                 dtype=kv_cache_dtype,
                 sliding_window=self.window_size,
             )
-        else:
-            return FullAttentionSpec(
-                block_size=block_size,
-                num_kv_heads=self.num_kv_heads,
-                head_size=self.head_dim,
-                dtype=kv_cache_dtype,
-            )
+
+        return FullAttentionSpec(
+            block_size=block_size,
+            num_kv_heads=self.num_kv_heads,
+            head_size=self.head_dim,
+            dtype=kv_cache_dtype,
+        )
 
 
 class Apriel2MambaMixer(nn.Module):
@@ -867,20 +1227,115 @@ direct_register_custom_op(
 # =============================================================================
 
 
+def _batch_has_prefill(forward_context: ForwardContext, active_mixer: nn.Module) -> bool:
+    """Return True if this batch contains prefill tokens.
+
+    CUDA graphs captured during decode cannot handle prefill, so we must
+    fall back to eager execution for mixed batches.
+    """
+    from vllm.config.compilation import CUDAGraphMode
+
+    if forward_context.cudagraph_runtime_mode == CUDAGraphMode.NONE:
+        return True  # Profile/warmup run — treat as non-graphable
+
+    attn_meta = forward_context.attn_metadata
+    if isinstance(attn_meta, dict):
+        mixer_prefix = getattr(active_mixer, "prefix", None)
+        if mixer_prefix is not None:
+            meta = attn_meta.get(mixer_prefix)
+            if meta is not None and hasattr(meta, "num_prefills"):
+                return meta.num_prefills > 0
+    return False
+
+
+def _capture_all_mixers_for_num_tokens(
+    stochastic_mixer: "Apriel2StochasticMixer",
+    cache: MixerGraphCache,
+    hidden_states: torch.Tensor,
+    output: torch.Tensor,
+    positions: torch.Tensor | None,
+    num_tokens: int,
+) -> None:
+    """Capture CUDA graphs for ALL sub-mixers at this batch size.
+
+    Called during vLLM's capture_model() phase. All mixers are captured
+    writing into the same ``output`` buffer address so that any mixer's
+    graph can be replayed into the current output on future decode steps.
+
+    After capturing, the active mixer is run eagerly once to leave the
+    correct result in ``output`` for downstream layers.
+    """
+    active_name = stochastic_mixer.active_mixer_name
+
+    for mixer_name, mixer in stochastic_mixer.mixers.items():
+        if cache.has(mixer_name, num_tokens):
+            continue
+
+        # Eager warmup: run the mixer once outside graph capture to trigger
+        # Triton autotuning (which calls cuda.synchronize() internally).
+        # Without this, autotuning during torch.cuda.graph() capture causes
+        # "operation not permitted when stream is capturing".
+        torch.cuda.synchronize()
+        output.zero_()
+        mixer(hidden_states, output, positions=positions)
+
+        torch.cuda.synchronize()
+        output.zero_()
+
+        apriel2_logger.info(
+            "Capturing mixer CUDA graph: layer=%s mixer=%s num_tokens=%d",
+            stochastic_mixer.prefix,
+            mixer_name,
+            num_tokens,
+        )
+        cache.capture(mixer_name, num_tokens, mixer, hidden_states, output, positions)
+
+    # Restore output to the active mixer's result for the outer capture pass
+    torch.cuda.synchronize()
+    stochastic_mixer.mixers[active_name](hidden_states, output, positions=positions)
+
+
 def stochastic_mixer_dispatch(
     hidden_states: torch.Tensor,
     output: torch.Tensor,
     positions: torch.Tensor | None,
     layer_name: str,
 ) -> None:
-    """Dispatch to the active mixer at runtime (escapes torch.compile)."""
+    """Dispatch to the active mixer; capture or replay CUDA graphs when enabled."""
     forward_context: ForwardContext = get_forward_context()
     stochastic_mixer = forward_context.no_compile_layers[layer_name]
+    active_name: str = stochastic_mixer.active_mixer_name
+    active_mixer = stochastic_mixer.mixers[active_name]
+    cache: MixerGraphCache | None = stochastic_mixer._mixer_graph_cache
 
-    # Get the currently active mixer (runtime lookup)
-    active_mixer = stochastic_mixer.mixers[stochastic_mixer.active_mixer_name]
+    if cache is not None:
+        num_tokens = hidden_states.shape[0]
 
-    # Forward through the active mixer
+        # Capture phase: capture graphs for ALL mixers at this batch size.
+        # We must check runtime_mode to avoid capturing during profile_run,
+        # where cudagraph_capturing_enabled is True but cuBLAS hasn't been
+        # lazily initialized yet (CUBLAS_STATUS_NOT_INITIALIZED).
+        # During profile_run, runtime_mode is NONE; during capture_model()
+        # it is PIECEWISE.
+        from vllm.config.compilation import CUDAGraphMode
+
+        runtime_mode = forward_context.cudagraph_runtime_mode
+        if (
+            _compile_monitor.cudagraph_capturing_enabled
+            and runtime_mode is not None
+            and runtime_mode != CUDAGraphMode.NONE
+        ):
+            _capture_all_mixers_for_num_tokens(stochastic_mixer, cache, hidden_states, output, positions, num_tokens)
+            return
+
+        # Replay phase: use cached graph if available and batch is decode-only
+        has_prefill = _batch_has_prefill(forward_context, active_mixer)
+        has_cached = cache.has(active_name, num_tokens)
+        if not has_prefill and has_cached:
+            cache.replay(active_name, num_tokens, hidden_states, output)
+            return
+
+    # Eager fallback
     active_mixer(hidden_states, output, positions=positions)
 
 
@@ -906,17 +1361,28 @@ direct_register_custom_op(
     fake_impl=stochastic_mixer_dispatch_fake,
 )
 
-# Add stochastic_mixer_dispatch to vLLM's splitting ops so it causes graph breaks
-# This allows dynamic dispatch at runtime even with CUDA graphs enabled
+# Register custom ops as PIECEWISE splitting ops so they cause graph breaks.
+# The Apriel2 GDN op MUST always be registered: even in FULL_AND_PIECEWISE mode,
+# PIECEWISE graphs handle prefill.  Without the graph break, the decode path gets
+# baked into a compiled piece; prefill batches then replay the wrong path →
+# illegal memory access.  The stochastic dispatch op is only needed when
+# FULL graphs are disabled (in FULL mode, the active mixer's kernels get baked
+# into the full graph transparently).
 try:
     from vllm.config.compilation import CompilationConfig, CUDAGraphMode
 
-    _stochastic_op = "vllm::stochastic_mixer_dispatch"
-    if _stochastic_op not in CompilationConfig._attention_ops:
-        CompilationConfig._attention_ops.append(_stochastic_op)
-        logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
+    _gdn_op = "vllm::apriel2_gdn_attention_core"
+    if _gdn_op not in CompilationConfig._attention_ops:
+        CompilationConfig._attention_ops.append(_gdn_op)
+        logger.info(f"Added {_gdn_op} to vLLM splitting ops")
+
+    if not APRIEL2_FULL_CUDA_GRAPHS:
+        _stochastic_op = "vllm::stochastic_mixer_dispatch"
+        if _stochastic_op not in CompilationConfig._attention_ops:
+            CompilationConfig._attention_ops.append(_stochastic_op)
+            logger.info(f"Added {_stochastic_op} to vLLM splitting ops")
 except ImportError:
-    logger.warning("Could not add stochastic_mixer_dispatch to vLLM splitting ops")
+    logger.warning("Could not add custom ops to vLLM splitting ops")
 
 
 def _force_piecewise_cudagraph_for_stochastic_mixers():
@@ -966,7 +1432,7 @@ def fused_gdn_gating_kernel(
     g_ptr,
     beta_ptr,
     num_heads: tl.constexpr,
-    total_elements: tl.constexpr,
+    total_elements,
     BLOCK_SIZE: tl.constexpr,
     SOFTPLUS_THRESHOLD: tl.constexpr,
 ):
@@ -1313,7 +1779,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         """Forward pass with custom op for core attention."""
         num_tokens = hidden_states.size(0)
 
-        # self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
+        self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
         # self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
         # self._debug_tensor("hidden_states", hidden_states)
 
@@ -1344,6 +1810,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
+
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-1] {self.prefix}: pre-custom-op sync OK", flush=True)
 
         torch.ops.vllm.apriel2_gdn_attention_core(
             mixed_qkv,
@@ -1436,6 +1906,17 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
 
+        if DEBUG_STATE_INDICES and not _compile_monitor.cudagraph_capturing_enabled:
+            indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
+            unique = {i for i in indices if i >= 0}
+            dup = len(indices) - len(unique) - indices.count(-1)
+            tag = " ** DUPLICATE **" if dup > 0 else ""
+            print(
+                f"[STATE-IDX GDN {self.prefix}] "
+                f"decodes={attn_metadata.num_decodes} prefills={attn_metadata.num_prefills} "
+                f"indices={indices}{tag}"
+            )
+
         # self._debug_print(f"num_actual_tokens={num_actual_tokens}, num_prefills={attn_metadata.num_prefills}, num_decodes={attn_metadata.num_decodes}")
         # self._debug_print(f"has_initial_state={has_initial_state}")
         # self._debug_print(f"non_spec_query_start_loc={non_spec_query_start_loc}")
@@ -1444,12 +1925,32 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         conv_state = self_kv_cache[0].transpose(-1, -2)
         ssm_state = self_kv_cache[1]
 
-        # self._debug_tensor("conv_state (from cache)", conv_state)
-        # self._debug_tensor("ssm_state (from cache)", ssm_state)
+        # During FULL CUDA graph capture the dummy batch size can exceed
+        # the number of allocated KV cache blocks (e.g. capture=512 but
+        # only 282 cache lines).  Clamp to avoid out-of-bounds access in
+        # conv1d and recurrent kernels.
+        # IMPORTANT: Only clamp during CUDA graph capture.  During normal
+        # inference, num_actual_tokens is the number of *tokens* in the
+        # batch, which can exceed num_blocks (= number of *state slots*)
+        # during prefill (many tokens share the same state slot).
+        # Clamping during prefill would truncate the input and cause the
+        # conv1d/recurrent kernels to read out-of-bounds via cache_indices
+        # that still reference the full batch.
+        num_cache_lines = conv_state.size(0)
+        if _compile_monitor.cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
+            num_actual_tokens = num_cache_lines
 
-        mixed_qkv = mixed_qkv[:num_actual_tokens]
-        b = b[:num_actual_tokens]
-        a = a[:num_actual_tokens]
+        kernel_token_count = num_actual_tokens
+        if attn_metadata.num_prefills > 0:
+            if non_spec_query_start_loc is None:
+                raise RuntimeError(
+                    f"{self.prefix}: missing non_spec_query_start_loc for GDN prefill"
+                )
+            kernel_token_count = int(non_spec_query_start_loc[-1].item())
+
+        mixed_qkv = mixed_qkv[:kernel_token_count]
+        b = b[:kernel_token_count]
+        a = a[:kernel_token_count]
 
         # self._debug_tensor("mixed_qkv (truncated)", mixed_qkv)
         # self._debug_tensor("b (truncated)", b)
@@ -1465,6 +1966,24 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             # self._debug_print("Using causal_conv1d_fn (prefill path)")
             mixed_qkv_T = mixed_qkv.transpose(0, 1)
             # self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
+
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+                max_ci = non_spec_state_indices_tensor.max().item()
+                print(
+                    f"[PRE-CONV] {self.prefix}: conv_state.shape={conv_state.shape}, "
+                    f"x.shape={mixed_qkv_T.shape}, "
+                    f"cache_indices={non_spec_state_indices_tensor.tolist()} (max={max_ci}), "
+                    f"num_cache_lines={num_cache_lines}, "
+                    f"query_start_loc={non_spec_query_start_loc.tolist()}, "
+                    f"has_initial_state={has_initial_state.tolist()}, "
+                    f"num_prefills={attn_metadata.num_prefills}",
+                    flush=True,
+                )
+                if max_ci >= num_cache_lines:
+                    print(
+                        f"[OOB-CONV] {self.prefix}: cache_index {max_ci} >= num_cache_lines {num_cache_lines}!",
+                        flush=True,
+                    )
             mixed_qkv = causal_conv1d_fn(
                 mixed_qkv_T,
                 conv_weights,
@@ -1476,9 +1995,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 query_start_loc=non_spec_query_start_loc,
                 metadata=attn_metadata,
             ).transpose(0, 1)
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+                torch.cuda.synchronize()
+                print(f"[SYNC-2] {self.prefix}: post-causal_conv1d_fn sync OK", flush=True)
         else:
             # self._debug_print("Using causal_conv1d_update (decode path)")
-            mixed_qkv = causal_conv1d_update(
+            causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
                 conv_weights,
@@ -1507,13 +2029,32 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
 
         # self._debug_tensor("A_log", self.A_log)
         # self._debug_tensor("dt_bias", self.dt_bias)
+
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-3] {self.prefix}: post-fused_gdn_gating sync OK", flush=True)
         # self._debug_tensor("g (from gating)", g)
         # self._debug_tensor("beta (from gating)", beta)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
             # self._debug_print("Using chunk_gated_delta_rule (prefill)")
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+                max_idx = non_spec_state_indices_tensor.max().item()
+                print(
+                    f"[SYNC-4] {self.prefix}: prefill ssm_state.shape={ssm_state.shape}, "
+                    f"indices={non_spec_state_indices_tensor.tolist()}, "
+                    f"max_idx={max_idx}, num_cache_lines={num_cache_lines}, "
+                    f"has_initial_state={has_initial_state.tolist()}, "
+                    f"num_prefills={attn_metadata.num_prefills}",
+                    flush=True,
+                )
+                if max_idx >= ssm_state.shape[0]:
+                    print(
+                        f"[OOB] {self.prefix}: max_idx={max_idx} >= ssm_state.shape[0]={ssm_state.shape[0]}!",
+                        flush=True,
+                    )
             initial_state = ssm_state[non_spec_state_indices_tensor].contiguous()
             initial_state[~has_initial_state, ...] = 0
             # self._debug_tensor("initial_state", initial_state)
@@ -1531,6 +2072,16 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 print(f"  beta: shape={beta.shape}, first8={beta.flatten()[:8].tolist()}")
                 print(f"  initial_state: {initial_state}")
                 print(f"  cu_seqlens: {non_spec_query_start_loc}")
+            expected_tokens = int(non_spec_query_start_loc[-1].item())
+            actual_tokens = query.shape[1]
+            if actual_tokens != expected_tokens:
+                raise RuntimeError(
+                    f"{self.prefix}: GDN prefill token mismatch: "
+                    f"q/k/v/g/beta tokens={actual_tokens}, "
+                    f"cu_seqlens[-1]={expected_tokens}, "
+                    f"num_actual_tokens={num_actual_tokens}, "
+                    f"kernel_token_count={kernel_token_count}"
+                )
             core_out, last_state = chunk_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1543,6 +2094,9 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
+            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+                torch.cuda.synchronize()
+                print(f"[SYNC-5] {self.prefix}: post-chunk_gated_delta_rule sync OK", flush=True)
             # self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
             # self._debug_tensor("last_state", last_state)
             # # Debug prefill state - get seq_len from query_start_loc
@@ -1564,6 +2118,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 print(
                     f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}"
                 )
+            # num_actual_tokens already clamped to cache lines above
+            num_decodes = min(attn_metadata.num_decodes, num_actual_tokens)
             core_out, _ = fused_recurrent_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1572,8 +2128,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=ssm_state,
                 inplace_final_state=True,
-                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
-                ssm_state_indices=non_spec_state_indices_tensor,
+                cu_seqlens=non_spec_query_start_loc[: num_decodes + 1],
+                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
                 use_qk_l2norm_in_kernel=True,
             )
             # self._debug_tensor("core_out (from fused_recurrent)", core_out)
@@ -1581,7 +2137,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             #     actual_state = ssm_state[slot_idx:slot_idx+1]
             #     # self._debug_state_stats("DECODE out_state", actual_state, num_actual_tokens)
 
-        core_attn_out[:num_actual_tokens] = core_out.squeeze(0)[:num_actual_tokens]
+        core_attn_out[:kernel_token_count] = core_out.squeeze(0)[:kernel_token_count]
         # self._debug_tensor("core_attn_out (final output)", core_attn_out)
         # self._debug_print("===== _forward_core END =====")
 
@@ -1847,6 +2403,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
+        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
+            torch.cuda.synchronize()
+            print(f"[SYNC-6] {self.prefix}: pre-kda_attention sync OK", flush=True)
+
         torch.ops.vllm.kda_attention(
             q,
             k,
@@ -1884,16 +2444,43 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
         num_actual_tokens = attn_metadata.num_actual_tokens
         constant_caches = self.kv_cache[forward_context.virtual_engine]
 
-        q_proj_states = q_proj_states[:num_actual_tokens]
-        k_proj_states = k_proj_states[:num_actual_tokens]
-        v_proj_states = v_proj_states[:num_actual_tokens]
-        g1 = g1[:num_actual_tokens]
-        beta = beta[:num_actual_tokens]
-
         (conv_state_q, conv_state_k, conv_state_v, recurrent_state) = constant_caches
         conv_state_q = conv_state_q.transpose(-1, -2)
         conv_state_k = conv_state_k.transpose(-1, -2)
         conv_state_v = conv_state_v.transpose(-1, -2)
+
+        # During FULL CUDA graph capture the dummy batch size can exceed
+        # the number of allocated KV cache blocks.  Clamp to avoid
+        # out-of-bounds access.
+        # IMPORTANT: Only clamp during CUDA graph capture — see GDN comment.
+        num_cache_lines = conv_state_q.size(0)
+        if _compile_monitor.cudagraph_capturing_enabled and num_actual_tokens > num_cache_lines:
+            num_actual_tokens = num_cache_lines
+
+        kernel_token_count = num_actual_tokens
+        if attn_metadata.num_prefills > 0:
+            if non_spec_query_start_loc is None:
+                raise RuntimeError(
+                    f"{self.prefix}: missing non_spec_query_start_loc for KDA prefill"
+                )
+            kernel_token_count = int(non_spec_query_start_loc[-1].item())
+
+        if DEBUG_STATE_INDICES and not _compile_monitor.cudagraph_capturing_enabled:
+            indices = non_spec_state_indices_tensor[:num_actual_tokens].tolist()
+            unique = {i for i in indices if i >= 0}
+            dup = len(indices) - len(unique) - indices.count(-1)
+            tag = " ** DUPLICATE **" if dup > 0 else ""
+            print(
+                f"[STATE-IDX KDA {self.prefix}] "
+                f"decodes={attn_metadata.num_decodes} prefills={attn_metadata.num_prefills} "
+                f"indices={indices}{tag}"
+            )
+
+        q_proj_states = q_proj_states[:kernel_token_count]
+        k_proj_states = k_proj_states[:kernel_token_count]
+        v_proj_states = v_proj_states[:kernel_token_count]
+        g1 = g1[:kernel_token_count]
+        beta = beta[:kernel_token_count]
 
         q_conv_weights = self.q_conv1d.weight.view(self.q_conv1d.weight.size(0), self.q_conv1d.weight.size(2))
         k_conv_weights = self.k_conv1d.weight.view(self.k_conv1d.weight.size(0), self.k_conv1d.weight.size(2))
@@ -1972,6 +2559,16 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             zero_idx = non_spec_state_indices_tensor[~has_initial_state]
             recurrent_state[zero_idx] = 0
             initial_state = recurrent_state[non_spec_state_indices_tensor].contiguous()
+            expected_tokens = int(non_spec_query_start_loc[-1].item())
+            actual_tokens = q.shape[1]
+            if actual_tokens != expected_tokens:
+                raise RuntimeError(
+                    f"{self.prefix}: KDA prefill token mismatch: "
+                    f"q/k/v/g/beta tokens={actual_tokens}, "
+                    f"cu_seqlens[-1]={expected_tokens}, "
+                    f"num_actual_tokens={num_actual_tokens}, "
+                    f"kernel_token_count={kernel_token_count}"
+                )
             core_attn_out_non_spec, last_recurrent_state = chunk_kda(
                 q=q,
                 k=k,
@@ -1985,6 +2582,7 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             )
             recurrent_state[non_spec_state_indices_tensor] = last_recurrent_state
         else:
+            num_decodes = min(attn_metadata.num_decodes, num_actual_tokens)
             core_attn_out_non_spec, _ = fused_recurrent_kda(
                 q=q,
                 k=k,
@@ -1993,10 +2591,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 beta=beta,
                 initial_state=recurrent_state,
                 use_qk_l2norm_in_kernel=True,
-                cu_seqlens=non_spec_query_start_loc[: attn_metadata.num_decodes + 1],
-                ssm_state_indices=non_spec_state_indices_tensor,
+                cu_seqlens=non_spec_query_start_loc[: num_decodes + 1],
+                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
             )
-        core_attn_out[0, :num_actual_tokens] = core_attn_out_non_spec[0, :num_actual_tokens]
+        core_attn_out[0, :kernel_token_count] = core_attn_out_non_spec[0, :kernel_token_count]
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         # Checkpoint to model name translations:
@@ -2457,19 +3055,48 @@ class Apriel2StochasticMixer(nn.Module):
             raise ValueError(f"Duplicate layer name: {prefix}")
         compilation_config.static_forward_context[prefix] = self
 
-        # Force PIECEWISE cudagraph mode for stochastic mixers
-        # FULL mode captures only active mixer ops, breaking dormant mixer switching
-        _force_piecewise_cudagraph_for_stochastic_mixers()
+        if APRIEL2_FULL_CUDA_GRAPHS:
+            # FULL mode: the entire forward (including dispatch) is captured as
+            # one CUDA graph. On layout change, graphs are re-captured.
+            # No per-mixer cache needed — vLLM's CUDAGraphWrapper handles it.
+            self._mixer_graph_cache: MixerGraphCache | None = None
+        else:
+            # PIECEWISE mode: force graph break at dispatch, mixer runs eagerly
+            _force_piecewise_cudagraph_for_stochastic_mixers()
+            self._mixer_graph_cache = MixerGraphCache() if APRIEL2_MIXER_CUDA_GRAPHS else None
 
     def set_active_mixer(self, name: str) -> None:
         """Set the active mixer by name."""
-        if name not in self.mixers:
+        if name not in self._mixer_names:
             raise ValueError(f"Unknown mixer '{name}'. Available: {self._mixer_names}")
         self.active_mixer_name = name
 
     def get_active_mixer(self) -> str:
         """Get the name of the currently active mixer."""
         return self.active_mixer_name
+
+    def offload_inactive_mixers(self) -> int:
+        """Move inactive mixer weights to CPU. Returns bytes freed.
+
+        Also removes offloaded mixers from self.mixers (nn.ModuleDict) and
+        stores them in self._offloaded_mixers (plain dict).  This is critical:
+        torch.compile/dynamo sets guards on every parameter it sees in the
+        module tree.  If offloaded params stay in the tree with device='cpu',
+        a subsequent forward triggers guard failure → re-trace → crash.
+        Hiding them from the module tree avoids the issue entirely.
+        """
+        freed = 0
+        device_cpu = torch.device("cpu")
+        self._offloaded_mixers: dict[str, nn.Module] = {}
+        to_offload = [name for name in self.mixers if name != self.active_mixer_name]
+        for name in to_offload:
+            mixer = self.mixers[name]
+            for param in mixer.parameters():
+                freed += param.data.nbytes
+            _move_module_device(mixer, device_cpu)
+            self._offloaded_mixers[name] = mixer
+            del self.mixers[name]
+        return freed
 
     def forward(
         self,
@@ -2810,12 +3437,76 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         },
     )
 
-    # For hybrid models
+    # has_inner_state = True: model uses recurrent state (GDN, KDA, Mamba).
+    # is_hybrid = False: we handle config verification ourselves via
+    # MODELS_CONFIG_MAP (see config_convertor.py) rather than relying on
+    # vLLM's default HybridAttentionMambaModelConfig dispatch.  This is
+    # necessary because the default dispatch crashes for pure-mamba models
+    # (ZeroDivisionError: num_kv_heads=0 when no attention blocks exist).
     has_inner_state = True
-    # Don't use is_hybrid=True - it triggers HybridAttentionMambaModelConfig
-    # which assumes all mamba-like layers have the same shape.
-    # Apriel2 has heterogeneous blocks, each with its own get_kv_cache_spec().
     is_hybrid = False
+
+    @classmethod
+    def get_mamba_state_shape_from_config(
+        cls,
+        vllm_config: VllmConfig,
+    ) -> tuple:
+        """Return the largest mamba state shape across all mixer types.
+
+        HybridAttentionMambaModelConfig.verify_and_update_config() calls this
+        to compute page size alignment.  It only needs a conservative upper
+        bound — per-layer get_kv_cache_spec() handles actual heterogeneous
+        allocation.  We return the shape of whichever mixer type produces the
+        largest page_size_bytes (the "envelope").
+        """
+        config = vllm_config.model_config.hf_config
+        decoder_config = getattr(config, "decoder", {}) or {}
+        blocks_config = get_blocks_config(decoder_config)
+        block_params = get_block_params(blocks_config, vllm_config)
+
+        # Find the mamba block with the largest natural page size
+        best_shapes: tuple | None = None
+        best_page_size = 0
+        for params in block_params.values():
+            if isinstance(params, MambaBlockParams):
+                if params.natural_page_size > best_page_size:
+                    best_page_size = params.natural_page_size
+                    best_shapes = params.shapes
+
+        if best_shapes is None:
+            # Pure attention model — return minimal shapes so
+            # verify_and_update_config() sees mamba_page_size=0 and returns.
+            return ((1, 1), (1, 1))
+
+        return best_shapes
+
+    @classmethod
+    def get_mamba_state_dtype_from_config(
+        cls,
+        vllm_config: VllmConfig,
+    ) -> tuple:
+        """Return dtypes matching the envelope mamba state shape.
+
+        Must be consistent with get_mamba_state_shape_from_config() — returns
+        the dtypes of whichever mixer type has the largest page size.
+        """
+        config = vllm_config.model_config.hf_config
+        decoder_config = getattr(config, "decoder", {}) or {}
+        blocks_config = get_blocks_config(decoder_config)
+        block_params = get_block_params(blocks_config, vllm_config)
+
+        best_dtypes: tuple | None = None
+        best_page_size = 0
+        for params in block_params.values():
+            if isinstance(params, MambaBlockParams):
+                if params.natural_page_size > best_page_size:
+                    best_page_size = params.natural_page_size
+                    best_dtypes = params.dtypes
+
+        if best_dtypes is None:
+            return (torch.float32, torch.float32)
+
+        return best_dtypes
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -2912,6 +3603,28 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
             skip_prefixes=skip_prefixes,
         )
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+
+    def offload_inactive_mixers(self) -> int:
+        """Offload all inactive mixer weights to CPU.
+
+        Cannot run inside load_weights() because torch.compile captures ALL
+        parameters as compiled graph inputs — profile_run() would crash trying
+        to pass CPU tensors to the GPU graph. Instead, this is called from the
+        monkey-patched Worker.determine_available_memory() AFTER profile_run().
+
+        Returns:
+            Total bytes freed on GPU.
+        """
+        total_freed = 0
+        for layer in self.model.layers:
+            if isinstance(layer, Apriel2StochasticDecoderLayer):
+                total_freed += layer.mixer.offload_inactive_mixers()
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        freed_gib = total_freed / (1024**3)
+        logger.info(f"Offloaded inactive mixer weights to CPU: freed {freed_gib:.2f} GiB GPU memory")
+        return total_freed
 
     def set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         """Set the active mixer for each stochastic layer.
@@ -3020,14 +3733,135 @@ def _patch_worker_for_placement_switching():
 
         logger.info("Cleared KV cache tensors for placement switch")
 
+    def _clear_piecewise_wrappers(module: nn.Module) -> None:
+        """Recursively clear all piecewise CUDAGraphWrapper entries."""
+        from vllm.compilation.cuda_graph import CUDAGraphWrapper
+
+        for val in module.__dict__.values():
+            if isinstance(val, CUDAGraphWrapper):
+                val.concrete_cudagraph_entries.clear()
+            elif isinstance(val, nn.Module):
+                _clear_piecewise_wrappers(val)
+        for child in module.children():
+            _clear_piecewise_wrappers(child)
+
+    def _recapture_cuda_graphs(worker) -> None:
+        """Invalidate and re-capture CUDA graphs after layout change.
+
+        In FULL CUDA graph mode, the captured graphs contain GPU kernels for
+        the previous layout. After changing mixer assignments, we must
+        re-capture to bake in the new layout's kernels.
+        """
+        model_runner = getattr(worker, "model_runner", None)
+        if model_runner is None:
+            return
+
+        from vllm.compilation.cuda_graph import CUDAGraphWrapper
+
+        # 1. Clear outer FULL wrapper entries
+        model = model_runner.model
+        if isinstance(model, CUDAGraphWrapper):
+            num_cleared = len(model.concrete_cudagraph_entries)
+            model.concrete_cudagraph_entries.clear()
+            logger.info(f"Cleared {num_cleared} FULL CUDA graph entries")
+
+        # 2. Clear inner piecewise wrapper entries (for FULL_AND_PIECEWISE mode)
+        inner_model = model.unwrap() if isinstance(model, CUDAGraphWrapper) else model
+        _clear_piecewise_wrappers(inner_model)
+
+        # 3. Re-capture for all batch sizes
+        logger.info("Re-capturing CUDA graphs for new layout...")
+        model_runner.capture_model()
+        logger.info("CUDA graph re-capture complete")
+
+    def _swap_mixer_weights(worker, placement: list[str]) -> None:
+        """Swap mixer weights between GPU and CPU for placement change.
+
+        For each layer where the active mixer changes:
+        1. Offload old active → CPU, remove from ModuleDict, store in _offloaded_mixers
+        2. Load new active from _offloaded_mixers → GPU, add to ModuleDict
+        Done layer by layer to avoid transient OOM.
+        """
+        model = worker.get_model()
+        device_gpu = torch.device("cuda")
+        device_cpu = torch.device("cpu")
+        loaded = 0
+        offloaded = 0
+
+        for layer_idx, new_mixer_name in enumerate(placement):
+            if layer_idx >= len(model.model.layers):
+                break
+            layer = model.model.layers[layer_idx]
+            if not isinstance(layer, Apriel2StochasticDecoderLayer):
+                continue
+
+            stochastic = layer.mixer
+            old_mixer_name = stochastic.active_mixer_name
+            if old_mixer_name == new_mixer_name:
+                continue
+
+            # 1. Offload old active → CPU, hide from module tree
+            old_mixer = stochastic.mixers[old_mixer_name]
+            _move_module_device(old_mixer, device_cpu)
+            del stochastic.mixers[old_mixer_name]
+            stochastic._offloaded_mixers[old_mixer_name] = old_mixer
+            offloaded += 1
+
+            # 2. Load new active from offloaded → GPU, restore to module tree
+            new_mixer = stochastic._offloaded_mixers.pop(new_mixer_name)
+            _move_module_device(new_mixer, device_gpu)
+            stochastic.mixers[new_mixer_name] = new_mixer
+            loaded += 1
+
+        if loaded or offloaded:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            logger.info(f"Weight swap: offloaded {offloaded} mixers to CPU, " f"loaded {loaded} mixers to GPU")
+
     def _set_layer_placements(self, placement: list[str]) -> dict[int, str]:
         # Clear KV cache BEFORE changing placement to prevent reading stale data
         # written by a different mixer type (which could cause NaN errors)
         _clear_kv_cache(self)
-        return self.get_model().set_layer_placements(placement)
+
+        # Swap weights before changing active mixer (needs old active_mixer_name)
+        if APRIEL2_OFFLOAD_INACTIVE_MIXERS:
+            _swap_mixer_weights(self, placement)
+
+        result = self.get_model().set_layer_placements(placement)
+        # Re-capture CUDA graphs with the new layout baked in
+        if APRIEL2_FULL_CUDA_GRAPHS and result:
+            _recapture_cuda_graphs(self)
+        return result
 
     def _get_mixer_names(self) -> tuple[str, ...]:
         return self.get_model().get_mixer_names()
+
+    # -- Weight offloading: patch determine_available_memory ---------------
+    # torch.compile captures ALL parameters as graph inputs. If we offload
+    # during load_weights(), profile_run() crashes (CPU tensors in GPU graph).
+    # Instead, offload AFTER profile_run() but adjust available memory upward.
+
+    if APRIEL2_OFFLOAD_INACTIVE_MIXERS:
+        _orig_determine_available_memory = Worker.determine_available_memory
+
+        @torch.inference_mode()
+        def _determine_available_memory_with_offload(self) -> int:
+            result = _orig_determine_available_memory(self)
+
+            # Offload inactive mixer weights to CPU
+            freed = self.get_model().offload_inactive_mixers()
+            if freed > 0:
+                self.available_kv_cache_memory_bytes += freed
+                self.model_runner.model_memory_usage -= freed
+                result = int(self.available_kv_cache_memory_bytes)
+                logger.info(
+                    "Adjusted available KV cache memory: +%.2f GiB from weight offloading",
+                    freed / (1024**3),
+                )
+
+            return result
+
+        Worker.determine_available_memory = _determine_available_memory_with_offload
 
     Worker.get_layer_placements = _get_layer_placements
     Worker.set_layer_placements = _set_layer_placements
