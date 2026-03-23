@@ -177,11 +177,15 @@ class LanguageModelBatch(TokenBatch):
                 # each document is counted exactly once even though all SDP ranks see the same
                 # documents (but process different token slices of them).
                 if model_input.num_docs is None:
-                    model_input.num_docs = (
-                        int((labels_per_document > 0).sum().item())
-                        if config.distributed.sequence_data_rank == 0
-                        else 0
-                    )
+                    # Skip .item() on meta tensors (called during setup/shape inference).
+                    if labels_per_document.is_meta:
+                        model_input.num_docs = 0
+                    else:
+                        model_input.num_docs = (
+                            int((labels_per_document > 0).sum().item())
+                            if config.distributed.sequence_data_rank == 0
+                            else 0
+                        )
                 # Expand to one entry per token: find each token's document index via the sorted
                 # length cumsum, then look up that document's label count.
                 # TODO: Document index already computed in `LengthModelInputPreprocessor`.
