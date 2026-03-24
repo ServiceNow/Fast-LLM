@@ -30,6 +30,11 @@ class LengthPreprocessingConfig(BatchPreprocessingConfig):
 
 
 @config_class()
+class TokenPreprocessingConfig(LengthPreprocessingConfig):
+    return_document_count: bool = Field(default=False)
+
+
+@config_class()
 class ImageNormalizationConfig(Config):
     scale: float = Field(default=255.0)
     # Default values from OpenAI Clip.
@@ -62,7 +67,7 @@ class PatchPreprocessingConfig(LengthPreprocessingConfig):
 
 
 @config_class()
-class LanguageModelBatchPreprocessingConfig(LengthPreprocessingConfig):
+class LanguageModelBatchPreprocessingConfig(TokenPreprocessingConfig):
     _abstract = False
     phase: PhaseType = Field(default=PhaseType.training)
     micro_batch_splits: int = Field(default=1)

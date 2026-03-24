@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import logging
 import re
@@ -42,54 +43,46 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
 
     def preprocess_batch(
         self,
-        model_inputs: list[LanguageModelInput],
+        model_input: LanguageModelInput,
         *,
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
-        device: torch.device | None,
-    ) -> list[tuple[torch.Tensor, dict]]:
-        reference_preprocessed_batches = {}
-        for name, reference_model in self._reference_models.items():
-            reference_preprocessed_batches[name] = reference_model.fast_llm_model.base_model.preprocess_batch(
-                model_inputs,
-                phase=PhaseType.inference,
-                iteration=iteration,
-                device=device,
-            )
+    ) -> tuple[torch.Tensor, dict]:
+        if not model_input.is_meta:
+            model_input.to_device_(self._distributed.device)
+        kwargs = model_input.to_kwargs()
+        kwargs[LanguageModelKwargs.iteration] = iteration
+        if extra_kwargs is not None:
+            Assert.empty(kwargs.keys() & extra_kwargs.keys())
+            kwargs.update(extra_kwargs)
+        if phase == PhaseType.inference:
+            kwargs[BlockKwargs.output_hidden_states].add(re.compile(r"head\..*logits.*$"))
 
-        preprocessed = []
-        for input_index, model_input in enumerate(model_inputs):
-            if device is not None:
-                model_input.to_device_(device)
-            kwargs = model_input.to_kwargs()
-            kwargs[LanguageModelKwargs.iteration] = iteration
-            if extra_kwargs is not None:
-                Assert.empty(kwargs.keys() & extra_kwargs.keys())
-                kwargs.update(extra_kwargs)
-            if phase == PhaseType.inference:
-                kwargs[BlockKwargs.output_hidden_states].add(re.compile(r"head\..*logits.*$"))
+        if not model_input.is_meta:
+            for name, reference_model in self._reference_models.items():
+                output_hidden_states = set()
+                if name in self._head_reference_models:
+                    output_hidden_states.add(re.compile(r"head\..*logits.*$"))
+                if name in self._decoder_reference_models:
+                    # TODO: Get the actual names
+                    output_hidden_states.add(re.compile(r"decoder\.\d+\.mixer_output$"))
+                assert len(output_hidden_states) >= 1
+                reference_model_input = dataclasses.replace(
+                    model_input,
+                    output_hidden_states=output_hidden_states,
+                    hidden_states={},
+                )
+                reference_model_input.set_children_attributes()
+                reference_model.forward(model_input, iteration=iteration)
 
-            if not model_input.is_meta:
-                for name, reference_model in self._reference_models.items():
-                    reference_tokens, reference_kwargs = reference_preprocessed_batches[name][input_index]
-                    if name in self._decoder_reference_models:
-                        # TODO: Get the actual names
-                        reference_kwargs[BlockKwargs.output_hidden_states].add(
-                            re.compile(r"decoder\.\d+\.mixer_output$")
-                        )
+                kwargs[f"reference_{name}_hidden_states"] = {
+                    layer_name: tensor for layer_name, (meta, tensor) in reference_model_input.hidden_states.items()
+                }
+            self.preprocess(kwargs)
 
-                    reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
-
-                    kwargs[f"reference_{name}_hidden_states"] = {
-                        layer_name: tensor
-                        for layer_name, (meta, tensor) in reference_kwargs[BlockKwargs.hidden_states].items()
-                    }
-                self.preprocess(kwargs)
-            preprocessed.append((model_input.tokens, kwargs))
-
-        return preprocessed
+        return model_input.tokens, kwargs
 
     def get_tied_parameters(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
         # TODO: Integrate to the `LayerBase` interface, move to `LanguageModel`, `MultiTokenPrediction`?

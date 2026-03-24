@@ -32,6 +32,6 @@ class RangeBatch(Batch, RangeDocument):
             document_begin += size
         return cls(ranges=ranges) if ranges else None
 
-    def get_cropped_ranges(self, begin: int, end: int) -> list[tuple[int, int]]:
-        cropped_ranges = ((max(begin_ - begin, 0), min(end_ - begin, end - begin)) for begin_, end_ in self.ranges)
-        return [(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_]
+    # def get_cropped_ranges(self, begin: int, end: int) -> list[tuple[int, int]]:
+    #    cropped_ranges = ((max(begin_ - begin, 0), min(end_ - begin, end - begin)) for begin_, end_ in self.ranges)
+    #    return [(begin_, end_) for begin_, end_ in cropped_ranges if end_ > begin_]

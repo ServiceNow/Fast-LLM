@@ -146,7 +146,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         *,
         iteration: int = 1,
         return_metrics: bool = False,
-        preprocessed: bool = False,
     ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
         assert self._is_setup
         assert schedule._config is self._config  # Noqa
@@ -161,7 +160,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
-        context.data_iterator = self._preprocess_data(context, data_iterator, preprocessed)
+        context.data_iterator = self._preprocess_data(context, data_iterator)
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
@@ -328,16 +327,20 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._reduce(context, step)
 
     def _preprocess_data(
-        self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
+        self, context: BatchContext, data_iterator: typing.Iterator
     ) -> typing.Generator[None, None, None]:
         grad_output = (
             self._optimizer.grad_scale / self._config.num_inputs if context.schedule.phase.is_training else None
         )
-        for micro_batch in range(self._config.sequential_micro_batches):
-            micro_batch_data = next(data_iterator)
-            if not preprocessed:
-                micro_batch_data = self._multi_stage.base_model.preprocess_batch(
-                    micro_batch_data,
+        model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
+        if not preprocessed:
+            model_inputs[0][0].share_batch_data(model_inputs, self._distributed)
+
+        for micro_batch, model_inputs_ in enumerate(model_inputs):
+            Assert.eq(len(model_inputs_), self._config.micro_batch_splits)
+            for micro_batch_split, model_input in enumerate(model_inputs_):
+                input_, kwargs = self._multi_stage.base_model.preprocess_batch(
+                    model_input,
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,
@@ -347,10 +350,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         "num_micro_batches": self._config.sequential_micro_batches,
                         "micro_batch_splits": self._config.micro_batch_splits,
                     },
-                    device=self._distributed.device,
                 )
-            Assert.eq(len(micro_batch_data), self._config.micro_batch_splits)
-            for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
                 kwargs.update(micro_batch_split=micro_batch_split)
                 data_index = micro_batch * self._config.micro_batch_splits + micro_batch_split
                 if self._stages_owned[0]:

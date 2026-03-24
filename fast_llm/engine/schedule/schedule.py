@@ -127,12 +127,14 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
-        self._preprocessed_meta = self._multi_stage.base_model.preprocess_batch(
-            batch_meta,
-            phase=self._phase,
-            iteration=0,
-            device=None,
-        )
+        self._preprocessed_meta = [
+            self._multi_stage.base_model.preprocess_batch(
+                model_input,
+                phase=self._phase,
+                iteration=0,
+            )
+            for model_input in batch_meta
+        ]
 
         self._steps, self._first_grad_stage = self._create_steps()
 

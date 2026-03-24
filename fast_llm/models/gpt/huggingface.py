@@ -114,11 +114,10 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             use_cache,
             output_hidden_states,
         )
-        ((input_, kwargs),) = self.fast_llm_base_model.preprocess_batch(
-            [model_input],
+        input_, kwargs = self.fast_llm_base_model.preprocess_batch(
+            model_input,
             phase=PhaseType.inference,
             iteration=iteration,
-            device=self._fast_llm_model.distributed.device,
         )
 
         self._inference_runner.forward(input_, kwargs, iteration=iteration)

@@ -27,6 +27,7 @@ class LanguageModelLossKwargs(BlockKwargs):
     advantages = "advantages"
     old_log_probabilities = "old_log_probabilities"
     label_counts = "num_labels_in_seq"
+    num_labels_in_batch = "num_labels_in_batch"
 
 
 @config_class(registry=True)
