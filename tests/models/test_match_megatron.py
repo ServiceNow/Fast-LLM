@@ -11,14 +11,13 @@ import yaml
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.config import MemmapDatasetConfig, SampledDatasetConfig
-from fast_llm.data.dataset.gpt.config import GPTSamplingData
+from fast_llm.data.dataset.config import SampledDatasetConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.gpt.legacy_memmap import MEMMAP_DTYPES, MEMMAP_INDEX_HEADER, LegacyMemmapDataset
+from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
-from fast_llm.data.preprocessing.tokenizer import TokenizerConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
-from fast_llm.data.sample.token import TokenSample
+from fast_llm.data.document.language_model import LanguageModelDocument
+from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig
@@ -48,8 +47,8 @@ def get_megatron_test_dataset(prefix: pathlib.Path = MEGATRON_DATASET_PREFIX):
         hf_dataset = datasets.load_from_disk(hf_path)["train"]
         tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
         samples = [
-            LanguageModelSample(
-                TokenSample((tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16))
+            LanguageModelDocument(
+                tokens=(tokenizer.tokenize(document["text"]) % MODEL_TEST_VOCAB_SIZE).to(torch.uint16)
             )
             for document in hf_dataset
         ]
@@ -104,7 +103,8 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
         config_args=[
             "model.distributed.compute_dtype=fp32",
             f'data.datasets.training={{"type":"megatron","path":{MEGATRON_DATASET_PREFIX}}}',
-            "data.sampling.seed=1234",
+            "data.seed=1234",
+            "data.micro_batch_size=512",
             "model.base_model.use_megatron_initialization=True",
         ],
         num_gpus=1,
@@ -116,26 +116,26 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
 
 
 @config_class(dynamic_type={SampledDatasetConfig: "megatron"})
-class MegatronDatasetConfig[SampleType: LanguageModelSample](MemmapDatasetConfig[SampleType]):
+class MegatronDatasetConfig[DocumentType: LanguageModelDocument](MemmapDatasetConfig[DocumentType]):
     _abstract: typing.ClassVar[bool] = False
     path: str = Field(
         desc="Dataset path (prefix).",
         hint=FieldHint.core,
     )
 
-    def build(self, preprocessing: PreprocessingConfig) -> "LegacyMemmapDataset[SampleType]":
-        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path, preprocessing)
+    def build(self) -> "LegacyMemmapDataset[DocumentType]":
+        return MegatronMemmapDataset(str(self.path).replace("/", "__"), self.path)
 
 
 class MegatronMemmapDataset(LegacyMemmapDataset):
-    def sample(self, sampling: GPTSamplingData) -> "MegatronSampledIndexedDataset":
-        return MegatronSampledIndexedDataset(self, sampling)
+    def sample(self, config: "SamplingConfig", num_samples: int, seed: int) -> "MegatronSampledIndexedDataset":
+        return MegatronSampledIndexedDataset(self, config, num_samples, seed)
 
     @classmethod
     def write_dataset(
         cls,
         prefix: pathlib.Path | str,
-        documents: typing.Iterable[LanguageModelSample],
+        documents: typing.Iterable[LanguageModelDocument],
     ) -> None:
         # Initialize metadata
         dtype = None
@@ -150,7 +150,7 @@ class MegatronMemmapDataset(LegacyMemmapDataset):
         # Write the binary data file (.bin) lazily
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
             for document in documents:
-                token_ids = document.tokens.tokens
+                token_ids = document.tokens
                 # Infer dtype from the first document
                 if dtype is None:
                     dtype = token_ids.dtype
@@ -192,30 +192,28 @@ class MegatronMemmapDataset(LegacyMemmapDataset):
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
 
 
-class MegatronSampledIndexedDataset(SampledDataset):
+class MegatronSampledIndexedDataset[DocumentType: LanguageModelDocument](SampledDataset[DocumentType]):
     """
     A GPT sampled dataset that exactly matches Megatron-LM, for testing purposes.
     Minimalistic implementation, implements only the required features.
     """
 
     def __init__(
-        self,
-        indexed_dataset: MegatronMemmapDataset,
-        sampling: GPTSamplingData,
+        self, indexed_dataset: MegatronMemmapDataset, sampling: GPTSamplingConfig, num_samples: int, seed: int
     ):
-        assert isinstance(sampling, GPTSamplingData)
+        assert isinstance(sampling, GPTSamplingConfig)
         self._indexed_dataset = indexed_dataset
-        self._num_samples = sampling.parameters.num_samples
-        self._sequence_length = sampling.parameters.sequence_length
+        self._config = sampling
+        self._num_samples = num_samples
 
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
-        np_rng = np.random.RandomState(seed=sampling.config.seed)
+        np_rng = np.random.RandomState(seed=seed)
 
         # Assume less than one epoch.
-        Assert.lt(self._sequence_length * self._num_samples, num_tokens)
+        Assert.lt(self._config.micro_batch_size * num_samples, num_tokens)
 
         self._doc_idx = np.arange(num_documents, dtype=np.int32)
         np_rng.shuffle(self._doc_idx)
@@ -224,27 +222,29 @@ class MegatronSampledIndexedDataset(SampledDataset):
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
-        self._sample_idx = build_sample_idx(document_sizes, self._doc_idx, self._sequence_length, 1, num_tokens, True)
+        self._sample_idx = build_sample_idx(
+            document_sizes, self._doc_idx, self._config.micro_batch_size, 1, num_tokens, True
+        )
         self._shuffle_idx = np.arange(0, self._sample_idx.shape[0] - 1, dtype=np.uint32)
         np_rng.shuffle(self._shuffle_idx)
 
     def __len__(self) -> int:
         return self._num_samples
 
-    def __getitem__(self, idx: int) -> typing.Any:
+    def __getitem__(self, idx: int) -> list[DocumentType]:
         shuffled_idx = self._shuffle_idx[idx]
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        return LanguageModelSample.from_documents(
-            [
-                self._indexed_dataset.get_document(
-                    self._doc_idx[doc].item(),
-                    begin=(doc == doc_f) * offset_f,
-                    end=offset_l + 1 if doc == doc_l else None,
-                )
-                for doc in range(doc_f, doc_l + 1)
-            ]
-        )
+        documents = [
+            self._indexed_dataset.get_document(
+                self._doc_idx[doc].item(),
+                begin=(doc == doc_f) * offset_f,
+                end=offset_l + 1 if doc == doc_l else None,
+            )
+            for doc in range(doc_f, doc_l + 1)
+        ]
+        # The Megatron side doesn't use varlen, so we make it look like a single document.
+        return [LanguageModelDocument(tokens=torch.cat([document.tokens for document in documents]))]
 
     @property
     def name(self) -> str:

@@ -10,7 +10,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
 from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
@@ -166,16 +165,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
-        #   -> (batch/sequence, sequence/batch, local_inner_projection)
-        inner_projection = self.in_proj(input_)
-        dt = self.dt_proj(self.dt_in_proj(input_))
-        # Standardize to (batch, sequence, local_inner_projection)
-        if kwargs[BlockKwargs.sequence_first]:
-            inner_projection = inner_projection.transpose(0, 1)
-            dt = dt.transpose(0, 1)
-
-        sequence_length = inner_projection.size(1)
+        # inner_projection : (local_tokens, hidden) -> (batch, sequence, local_inner_projection)
+        inner_projection = self.in_proj(input_).unsqueeze(0)
+        dt = self.dt_proj(self.dt_in_proj(input_)).unsqueeze(0)
 
         z, x, b, c = torch.split(
             inner_projection,
@@ -189,7 +181,9 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
         convolution_kwargs = (
-            {} if self._config.cross_document_attention else {"seq_idx": kwargs[MixerKwargs.seq_idx].unsqueeze(0)}
+            {}
+            if self._config.cross_document_attention
+            else {"seq_idx": kwargs[MixerKwargs.document_index_q].unsqueeze(0)}
         )
         if self._config.repeat_kv_before_conv:
             x = self.convolution(
@@ -244,28 +238,20 @@ class Mamba[ConfigType: MambaConfig](BlockWithBias[ConfigType]):
         self._debug(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
-        y = y.transpose(1, 2)[:, :sequence_length]
-        if kwargs[BlockKwargs.sequence_first]:
-            # TODO: Is contiguous needed?
-            y = y.transpose(0, 1).contiguous()
-        # (batch/sequence, sequence/batch, local_heads * state)
-        #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        out, bias = self.out_proj(y)
-        self._debug(out, None, kwargs.get(BlockKwargs.hidden_dims), kwargs)
+        y = y.transpose(1, 2)[:, : kwargs[BlockKwargs.token_dim].size]
+        # (batch, sequence, local_heads * state)
+        #   -> (local_tokens, hidden)
+        out, bias = self.out_proj(y.squeeze(0))
+        self._debug(out, None, (kwargs.get(BlockKwargs.hidden_token_dim), self._hidden_dim), kwargs)
         return out, bias
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         # TODO: Implement.
         raise NotImplementedError()
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
         if not self._config.cross_document_attention:
             assert (
                 _mamba_varlen_available
             ), f"Varlen mamba requires custom mamba installation from `https://github.com/jxiw/varlen_mamba`"
-            preprocess_for_varlen(
-                kwargs,
-                kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-                return_seq_idx=True,
-                return_position_ids=True,
-            )
+        return {"return_position_index": True, "return_document_index": True}

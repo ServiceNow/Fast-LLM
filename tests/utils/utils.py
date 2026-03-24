@@ -9,11 +9,13 @@ from fast_llm.engine.base_model.config import set_model_names
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
+from fast_llm.functional.triton import triton_available
 from tests.utils.global_variables import TEST_RESULTS_PATH
 
 logger = logging.getLogger(__name__)
 
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+requires_triton = pytest.mark.skipif(not triton_available, reason="Triton is not available")
 
 
 @pytest.fixture(scope="session")

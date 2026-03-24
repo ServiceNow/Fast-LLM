@@ -11,14 +11,14 @@ from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, 
 from fast_llm.utils import Assert
 
 
-class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[ConfigType]):
+class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[ConfigType], torch.nn.Module):
     def __init__(
         self,
         config: ConfigType,
         distributed_config: DistributedConfig,
         *,
         name: str,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
         num_splits: int = 1,
@@ -26,7 +26,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         weight: float = 1.0,
     ):
         super().__init__(config)
-        Assert.in_range(prediction_distance, 0, prediction_heads)
+        Assert.in_range_incl(prediction_distance, 1, prediction_heads)
         self._prediction_distance = prediction_distance
         self._prediction_heads = prediction_heads
         self._name = name
@@ -43,8 +43,14 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
+
+    def get_preprocessing_config(
+        self,
+    ) -> dict[str, typing.Any]:
+        return {}
 
     @property
     def name(self) -> str:
@@ -60,20 +66,10 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
         *,
-        multi_token_format: bool = False,
+        sequence_parallel: bool = True,
     ) -> torch.Tensor | None:
-        # MTP shift
-        if multi_token_format and self._prediction_heads > 1:
-            sequence_first: bool = kwargs[LanguageModelLossKwargs.sequence_first]
-            sequence_q_length = target.size(1 - sequence_first) + 1 - self._prediction_heads
-            target_slice = slice(self._prediction_distance, self._prediction_distance + sequence_q_length)
-            target = target[target_slice] if sequence_first else target[:, target_slice]
-
-        # Flatten the batch and sequence dimensions.
-        target = target.flatten(0, 1)
-
         # Get the local chunk.
-        if self._sequence_parallel:
+        if sequence_parallel and self._sequence_parallel:
             target = split_op(target, self._parallel_dim.group, 0)
 
         # Get the chunk for the current split.
@@ -95,15 +91,24 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(
-            kwargs[LanguageModelLossKwargs.labels], kwargs, split_index, multi_token_format=True
+            kwargs[LanguageModelLossKwargs.labels][self._prediction_distance - 1], kwargs, split_index
         )
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
-        return None if loss_mask is None else self._prepare_target(loss_mask, kwargs, split_index)
+        return (
+            None
+            if loss_mask is None
+            else self._prepare_target(loss_mask[self._prediction_distance - 1], kwargs, split_index)
+        )
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
-        return self._prepare_target(kwargs[f"{reference_model}_logits"], kwargs, split_index)
+        Assert.incl(
+            logits_name := self.module_name.rsplit(".", 2)[0] + f".logits",
+            reference_hidden_states := kwargs[f"reference_{reference_model}_hidden_states"],
+        )
+        # The logits are already sequence-parallel if needed, we don't want to split again.
+        return self._prepare_target(reference_hidden_states[logits_name], kwargs, split_index, sequence_parallel=False)
 
 
 def loss_forward_backward(
@@ -116,6 +121,6 @@ def loss_forward_backward(
             grad = None
         else:
             loss.backward(torch.full_like(loss, grad_output))
-            grad = input_.grad.detach().to(input_.dtype)
+            grad = input_.grad.detach()
 
     return loss, grad

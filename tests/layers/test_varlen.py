@@ -1,12 +1,13 @@
 import pytest
 import torch
 
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
+from fast_llm.data.document.language_model import LanguageModelBatch
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.layers.ssm.gdn import _causal_conv1d_available
@@ -20,14 +21,13 @@ from tests.utils.utils import get_stage
 @pytest.mark.parametrize(
     "config",
     [
-        AttentionConfig(heads=4, head_groups=2, head_size=16, cross_document_attention=False),
+        AttentionConfig(heads=4, head_groups=2, head_size=16),
         pytest.param(
             MambaConfig(
                 d_inner=128,
                 d_xb=64,
                 state_size=16,
                 dt_rank=8,
-                cross_document_attention=False,
             ),
             marks=pytest.mark.skip("Mamba varlen kernel not available"),
         ),
@@ -41,44 +41,38 @@ from tests.utils.utils import get_stage
         ),
     ],
 )
-def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
+@pytest.mark.parametrize("lengths", ([6, 9], [4, 1, 10]))
+def test_mixer_varlen_stacking_equivalence(config: MixerConfig, lengths: list[int]):
     """
     Check that Gated Delta Net forward/backward match with and without packing.
     """
-    hidden_size = 32
-    hidden_dim = TensorDim("hidden", hidden_size)
+    hidden_dim = TensorDim("hidden", hidden_size := 32)
     distributed = Distributed(
         distributed_config := DistributedConfig(compute_dtype=DataType.float16, use_cuda=torch.cuda.is_available())
     )
     mixer = config.get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False)
     stage = get_stage([mixer], distributed)
 
-    batch_size = 2  # cu_seqlens path requires flattened batch
-    seq_len = 15
+    num_tokens = sum(lengths)
 
-    sequence_lengths = [[6, 9], [4, 1, 10]]
     hidden_states = torch.randn(
-        batch_size,
-        seq_len,
+        num_tokens,
         hidden_size,
         device=distributed.device,
         dtype=distributed_config.compute_dtype.torch,
         requires_grad=True,
     )
 
-    kwargs = {
-        BlockKwargs.device: distributed.device,
-        BlockKwargs.sequence_first: False,
-        BlockKwargs.hidden_dims: (hidden_dim,),
-    }
-
-    kwargs_packed = {
-        **kwargs,
-        BlockKwargs.sequence_lengths: sequence_lengths,
-        BlockKwargs.sequence_length: seq_len,
-        BlockKwargs.sequence_q_dim: TensorDim("", seq_len),
-        BlockKwargs.sequence_k_dim: TensorDim("", seq_len),
-    }
+    (model_input_packed,) = LanguageModelBatch(
+        tokens=torch.empty(num_tokens, dtype=torch.int64, device=distributed.device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **mixer.get_preprocessing_config(),
+        )
+    )
+    kwargs_packed = model_input_packed.to_kwargs()
     mixer.preprocess(kwargs_packed)
 
     out_packed, context = stage.forward(hidden_states, kwargs_packed)
@@ -90,21 +84,22 @@ def test_mixer_varlen_stacking_equivalence(config: MixerConfig):
     stage.reset_gradients()
     # Run reference path separately per sequence without varlen packing, then concatenate.
     out_refs = []
-    for i in range(batch_size):
-        for seq in torch.split(hidden_states[i], sequence_lengths[i], dim=0):
-            seq_len_ = len(seq)
-            kwargs_seq = {
-                **kwargs,
-                BlockKwargs.sequence_lengths: [[seq_len_]],
-                BlockKwargs.sequence_length: seq_len_,
-                BlockKwargs.sequence_q_dim: TensorDim("", seq_len_),
-                BlockKwargs.sequence_k_dim: TensorDim("", seq_len_),
-            }
-            mixer.preprocess(kwargs_seq)
-            out, context = stage.forward(seq.unsqueeze(0), kwargs_seq)
-            stage.backward(torch.ones_like(out), context)
-            out_refs.append(out)
-    out_ref = torch.cat(out_refs, dim=1).view_as(out_packed)
+    for length, hidden_states_ in zip(lengths, torch.split(hidden_states, lengths, dim=0), strict=True):
+        (model_input_unpacked,) = LanguageModelBatch(
+            tokens=torch.empty(length, dtype=torch.int64, device=distributed.device), lengths=[length]
+        ).get_model_inputs(
+            LanguageModelBatchPreprocessingConfig(
+                distributed=distributed_config,
+                predicted_tokens=0,
+                **mixer.get_preprocessing_config(),
+            )
+        )
+        kwargs_unpacked = model_input_unpacked.to_kwargs()
+        mixer.preprocess(kwargs_unpacked)
+        out, context = stage.forward(hidden_states_, kwargs_unpacked)
+        stage.backward(torch.ones_like(out), context)
+        out_refs.append(out)
+    out_ref = torch.cat(out_refs, dim=0)
 
     Assert.rms_close_relative(out_packed, out_ref, 1e-3, 1e-4)
 

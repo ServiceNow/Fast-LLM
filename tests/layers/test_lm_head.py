@@ -13,8 +13,7 @@ from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage
 
-SEQUENCE_LENGTH = 200
-BATCH_SIZE = 4
+NUM_TOKENS = 200
 HIDDEN_SIZE = 256
 VOCAB_SIZE = 500
 
@@ -28,7 +27,6 @@ class LMHeadTestConfig:
     logits_scale_factor: float = 1.0
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
-    sequence_first: bool = False
     loss_masking: bool = False
     prediction_heads: int = 1
     tied_embedding_weight: bool = False
@@ -47,6 +45,7 @@ class LMHeadTestConfig:
             "normalization": {"type": "rms_norm"},
             "logits_scale_factor": self.logits_scale_factor,
             "cross_entropy_splits": self.num_splits,
+            "prediction_heads": self.prediction_heads,
         }
         losses = {}
         if self.label_loss is not False:
@@ -69,15 +68,7 @@ class LMHeadTestConfig:
                 "base_model": {
                     "decoder": {"num_blocks": 0},
                     "embeddings": {"vocab_size": VOCAB_SIZE, "full_precision_residual": self.full_precision_residual},
-                    "head": (
-                        head_config
-                        if self.prediction_heads == 1
-                        else {
-                            "type": "multi_token_prediction",
-                            "head": head_config,
-                            "prediction_heads": self.prediction_heads,
-                        }
-                    ),
+                    "head": head_config,
                     "hidden_size": HIDDEN_SIZE,
                     "tied_embedding_weight": self.tied_embedding_weight,
                 },
@@ -88,45 +79,46 @@ class LMHeadTestConfig:
     def get_inputs(self) -> tuple[torch.Tensor, dict[str, typing.Any]]:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         input_ = torch.randn(
-            (
-                (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE)
-                if self.sequence_first
-                else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE)
-            ),
+            (NUM_TOKENS, HIDDEN_SIZE),
             dtype=(torch.float32 if self.full_precision_residual else self.compute_dtype.torch),
             device=device,
             requires_grad=True,
         )
-        label_shape = (
-            (SEQUENCE_LENGTH + self.prediction_heads - 1, BATCH_SIZE)
-            if self.sequence_first
-            else (BATCH_SIZE, SEQUENCE_LENGTH + self.prediction_heads - 1)
-        )
         kwargs: dict[str, typing.Any] = {
-            AttentionKwargs.sequence_first: self.sequence_first,
             AttentionKwargs.grad_output: 1.0,
         }
         if self.loss_masking:
-            kwargs[LanguageModelKwargs.loss_mask] = torch.randint(0, 2, label_shape, dtype=torch.bool, device=device)
+            kwargs[LanguageModelKwargs.loss_mask] = [
+                torch.randint(0, 2, (NUM_TOKENS,), dtype=torch.bool, device=device)
+                for _ in range(self.prediction_heads)
+            ]
         if self.actual_label_loss is not False:
-            labels = torch.randint(
-                0,
-                VOCAB_SIZE,
-                label_shape,
-                dtype=torch.int64,
-                device=device,
-            )
+            labels = [
+                torch.randint(
+                    0,
+                    VOCAB_SIZE,
+                    (NUM_TOKENS,),
+                    dtype=torch.int64,
+                    device=device,
+                )
+                for _ in range(self.prediction_heads)
+            ]
             if LanguageModelKwargs.loss_mask in kwargs:
-                labels = torch.where(kwargs[LanguageModelKwargs.loss_mask], labels, -100)
+                labels = [
+                    torch.where(mask, labels_, -100)
+                    for labels_, mask in zip(labels, kwargs[LanguageModelKwargs.loss_mask], strict=True)
+                ]
             kwargs[LanguageModelKwargs.labels] = labels
 
         if self.distillation_loss is not False:
             assert self.prediction_heads == 1
-            kwargs[f"distillation_logits"] = torch.randn(
-                input_.shape[:-1] + (VOCAB_SIZE,),
-                dtype=input_.dtype,
-                device=device,
-            )
+            kwargs[f"reference_distillation_hidden_states"] = {
+                "head.logits": torch.randn(
+                    input_.shape[:-1] + (VOCAB_SIZE,),
+                    dtype=input_.dtype,
+                    device=device,
+                )
+            }
         return input_, kwargs
 
     def get_reference_outputs(
@@ -153,28 +145,21 @@ class LMHeadTestConfig:
         losses = {}
 
         if self.actual_label_loss is not False:
-            if self.sequence_first:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    head._prediction_distance : head._prediction_distance + logits.size(0)
-                ]
-            else:
-                labels = kwargs[LanguageModelKwargs.labels][
-                    :, head._prediction_distance : head._prediction_distance + logits.size(1)
-                ]
-            label_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2), labels.flatten(), reduction="none"
-            ).mean()
+            labels = kwargs[LanguageModelKwargs.labels][head._prediction_distance - 1]
+            label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
             losses["label"] = label_loss.detach()
             total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
-                logits.flatten(0, -2),
-                torch.softmax(kwargs[f"distillation_logits"].flatten(0, -2), -1),
+                logits,
+                torch.softmax(kwargs[f"reference_distillation_hidden_states"]["head.logits"], -1),
                 reduction="none",
             )
             if LanguageModelKwargs.loss_mask in kwargs:
-                distillation_loss = distillation_loss * kwargs[LanguageModelKwargs.loss_mask].flatten()
+                distillation_loss = (
+                    distillation_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
+                )
             distillation_loss = distillation_loss.mean()
             losses["distillation"] = distillation_loss.detach()
             total_loss = total_loss + float(self.distillation_loss) * distillation_loss
@@ -182,7 +167,7 @@ class LMHeadTestConfig:
         if self.z_loss is not False:
             z_loss = torch.logsumexp(logits, dim=-1) ** 2
             if LanguageModelKwargs.loss_mask in kwargs:
-                z_loss = z_loss * kwargs[LanguageModelKwargs.loss_mask]
+                z_loss = z_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
             z_loss = z_loss.mean()
             losses["z_loss"] = z_loss.detach()
             total_loss = total_loss + float(self.z_loss) * z_loss
@@ -194,7 +179,7 @@ class LMHeadTestConfig:
         else:
             losses = {LM_HEAD_LOSS_NAME: total_loss.detach()}
 
-        if head._prediction_distance > 0:
+        if head._prediction_distance > 1:
             losses = {f"{name}_{head._prediction_distance}": loss for name, loss in losses.items()}
 
         return total_loss.detach(), input_.grad, logit_weight.grad, normalization_weight.grad, losses
@@ -220,7 +205,6 @@ def _add_configs(base_name: str, **kwargs):
 _add_configs("default")
 _add_configs("bfloat16", compute_dtype=DataType.bfloat16)
 _add_configs("full_precision_residual", full_precision_residual=True)
-_add_configs("sequence_first", sequence_first=True)
 _add_configs("logit_scaling", logits_scale_factor=5.0)
 _add_configs("tied_embedding_weight", tied_embedding_weight=True)
 _add_configs("multi_token_prediction", prediction_heads=2)
@@ -240,7 +224,7 @@ _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distill
         for _lm_head_test_config in _lm_head_test_configs
     ],
 )
-def test_lm_head(test_config):
+def test_lm_head(test_config: LMHeadTestConfig):
     model_config = test_config.get_config()
     model, distributed = get_base_model(model_config)
     input_, kwargs = test_config.get_inputs()
@@ -255,11 +239,12 @@ def test_lm_head(test_config):
         else None
     )
 
-    for prediction_distance, head in enumerate(model.head.heads):
+    for prediction_distance in range(1, model_config.base_model.head.prediction_heads + 1):
         # Prepare the LM head
+        head = model.head if prediction_distance == 1 else model.multi_token_prediction.heads[prediction_distance - 2]
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
-        is_duplicate = test_config.tied_embedding_weight or prediction_distance > 0
+        is_duplicate = test_config.tied_embedding_weight or prediction_distance > 1
         stage = get_stage(
             [head],
             distributed,
@@ -273,7 +258,7 @@ def test_lm_head(test_config):
 
         ref_total_loss, ref_input_grad, ref_logit_weight_grad, ref_normalization_weight_grad, ref_losses = (
             test_config.get_reference_outputs(
-                head, input_, kwargs, tied_logit_weight if prediction_distance > 0 else None
+                head, input_, kwargs, tied_logit_weight if prediction_distance > 1 else None
             )
         )
 

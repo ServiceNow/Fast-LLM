@@ -2,7 +2,7 @@ import os
 
 import torch
 
-from fast_llm.functional.triton import TritonConfig, tl, tl_constexpr, triton, triton_autotune, triton_jit
+from fast_llm.functional.triton import TritonConfig, tl, tl_arange, tl_constexpr, triton, triton_autotune, triton_jit
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.utils import Assert, div
 
@@ -99,9 +99,9 @@ def dense_matmul_kernel(
     col_offset = pid_col * block_size_col
 
     # Pointers
-    row_range = tl.arange(0, block_size_row)[:, None] + row_offset
-    col_range = tl.arange(0, block_size_col)[None, :] + col_offset
-    inner_range = tl.arange(0, block_size_inner)
+    row_range = tl_arange(0, block_size_row)[:, None] + row_offset
+    col_range = tl_arange(0, block_size_col)[None, :] + col_offset
+    inner_range = tl_arange(0, block_size_inner)
     lhs_ptr += row_range * lhs_stride_row + inner_range[None, :] * lhs_stride_inner
     rhs_ptr += inner_range[:, None] * rhs_stride_inner + col_range * rhs_stride_col
     out_ptr += row_range * out_stride_row + col_range * out_stride_col
@@ -228,7 +228,7 @@ def output_sparse_matmul_kernel(
     # Grid offsets
     row_offset = pid_row * block_size_row
     col_sparse_offset = pid_col * block_size_col
-    sparse_range = tl.arange(0, padded_sparse_dim)
+    sparse_range = tl_arange(0, padded_sparse_dim)
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
     if sparse_index == sparse_dim:
@@ -236,9 +236,9 @@ def output_sparse_matmul_kernel(
     col_dense_offset = col_sparse_offset + sparse_index * col_sparse_dim
 
     # Pointers
-    row_range = tl.arange(0, block_size_row)[:, None]
-    col_range = tl.arange(0, block_size_col)[None, :]
-    inner_range = tl.arange(0, block_size_inner)
+    row_range = tl_arange(0, block_size_row)[:, None]
+    col_range = tl_arange(0, block_size_col)[None, :]
+    inner_range = tl_arange(0, block_size_inner)
     lhs_ptr += (row_offset + row_range) * lhs_stride_row + inner_range[None, :] * lhs_stride_inner
     rhs_ptr += inner_range[:, None] * rhs_stride_inner + (col_dense_offset + col_range) * rhs_stride_col
     out_ptr += (row_offset + row_range) * out_stride_row + (col_sparse_offset + col_range) * out_stride_col
@@ -351,7 +351,7 @@ def input_inner_sparse_matmul_kernel(
     # Grid offsets
     row_offset = pid_row * block_size_row
 
-    sparse_range = tl.arange(0, padded_sparse_dim)
+    sparse_range = tl_arange(0, padded_sparse_dim)
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
     if sparse_index == sparse_dim:
@@ -360,9 +360,9 @@ def input_inner_sparse_matmul_kernel(
     col_offset = pid_col * block_size_col
 
     # Pointers
-    row_range = tl.arange(0, block_size_row)[:, None]
-    col_range = tl.arange(0, block_size_col)[None, :]
-    inner_range = tl.arange(0, block_size_inner)
+    row_range = tl_arange(0, block_size_row)[:, None]
+    col_range = tl_arange(0, block_size_col)[None, :]
+    inner_range = tl_arange(0, block_size_inner)
     lhs_ptr += (row_offset + row_range) * lhs_stride_row + inner_range[None, :] * lhs_stride_inner
     rhs_ptr += (inner_dense_offset + inner_range[:, None]) * rhs_stride_inner + (
         col_offset + col_range
@@ -485,9 +485,9 @@ def input_row_sparse_matmul_kernel(
     inner_offset = (inner_begin // block_size_inner) * block_size_inner
 
     # Pointers
-    row_range = tl.arange(0, block_size_row)[:, None]
-    col_range = tl.arange(0, block_size_col)[None, :]
-    inner_range = tl.arange(0, block_size_inner) + inner_offset
+    row_range = tl_arange(0, block_size_row)[:, None]
+    col_range = tl_arange(0, block_size_col)[None, :]
+    inner_range = tl_arange(0, block_size_inner) + inner_offset
     lhs_ptr += (row_sparse_offset + row_range) * lhs_stride_row
     rhs_ptr += (col_offset + col_range) * rhs_stride_col
     out_ptr += (row_dense_offset + row_range) * out_stride_row + (col_offset + col_range) * out_stride_col

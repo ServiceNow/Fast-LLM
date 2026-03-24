@@ -1,7 +1,7 @@
-import abc
 import dataclasses
 import functools
 import logging
+import math
 import typing
 import warnings
 
@@ -10,25 +10,30 @@ import torch
 import torch.utils
 import torch.utils.data
 
+from fast_llm.config import Configurable
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
-from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
-from fast_llm.tensor import TensorMeta
+from fast_llm.engine.schedule.config import ScheduleConfig, StepType
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass()
+@dataclasses.dataclass(kw_only=True)
 class Step:
-    config: BatchConfig
     # The step type (forward or backward).
     type_: StepType
     # Index of the stage to be processed.
     stage: int
-    # Data index (combines micro-batch and micro-sequence)
-    data_index: int
+    # Micro-sequence index
+    micro_batch_split: int
+    # Micro-batch index
+    depth_first_micro_batch: int
+    breadth_first_micro_batch: int
+    # Combined index (micro-batch and micro-sequence)
+    index: int
     pipeline_rank: int = 0
     # Estimated relative duration of the step.
     duration: float = 1.0
@@ -72,27 +77,11 @@ class Step:
     meta_kwargs: dict | None = None
 
     @property
-    def micro_batch_split(self) -> int:
-        return self.data_index % self.config.micro_batch_splits
-
-    @property
-    def micro_batch(self) -> int:
-        return self.data_index // self.config.micro_batch_splits
-
-    @property
-    def depth_first_micro_batch(self) -> int:
-        return self.micro_batch % self.config.depth_first_micro_batches
-
-    @property
-    def breadth_first_micro_batch(self) -> int:
-        return self.micro_batch // self.config.depth_first_micro_batches
-
-    @property
     def map_index(self) -> tuple[StepType, int, int]:
         return (
             self.type_,
             self.stage,
-            self.data_index,
+            self.index,
         )
 
     def __repr__(self) -> str:
@@ -117,30 +106,32 @@ class Step:
         return self.stage if self.type_ == StepType.forward else 2 * num_stages - 1 - self.stage
 
 
-class Schedule(abc.ABC):
+class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def __init__(
         self,
+        config: ConfigType,
+        *,
         multi_stage: MultiStageModel,
-        batch_config: BatchConfig,
-        schedule_config: ScheduleConfig,
+        batch_meta: list[ModelInput],
         distributed_config: DistributedConfig,
         phase: PhaseType,
     ):
+        super().__init__(config)
         self._multi_stage = multi_stage
-        self._batch_config = batch_config
-        self._schedule_config = schedule_config
         self._distributed_config = distributed_config
         self._num_stages = len(self._multi_stage.stages)
         self._phase = phase
         self._is_training = self._phase.is_training
 
-        if self._batch_config.num_inputs < self._distributed_config.pipeline_parallel:
+        if self._config.num_inputs < self._distributed_config.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
-        self._preprocessed_meta = self._multi_stage.base_model.preprocess_meta(
-            self._batch_config,
+        self._preprocessed_meta = self._multi_stage.base_model.preprocess_batch(
+            batch_meta,
             phase=self._phase,
+            iteration=0,
+            device=None,
         )
 
         self._steps, self._first_grad_stage = self._create_steps()
@@ -155,7 +146,7 @@ class Schedule(abc.ABC):
         self._setup_throttle_steps()
         self._setup_metas()
 
-        if self._schedule_config.debug_schedule:
+        if self._config.debug_schedule:
             logger.info(f"{self._phase.value} schedule:\n{self._steps}")
 
     @property
@@ -163,12 +154,8 @@ class Schedule(abc.ABC):
         return self._phase
 
     @property
-    def batch_config(self) -> BatchConfig:
-        return self._batch_config
-
-    @property
-    def preprocessed_meta(self) -> list[tuple[TensorMeta, dict]]:
-        return self._preprocessed_meta
+    def samples_per_batch(self) -> int:
+        return self._config.sequential_micro_batches * self._distributed_config.batch_data_parallel
 
     def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
@@ -198,9 +185,9 @@ class Schedule(abc.ABC):
         for i, step in enumerate(self._steps):
             Assert.in_range(step.stage, 0, self._num_stages)
             Assert.in_range(
-                step.data_index,
+                step.index,
                 0,
-                self._batch_config.sequential_micro_batches * self._batch_config.micro_batch_splits,
+                self._config.num_inputs,
             )
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
@@ -216,7 +203,7 @@ class Schedule(abc.ABC):
         Assert.custom(all, self._device_steps)
         # Consistency checks
         step_map = self._step_map.copy()
-        for data_index in range(self._batch_config.num_inputs):
+        for data_index in range(self._config.num_inputs):
             for type_ in (StepType.forward, StepType.backward):
                 for stage in range(0 if type_ == StepType.forward else self._first_grad_stage, self._num_stages):
                     assert (
@@ -281,7 +268,7 @@ class Schedule(abc.ABC):
             for step in device_steps:
                 buffer_index = weight_buffer_indices[step.stage]
                 if buffer_contents.get(buffer_index) != step.stage:
-                    if self._schedule_config.data_overlap and self._distributed_config.use_cuda:
+                    if self._config.data_overlap and self._distributed_config.use_cuda:
                         step.restore_step = device_steps[buffer_last_used.get(buffer_index, -1) + 1]
                         step.restore_event = torch.cuda.Event()
                     else:
@@ -378,7 +365,7 @@ class Schedule(abc.ABC):
                     launch_step.recv_launch.append(recv_step)
                     send_step.send_to = launch_step
                     recv_step.recv_step = launch_step
-                    if self._schedule_config.pipeline_overlap and self._distributed_config.use_cuda:
+                    if self._config.pipeline_overlap and self._distributed_config.use_cuda:
                         recv_step.recv_event = torch.cuda.Event()
 
     def _validate_send_recv_steps(self) -> None:
@@ -449,12 +436,12 @@ class Schedule(abc.ABC):
             raise RuntimeError(f"Cannot find valid timeline for {self}, \nStatuses:{msg}")
 
     def _setup_throttle_steps(self) -> None:
-        if not self._schedule_config.throttle_cpu or not self._distributed_config.use_cuda:
+        if not self._config.throttle_cpu or not self._distributed_config.use_cuda:
             return
         for device_steps in self._device_steps:
             for i, step in enumerate(device_steps):
-                if i >= self._schedule_config.throttle_cpu_delay and i % self._schedule_config.throttle_cpu_rate == 0:
-                    throttle_step = device_steps[i - self._schedule_config.throttle_cpu_delay]
+                if i >= self._config.throttle_cpu_delay and i % self._config.throttle_cpu_rate == 0:
+                    throttle_step = device_steps[i - self._config.throttle_cpu_delay]
                     throttle_step.throttle_event = torch.cuda.Event()
                     step.throttle_step = throttle_step
 
@@ -471,17 +458,6 @@ class Schedule(abc.ABC):
                     step.next_step.meta_input = step.meta_output
                     step.next_step.meta_kwargs = step.meta_kwargs
 
-    def get_data_index(self, micro_batch: int, micro_batch_split: int) -> int:
-        return micro_batch * self._batch_config.micro_batch_splits + micro_batch_split
-
-    def get_data_index_split(
-        self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_batch_split: int
-    ) -> int:
-        return self.get_data_index(
-            breadth_first_micro_batch * self._batch_config.depth_first_micro_batches + depth_first_micro_batch,
-            micro_batch_split,
-        )
-
     def _create_steps(self) -> tuple[list[Step], int]:
         steps = []
         if self._is_training:
@@ -492,31 +468,39 @@ class Schedule(abc.ABC):
                 first_grad_stage += 1
         else:
             first_grad_stage = self._num_stages
-        for depth_first_micro_batch in range(self._batch_config.depth_first_micro_batches):
+        for depth_first_micro_batch in range(self._config.depth_first_micro_batches):
             for stage in range(self._num_stages):
-                for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                    for micro_batch_split in range(self._batch_config.micro_batch_splits):
+                for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
+                    for micro_batch_split in range(self._config.micro_batch_splits):
+                        micro_batch = (
+                            breadth_first_micro_batch * self._config.depth_first_micro_batches
+                            + depth_first_micro_batch
+                        )
                         steps.append(
                             Step(
-                                config=self._batch_config,
                                 stage=stage,
-                                data_index=self.get_data_index_split(
-                                    breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
-                                ),
+                                index=micro_batch * self._config.micro_batch_splits + micro_batch_split,
+                                depth_first_micro_batch=depth_first_micro_batch,
+                                breadth_first_micro_batch=breadth_first_micro_batch,
+                                micro_batch_split=micro_batch_split,
                                 type_=StepType.forward,
                             )
                         )
             if self._is_training:
                 for stage in reversed(range(first_grad_stage, self._num_stages)):
-                    for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                        for micro_batch_split in reversed(range(self._batch_config.micro_batch_splits)):
+                    for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
+                        for micro_batch_split in reversed(range(self._config.micro_batch_splits)):
+                            micro_batch = (
+                                breadth_first_micro_batch * self._config.depth_first_micro_batches
+                                + depth_first_micro_batch
+                            )
                             steps.append(
                                 Step(
-                                    config=self._batch_config,
                                     stage=stage,
-                                    data_index=self.get_data_index_split(
-                                        breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
-                                    ),
+                                    index=micro_batch * self._config.micro_batch_splits + micro_batch_split,
+                                    depth_first_micro_batch=depth_first_micro_batch,
+                                    breadth_first_micro_batch=breadth_first_micro_batch,
+                                    micro_batch_split=micro_batch_split,
                                     type_=StepType.backward,
                                 )
                             )
@@ -548,3 +532,10 @@ class Schedule(abc.ABC):
     @functools.cached_property
     def compute_usage(self) -> tuple[int | None, int | None]:
         return self.get_compute_usage(True, False), self.get_compute_usage(True, True)
+
+    def get_compute_metrics(self, time_per_iteration: float) -> dict[str, float]:
+        model_compute, hardware_compute = self.compute_usage
+        return {
+            "model_tflops": math.nan if model_compute is None else model_compute / time_per_iteration,
+            "hardware_tflops": math.nan if hardware_compute is None else hardware_compute / time_per_iteration,
+        }

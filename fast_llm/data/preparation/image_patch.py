@@ -4,7 +4,6 @@ import math
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.preprocessing.abstract import PreprocessingConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -13,8 +12,8 @@ if typing.TYPE_CHECKING:
     import torch
 
 
-@config_class(dynamic_type={PreprocessingConfig: "image_patch"})
-class ImagePatchConfig(PreprocessingConfig):
+@config_class()
+class ImagePreparationConfig(Config):
     """
     Configuration for the tokenizer.
     The tokenizer is needed for FIM and dataset preparation.
@@ -34,6 +33,7 @@ class ImagePatchConfig(PreprocessingConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: These are unspecified in the model.
     do_resize: bool = Field(default=True, desc="Whether to resize the image.")
     max_image_height: int = Field(
         default=1024,
@@ -73,19 +73,6 @@ class ImagePatchConfig(PreprocessingConfig):
             )
             default.pop("image_format")
         return super()._from_dict(default, strict)
-
-    def check_compatibility(self, preprocessing: typing.Self) -> None:
-        Assert.custom(isinstance, preprocessing, ImagePatchConfig)
-        Assert.eq(self.height, preprocessing.height)
-        Assert.eq(self.width, preprocessing.width)
-        Assert.eq(self.do_resize, preprocessing.do_resize)
-        Assert.leq(self.max_image_height, preprocessing.max_image_height)
-        Assert.leq(self.max_image_width, preprocessing.max_image_width)
-        # None is used in the trainer to mark unknown value, so we can't do an equality check. TODO: Distinguish.
-        if preprocessing.image_break_token is not None:
-            Assert.eq(self.image_break_token, preprocessing.image_break_token)
-        if preprocessing.image_end_token is not None:
-            Assert.eq(self.image_end_token, preprocessing.image_end_token)
 
     @property
     def num_channels(self) -> int:
@@ -247,16 +234,3 @@ class ImagePatchConfig(PreprocessingConfig):
         return torchvision_transforms.functional.resize(
             image, size=(target_height, target_width), interpolation=torchvision_transforms.InterpolationMode.BICUBIC
         )
-
-
-@config_class()
-class ImageNormalizationConfig(Config):
-    scale: float = Field(default=255.0)
-    # Default values from OpenAI Clip.
-    mean: tuple[float, float, float] = Field(default=(0.48145466, 0.4578275, 0.40821073))
-    std: tuple[float, float, float] = Field(default=(0.26862954, 0.26130258, 0.27577711))
-
-    def normalize(self, image: "torch.Tensor") -> "torch.Tensor":
-        import torchvision.transforms.v2 as torchvision_transforms
-
-        return torchvision_transforms.functional.normalize(image / self.scale, list(self.mean), list(self.std))

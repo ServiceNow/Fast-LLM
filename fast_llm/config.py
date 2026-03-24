@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _AUTO_VALIDATE = True
 
 MISSING = Tag("<MISSING>")
-DEFAULT = Tag("<DEFAULT>")
+# DEFAULT = Tag("<DEFAULT>")
 
 
 class NoAutoValidate:
@@ -425,12 +425,12 @@ class Config(metaclass=ConfigMeta):
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 value = getattr(self, name)
-                if isinstance(value, Tag):
-                    Assert.is_(value, DEFAULT)
-                    # Replace the value with its default.
-                    # We still need to validate because some fields have invalid defaults.
-                    # TODO: Improve (still needed with new config update format? Do earlier to allow implicit defaults?)
-                    value = field.default
+                # if isinstance(value, Tag):
+                #    Assert.is_(value, DEFAULT)
+                #    # Replace the value with its default.
+                #    # We still need to validate because some fields have invalid defaults.
+                #    # TODO: Improve (still needed with new config update format? Do earlier to allow implicit defaults?)
+                #    value = field.default
                 new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
                 setattr(self, name, new_value)
         for name in getattr(self, "_unknown_fields", {}):
@@ -781,7 +781,15 @@ class Config(metaclass=ConfigMeta):
                     continue
                 # Check for nested configs to instantiate.
                 try:
-                    value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                    value = default.pop(name, MISSING)
+                    # Skip fields for which we want to use the provided default.
+                    # This will prevent unwanted config instantiation in union fields with non-config defaults,
+                    # For example optional config fields.
+                    if value is MISSING and (
+                        field.default is not dataclasses.MISSING or field.default_factory is not dataclasses.MISSING
+                    ):
+                        continue
+                    value = cls._from_dict_nested(value, field.type, strict)
                     if value is not MISSING:
                         out_arg_dict[name] = value
                 except FieldTypeError as e:
@@ -801,7 +809,6 @@ class Config(metaclass=ConfigMeta):
         if type_ in (typing.Any, types.NoneType):
             pass
         elif isinstance(type_, types.UnionType):
-            # Takes care of Optional too
             value = cls._from_dict_union(value, type_, strict)
         elif hasattr(type_, "__origin__"):
             # TODO: Improve error messages for nested entries.

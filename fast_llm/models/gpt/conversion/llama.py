@@ -19,7 +19,11 @@ from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockS
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.language_model.config import LanguageModelEmbeddingsConfig, LanguageModelHeadConfig
+from fast_llm.layers.language_model.config import (
+    LanguageModelConfig,
+    LanguageModelEmbeddingsConfig,
+    LanguageModelHeadConfig,
+)
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.model import GPTModel
@@ -486,18 +490,17 @@ class LlamaHeadConverter:
     @classmethod
     def get_converters(
         cls,
-        config: LanguageModelHeadConfig,
+        config: LanguageModelConfig,
         exported_config: dict,
-        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
         return [
             *cls.normalization_converter_class.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.final_norm",
+                config.head.normalization,
+                f"head.final_norm",
                 f"model.norm",
             ),
             get_parameter_converter(
-                f"{fast_llm_prefix}.output_weights",
+                f"head.output_weights",
                 "lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
                 drop_on_export=exported_config["tie_word_embeddings"],
@@ -539,7 +542,7 @@ class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
         return [
             *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
             *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config.head, exported_config, "head"),
+            *cls.head_converter_class.get_converters(config, exported_config),
         ]
 
 

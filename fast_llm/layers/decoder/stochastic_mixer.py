@@ -16,7 +16,7 @@ from fast_llm.layers.decoder.config import (
 )
 from fast_llm.logging import get_model_debug_level
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,11 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
             )
 
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        for mixer in self.mixers.values():
+            mixer.get_preprocessing_config()
+        return safe_merge_dicts(*(mixer.get_preprocessing_config() for mixer in self.mixers.values()))
 
     def _sample_allocation(self, num_layers: int, generator: torch.Generator) -> list[int]:
         """

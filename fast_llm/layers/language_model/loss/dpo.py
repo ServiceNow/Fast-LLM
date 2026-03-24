@@ -9,26 +9,30 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss, loss_for
 class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModelLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._num_splits > 1:
             raise NotImplementedError()
-        if self._prediction_distance > 0:
+        if self._prediction_distance > 1:
             raise NotImplementedError()
         if self._vocab_parallel:
             raise NotImplementedError()
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"use_preference_spans": True}
 
     def forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
         split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
 
         if self._get_loss_mask(kwargs, split_index) is not None:
             raise NotImplementedError()
 
-        return loss_forward_backward(
+        loss, grad = loss_forward_backward(
             self._get_grad_output(kwargs),
             dpo_loss,
             logits,
@@ -38,6 +42,13 @@ class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModel
             kwargs[LanguageModelLossKwargs.rejected_spans],
             self._config.beta,
         )
+
+        if grad is not None:
+            if grad_logits is None:
+                grad_logits = grad
+            else:
+                grad_logits.add_(grad)
+        return loss, grad_logits
 
 
 def dpo_loss(
@@ -49,28 +60,24 @@ def dpo_loss(
     beta: float = 1.0,
     logits_scale_factor: float = 1.0,
 ) -> torch.Tensor:
+    logits = logits.float()
 
     if logits_scale_factor != 1.0:
         # TODO: Make more efficient.
         logits = logits * logits_scale_factor
 
-    policy_log_probabilities = _get_target_log_probabilities(logits, targets)
+    policy_log_probabilities = get_target_log_probabilities(logits, targets)
     policy_log_ratios = _get_target_log_probability_for_spans(
         policy_log_probabilities, chosen_spans
     ) - _get_target_log_probability_for_spans(policy_log_probabilities, rejected_spans)
 
-    reference_log_probabilities = _get_target_log_probabilities(reference_model_logits.float().detach(), targets)
+    reference_log_probabilities = get_target_log_probabilities(reference_model_logits.float().detach(), targets)
     reference_log_ratios = _get_target_log_probability_for_spans(
         reference_log_probabilities, chosen_spans
     ) - _get_target_log_probability_for_spans(reference_log_probabilities, rejected_spans)
 
-    # TODO: ====== Shouldn't the sigmoid be computed independently for each document? =======
+    # TODO: Shouldn't the sigmoid be computed independently for each document?
     return -torch.nn.functional.logsigmoid(beta * (policy_log_ratios - reference_log_ratios)).mean()
-
-
-def _get_target_log_probabilities(logits: torch.Tensor, targets: torch.Tensor):
-    # Gather log probabilities corresponding to the target tokens
-    return torch.nn.functional.log_softmax(logits, dim=-1).gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
 
 
 def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans: list[list[tuple[int, int]]]):
@@ -79,3 +86,11 @@ def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans
         for sample_index, sample_spans in enumerate(spans)
         for begin, end in sample_spans
     )
+
+
+@torch.compile
+def get_target_log_probabilities(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    # Avoid negative (masked) labels.
+    targets = targets * (targets >= 0)
+    # Gather log probabilities corresponding to the target tokens
+    return torch.nn.functional.log_softmax(logits, dim=-1).gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)

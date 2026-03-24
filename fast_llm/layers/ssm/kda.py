@@ -2,7 +2,6 @@ import logging
 import typing
 
 import torch
-from einops import rearrange, repeat
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
@@ -10,8 +9,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDi
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import KimiDeltaAttentionConfig
@@ -26,16 +23,6 @@ try:
     _kda_available = torch.cuda.is_available()
 except (ImportError, RuntimeError):
     _kda_available = False
-
-
-def index_first_axis(x, indices):
-    other_shape = x.shape[1:]
-    second_dim = other_shape.numel()
-    return torch.gather(
-        rearrange(x, "b ... -> b (...)"),
-        0,
-        repeat(indices, "z -> z d", d=second_dim),
-    ).reshape(-1, *other_shape)
 
 
 class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[ConfigType]):
@@ -201,24 +188,6 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             peft=self._peft,
         )
 
-    def _apply_conv(self, tensor: torch.Tensor, conv: torch.nn.Module, seq_idx: torch.Tensor = None) -> torch.Tensor:
-        """
-        Applies convolution.
-        Note, in the reference code they use Short Convolution from flash-linear-attention/fla/modules/convolution.py, but that one just uses causal_conv1d anyways.
-        Varlen:
-        - seq. idx are only suppored in channel last layout, i.e. no transpose
-        """
-        tensor = rearrange(tensor, "b t d -> b d t")
-        # tensor = tensor.transpose(1, 2).contiguous() if seq_idx is None else tensor.transpose(1, 2)
-        tensor = conv(tensor, seq_idx=seq_idx)
-        return tensor.transpose(1, 2).contiguous()
-
-    def _reshape_heads(self, tensor: torch.Tensor) -> torch.Tensor:
-        tensor = tensor.contiguous()
-        # since head_dim is the same vor k,q and v
-        # same as rearrange(v, '... (h d) -> ... h d', d=self.head_dim)
-        return tensor.view(tensor.shape[0], tensor.shape[1], self._local_heads, self._config.head_dim)
-
     def _forward(
         self,
         input_: torch.Tensor,
@@ -227,88 +196,57 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
-        Same as in gdn, the idea is to always do forward pass in a packed way, whcih is required for varlen support.
+        Same as in gdn, the idea is to always do forward pass in a packed way, which is required for varlen support.
         """
-        sequence_first = kwargs[BlockKwargs.sequence_first]
-        hidden_states = input_
 
-        # TODO: can be made more efficeint by rearranging hidden states directly and only once
-        residual_dtype = hidden_states.dtype
+        # TODO: Merge q,k,v into a single tensor?
+        q = self.q_proj(input_)
+        k = self.k_proj(input_)
+        v = self.v_proj(input_)
 
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        document_index = kwargs[MixerKwargs.document_index_q].unsqueeze(0)
+        lengths = kwargs[MixerKwargs.lengths]
+        # Move sequence dim to last so the convolution acts on it, add pretend batch dimension.
+        q = (
+            self.q_conv(q.unsqueeze(0).transpose(1, 2), document_index=document_index, lengths=lengths)
+            .transpose(1, 2)
+            .unflatten(-1, (self._local_heads, self._config.head_dim))
+        )
+        k = (
+            self.k_conv(k.unsqueeze(0).transpose(1, 2), document_index=document_index, lengths=lengths)
+            .transpose(1, 2)
+            .unflatten(-1, (self._local_heads, self._config.head_dim))
+        )
+        v = (
+            self.v_conv(v.unsqueeze(0).transpose(1, 2), document_index=document_index, lengths=lengths)
+            .transpose(1, 2)
+            .unflatten(-1, (self._local_heads, self._config.head_dim))
+        )
 
-        if sequence_first:
-            q = q.transpose(0, 1)
-            k = k.transpose(0, 1)
-            v = v.transpose(0, 1)
-
-        batch_size, sequence_length, _ = q.size()
-        q = rearrange(q, "b s ... -> (b s) ...").unsqueeze(0)
-        k = rearrange(k, "b s ... -> (b s) ...").unsqueeze(0)
-        v = rearrange(v, "b s ... -> (b s) ...").unsqueeze(0)
-
-        # because we use cu_seqlens, chunk_kda requires batch size to be 1 (flatten, see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/kda/chunk.py#L303)
-        # similarly to ShortConvolution from fla we already operate on flattened batches here (https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914)
-        seq_idx = kwargs[MixerKwargs.seq_idx].unsqueeze(0)
-        q = self._apply_conv(q, self.q_conv, seq_idx)
-        k = self._apply_conv(k, self.k_conv, seq_idx)
-        v = self._apply_conv(v, self.v_conv, seq_idx)
-
-        g_kernel = self.f_b_proj(self.f_a_proj(hidden_states))
-        if sequence_first:
-            g_kernel = g_kernel.transpose(0, 1)
-        g_kernel = self._reshape_heads(g_kernel)
-        g_kernel = rearrange(g_kernel, "b s ... -> (b s) ...").unsqueeze(0)
-
+        g_kernel = (
+            self.f_b_proj(self.f_a_proj(input_)).unsqueeze(0).unflatten(-1, (self._local_heads, self._config.head_dim))
+        )
         g_kernel = fused_kda_gate(g_kernel, self.A_log.float(), dt_bias=self.dt_bias)
 
-        beta = torch.sigmoid(self.beta_proj(hidden_states).float())
-        q = self._reshape_heads(q)
-        k = self._reshape_heads(k)
-        v = self._reshape_heads(v)
-        if sequence_first:
-            beta = beta.transpose(0, 1)
-        beta = rearrange(beta, "b s h -> (b s) h").unsqueeze(0)
-
-        # need to install nightly triton for this to work on H100, see https://github.com/fla-org/flash-linear-attention/blob/main/FAQs.md
-        # cu_seqlens requires batch ssize to be 1, i.e. flattened bacthes
-        attn_out, _ = chunk_kda(
+        out, _ = chunk_kda(
             q=q,
             k=k,
             v=v,
             g=g_kernel,
-            beta=beta,
+            beta=torch.sigmoid(self.beta_proj(input_).float()).unsqueeze(0),
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
             cu_seqlens=kwargs[MixerKwargs.cu_seqlens_q],
         )
+        out = out.to(input_.dtype).squeeze(0)
 
-        attn_out = attn_out.to(residual_dtype)
-
-        g_out = self.g_b_proj(self.g_a_proj(hidden_states))  # bs x seq x n_local_heads x head dim
-        g_out = self._reshape_heads(g_out)
-        if sequence_first:
-            g_out = g_out.transpose(0, 1)
-
-        attn_out = rearrange(attn_out.squeeze(0), "(b s) h d -> b s h d", b=batch_size, s=sequence_length)
-        attn_out = self.norm(attn_out, g_out)
-        attn_out = rearrange(attn_out, "b s h d -> b s (h d)")
-        if sequence_first:
-            attn_out = attn_out.transpose(0, 1)
-        attn_out = self.o_proj(attn_out)
-
-        return attn_out
+        g_out = self.g_b_proj(self.g_a_proj(input_))
+        out = self.norm(out, g_out.view_as(out))
+        return self.o_proj(out.flatten(-2))
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        preprocess_for_varlen(
-            kwargs,
-            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-            return_cu_seqlens=True,
-            return_seq_idx=True,
-        )
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_cumulative_sequence_lengths": True, "return_document_index": True}
