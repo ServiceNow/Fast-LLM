@@ -1083,7 +1083,8 @@ def set_nested_dict_value[KeyType, ValueType](
             isinstance(d.get(key), (list, set, tuple))
             and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in d[key])
         ):
-            raise ValueError("Update not supported for nested lists.")
+            # Nested lists cannot be meaningfully merged, so replace entirely.
+            d[key] = value
         else:
             d[key] = value
     else:
