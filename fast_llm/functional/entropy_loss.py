@@ -293,7 +293,9 @@ def fused_entropy_loss_forward_backward(
     It is an improvement over the pytorch implementation because of the fused casting, both in speed and memory,
     but still suboptimal because it needs multiple kernels.
     """
-    grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     if target_format == TargetFormat.labels:
         assert entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl)
         assert loss_mask is None

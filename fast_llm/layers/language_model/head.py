@@ -221,7 +221,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     total_losses.append(total_loss_)
                 # TODO: Avoid copy with explicit out argument.
                 input_grad_.copy_(grad_)
-            total_loss = sum(total_losses) / self._config.cross_entropy_splits if total_losses else None
+            total_loss = torch.stack(total_losses).sum() if total_losses else None
 
         # TODO: ====== Drop return value, treat as normal loss ======
         #  Return value only needed because stage expects a return tensor

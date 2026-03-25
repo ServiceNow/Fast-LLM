@@ -115,20 +115,13 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def _get_grad_output(self, kwargs: dict[str, typing.Any]) -> float | None:
         grad_output = kwargs.get(LanguageModelKwargs.grad_output)
-        if grad_output is not None:
-            grad_output = (
-                grad_output
-                * self._weight
-                / (self._parallel_dim.size if self._sequence_parallel else 1)
-                / self._num_splits
-            )
-        return grad_output
+        return None if grad_output is None else grad_output * self._weight
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], split_index)
 
     def _get_label_count(self, kwargs: dict[str, typing.Any]):
-        return kwargs[LanguageModelKwargs.label_counts][self._prediction_distance - 1]
+        return kwargs[LanguageModelKwargs.num_labels_in_batch][self._prediction_distance - 1]
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)

@@ -151,9 +151,9 @@ _DISTRIBUTED_REDUCTION_MAP: dict[ReductionType, "torch.distributed.ReduceOp.RedO
 def _set_distributed_reduction_map() -> None:
     import torch
 
-    global _TORCH_REDUCTION_MAP
+    global _DISTRIBUTED_REDUCTION_MAP
 
-    _TORCH_REDUCTION_MAP = {
+    _DISTRIBUTED_REDUCTION_MAP = {
         ReductionType.sum: torch.distributed.ReduceOp.SUM,
         ReductionType.average: torch.distributed.ReduceOp.AVG,
         ReductionType.minimum: torch.distributed.ReduceOp.MIN,
@@ -168,7 +168,9 @@ class LossDef:
     dtype: DataType = DataType.float32
     reduction: ReductionType = ReductionType.sum
 
-    def reduce(self, losses: list[torch.Tensor], distributed: "Distributed") -> torch.Tensor | None:
+    def reduce(self, losses: "list[torch.Tensor]", distributed: "Distributed") -> "torch.Tensor | None":
+        import torch
+
         from fast_llm.core.ops import reduce_op
 
         if losses or distributed.pipeline_group:

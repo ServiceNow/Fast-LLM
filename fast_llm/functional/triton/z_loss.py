@@ -91,6 +91,8 @@ def triton_z_loss_forward_backward(
         assert loss_mask.is_contiguous()
     n_rows = logits.shape[:-1].numel()
     n_cols = logits.size(-1)
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
     if block_size is None:
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:
@@ -110,7 +112,7 @@ def triton_z_loss_forward_backward(
 
         backward_kwargs = {
             "grad_logits_ptr": grad_logits,
-            "grad_losses": grad_output / n_rows,
+            "grad_losses": grad_output / divisor,
             "grad_logits_stride_0": grad_logits.stride(-2),
             "accumulate": accumulate,
         }

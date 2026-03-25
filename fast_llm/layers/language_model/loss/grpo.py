@@ -73,7 +73,9 @@ def fused_grpo_loss_forward_backward(
     ) = None,  # (*batch,) — response-span length broadcast per token, 0 for non-response
     divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
-    grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     loss_mask = target >= 0
 
     logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)

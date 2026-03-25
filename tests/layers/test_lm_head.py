@@ -102,6 +102,11 @@ class LMHeadTestConfig:
                 torch.randint(0, 2, (NUM_TOKENS,), dtype=torch.bool, device=device)
                 for _ in range(self.prediction_heads)
             ]
+            kwargs[LanguageModelKwargs.num_labels_in_batch] = [
+                loss_mask.sum().item() for loss_mask in kwargs[LanguageModelKwargs.loss_mask]
+            ]
+        else:
+            kwargs[LanguageModelKwargs.num_labels_in_batch] = [NUM_TOKENS for _ in range(self.prediction_heads)]
         if self.actual_label_loss is not False or self.grpo_loss is not False:
             labels = [
                 torch.randint(
@@ -166,32 +171,34 @@ class LMHeadTestConfig:
 
         names_losses_weights = []
 
+        loss_mask = (
+            kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
+            if LanguageModelKwargs.loss_mask in kwargs
+            else None
+        )
+
         if self.actual_label_loss is not False or self.grpo_loss is not False:
             labels = kwargs[LanguageModelKwargs.labels][head._prediction_distance - 1]
 
         if self.actual_label_loss is not False:
-            label_loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none").mean()
+            label_loss = torch.nn.functional.cross_entropy(logits, labels)
             names_losses_weights.append(("label", label_loss, float(self.actual_label_loss)))
-            # total_loss = total_loss + float(self.actual_label_loss) * label_loss
 
         if self.distillation_loss is not False:
             distillation_loss = torch.nn.functional.cross_entropy(
                 logits,
                 torch.softmax(kwargs[f"reference_distillation_hidden_states"]["head.logits"], -1),
-                reduction="none",
+                reduction="mean" if loss_mask is None else "none",
             )
-            if LanguageModelKwargs.loss_mask in kwargs:
-                distillation_loss = (
-                    distillation_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
-                )
-            distillation_loss = distillation_loss.mean()
+            if loss_mask is not None:
+                distillation_loss = (distillation_loss * loss_mask).sum() / loss_mask.sum()
             names_losses_weights.append(("distillation", distillation_loss, float(self.distillation_loss)))
 
         if self.z_loss is not False:
             z_loss = torch.logsumexp(logits, dim=-1) ** 2
-            if LanguageModelKwargs.loss_mask in kwargs:
-                z_loss = z_loss * kwargs[LanguageModelKwargs.loss_mask][head._prediction_distance - 1]
-            z_loss = z_loss.mean()
+            if loss_mask is not None:
+                z_loss = z_loss * loss_mask
+            z_loss = z_loss.mean() if loss_mask is None else (z_loss * loss_mask).sum() / loss_mask.sum()
             names_losses_weights.append(("z_loss", z_loss, float(self.z_loss)))
 
         if self.grpo_loss is not False:
@@ -317,7 +324,6 @@ def test_lm_head(test_config: LMHeadTestConfig):
 
         losses = collections.defaultdict(list)
         output, context = stage.forward(head_input, kwargs, losses)
-        print(losses)
         stage.backward(output_grad, context)
         threshold = 1e-5 if distributed.config.compute_dtype == DataType.float32 else 5e-3
         min_threshold = (
@@ -329,7 +335,6 @@ def test_lm_head(test_config: LMHeadTestConfig):
         Assert.eq(len(loss_definitions), len(loss_definitions_))
         Assert.eq(losses.keys(), ref_losses.keys(), loss_definitions.keys())
 
-        losses = {name: loss[0] if len(loss) == 1 else torch.stack(loss).sum() for name, loss in losses.items()}
         losses = {
             name: loss_definition.reduce(losses[name], distributed)
             for name, loss_definition in loss_definitions.items()

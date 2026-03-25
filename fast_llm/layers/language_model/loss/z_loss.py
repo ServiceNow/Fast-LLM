@@ -65,7 +65,9 @@ def fused_z_loss_forward_backward(
     Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
     Grad = 2 * log_sum_exp_logits * softmax(logits)
     """
-    grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
     log_sum_exp_logits = sum_exp_logits.log() + logits_max
 
