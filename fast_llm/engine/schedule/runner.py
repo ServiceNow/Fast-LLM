@@ -1,6 +1,7 @@
 import collections
 import contextlib
 import dataclasses
+import json
 import logging
 import time
 import typing
@@ -287,20 +288,39 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         reduced_losses = {}
         for name, losses in context.losses.items():
+            loss_def = self._loss_definitions[name]
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    loss_count = (
-                        self._loss_definitions[name].count
-                        * self._distributed_config.data_parallel
-                        * context.schedule.config.num_inputs
-                    )
-                    reduced_loss = torch.stack(losses).sum() / loss_count
-                    if self._distributed.data_group:
-                        all_reduce(reduced_loss, group=self._distributed.data_group)
+                    denom_field = loss_def.denominator_batch_field
+                    if denom_field is not None:
+                        # Normalize by a per-micro-batch scalar from the batch data (e.g. num_docs),
+                        # computed before any TP/SP/PP splitting.  Sum numerator and denominator
+                        # independently across DP ranks so the result is a true global average.
+                        numerator = torch.stack(losses).sum()
+                        denominator = torch.tensor(
+                            sum(
+                                batch_kwargs[denom_field] or 0
+                                for batch_kwargs in context.batch.values()
+                                if denom_field in batch_kwargs
+                            ),
+                            dtype=numerator.dtype,
+                            device=numerator.device,
+                        )
+                        if self._distributed.data_group:
+                            all_reduce(numerator, group=self._distributed.data_group)
+                            all_reduce(denominator, group=self._distributed.data_group)
+                        reduced_loss = numerator / denominator.clamp(min=1)
+                    else:
+                        loss_count = (
+                            loss_def.count
+                            * self._distributed_config.data_parallel
+                            * context.schedule.config.num_inputs
+                        )
+                        reduced_loss = torch.stack(losses).sum() / loss_count
+                        if self._distributed.data_group:
+                            all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
-                    reduced_loss = torch.zeros(
-                        [1], dtype=self._loss_definitions[name].dtype.torch, device=self._distributed.device
-                    )
+                    reduced_loss = torch.zeros([1], dtype=loss_def.dtype.torch, device=self._distributed.device)
                 if self._distributed.pipeline_group:
                     all_reduce(reduced_loss, group=self._distributed.pipeline_group)
             else:
@@ -428,14 +448,63 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_compute(context, step)
         return input_grad
 
+    def _get_pipeline_log_file(self):
+        if not self._config.log_data_pipeline:
+            return None
+        if not hasattr(self, "_pipeline_log_file"):
+            run = get_run()
+            if run is not None and run.experiment_directory is not None:
+                log_dir = run.experiment_directory / "data_pipeline_log"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                rank = self._distributed_config.data_rank
+                self._pipeline_log_file = open(log_dir / f"rank_{rank}.jsonl", "a")
+            else:
+                self._pipeline_log_file = None
+        return self._pipeline_log_file
+
     def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
         if step.index not in context.batch:
             start_time = time.perf_counter()
+            rank = self._distributed_config.data_rank
+            log_file = self._get_pipeline_log_file()
 
+            if log_file is not None:
+                log_file.write(
+                    json.dumps(
+                        {
+                            "event": "BATCH_START",
+                            "rank": rank,
+                            "micro": step.index,
+                            "t": time.time(),
+                        }
+                    )
+                    + "\n"
+                )
+                log_file.flush()
+
+            samples_loaded = 0
             while step.index not in context.batch:
                 next(context.data_iterator)
+                samples_loaded += 1
 
             data_time = (time.perf_counter() - start_time) * 1000
+
+            if log_file is not None:
+                log_file.write(
+                    json.dumps(
+                        {
+                            "event": "BATCH_END",
+                            "rank": rank,
+                            "micro": step.index,
+                            "t": time.time(),
+                            "duration_ms": round(data_time, 2),
+                            "samples": samples_loaded,
+                        }
+                    )
+                    + "\n"
+                )
+                log_file.flush()
+
             if data_time > self._config.data_batch_warn_time_ms:
                 logger.warning(f"Data loading took {data_time:,.2f} ms")
         return context.inputs.pop(step.global_index).detach().requires_grad_(step.stage != 0)

@@ -47,8 +47,12 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             LossDef(
                 self._logprob_metric_name,
                 formatted_name=self._logprob_metric_name,
-                count=1,  # This is an additive metric over the sequence.
+                count=1,
                 dtype=DataType.float32,
+                # Normalize by the number of documents with response tokens in each micro-batch,
+                # giving a true per-document average regardless of variable document lengths.
+                # num_docs is computed before any TP/SP/PP splitting in language_model.py.
+                denominator_batch_field=LanguageModelLossKwargs.num_docs,
             )
         ]
 
