@@ -42,6 +42,11 @@ class ScheduleConfig(Config):
         hint=FieldHint.optional,
         valid=check_field(Assert.gt, 0),
     )
+    log_data_pipeline: bool = Field(
+        default=False,
+        desc="Write per-micro-batch timing to data_pipeline_log/rank_{rank}.jsonl for pipeline diagnostics.",
+        hint=FieldHint.optional,
+    )
     # Enable cpu throttling to avoid lag spikes, see https://arxiv.org/pdf/2211.05953.pdf, appendix D.2.
     throttle_cpu: bool = Field(
         default=True,

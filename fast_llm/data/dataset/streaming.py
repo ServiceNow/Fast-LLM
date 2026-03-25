@@ -12,6 +12,7 @@ from fast_llm.data.dataset.config import REDIS_DATA_STREAM, REDIS_GROUP_NAME, Sa
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.range import RangeDocument
 from fast_llm.data.document.token_data import TokenDataDocument
+from fast_llm.engine.config_utils.run import get_run
 from fast_llm.utils import Assert
 
 
@@ -139,28 +140,63 @@ class RedisStreamingDataset[ConfigType: StreamingDatasetConfig, DocumentType: La
             else:
                 raise
 
-        start_time = time.time()
-        while True:
-            # XREADGROUP reads from the consumer group
-            # COUNT: max number of messages to fetch at once
-            # BLOCK: wait for new messages (milliseconds)
-            messages = client.xreadgroup(
-                groupname=REDIS_GROUP_NAME,
-                consumername=f"fast_llm_consumer_{config.rank}",
-                # ">" reads only new messages that have not been delivered to any consumer
-                streams={REDIS_DATA_STREAM: ">"},
-                count=1,
-                block=1000,
-                # No explicit ACK: messages are processed immediately; on rank failure the job restarts,
-                # so message loss is acceptable and simplifies coordination
-                noack=True,
-            )
-            if messages:
-                for stream_key, messages_ in messages:
-                    assert stream_key == REDIS_DATA_STREAM.encode()
-                    for message_id, message in messages_:
-                        yield RedisStreamingDocumentData.from_message(message).to_document()
-                start_time = time.time()
+        # Set up pipeline diagnostics log file if enabled
+        log_file = None
+        if self._config.log_data_pipeline:
+            run = get_run()
+            if run is not None and run.experiment_directory is not None:
+                log_dir = run.experiment_directory / "data_pipeline_log"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = open(log_dir / f"rank_{config.rank}.jsonl", "a")
 
-            elif (t := time.time() - start_time) > self._config.timeout:
-                raise TimeoutError(f"No document received after {t} seconds")
+        last_read_time = time.time()
+        start_time = time.time()
+        try:
+            while True:
+                # XREADGROUP reads from the consumer group
+                # COUNT: max number of messages to fetch at once
+                # BLOCK: wait for new messages (milliseconds)
+                messages = client.xreadgroup(
+                    groupname=REDIS_GROUP_NAME,
+                    consumername=f"fast_llm_consumer_{config.rank}",
+                    # ">" reads only new messages that have not been delivered to any consumer
+                    streams={REDIS_DATA_STREAM: ">"},
+                    count=1,
+                    block=1000,
+                    # No explicit ACK: messages are processed immediately; on rank failure the job restarts,
+                    # so message loss is acceptable and simplifies coordination
+                    noack=True,
+                )
+                if messages:
+                    now = time.time()
+                    for stream_key, messages_ in messages:
+                        assert stream_key == REDIS_DATA_STREAM.encode()
+                        for message_id, message in messages_:
+                            doc = RedisStreamingDocumentData.from_message(message)
+                            if log_file is not None:
+                                write_ms = int(message_id.split(b"-")[0]) / 1000.0
+                                gap_ms = (now - last_read_time) * 1000.0
+                                latency_ms = (now - write_ms) * 1000.0
+                                log_file.write(
+                                    json.dumps(
+                                        {
+                                            "event": "READ",
+                                            "rank": config.rank,
+                                            "t": now,
+                                            "gap_ms": round(gap_ms, 2),
+                                            "latency_ms": round(latency_ms, 2),
+                                            "tokens": doc.num_tokens,
+                                        }
+                                    )
+                                    + "\n"
+                                )
+                                log_file.flush()
+                            last_read_time = now
+                            yield doc.to_document()
+                    start_time = time.time()
+
+                elif (t := time.time() - start_time) > self._config.timeout:
+                    raise TimeoutError(f"No document received after {t} seconds")
+        finally:
+            if log_file is not None:
+                log_file.close()

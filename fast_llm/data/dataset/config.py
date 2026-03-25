@@ -291,6 +291,12 @@ class StreamingDatasetConfig[DocumentType: LanguageModelDocument](RedisConfig, S
 
     _abstract = False
 
+    log_data_pipeline: bool = Field(
+        default=False,
+        desc="Write per-read timing to data_pipeline_log/rank_{rank}.jsonl for pipeline diagnostics.",
+        hint=FieldHint.optional,
+    )
+
     def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
         from fast_llm.data.dataset.streaming import RedisStreamingDataset
 

@@ -1,6 +1,7 @@
 import collections
 import contextlib
 import dataclasses
+import json
 import logging
 import time
 import typing
@@ -447,14 +448,63 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_compute(context, step)
         return input_grad
 
+    def _get_pipeline_log_file(self):
+        if not self._config.log_data_pipeline:
+            return None
+        if not hasattr(self, "_pipeline_log_file"):
+            run = get_run()
+            if run is not None and run.experiment_directory is not None:
+                log_dir = run.experiment_directory / "data_pipeline_log"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                rank = self._distributed_config.data_rank
+                self._pipeline_log_file = open(log_dir / f"rank_{rank}.jsonl", "a")
+            else:
+                self._pipeline_log_file = None
+        return self._pipeline_log_file
+
     def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
         if step.index not in context.batch:
             start_time = time.perf_counter()
+            rank = self._distributed_config.data_rank
+            log_file = self._get_pipeline_log_file()
 
+            if log_file is not None:
+                log_file.write(
+                    json.dumps(
+                        {
+                            "event": "BATCH_START",
+                            "rank": rank,
+                            "micro": step.index,
+                            "t": time.time(),
+                        }
+                    )
+                    + "\n"
+                )
+                log_file.flush()
+
+            samples_loaded = 0
             while step.index not in context.batch:
                 next(context.data_iterator)
+                samples_loaded += 1
 
             data_time = (time.perf_counter() - start_time) * 1000
+
+            if log_file is not None:
+                log_file.write(
+                    json.dumps(
+                        {
+                            "event": "BATCH_END",
+                            "rank": rank,
+                            "micro": step.index,
+                            "t": time.time(),
+                            "duration_ms": round(data_time, 2),
+                            "samples": samples_loaded,
+                        }
+                    )
+                    + "\n"
+                )
+                log_file.flush()
+
             if data_time > self._config.data_batch_warn_time_ms:
                 logger.warning(f"Data loading took {data_time:,.2f} ms")
         return context.inputs.pop(step.global_index).detach().requires_grad_(step.stage != 0)
