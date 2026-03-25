@@ -66,6 +66,7 @@ class ModelInput(Document):
         Gather values depending on the entire data-parallel batch, ex. the total number of labels or documents.
         Should be called in the main process because distributed operations are not available during preprocessing.
         Implemented as a class method so quantities shared by all models inputs are only computed once.
+        Note: this may be called more than once (ex. reference model preprocessing), so the method should be idempotent.
         TODO: ====== Use as entry point for batch broadcasting? ======
         """
 

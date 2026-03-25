@@ -112,7 +112,7 @@ def format_metrics(
             **{key: metrics.pop(key, _NAN) for key in _METRIC_FORMATS_KEYS[phase]},
         )
     ]
-    outputs.extend([f"{loss_def.formatted_name}: {metrics.pop(loss_def.name, _NAN):.5f}" for loss_def in loss_defs])
+    outputs.extend([f"{loss_def.name}: {metrics.pop(loss_def.name, _NAN):.5f}" for loss_def in loss_defs])
     if metrics:
         outputs.extend([f"{key}: {value}" for key, value in metrics.items()])
 

@@ -11,7 +11,6 @@ from fast_llm.data.document.language_model import LanguageModelBatch, LanguageMo
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfacePreTrainedModel
-from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
 
@@ -81,7 +80,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
 
     def _inner_forward(
         self,
-        batch: LanguageModelInput,
+        batch: LanguageModelBatch,
         input_shape: tuple[int],
         past_key_values=None,
         inputs_embeds: torch.FloatTensor | None = None,
@@ -114,18 +113,12 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             use_cache,
             output_hidden_states,
         )
-        input_, kwargs = self.fast_llm_base_model.preprocess_batch(
-            model_input,
-            phase=PhaseType.inference,
-            iteration=iteration,
-        )
-
-        self._inference_runner.forward(input_, kwargs, iteration=iteration)
+        self._inference_runner.forward(model_input, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
         hidden_states = {
             name: meta.local_to_global(tensor)[0].unflatten(0, input_shape)
-            for name, (meta, tensor) in kwargs[AttentionKwargs.hidden_states].items()
+            for name, (meta, tensor) in model_input.hidden_states.items()
         }
 
         # TODO: Handle MTP.
@@ -134,7 +127,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         output = transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
             hidden_states=hidden_states or None,
-            past_key_values=kwargs[AttentionKwargs.presents],
+            past_key_values=model_input.presents,
         )
         return (
             output

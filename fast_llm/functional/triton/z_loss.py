@@ -6,6 +6,7 @@ from fast_llm.functional.triton.entropy_loss import (
     triton_cross_entropy_forward_from_labels_parallel_kernel,
     triton_fused_softmax_base,
 )
+from fast_llm.functional.utils import reduce_losses
 
 
 @triton_jit()
@@ -83,6 +84,7 @@ def triton_z_loss_forward_backward(
     logits_scale_factor: float = 1.0,
     block_size: int | None = None,
     num_warps: int | None = None,
+    divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert logits.is_contiguous()
     if loss_mask is not None:
@@ -141,4 +143,5 @@ def triton_z_loss_forward_backward(
             **kwargs,
             **backward_kwargs,
         )
-    return losses.mean(), grad_logits
+    loss = reduce_losses(losses, divisor)
+    return loss, grad_logits

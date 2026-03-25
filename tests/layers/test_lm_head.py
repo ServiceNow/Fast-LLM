@@ -329,9 +329,10 @@ def test_lm_head(test_config: LMHeadTestConfig):
         Assert.eq(len(loss_definitions), len(loss_definitions_))
         Assert.eq(losses.keys(), ref_losses.keys(), loss_definitions.keys())
 
+        losses = {name: loss[0] if len(loss) == 1 else torch.stack(loss).sum() for name, loss in losses.items()}
         losses = {
-            name: loss[0] if len(loss) == 1 else torch.stack(loss).sum() / loss_definitions[name].count
-            for name, loss in losses.items()
+            name: loss_definition.reduce(losses[name], distributed)
+            for name, loss_definition in loss_definitions.items()
         }
 
         for name, loss in losses.items():

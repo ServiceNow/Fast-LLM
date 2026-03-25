@@ -10,8 +10,8 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
+from fast_llm.functional.utils import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
@@ -277,14 +277,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             output_parallel_linear_backward(grad, context) if self.training else None
         )
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         return [
-            LossDef(name=self._total_loss_name, formatted_name=self._total_loss_name, count=count),
-            *(
-                loss_
-                for loss in self.losses
-                for loss_ in loss.get_loss_definitions(count * self._config.cross_entropy_splits)
-            ),
+            LossDef(name=self._total_loss_name),
+            *(loss_ for loss in self.losses for loss_ in loss.get_loss_definitions()),
         ]
 
     def _get_full_loss_name(self, name) -> str:

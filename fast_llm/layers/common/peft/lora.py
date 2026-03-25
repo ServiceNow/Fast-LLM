@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.functional.autograd import wrap_forward_backward
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.layers.common.linear.linear import Linear, LinearBase
 from fast_llm.tensor import ParameterMeta
 

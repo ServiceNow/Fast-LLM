@@ -2,6 +2,7 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
 from fast_llm.functional.config import EntropyLossType, TargetFormat
+from fast_llm.functional.utils import reduce_losses
 from fast_llm.utils import Assert
 
 
@@ -285,6 +286,7 @@ def fused_entropy_loss_forward_backward(
     temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
+    divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -296,7 +298,7 @@ def fused_entropy_loss_forward_backward(
         assert entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl)
         assert loss_mask is None
         loss_mask = target >= 0
-        per_sample_loss, grad = _fused_cross_entropy_base_from_labels(
+        losses, grad = _fused_cross_entropy_base_from_labels(
             logits,
             target,
             loss_mask,
@@ -305,7 +307,7 @@ def fused_entropy_loss_forward_backward(
             group,
         )
     elif entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl):
-        per_sample_loss, grad = _fused_cross_entropy_base_from_distribution(
+        losses, grad = _fused_cross_entropy_base_from_distribution(
             logits,
             target,
             grad_output,
@@ -316,7 +318,7 @@ def fused_entropy_loss_forward_backward(
             return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
         )
     elif entropy_loss_type == EntropyLossType.reverse_kl:
-        per_sample_loss, grad = _fused_reverse_kl_base_from_distribution(
+        losses, grad = _fused_reverse_kl_base_from_distribution(
             logits,
             target,
             grad_output,
@@ -328,9 +330,7 @@ def fused_entropy_loss_forward_backward(
     else:
         raise NotImplementedError(entropy_loss_type)
 
-    if loss_mask is not None:
-        per_sample_loss = per_sample_loss * loss_mask
-    loss = per_sample_loss.mean()
+    loss = reduce_losses(losses, divisor, loss_mask)
 
     if grad is not None:
         if loss_mask is not None:

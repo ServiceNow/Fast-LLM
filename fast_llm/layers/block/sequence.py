@@ -69,10 +69,8 @@ class FixedBlockSequence[ConfigType: FixedBlockSequenceConfig](BlockBase[ConfigT
         kwargs[BlockKwargs.num_blocks_in_sequence] = self._config.num_blocks
         self._layers_with_namespace[0].preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return (
-            self[0].get_loss_definitions(count=count * self._config.num_blocks) if self._config.num_blocks > 0 else []
-        )
+    def get_loss_definitions(self) -> list[LossDef]:
+        return self[0].get_loss_definitions() if self._config.num_blocks > 0 else []
 
 
 class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[ConfigType], torch.nn.ModuleList):
@@ -139,11 +137,11 @@ class PatternBlockSequence[ConfigType: PatternBlockSequenceConfig](BlockBase[Con
             kwargs[BlockKwargs.num_blocks_in_sequence] = self._config.expanded_pattern.count(name)
             self._layers_with_namespace[index].preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         # TODO: Prevent name conflicts.
         return sum(
             (
-                self[self._config.preprocessing_layers[name]].get_loss_definitions(count=count * count_)
+                self[self._config.preprocessing_layers[name]].get_loss_definitions()
                 for name, count_ in collections.Counter(self._config.expanded_pattern).items()
             ),
             [],

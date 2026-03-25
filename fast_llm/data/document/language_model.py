@@ -61,9 +61,10 @@ class LanguageModelInput(TokenModelInput):
         super().share_batch_data(model_inputs, distributed)
         for targets in zip(*(model_input.targets for model_input in model_inputs), strict=True):
             targets[0].share_batch_data(targets, distributed)
-        model_inputs[0].image_patches.share_batch_data(
-            [model_input.image_patches for model_input in model_inputs], distributed
-        )
+        if model_inputs[0].image_patches is not None:
+            model_inputs[0].image_patches.share_batch_data(
+                [model_input.image_patches for model_input in model_inputs], distributed
+            )
 
     def set_children_attributes(self) -> None:
         if self.image_patches is not None:
@@ -174,31 +175,28 @@ class LanguageModelBatch(TokenBatch):
                 labels[document_begin + prediction_distance - 1] = -100
                 document_begin += length
 
-            prediction_labels = labels[
-                prediction_distance : len(self.tokens) - config.num_labels + prediction_distance
-            ].clone()
-            mask = prediction_labels >= 0
+            mask = labels >= 0
             label_counts = self._get_label_counts(mask) if config.return_label_counts else None
 
             for input_index, model_input in enumerate(model_inputs):
-                begin = model_input.sequence_k_dim.size
-                end = begin + model_input.token_dim.size
+                label_end = model_input.sequence_k_dim.size + prediction_distance
+                label_begin = label_end - model_input.token_dim.size
 
                 # Labels contain all four sources of masking: padding, user-defined spans, image placeholders, cross-document predictions.
                 target_input = LanguageModelTargetInput(
-                    tokens=labels[begin:end],
-                    mask=mask[begin:end] if config.return_prediction_mask else None,
-                    label_counts=label_counts[begin:end] if config.return_label_counts else None,
+                    tokens=labels[label_begin:label_end].clone(),
+                    mask=mask[label_begin:label_end] if config.return_prediction_mask else None,
+                    label_counts=label_counts[label_begin:label_end] if config.return_label_counts else None,
                     # Set value for the first input only so `share_batch_data` generated the correct sum.
                     # TODO: ====== Make optional?
-                    num_labels=mask.sum(dtype=torch.int32).item() if input_index == 0 else 0,
+                    num_labels=(
+                        len(mask) if self.is_meta else mask.sum(dtype=torch.int32).item() if input_index == 0 else 0
+                    ),
                 )
                 if config.use_grpo_data and not model_input.is_meta:
-                    target_input.advantages = self.advantages.get_cropped_data(
-                        begin + prediction_distance, end + prediction_distance
-                    )
+                    target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
                     target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
-                        begin + prediction_distance, end + prediction_distance
+                        label_begin, label_end
                     )
 
                 model_input.targets.append(target_input)

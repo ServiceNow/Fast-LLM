@@ -99,10 +99,10 @@ class MultiTokenPrediction[ConfigType: LanguageModelHeadConfig](BlockBase[Config
         if self._enabled:
             self._layers_with_namespace[0].preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         return (
-            self.blocks[0].get_loss_definitions(count=count * (self._config.prediction_heads - 1))
-            + [loss_definition for head in self.heads for loss_definition in head.get_loss_definitions(count=count)]
+            self.blocks[0].get_loss_definitions()
+            + [loss_definition for head in self.heads for loss_definition in head.get_loss_definitions()]
             if self._enabled
             else []
         )

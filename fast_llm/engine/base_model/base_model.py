@@ -48,11 +48,11 @@ class LayerBase(torch.nn.Module, abc.ABC):
             out += layer.get_compute_usage(input_, kwargs, config)
         return out
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         losses = []
         for layer in self.get_layers():
             if layer is not self:
-                losses += layer.get_loss_definitions(count)
+                losses += layer.get_loss_definitions()
         return losses
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:

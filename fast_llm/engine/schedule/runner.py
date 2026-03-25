@@ -284,30 +284,12 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return self._reduce_losses(context), update_successful, metrics
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
-        reduced_losses = {}
-        for name, losses in context.losses.items():
-            if losses or self._distributed.pipeline_group:
-                if losses:
-                    loss_count = (
-                        self._loss_definitions[name].count
-                        * self._distributed_config.data_parallel
-                        * context.schedule.config.num_inputs
-                    )
-                    reduced_loss = torch.stack(losses).sum() / loss_count
-                    if self._distributed.data_group:
-                        all_reduce(reduced_loss, group=self._distributed.data_group)
-                else:
-                    reduced_loss = torch.zeros(
-                        [1], dtype=self._loss_definitions[name].dtype.torch, device=self._distributed.device
-                    )
-                if self._distributed.pipeline_group:
-                    all_reduce(reduced_loss, group=self._distributed.pipeline_group)
-            else:
-                reduced_loss = 0.0
-            reduced_losses[name] = reduced_loss
+        reduced_losses = {
+            name: self._loss_definitions[name].reduce(losses, self._distributed)
+            for name, losses in context.losses.items()
+        }
         return {
-            name: reduced_loss.item() if isinstance(reduced_loss, torch.Tensor) else reduced_loss
-            for name, reduced_loss in reduced_losses.items()
+            name: 0.0 if reduced_loss is None else reduced_loss.item() for name, reduced_loss in reduced_losses.items()
         }
 
     def _train_step(self, context: BatchContext, step: Step) -> None:
@@ -329,12 +311,17 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _preprocess_data(
         self, context: BatchContext, data_iterator: typing.Iterator
     ) -> typing.Generator[None, None, None]:
+        # We multiply by the data-parallel size to improve numerical stability (reduce numerical underflow).
+        # This factor is canceled in the averaging during gradient reduction.
         grad_output = (
-            self._optimizer.grad_scale / self._config.num_inputs if context.schedule.phase.is_training else None
+            self._optimizer.grad_scale * self._distributed_config.data_parallel
+            if context.schedule.phase.is_training
+            else None
         )
         model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
-        if not preprocessed:
-            model_inputs[0][0].share_batch_data(model_inputs, self._distributed)
+        model_inputs[0][0].share_batch_data(
+            [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
+        )
 
         for micro_batch, model_inputs_ in enumerate(model_inputs):
             Assert.eq(len(model_inputs_), self._config.micro_batch_splits)
@@ -408,7 +395,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             step.recv_event.wait()
             self._record_event(context, EventType.compute_wait_pipe, step)
 
-    def _forward(self, context: BatchContext, step: Step) -> None:
+    def _forward(self, context: BatchContext, step: Step) -> torch.Tensor | None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
             context.batch[step.index],

@@ -6,7 +6,6 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.config import LossDef
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
@@ -68,19 +67,8 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return (
-            [
-                LossDef(
-                    name=self.name,
-                    formatted_name=self.name,
-                    count=count,
-                    dtype=DataType.float32,
-                )
-            ]
-            if self._do_register_loss
-            else []
-        )
+    def get_loss_definitions(self) -> list[LossDef]:
+        return [LossDef(name=self.name)] if self._do_register_loss else []
 
     def get_preprocessing_config(
         self,
@@ -138,6 +126,9 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], split_index)
+
+    def _get_label_count(self, kwargs: dict[str, typing.Any]):
+        return kwargs[LanguageModelKwargs.label_counts][self._prediction_distance - 1]
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)

@@ -75,7 +75,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     hidden_states={},
                 )
                 reference_model_input.set_children_attributes()
-                reference_model.forward(model_input, iteration=iteration)
+                reference_model.forward(reference_model_input, iteration=iteration)
 
                 kwargs[f"reference_{name}_hidden_states"] = {
                     layer_name: tensor for layer_name, (meta, tensor) in reference_model_input.hidden_states.items()
