@@ -117,7 +117,9 @@ class DistributedDim:
             elif isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start:
                 global_ranks = range(start, start + size * stride, global_ranks.step)
             else:
-                global_ranks = [rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks]
+                global_ranks = tuple(
+                    rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks
+                )
         Assert.eq(len(global_ranks), world_size)
         return DistributedDim(name=name, size=world_size, rank=rank, global_ranks=global_ranks)
 

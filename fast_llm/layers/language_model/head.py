@@ -136,7 +136,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     (scalar_dim,),
                     tensor_name=f"{self.module_name} output",
                     reductions=(
-                        (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
+                        (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.SUM),
                     ),
                 )
             else:
@@ -227,7 +227,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         #  Return value only needed because stage expects a return tensor
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(total_loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
+            all_reduce(total_loss, op=ReduceOp.SUM, group=self._parallel_dim.group)
 
         if losses is not None:
             losses[self._total_loss_name].append(total_loss)

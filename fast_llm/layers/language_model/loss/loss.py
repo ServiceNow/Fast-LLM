@@ -76,7 +76,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return {}
 
     def _register_loss(
-        self, name: str, value: torch.Tensor, losses: dict | None, reduce_op=torch.distributed.ReduceOp.AVG
+        self, name: str, value: torch.Tensor, losses: dict | None, reduce_op=torch.distributed.ReduceOp.SUM
     ):
         if losses is None:
             return
