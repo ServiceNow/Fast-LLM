@@ -103,7 +103,10 @@ class TokenBatch(Batch, TokenDocument):
         lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
 
         if config.return_document_count:
-            model_input.num_documents = len(self.lengths) if begin == 0 else 0
+            # Exclude the padding "length" from the document count.
+            model_input.num_documents = (
+                len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if begin == 0 else 0
+            )
 
         LengthModelInputPreprocessor(
             lengths=lengths,

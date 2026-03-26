@@ -172,7 +172,8 @@ class LanguageModelBatch(TokenBatch):
             # Mask cross-document predictions.
             document_begin = 0
             for length in self.lengths:
-                labels[document_begin + prediction_distance - 1] = -100
+                if prediction_distance <= length:
+                    labels[document_begin + prediction_distance - 1] = -100
                 document_begin += length
 
             mask = labels >= 0
