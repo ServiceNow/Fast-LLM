@@ -13,6 +13,7 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
+    get_parameter_converter,
 )
 from fast_llm.utils import Assert, safe_merge_dicts
 
@@ -38,7 +39,21 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         config: LanguageModelConfig,
         exported_config: dict,
     ) -> list[WeightConverter]:
-        converters = super().get_converters(config, exported_config)
+        # Override: map head.final_norm to model.mtp_norms.0 (not model.norm as in standard Llama),
+        # since MTPLlamaModel uses mtp_norms[0] for the first prediction head.
+        converters = [
+            *cls.normalization_converter_class.get_converters(
+                config.head.normalization,
+                "head.final_norm",
+                "model.mtp_norms.0",
+            ),
+            get_parameter_converter(
+                "head.output_weights",
+                "lm_head.weight",
+                drop_on_import=exported_config["tie_word_embeddings"],
+                drop_on_export=exported_config["tie_word_embeddings"],
+            ),
+        ]
         for prediction_distance in range(2, config.head.prediction_heads + 1):
             converters += cls.block_converter_class.get_converters(
                 config.decoder.last_block_config,
