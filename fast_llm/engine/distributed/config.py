@@ -80,6 +80,16 @@ class DistributedDim:
     def __post_init__(self):
         self._is_setup = False
 
+    def __getstate__(self):
+        # Prevent process groups from being pickled, ex. in the data loader.
+        state = self.__dict__.copy()
+        if "_group" in state:
+            del state["_group"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     @property
     def group(self) -> "ProcessGroup|None":
         assert hasattr(self, "_group")
