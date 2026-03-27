@@ -5,13 +5,15 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.utils import Assert
 
 
-class StepType(str, enum.Enum):
+class StepType(enum.StrEnum):
     forward = "forward"
     backward = "backward"
 
 
 @config_class()
 class ScheduleConfig(Config):
+    """Configuration for the micro-batch execution schedule: pipeline overlap, CPU throttling, and debug options."""
+
     depth_first_micro_batches: int = Field(
         default=1,
         desc="Size of individual micro-batches. May be derived or constrained be other quantities.",
@@ -85,18 +87,18 @@ class ScheduleConfig(Config):
         return self.sequential_micro_batches * self.micro_batch_splits
 
 
-class StreamType(str, enum.Enum):
+class StreamType(enum.StrEnum):
     compute = "compute"
     data = "data"
     pipeline = "pipeline"
 
 
-class StepScheduleType(str, enum.Enum):
+class StepScheduleType(enum.StrEnum):
     breadth_first = "breadth_first"
     depth_first = "depth_first"
 
 
-class EventType(str, enum.Enum):
+class EventType(enum.StrEnum):
     # Global events
     batch_begin = "batch_begin"
     batch_end = "batch_end"

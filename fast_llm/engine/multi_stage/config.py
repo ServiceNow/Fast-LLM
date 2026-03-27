@@ -42,7 +42,7 @@ class ShardName:
     grads = "grads"
 
 
-class StageMode(str, enum.Enum):
+class StageMode(enum.StrEnum):
     # Allow forward and backward passes and optimizer.
     # TODO: Add mode for forward and backward but not optimizer?
     training = "training"
@@ -72,6 +72,8 @@ class StageMode(str, enum.Enum):
 
 @config_class()
 class StageConfig(Config):
+    """Configuration for a single model stage: gradient precision, frozen weight storage, and debug logging."""
+
     full_precision_gradients: bool = Field(
         default=True,
         desc="Reduce and accumulate gradients in fp32 to improve numerical stability.",
@@ -141,6 +143,8 @@ class StageConfig(Config):
 
 @config_class()
 class MultiStageConfig(StageConfig):
+    """Configuration for the multi-stage model layout: layers per stage, ZeRO sharding, and buffer counts."""
+
     layers_per_stage: float = Field(
         default=1.0,
         desc="Number of layers to include in each Fast LLM stage.",
@@ -206,6 +210,8 @@ SHARD_PAD_TO_MULTIPLE = 32
 
 @config_class(registry=True)
 class FastLLMModelConfig(Config):
+    """Abstract base configuration for a Fast-LLM model: base model, multi-stage layout, and distributed config."""
+
     _abstract = True
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
         DistributedCheckpointFormat,
@@ -283,6 +289,8 @@ class FastLLMModelConfig(Config):
 
 @config_class()
 class PretrainedFastLLMModelConfig(Config):
+    """Configuration wrapper that optionally loads model weights and config from a pretrained checkpoint."""
+
     # TODO: Generalize data, schedule, logging, etc.
     _abstract = True
     # This configs may be overridden with the pretrained config during validation, so we should be careful about accessing them before.

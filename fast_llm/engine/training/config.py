@@ -51,6 +51,8 @@ def _validate_script(value: str | list[str]) -> list[str]:
 
 @config_class()
 class CallbackConfig(Config):
+    """Configuration for an optional shell script callback invoked after a checkpoint, export, or shutdown event."""
+
     script: list[str] | None = Field(
         default=None,
         desc="Shell script to run.",
@@ -72,6 +74,8 @@ class CallbackConfig(Config):
 
 @config_class()
 class WandbAlertConfig(IntervalConfig):
+    """Configuration for periodic Weights & Biases status alerts during training."""
+
     interval = FieldOverride(
         desc="The number of training iterations between each Wandb status post (alert)."
         " Setting to None will disable iteration-based wandb alerts."
@@ -94,6 +98,8 @@ class WandbAlertConfig(IntervalConfig):
 
 @config_class()
 class MetricsLogsConfig(IntervalConfig):
+    """Configuration for training metric logging interval (loss, throughput, etc.)."""
+
     interval = FieldOverride(
         default=100,
         desc="The number of training iterations between each metric logs."
@@ -104,6 +110,8 @@ class MetricsLogsConfig(IntervalConfig):
 
 @config_class()
 class WandbConfig(Config):
+    """Configuration for Weights & Biases experiment tracking (project, entity, alerts)."""
+
     alert: WandbAlertConfig = Field(
         desc="Configuration for Wandb alerts."
         " The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
@@ -116,6 +124,8 @@ class WandbConfig(Config):
 
 @config_class()
 class TrainingCheckpointBaseConfig(IntervalConfig):
+    """Abstract base configuration for periodic saving operations (checkpoints and exports)."""
+
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
@@ -156,6 +166,8 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 
 @config_class()
 class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
+    """Configuration for saving full training checkpoints (weights + optimizer state) at a fixed interval."""
+
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
     interval = FieldOverride(
@@ -189,6 +201,8 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
 
 @config_class()
 class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
+    """Configuration for exporting model weights to an external format (e.g. HuggingFace) at a fixed interval."""
+
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
     interval = FieldOverride(
@@ -206,6 +220,8 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
 
 @config_class()
 class ShutdownConfig(IntervalConfig):
+    """Configuration for automatic training shutdown after a checkpoint, useful for preemptible jobs."""
+
     interval = FieldOverride(
         desc="The number of training iterations between each automated shutdown."
         " Setting to None will disable automated shutdowns."
@@ -218,6 +234,8 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
+    """Configuration for training phases: iterations, checkpoints, exports, logging, evaluators, and W&B."""
+
     evaluators: dict[str, EvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
@@ -260,6 +278,8 @@ class TrainingConfig(Config):
 
 @config_class(registry=True)
 class TrainerCallbackConfig(Config):
+    """Abstract base configuration for trainer callbacks that hook into training events."""
+
     def get_callback(self, model: "FastLLMModel") -> "TrainerCallback":
         raise NotImplementedError()
 
@@ -269,6 +289,8 @@ class TrainerCallbackConfig(Config):
 
 @config_class()
 class WeightsBroadcastConfig(Config):
+    """Configuration for broadcasting model weights to an external process via NCCL (used in online RL pipelines)."""
+
     # TODO: Have the external model send these instead?
     host: str = Field(
         default="localhost",
@@ -294,9 +316,7 @@ class WeightsBroadcastConfig(Config):
 
 @config_class(dynamic_type={TrainerCallbackConfig: "streaming"})
 class StreamingTrainerCallbackConfig(TrainerCallbackConfig, RedisConfig):
-    """
-    Aggregates all trainer-side Redis-based event configurations.
-    """
+    """Trainer callback for online RL: exports and broadcasts model weights via Redis after each update."""
 
     broadcast: WeightsBroadcastConfig = Field(
         desc="Configuration for signaling weight-ready events via Redis.",
@@ -319,6 +339,8 @@ class StreamingTrainerCallbackConfig(TrainerCallbackConfig, RedisConfig):
 
 @config_class(registry=True, dynamic_type={RunnableConfig: "train"})
 class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
+    """Abstract base configuration for a training run: model, data, schedule, optimizer, callbacks, and checkpointing."""
+
     _abstract = True
     # TODO: Generalize data, schedule, logging, etc.
     training: TrainingConfig = Field(

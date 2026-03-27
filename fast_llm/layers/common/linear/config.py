@@ -45,6 +45,8 @@ class AffineLinearBaseConfig(LinearBaseConfig):
 
 @config_class()
 class LinearConfig(LinearBaseConfig):
+    """Configuration for a linear (weight-only, no bias) layer with optional PEFT and tensor-parallelism support."""
+
     apply_peft: bool | None = Field(
         default=None,
         desc="Wrap this layer ."
@@ -104,6 +106,8 @@ class LinearConfig(LinearBaseConfig):
 
 @config_class()
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
+    """Configuration for an affine linear layer (weight + optional bias) with optional PEFT and tensor-parallelism support."""
+
     def get_layer(
         self,
         in_dim: TensorDim,
@@ -175,6 +179,7 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
     )
     activation: ActivationType | None = Field(
         default=None,
+        desc="Activation function applied after the convolution. None means no activation.",
         hint=FieldHint.architecture,
     )
 

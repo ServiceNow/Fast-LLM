@@ -18,7 +18,9 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ShufflingType(str, enum.Enum):
+class ShufflingType(enum.StrEnum):
+    """Strategy for shuffling dataset samples across training epochs."""
+
     # Shuffle all epochs together. Not extendable.
     full = "full"
     # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
@@ -115,6 +117,8 @@ class SamplingConfig(SamplingConfigBase):
 
 @config_class()
 class DatasetConfig[DocumentType: Document](Config):
+    """Abstract base configuration for all dataset types."""
+
     _abstract: typing.ClassVar[bool] = True
 
 
@@ -130,6 +134,8 @@ class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
 
 @config_class()
 class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    """Abstract configuration for datasets that can be built and then sampled."""
+
     def build(self) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
@@ -139,6 +145,8 @@ class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[Docume
 
 @config_class()
 class IndexedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
+    """Abstract configuration for indexed datasets that support random access by index."""
+
     def build(self) -> "IndexedDataset[DocumentType]":
         raise NotImplementedError()
 
@@ -211,6 +219,8 @@ class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[Document
 
 @config_class(dynamic_type={SampledDatasetConfig: "blended"})
 class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    """Mixes multiple datasets together, sampling from each according to specified weights."""
+
     _abstract = False
     name: str = Field(
         default="blended",
@@ -265,6 +275,8 @@ REDIS_GROUP_NAME = "fast_llm_group"
 
 @config_class()
 class RedisConfig(Config):
+    """Configuration for connecting to a Redis server (host, port, timeout)."""
+
     REDIS_FIELD: typing.ClassVar[str] = "data"
     REDIS_FIELD_B: typing.ClassVar[bytes] = REDIS_FIELD.encode()
     REDIS_GROUP_NAME: typing.ClassVar[str] = "fast_llm_group"
