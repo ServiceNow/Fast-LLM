@@ -70,7 +70,7 @@ def test_serialize_default_config_updates(cls):
 
 @pytest.mark.parametrize("load_config", tuple(ModelConfigType))
 def test_pretrained_config(load_config: ModelConfigType, result_path):
-    config_path = result_path / "pretrained_config"
+    config_path = result_path / "pretrained_config" / load_config.value
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {

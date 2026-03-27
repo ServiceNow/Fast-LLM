@@ -1,4 +1,5 @@
 import abc
+import functools
 import os
 import pathlib
 import shlex
@@ -10,7 +11,7 @@ from fast_llm.config import (
     Configurable,
     Field,
     FieldHint,
-    FieldUpdate,
+    FieldOverride,
     NoAutoValidate,
     check_field,
     config_class,
@@ -71,12 +72,12 @@ class CallbackConfig(Config):
 
 @config_class()
 class WandbAlertConfig(IntervalConfig):
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each Wandb status post (alert)."
         " Setting to None will disable iteration-based wandb alerts."
         " Must be a sub-interval of the logging interval."
     )
-    offset = FieldUpdate(
+    offset = FieldOverride(
         desc="Offset for the first Wandb status post (alert)." " Must be compatible with the logging offset.",
     )
     status_updates: bool | None = Field(
@@ -85,22 +86,20 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
-    post_alerts: bool = Field(init=False)
 
-    def _validate(self) -> None:
-        if self.status_updates is None:
-            self.post_alerts = self.enabled()
-        super()._validate()
+    @functools.cached_property
+    def post_alerts(self) -> bool:
+        return self.status_updates if self.status_updates is not None else self.enabled()
 
 
 @config_class()
 class MetricsLogsConfig(IntervalConfig):
-    interval = FieldUpdate(
+    interval = FieldOverride(
         default=100,
         desc="The number of training iterations between each metric logs."
         " Setting to None will disable metric logging.",
     )
-    offset = FieldUpdate(desc="Offset for the first metric logs.")
+    offset = FieldOverride(desc="Offset for the first metric logs.")
 
 
 @config_class()
@@ -159,12 +158,12 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each checkpoint. Setting to None will disable checkpoints."
     )
-    offset = FieldUpdate(desc="Offset for the first checkpoint.")
-    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
-    keep: int | None = FieldUpdate(default=5)
+    offset = FieldOverride(desc="Offset for the first checkpoint.")
+    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after checkpoint.")
+    keep: int | None = FieldOverride(default=5)
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "checkpoint"
@@ -192,11 +191,11 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
 class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
-    offset = FieldUpdate(desc="Offset for the first export.")
-    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
+    offset = FieldOverride(desc="Offset for the first export.")
+    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after export.")
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
@@ -207,12 +206,12 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
 
 @config_class()
 class ShutdownConfig(IntervalConfig):
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each automated shutdown."
         " Setting to None will disable automated shutdowns."
         " Must be a sub-interval of the checkpoint interval."
     )
-    offset = FieldUpdate(
+    offset = FieldOverride(
         desc="Offset for the first automated shutdown." " Must be compatible with the checkpoint offset."
     )
 

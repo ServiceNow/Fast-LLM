@@ -47,10 +47,9 @@ class UpdateType(str, enum.Enum):
     update = "update"
 
 
-class FieldHint:
+class FieldHint(enum.StrEnum):
     """
     A label defined for each config field, to let the user and some methods know how important each field is.
-    * core:
     """
 
     core = "core"
@@ -127,7 +126,7 @@ class Field(dataclasses.Field):
         *,
         desc: str | None = None,
         doc: str | None = None,
-        hint: str = FieldHint.unknown,
+        hint: FieldHint = FieldHint.unknown,
         # Validation function on the field to satisfy.
         # Should raise an Exception in case of failure, and return the validated value.
         # Run before the default validation (type check).
@@ -164,9 +163,9 @@ class Field(dataclasses.Field):
         # self.auto_instantiate = auto_instantiate
 
 
-class FieldUpdate(dict):
+class FieldOverride(dict):
     """
-    Specify some entries in the field that should be updated from the base class.
+    Override some entries in the field inherited from the base class.
     Useful for changing the default or description in a derived class.
     Processed in `__init_subclass__`.
     """
@@ -180,20 +179,6 @@ def check_field(fn, *args, **kwargs):
 
     def valid(x):
         fn(x, *args, **kwargs)
-        return x
-
-    return valid
-
-
-def test_field(fn, *args, **kwargs):
-    """
-    Helper function to define a condition that a config field should satisfy,
-    in the form of a function that returns a boolean.
-    """
-
-    def valid(x):
-        if not fn(x, *args, **kwargs):
-            raise ValueError(fn, x, args, kwargs)
         return x
 
     return valid
@@ -536,7 +521,7 @@ class Config(metaclass=ConfigMeta):
             )
         else:
             if not issubclass(origin, tuple) and len(args) != 1:
-                FieldTypeError(f"Invalid array specification")
+                raise FieldTypeError(f"Invalid array specification")
             new_value = origin(
                 cls._validate_nested(value_, args[0], f"{name}[{i}]", None, errors, True)
                 for i, value_ in enumerate(value)
@@ -649,8 +634,8 @@ class Config(metaclass=ConfigMeta):
         all_fields: bool = False,
         serializable: bool = True,
     ) -> None:
-        if field is not None and (not field.init or field._field_type != dataclasses._FIELD) and not all_fields:
-            # Exclude class variables and derived fields unless requested explicitly.
+        if field is not None and (field._field_type != dataclasses._FIELD or (not field.init and not all_fields)):
+            # Always exclude class variables; exclude derived (init=False) fields unless all_fields=True.
             return
         explicit_field = (
             field is None
@@ -865,7 +850,7 @@ class Config(metaclass=ConfigMeta):
                 new_value += value[len(value) - len(new_value) :]
         else:
             if not issubclass(origin, tuple) and len(args) != 1:
-                FieldTypeError(f"Invalid array specification")
+                raise FieldTypeError(f"Invalid array specification")
             new_value = origin(cls._from_dict_nested(value_, args[0], strict) for i, value_ in enumerate(value))
         return new_value
 
@@ -973,7 +958,7 @@ class Config(metaclass=ConfigMeta):
 
         for name in list(cls.__dict__):
             value = getattr(cls, name)
-            if isinstance(value, FieldUpdate):
+            if isinstance(value, FieldOverride):
                 # In case of multiple inheritance, the base class field may not appear in `cls.__dataclass_fields__`.
                 # so we iterate over superclasses following mro and use the first match.
                 base_class_field = None

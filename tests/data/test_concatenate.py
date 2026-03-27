@@ -23,7 +23,7 @@ GPT_CONCATENATED_SAMPLES = [
 ]
 
 
-def test_gpt_concatenate():
+def test_gpt_concatenate(data_result_path):
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     memmap_config = GPTDatasetFromFileConfig.from_dict(config)._load_config()
@@ -47,4 +47,5 @@ def test_gpt_concatenate():
         sequence_length=5,
         expected_samples=GPT_CONCATENATED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "concatenate",
     )

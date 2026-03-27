@@ -7,7 +7,7 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldOverride, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
@@ -142,8 +142,8 @@ class CheckpointSaveConfigBase(CheckpointConfigBase):
 @config_class()
 class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
     _abstract = False
-    model_weights: bool = FieldUpdate(desc="Save the model weights.")
-    optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
+    model_weights: bool = FieldOverride(desc="Save the model weights.")
+    optimizer_state: bool = FieldOverride(desc="Save the optimizer state. Default: save if supported by the `format`.")
 
     def _validate(self) -> None:
         if self.optimizer_state is None and hasattr(self.format, "support_optimizer"):
@@ -196,8 +196,8 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
 
-    model_weights: bool = FieldUpdate(desc="Load the model weights.")
-    optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
+    model_weights: bool = FieldOverride(desc="Load the model weights.")
+    optimizer_state: bool = FieldOverride(default=False, desc="Load the optimizer state.")
 
     def _validate(self) -> None:
         super()._validate()

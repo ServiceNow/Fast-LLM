@@ -106,7 +106,7 @@ def test_blending(probs):
     Assert.all_equal(samples, samples_alt)
 
 
-def test_gpt_blended():
+def test_gpt_blended(data_result_path):
     # Make sure dataset blending works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     _, alt_config, _, _ = get_alt_test_dataset()
@@ -127,10 +127,11 @@ def test_gpt_blended():
         sequence_length=5,
         expected_samples=GPT_BLENDED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "blended",
     )
 
 
-def test_gpt_blended_mixed():
+def test_gpt_blended_mixed(data_result_path):
     # Make sure dataset blending works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     # Random dataset needs an explicit vocab size.
@@ -155,4 +156,5 @@ def test_gpt_blended_mixed():
         sequence_length=5,
         expected_samples=GPT_BLENDED_MIXED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "blended_mixed",
     )

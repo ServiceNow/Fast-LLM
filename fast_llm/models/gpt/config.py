@@ -1,7 +1,7 @@
 import logging
 import typing
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
+from fast_llm.config import Field, FieldHint, FieldOverride, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
@@ -58,7 +58,7 @@ class GPTBaseModelConfig(LanguageModelConfig, BaseModelConfig):
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
-    base_model: GPTBaseModelConfig = FieldUpdate()
+    base_model: GPTBaseModelConfig = FieldOverride()
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         AutoGPTHuggingfaceCheckpointFormat,
         LlamaCheckpointFormat,
@@ -94,14 +94,14 @@ class GPTModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: GPTModelConfig = FieldUpdate()
+    model: GPTModelConfig = FieldOverride()
 
 
 @config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
-    data: GPTDataConfig = FieldUpdate()
+    data: GPTDataConfig = FieldOverride()
     # TODO: Use dynamic model type?
-    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldOverride()
 
     def _validate(self) -> None:
         if self.model.base_model.use_megatron_initialization:

@@ -231,9 +231,9 @@ def _run_test_data_streaming_distributed(
 
 
 @pytest.mark.parametrize("num_workers", (0, 1))
-def test_data_streaming(result_path, worker_resources, num_workers):
+def test_data_streaming(data_result_path, worker_resources, num_workers):
     distributed_config = _get_distributed_config({})
-    path = result_path / "data_streaming/single_gpu"
+    path = data_result_path / f"data_streaming/single_gpu_workers_{num_workers}"
     _run_test_data_streaming(path, distributed_config, worker_resources.torchrun_port, num_workers)
     check_data_streaming_results(path, distributed_config)
 
@@ -254,10 +254,10 @@ _DISTRIBUTED_TESTING_CONFIGS = [
 
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
-def test_run_data_streaming_distributed(run_parallel_script, result_path, worker_resources):
+def test_run_data_streaming_distributed(run_parallel_script, data_result_path, worker_resources):
     run_parallel_script(
         _run_test_data_streaming_distributed,
-        (result_path / "data_streaming", worker_resources.torchrun_port),
+        (data_result_path / "data_streaming", worker_resources.torchrun_port),
         world_size=4,
         backend=DistributedBackend.gloo,
         use_cuda=False,  # Disable device count check.
@@ -267,7 +267,7 @@ def test_run_data_streaming_distributed(run_parallel_script, result_path, worker
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_data_streaming"])
 @pytest.mark.parametrize(("name", "num_gpus", "distributed_config_dict"), _DISTRIBUTED_TESTING_CONFIGS)
-def test_data_streaming_distributed(result_path, name, num_gpus, distributed_config_dict, report_subtest):
-    report_subtest(path := result_path / f"data_streaming/{name}", num_gpus, use_cuda=False)
+def test_data_streaming_distributed(data_result_path, name, num_gpus, distributed_config_dict, report_subtest):
+    report_subtest(path := data_result_path / f"data_streaming/{name}", num_gpus, use_cuda=False)
     distributed_config = _get_distributed_config(distributed_config_dict, num_gpus)
     check_data_streaming_results(path, distributed_config)
