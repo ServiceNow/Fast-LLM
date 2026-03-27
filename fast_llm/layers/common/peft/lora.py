@@ -61,8 +61,9 @@ def lora_linear(
         input_ = input_.detach().requires_grad_()
         with torch.enable_grad():
             output = old_forward(input_)
+            layer_out = output
             if isinstance(output, tuple):
-                layer_out, tp_bias = output[0]
+                layer_out, tp_bias = output
                 assert tp_bias is None
             lora_out = (alpha / rank) * module.lora_1(
                 module.lora_0(torch.dropout(input_, dropout, module.training) if dropout > 0.0 else input_)
