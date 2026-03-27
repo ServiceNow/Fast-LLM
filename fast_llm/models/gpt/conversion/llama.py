@@ -217,7 +217,7 @@ class LlamaAttentionConverter:
                 }
             )
         else:
-            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
+            raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
         out = {
             "rotary": rotary_config,
             "heads": config["num_attention_heads"],

@@ -116,7 +116,7 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         if self._config.routing == RoutingType.topk:
             scores, top_experts = self._topk_routing(logits, kwargs.get(BlockKwargs.grad_output), losses)
             if self._config.shared_experts > 0:
-                scores, top_experts = self._add_shared_experts(top_experts, scores)
+                scores, top_experts = self._add_shared_experts(scores, top_experts)
         elif self._config.routing == RoutingType.sinkhorn:
             scores, top_experts = self._sinkhorn_routing(logits)
         else:
