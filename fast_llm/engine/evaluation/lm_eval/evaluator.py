@@ -26,7 +26,7 @@ class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
         run_count: int,
     ) -> None:
         if "HUGGINGFACE_API_KEY_PATH" in os.environ:
-            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
+            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).read_text().strip()
         else:
             if not "HF_TOKEN" in os.environ:
                 logger.warning(
@@ -62,4 +62,4 @@ class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
         metrics: dict[str, typing.Any],
     ) -> None:
         assert self._is_setup
-        self._flm_wrapper.run(self._config.cli_args, metrics.get("completed_steps", 0), self._run.index)
+        self._flm_wrapper.run(self._config.cli_args, metrics.get("completed_steps", 0), run_index)

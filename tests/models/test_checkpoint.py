@@ -235,7 +235,7 @@ def test_load_pretrained(
 ):
     # Test that loadind a pretrained model from either converted checkpoint always yields the exact same model.
     reference_config = model_testing_config.model_config_class.from_dict(
-        yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
+        yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").read_text())["model"]
     )
     reference_shard = safetensors.torch.load_file(
         get_convert_path() / "rank_0.safetensors", device=str(testing_device)
@@ -260,7 +260,7 @@ def test_load_pretrained(
             "base_model": yaml.safe_load(
                 get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
                 .joinpath("metadata.yaml")
-                .open("r")
+                .read_text()
             )["config"]["base_model"]
         }
     )

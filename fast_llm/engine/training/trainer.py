@@ -402,7 +402,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         )
         # Mark the checkpoint as complete.
         if self._run.is_main_rank:
-            (checkpoint_directory / "ok").open("w")
+            (checkpoint_directory / "ok").touch()
             logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
 
             to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))

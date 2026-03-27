@@ -153,7 +153,7 @@ class RunnableConfig(Config):
         elif urllib.parse.urlparse(parsed.config).scheme == "https":
             return yaml.safe_load(cls._load_url(parsed.config, parsed.config_auth_token_file))
         elif pathlib.Path(parsed.config).is_file():
-            return yaml.safe_load(pathlib.Path(parsed.config).open("r").read())
+            return yaml.safe_load(pathlib.Path(parsed.config).read_text())
         else:
             raise FileNotFoundError(parsed.config)
 

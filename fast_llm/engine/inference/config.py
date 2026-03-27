@@ -72,7 +72,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         kwargs.pop("_from_pipeline", None)
         kwargs.pop("_from_auto", False)
         kwargs.pop("_commit_hash", None)
-        kwargs.get("gguf_file", None)
+        kwargs.pop("gguf_file", None)
 
         # Get the pretrained config.
         if "pretrained" in kwargs:

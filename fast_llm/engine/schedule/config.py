@@ -16,13 +16,14 @@ class ScheduleConfig(Config):
 
     depth_first_micro_batches: int = Field(
         default=1,
-        desc="Size of individual micro-batches. May be derived or constrained be other quantities.",
+        desc="Number of micro-batches processed depth-first, i.e., each runs through all model stages before the next"
+        " begins. This is the standard way to perform gradient accumulation.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
     breadth_first_micro_batches: int = Field(
         default=1,
-        desc="Size of individual micro-batches. May be derived or constrained be other quantities.",
+        desc="Number of micro-batches processed breadth-first, i.e., interleaved across model stages.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )

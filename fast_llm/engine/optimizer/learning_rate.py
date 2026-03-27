@@ -59,22 +59,20 @@ class PowerLRStage(InterpolateLRStage):
         super().__post_init__()
         Assert.gt(self.power, 0)
 
-    @abc.abstractmethod
     def _interpolate(self, coeff: float) -> float:
         return coeff**self.power
 
 
 @dataclasses.dataclass()
 class CosineLRStage(InterpolateLRStage):
-    lr: int
-    end_lr: int
+    lr: float
+    end_lr: float
     power: float = 1.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
         Assert.gt(self.power, 0)
 
-    @abc.abstractmethod
     def _interpolate(self, coeff: float) -> float:
         return 0.5 * (1.0 - math.cos(math.pi * coeff**self.power))
 

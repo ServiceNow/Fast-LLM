@@ -70,7 +70,7 @@ class ConvertConfig(RunnableConfig):
         logger.info(f"Saving {output.format} checkpoint to {output.path}...")
         output.path.mkdir(parents=True, exist_ok=self.exist_ok)
         model.save_checkpoint(output)
-        (output.path / "ok").open("w")
+        (output.path / "ok").touch()
         logger.info(f"Done!")
 
     def run(self):
@@ -120,7 +120,7 @@ class ConvertConfig(RunnableConfig):
             global_rename_map = {}
             file_count = 0
             for step_path in step_paths:
-                step_index = json.load((step_path / index_filename).open("r"))
+                step_index = json.loads((step_path / index_filename).read_text())
                 if len(index) == 0:
                     index.update(step_index)
                     index["weight_map"] = weight_map
@@ -141,7 +141,7 @@ class ConvertConfig(RunnableConfig):
             path = self.output.path / index_filename
 
             # Save the index.
-            json.dump(index, path.open("w"), indent=4)
+            path.write_text(json.dumps(index, indent=4))
 
             # Copy the config
             (step_paths[0] / config_filename).rename(self.output.path / config_filename)
@@ -158,5 +158,5 @@ class ConvertConfig(RunnableConfig):
                 step_path.rmdir()
 
             # All good!
-            (self.output.path / "ok").open("w")
+            (self.output.path / "ok").touch()
             logger.info(f">>> All done!")

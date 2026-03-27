@@ -144,9 +144,9 @@ class Run:
                 (self._experiment_directory / "runs").mkdir(exist_ok=True, parents=True)
                 run = len(list((self._experiment_directory / "runs").iterdir()))
                 (self._experiment_directory / "runs" / str(run)).mkdir()
-                yaml.safe_dump(config_dict, (self._experiment_directory / "config.yaml").open("w"))
+                (self._experiment_directory / "config.yaml").write_text(yaml.safe_dump(config_dict))
                 # Dumping a verbose version of the config
-                yaml.safe_dump(config_dict_verbose, (self._experiment_directory / "config_verbose.yaml").open("w"))
+                (self._experiment_directory / "config_verbose.yaml").write_text(yaml.safe_dump(config_dict_verbose))
             else:
                 run = 0
             # Make sure all the workers agree on the run. This also acts as a barrier.
