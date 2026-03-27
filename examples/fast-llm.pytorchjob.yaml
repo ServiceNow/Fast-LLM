@@ -42,7 +42,7 @@ spec:
                            --rdzv_conf=timeout=3600 \
                            --no_python \
                            fast-llm train gpt \
-                           --config examples/mistral-4-node-benchmark.yaml
+                           --config examples/mistral.yaml
               env:
                 - name: NCCL_DEBUG
                   value: "INFO"
@@ -102,7 +102,7 @@ spec:
                            --rdzv_conf=timeout=3600 \
                            --no_python \
                            fast-llm train gpt \
-                           --config examples/mistral-4-node-benchmark.yaml
+                           --config examples/mistral.yaml
               env:
                 - name: NCCL_DEBUG
                   value: "INFO"

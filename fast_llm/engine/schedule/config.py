@@ -1,7 +1,7 @@
 import enum
 import functools
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, test_field
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.utils import Assert
 
 
@@ -68,10 +68,6 @@ class ScheduleConfig(Config):
         default=False,
         desc="Detailed time table for the schedule execution (cpu and gpu times).",
         hint=FieldHint.logging,
-    )
-    # TODO: Remove
-    estimate_critical_batch: bool = Field(
-        default=False, desc="No longer supported.", hint=FieldHint.deprecated, valid=test_field(lambda x: not x)
     )
     # Skip the weight update and related ops (debug)
     skip_step: bool = Field(

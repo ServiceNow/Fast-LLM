@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import typing
+import warnings
 
 import redis
 import torch.utils.data
@@ -33,20 +34,25 @@ class RedisStreamingDocumentData(Config):
 
     def _validate(self):
         # Decode message
-        if isinstance(self.tokens, bytes):
-            self.tokens = torch.frombuffer(self.tokens, dtype=torch.int64)
-        elif isinstance(self.tokens, (list, tuple)):
-            self.tokens = torch.tensor(self.tokens, dtype=torch.int64)
+        with warnings.catch_warnings():
+            # The tensors are read-only in practice; the non-writable-buffer warning is expected.
+            warnings.simplefilter("ignore", UserWarning)
+            if isinstance(self.tokens, bytes):
+                self.tokens = torch.frombuffer(self.tokens, dtype=torch.int64)
+            elif isinstance(self.tokens, (list, tuple)):
+                self.tokens = torch.tensor(self.tokens, dtype=torch.int64)
         if isinstance(self.loss_masking_spans, str):
             self.loss_masking_spans = json.loads(self.loss_masking_spans)
         if isinstance(self.chosen_span, str):
             self.chosen_span = json.loads(self.chosen_span)
         if isinstance(self.rejected_span, str):
             self.rejected_span = json.loads(self.rejected_span)
-        if isinstance(self.old_log_probabilities, bytes):
-            self.old_log_probabilities = torch.frombuffer(self.old_log_probabilities, dtype=torch.float32)
-        elif isinstance(self.old_log_probabilities, (list, tuple)):
-            self.old_log_probabilities = torch.tensor(self.old_log_probabilities, dtype=torch.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            if isinstance(self.old_log_probabilities, bytes):
+                self.old_log_probabilities = torch.frombuffer(self.old_log_probabilities, dtype=torch.float32)
+            elif isinstance(self.old_log_probabilities, (list, tuple)):
+                self.old_log_probabilities = torch.tensor(self.old_log_probabilities, dtype=torch.float32)
         super()._validate()
         if self.old_log_probabilities is not None:
             Assert.eq(len(self.old_log_probabilities), self.num_tokens)

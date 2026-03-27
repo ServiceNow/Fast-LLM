@@ -63,10 +63,6 @@ class MemmapArray:
             self._array = np.load(self._path, mmap_mode="r")
 
 
-# TODO: Make configurable?
-TOKEN_CUMSUM_RATE = 10
-
-
 class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A sampled dataset.
@@ -253,9 +249,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
         # The starting point `(document[idx], token[idx])` corresponds to the `(idx * sequence_length)` th token, i.e.
         # `document_sizes[all_document_index][:document[idx]].sum() + token[idx] == idx * sequence_length`.
         # This can be computed quickly provided we know a (partial) sum close to `(idx * sequence_length)`.
-        # So it is enough to pre-compute the (zero-padded) token cumsum at regular intervals `TOKEN_CUMSUM_RATE`.
-        # Using `TOKEN_CUMSUM_RATE > 1` reduces pre-computation overhead at the cost of runtime computation.
-        # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
+        # So it is enough to pre-compute the (zero-padded) token cumsum at regular intervals (`token_cumsum_rate`).
+        # A larger rate reduces pre-computation overhead at the cost of more runtime scanning per sample.
+        # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::token_cumsum_rate]))`
         if unshuffled_epochs > 0:
             token_cumsum_unshuffled, unshuffled_tokens = self._get_token_cumsum(
                 document_sizes,
@@ -288,7 +284,7 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             )
             self._token_cumsum_shuffled.save(token_cumsum_shuffled)
             self._document_shuffling.save(
-                document_shuffling[: (token_cumsum_shuffled.size + 1) * TOKEN_CUMSUM_RATE].numpy(
+                document_shuffling[: (token_cumsum_shuffled.size + 1) * self._config.token_cumsum_rate].numpy(
                     force=self._config.gpu
                 )
             )
@@ -298,10 +294,12 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: DataType) -> tuple[np.ndarray, int | None]:
         if self._config.truncate_documents:
             # Create the output tensor.
-            out = sizes.new_empty(sizes.numel() // TOKEN_CUMSUM_RATE + 1, dtype=dtype.torch)
+            out = sizes.new_empty(sizes.numel() // self._config.token_cumsum_rate + 1, dtype=dtype.torch)
             # Get partial sums for regular intervals, excluding the last incomplete interval.
             torch.sum(
-                sizes[: sizes.numel() - sizes.numel() % TOKEN_CUMSUM_RATE].view(-1, TOKEN_CUMSUM_RATE),
+                sizes[: sizes.numel() - sizes.numel() % self._config.token_cumsum_rate].view(
+                    -1, self._config.token_cumsum_rate
+                ),
                 dim=1,
                 out=out[1:],
             )
@@ -319,7 +317,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             return out.numpy(force=self._config.gpu), None
         else:
             # TODO: dynamically handle int64 or int32 in CPP
-            out = build_padded_token_cumsum(sizes.cpu().numpy(), self._config.sample_size, TOKEN_CUMSUM_RATE, offset)
+            out = build_padded_token_cumsum(
+                sizes.cpu().numpy(), self._config.sample_size, self._config.token_cumsum_rate, offset
+            )
             num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(
@@ -358,7 +358,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
         # Find the rightmost location `token_start_cumsum_index` in `token_cumsum` with `token_cumsum[token_start_cumsum_index] <= token_start`
         token_start_cumsum_index = np.searchsorted(token_start_array, token_start, side="right").item() - 1
 
-        document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
+        document_sampling_index = (
+            token_start_cumsum_index * self._config.token_cumsum_rate + token_start_array_document_offset
+        )
 
         token_count = token_start_array[token_start_cumsum_index].item()
 

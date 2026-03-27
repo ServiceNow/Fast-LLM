@@ -157,6 +157,10 @@ plugins:
       branch: main
   - bibtex:
       bib_file: "docs/refs.bib"
+      enable_inline_citations: false
+
+exclude_docs: |
+  README.md
 
 nav:
   - Welcome: index.md
@@ -190,5 +194,6 @@ nav:
     - Style Guide: contributing/style-guide.md
     - Development Practices: contributing/dev-practices.md
     - Testing: contributing/testing.md
+    - How to Release: contributing/how-to-release.md
   - About Us: about-us.md
   - Join Us: join-us.md

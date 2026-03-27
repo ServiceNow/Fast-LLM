@@ -79,6 +79,13 @@ class SamplingConfig(SamplingConfigBase):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     predicted_tokens: int = Field(default=1)
+    token_cumsum_rate: int = Field(
+        default=10,
+        desc="Sampling interval for the token cumulative sum index."
+        " A smaller value reduces per-sample seek time at the cost of a larger index.",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0),
+    )
     cache_directory: pathlib.Path | None = Field(default=None)
     dataset_name: str = Field(default="dataset")
     world_size: int = Field(default=1)
