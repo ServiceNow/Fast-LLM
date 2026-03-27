@@ -71,7 +71,6 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
     def _get_intermediate_dims(self):
         intermediate_2_dim = TensorDim("intermediate", self._config.intermediate_size, self._parallel_dim)
         if self._config.gated:
-            TensorDim("gate_and_up", 2)
             intermediate_1_dim = ConcatenatedTensorDim("gate_and_up", (intermediate_2_dim, intermediate_2_dim))
         else:
             intermediate_1_dim = intermediate_2_dim
