@@ -706,7 +706,7 @@ update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
         ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
     },
 )

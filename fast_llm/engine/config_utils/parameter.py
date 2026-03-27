@@ -38,6 +38,7 @@ def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
 
 @config_class()
 class ParameterConfig(ModuleConfig):
+    _abstract = False
     initialization: InitializationConfig = Field(
         desc="If provided, override the default initialization method set by the parent layer.",
         hint=FieldHint.feature,
@@ -49,9 +50,6 @@ class ParameterConfig(ModuleConfig):
         hint=FieldHint.feature,
     )
     # TODO: Initialization, lr_scale
-
-    def _validate(self) -> None:
-        pass
 
     def get_parameter(
         self,
@@ -83,9 +81,6 @@ class OptionalParameterConfig(ParameterConfig):
         default=None,
     )
 
-    def _validate(self) -> None:
-        pass
-
     def get_parameter(
         self,
         dims: tuple[TensorDim, ...],
@@ -97,8 +92,6 @@ class OptionalParameterConfig(ParameterConfig):
         default_enabled: bool = False,
         peft: PeftConfig | None,
     ) -> "ParameterMeta|None":
-        pass
-
         if (self.enabled is None and default_enabled) or self.enabled:
             return super().get_parameter(
                 dims,

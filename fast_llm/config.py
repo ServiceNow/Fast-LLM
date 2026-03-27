@@ -40,7 +40,7 @@ class NoAutoValidate:
         _AUTO_VALIDATE = self._old_value
 
 
-class UpdateType(str, enum.Enum):
+class UpdateType(enum.StrEnum):
     # Override entries no matter what they contain.
     override = "override"
     # Override atomic entries and lists, but update dicts recursively by setting or overriding only the specified entries.

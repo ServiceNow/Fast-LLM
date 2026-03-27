@@ -165,9 +165,8 @@ class RunnableConfig(Config):
 
         headers = {"Accept": "application/vnd.github.v3.raw"}
         if config_auth_token_file is not None:
-            config_auth_token = config_auth_token_file.open("r").read().strip()
-            with open(config_auth_token_file) as f:
-                headers["Authorization"] = f"token {config_auth_token}"
+            config_auth_token = config_auth_token_file.read_text().strip()
+            headers["Authorization"] = f"token {config_auth_token}"
         response = requests.get(config_url, headers=headers)
         if response.status_code == 200:
             return response.text

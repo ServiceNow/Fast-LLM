@@ -97,7 +97,7 @@ class LayerBaseWithNamespace(LayerBase):
     TODO: Consider namespace for losses and metrics?
     """
 
-    def __init__(self, layer: LayerBase, namespace: str = None):
+    def __init__(self, layer: LayerBase, namespace: str):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
@@ -139,7 +139,7 @@ class LayerBaseWithNamespace(LayerBase):
 class LayerWithNamespace(LayerBaseWithNamespace, Layer):
     _layer: Layer
 
-    def __init__(self, layer: Layer, namespace: str = None):
+    def __init__(self, layer: Layer, namespace: str):
         super().__init__(layer, namespace)
         self.layer_count = self._layer.layer_count
 
