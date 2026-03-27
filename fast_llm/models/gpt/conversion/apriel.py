@@ -34,7 +34,7 @@ class AprielMambaConverter:
             "d_xb": config["ssm_cfg"].get("d_xb") or config["hidden_size"],
             "dt_layer": {"bias": {"enabled": config["ssm_cfg"].get("dt_proj_bias", True)}},
             "dt_rank": (
-                math.ceil(config["hidden_size"])
+                math.ceil(config["hidden_size"] / 16)
                 if config["ssm_cfg"].get("dt_rank", "auto") == "auto"
                 else config["ssm_cfg"]["dt_rank"]
             ),
