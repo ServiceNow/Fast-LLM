@@ -192,7 +192,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         interrupter = Interrupter(self._config.training.checkpoint.enabled())
         train_iterator = self._get_data_iterator(
-            PhaseType.training.value,
+            PhaseType.training,
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
@@ -254,7 +254,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        metrics_key = PhaseType.training.value
+                        metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
                             **{
@@ -429,7 +429,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
-            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
+            self._completed_steps = metadata["schedules"][PhaseType.training]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
         # TODO: Move barrier, ok file to FastLLMModel

@@ -48,7 +48,7 @@ def test_mlp_recomputation(gated, activation, testing_device):
     param_grad_refs = [param.grad for param in params]
 
     for i, recompute_level in enumerate(MLPRecomputeLevel):
-        print(recompute_level.value)  # noqa
+        print(recompute_level)  # noqa
         input_.grad = None
         for param in params:
             param.grad = None

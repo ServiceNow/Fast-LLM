@@ -495,7 +495,7 @@ class Apriel2StochasticMixerConverter:
             "type": "stochastic",
             "mixers": mixers,
             "main_mixer_name": config.main_mixer_name,
-            "sampling_strategy": config.sampling_strategy.value,
+            "sampling_strategy": config.sampling_strategy,
         }
 
     @classmethod
@@ -620,7 +620,7 @@ class Apriel2BlockConverter:
         mlp = {
             "type": "mlp",
             "intermediate_size": config.mlp.intermediate_size,
-            "activation": config.mlp.activation.value,
+            "activation": config.mlp.activation,
             "gated": config.mlp.gated,
             "add_linear_biases": config.mlp.add_linear_biases,
         }

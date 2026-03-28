@@ -149,7 +149,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._setup_metas()
 
         if self._config.debug_schedule:
-            logger.info(f"{self._phase.value} schedule:\n{self._steps}")
+            logger.info(f"{self._phase} schedule:\n{self._steps}")
 
     @property
     def phase(self) -> PhaseType:
@@ -210,7 +210,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 for stage in range(0 if type_ == StepType.forward else self._first_grad_stage, self._num_stages):
                     assert (
                         step_map.pop((type_, stage, data_index), None) is not None
-                    ), f"Missing {type_.value} step with stage={stage}, data_index={data_index}"
+                    ), f"Missing {type_} step with stage={stage}, data_index={data_index}"
         Assert.empty(step_map)
 
         # Related steps
