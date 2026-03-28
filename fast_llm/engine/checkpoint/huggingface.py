@@ -165,7 +165,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                     for key in f.keys():
                         yield key, "weights", f.get_slice(key)
             elif path.suffix == ".bin":
-                # TODO: Confirm that loading works with `weights_only=True`
-                yield from torch.load(path, weights_only=True)
+                for key, tensor in torch.load(path, weights_only=True).items():
+                    yield key, "weights", tensor
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")
