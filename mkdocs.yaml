@@ -187,6 +187,7 @@ nav:
       - Evaluators: user_guide/evaluators.md
     - Developer Guide:
       - Configuration: developer_guide/configuration.md
+      - Parallelism: developer_guide/parallelism.md
       - Model:
         - Model: developer_guide/model.md
         - Conversion: developer_guide/conversion.md
