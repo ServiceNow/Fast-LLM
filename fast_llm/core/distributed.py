@@ -164,9 +164,7 @@ def send(
     assert group is not None
     if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
         # send not supported for gloo on GPU.
-        tensor_cpu = tensor.cpu()
-        group.send([tensor_cpu], dst, tag).wait()
-        tensor.copy_(tensor_cpu)
+        group.send([tensor.cpu()], dst, tag).wait()
         return None
     work = group.send([tensor], dst, tag)
     if async_op:
@@ -182,7 +180,7 @@ def recv(
     assert group is not None
     if isinstance(group, torch.distributed.ProcessGroupGloo) and tensor.device.type != "cpu":
         # recv not supported for gloo on GPU.
-        tensor_cpu = tensor.cpu()
+        tensor_cpu = tensor.new_empty(device="cpu")
         group.recv([tensor_cpu], src, tag).wait()
         tensor.copy_(tensor_cpu)
         return None

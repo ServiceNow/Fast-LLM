@@ -449,8 +449,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
                 [metadata_["chosen_spans"] for metadata_ in metadata]
             )
         if "rejected_spans" in metadata[0]:
-            out["image_patches"] = RangeReaderConfig.blend_metadata(
-                [metadata_["image_patches"] for metadata_ in metadata]
+            out["rejected_spans"] = RangeReaderConfig.blend_metadata(
+                [metadata_["rejected_spans"] for metadata_ in metadata]
             )
         if "image_patches" in metadata[0]:
             out["image_patches"] = PatchReaderConfig.blend_metadata(

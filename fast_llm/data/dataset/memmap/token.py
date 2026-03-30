@@ -54,7 +54,8 @@ def _get_nearest_split(cumsum: torch.Tensor, value: float) -> int:
     left = torch.searchsorted(cumsum, value, side="right")
     if left == len(cumsum):
         return left.item()
-    return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
+    prev = cumsum[left - 1].item() if left > 0 else 0
+    return left.item() + 1 if (value - prev) / (cumsum[left].item() - prev) > 0.5 else left.item()
 
 
 class TokenWriter(MemmapWriter):
