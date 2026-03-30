@@ -39,6 +39,14 @@ from fast_llm_external_models.apriel2.conversion.diagram.model import (
 from fast_llm_external_models.apriel2.conversion.diagram.style import Theme
 
 _ARROW_CLR = 1  # px clearance between arrowhead tip and target box edge
+_clip_counter = 0
+
+
+def _next_clip_id(prefix: str = "clip") -> str:
+    """Return a unique clip-path ID for sheen clipping."""
+    global _clip_counter
+    _clip_counter += 1
+    return f"{prefix}-{_clip_counter}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -72,12 +80,18 @@ class Box:
         main_kwargs: dict[str, Any] = dict(x=bb.x, y=bb.y, width=bb.w, height=bb.h, rx=th.geo.rx)
         if self.fill is not None:
             main_kwargs["fill"] = self.fill
+        clip_id = _next_clip_id("box-clip")
         els: list[S.Element] = [
             S.Rect(x=bb.x + 3, y=bb.y + 3, width=bb.w, height=bb.h,
                    rx=th.geo.rx, class_=[shadow_cls]),
             S.Rect(**main_kwargs),
+            S.Defs(elements=[
+                S.ClipPath(id=clip_id, elements=[
+                    S.Rect(x=bb.x, y=bb.y, width=bb.w, height=bb.h, rx=th.geo.rx),
+                ]),
+            ]),
             S.Rect(x=bb.x + 2, y=bb.y + 1, width=bb.w - 4, height=6,
-                   rx=5, class_=["box-sheen"]),
+                   rx=th.geo.rx, clip_path=f"url(#{clip_id})", class_=["box-sheen"]),
             S.Text(x=bb.cx, y=bb.cy, text=self.label, class_=txt_cls),
         ]
         yield S.G(class_=["box", self.css], elements=els)
@@ -200,12 +214,18 @@ class ValueLabel:
         sz = self.measure(th)
         rx = bb.x + (bb.w - sz.w) / 2
         ry = bb.y + (bb.h - sz.h) / 2
+        clip_id = _next_clip_id("vl-clip")
         yield S.G(class_=["box", "box-transparent"], elements=[
             S.Rect(x=rx + 3, y=ry + 3, width=sz.w, height=sz.h,
                    rx=th.geo.rx, class_=["box-shadow-muted"]),
             S.Rect(x=rx, y=ry, width=sz.w, height=sz.h, rx=th.geo.rx),
+            S.Defs(elements=[
+                S.ClipPath(id=clip_id, elements=[
+                    S.Rect(x=rx, y=ry, width=sz.w, height=sz.h, rx=th.geo.rx),
+                ]),
+            ]),
             S.Rect(x=rx + 2, y=ry + 1, width=sz.w - 4, height=6,
-                   rx=5, class_=["box-sheen"]),
+                   rx=th.geo.rx, clip_path=f"url(#{clip_id})", class_=["box-sheen"]),
             S.Text(x=bb.cx, y=bb.cy, text=self.text, class_=["t-label"]),
         ])
 
@@ -913,8 +933,17 @@ def _render_detail_frame(
     content_bb = BBox(x + g, y + title_h + g, w - 2 * g, h - title_h - 2 * g)
     if not title:
         # Untitled: single rounded rect, white content
+        clip_id = _next_clip_id("frame-clip")
         return S.G(class_=[css], elements=[
+            S.Rect(x=x + 3, y=y + 3, width=w, height=h, rx=rx, class_=["box-shadow"]),
             S.Rect(x=x, y=y, width=w, height=h, rx=rx, class_=["detail-content"]),
+            S.Defs(elements=[
+                S.ClipPath(id=clip_id, elements=[
+                    S.Rect(x=x, y=y, width=w, height=h, rx=rx),
+                ]),
+            ]),
+            S.Rect(x=x + 2, y=y + 1, width=w - 4, height=6, rx=rx,
+                   clip_path=f"url(#{clip_id})", class_=["box-sheen"]),
         ]), content_bb
     # Title strip: rounded top corners, square bottom
     title_path_kwargs: dict = dict(
@@ -945,9 +974,26 @@ def _render_detail_frame(
         ],
         class_=["detail-content"],
     )
+    clip_id = _next_clip_id("frame-clip")
+    # Clip sheen to title strip shape (rounded top corners, square bottom)
+    clip_path = S.Path(d=[
+        S.MoveTo(x, y + title_h),
+        S.LineTo(x, y + rx),
+        S.Arc(rx, rx, 0, False, True, x + rx, y),
+        S.LineTo(x + w - rx, y),
+        S.Arc(rx, rx, 0, False, True, x + w, y + rx),
+        S.LineTo(x + w, y + title_h),
+        S.ClosePath(),
+    ])
     return S.G(class_=[css], elements=[
+        S.Rect(x=x + 3, y=y + 3, width=w, height=h, rx=rx, class_=["box-shadow"]),
         title_path,
         content_path,
+        S.Defs(elements=[
+            S.ClipPath(id=clip_id, elements=[clip_path]),
+        ]),
+        S.Rect(x=x + 2, y=y + 1, width=w - 4, height=6, rx=rx,
+               clip_path=f"url(#{clip_id})", class_=["box-sheen"]),
         S.Text(x=x + w / 2, y=y + title_h / 2, text=title,
                class_=["t-label-bold"], text_anchor="middle",
                dominant_baseline="central"),

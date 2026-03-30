@@ -32,7 +32,7 @@ class Palette:
     gate: str = "#e8d8f0"
     gate_text: str = "#5a3a7a"
     stochastic: str = "#f0e8d8"
-    stoch_text: str = "#6a5a3a"
+    stoch_text: str = "#4a4038"
 
     # infrastructure — warm muted
     embedding: str = "#e8e2da"
@@ -100,7 +100,7 @@ class Geometry:
     box_h_sm: float = 28
     value_label_h: float = 20
     rx: float = 7
-    rx_block: float = 10
+    rx_block: float = 7
 
     gap: float = 10
     gap_block: float = 6
@@ -116,11 +116,11 @@ class Geometry:
     stack_cell_gap: float = 10  # matches gap — room for vertical flow lines
     stack_conn_gap: float = 60  # gap between overview right edge and definition area
 
-    title_h: float = 24  # height of title strip in titled panels
+    title_h: float = 30  # height of title strip in titled panels
 
     stroke: float = 1.8
     stroke_arrow: float = 2.0
-    stroke_detail: float = 1.5
+    stroke_detail: float = 2.2
     dash: list[int] = field(default_factory=lambda: [6, 4])
 
 
@@ -225,22 +225,22 @@ text.mono {{ font-family: {mono}; }}
 }}
 
 /* ── detail panel frames ───────────────── */
-.detail-attention {{ fill: {attn}; stroke: {attn}; stroke-width: {sw_det}; }}
+.detail-attention {{ fill: {attn}; stroke: {attn_t}; stroke-width: {sw_det}; }}
 .detail-attention > text {{ fill: {attn_t}; stroke: none; }}
 
-.detail-swa {{ fill: {swa}; stroke: {swa}; stroke-width: {sw_det}; }}
+.detail-swa {{ fill: {swa}; stroke: {swa_t}; stroke-width: {sw_det}; }}
 .detail-swa > text {{ fill: {swa_t}; stroke: none; }}
-.detail-gdn {{ fill: {gdn}; stroke: {gdn}; stroke-width: {sw_det}; }}
+.detail-gdn {{ fill: {gdn}; stroke: {gdn_t}; stroke-width: {sw_det}; }}
 .detail-gdn > text {{ fill: {gdn_t}; stroke: none; }}
-.detail-kda {{ fill: {kda}; stroke: {kda}; stroke-width: {sw_det}; }}
+.detail-kda {{ fill: {kda}; stroke: {kda_t}; stroke-width: {sw_det}; }}
 .detail-kda > text {{ fill: {kda_t}; stroke: none; }}
-.detail-mamba {{ fill: {mamba}; stroke: {mamba}; stroke-width: {sw_det}; }}
+.detail-mamba {{ fill: {mamba}; stroke: {mamba_t}; stroke-width: {sw_det}; }}
 .detail-mamba > text {{ fill: {mamba_t}; stroke: none; }}
 
 .detail-stochastic {{ fill: url(#super-mixer-stripes); stroke: {stoch_t}; stroke-width: {sw_det}; }}
 .detail-stochastic > text {{ fill: {stoch_t}; stroke: none; }}
 
-.detail-mlp {{ fill: {mlp}; stroke: {mlp}; stroke-width: {sw_det}; }}
+.detail-mlp {{ fill: {mlp}; stroke: {mlp_t}; stroke-width: {sw_det}; }}
 .detail-mlp > text {{ fill: {mlp_t}; stroke: none; }}
 
 .detail-decoder {{ fill: {blk_bg}; stroke: {blk_s}; stroke-width: {sw_det}; }}
