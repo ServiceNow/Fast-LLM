@@ -4,8 +4,8 @@ import typing
 import torch
 
 from fast_llm.engine.base_model.config import LossDef
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
+from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
@@ -35,6 +35,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                 if losses is None
                 else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
             ),
+            divisor=self._get_label_count(kwargs),
         )
 
         self._register_loss(
@@ -42,15 +43,8 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         )
         return loss, grad
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return super().get_loss_definitions(count) + [
-            LossDef(
-                self._logprob_metric_name,
-                formatted_name=self._logprob_metric_name,
-                count=1,  # This is an additive metric over the sequence.
-                dtype=DataType.float32,
-            )
-        ]
+    def get_loss_definitions(self) -> list[LossDef]:
+        return super().get_loss_definitions() + [LossDef(self._logprob_metric_name)]
 
     def get_preprocessing_config(
         self,
@@ -77,8 +71,11 @@ def fused_grpo_loss_forward_backward(
     num_labels_in_seq: (
         torch.Tensor | None
     ) = None,  # (*batch,) — response-span length broadcast per token, 0 for non-response
+    divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
-    grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     loss_mask = target >= 0
 
     logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
@@ -88,12 +85,11 @@ def fused_grpo_loss_forward_backward(
     new_log_probs = predicted_logits - sum_exp_logits.log()
     probability_ratio = (new_log_probs - old_log_probabilities).exp()
 
-    per_sample_loss = -torch.min(
+    losses = -torch.min(
         probability_ratio * advantages,
         torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantages,
     )
-    per_sample_loss = per_sample_loss * loss_mask
-    loss = per_sample_loss.mean()
+    loss = reduce_losses(losses, divisor, loss_mask)
 
     # Sum of per-sequence mean log-probs, matching pipelinerl's new_logprobs metric:
     #   sum_sum(new_logprobs / num_labels_in_seq, masks_shifted, segments)

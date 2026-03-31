@@ -9,9 +9,9 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.autograd import AuxiliaryLoss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.functional.utils import AuxiliaryLoss
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
@@ -247,24 +247,12 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         )
         return super().get_compute_usage(moe_input, kwargs, config) + self.router.get_compute_usage(input_, config)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         loss_definitions = []
         if self._config.routing == RoutingType.topk:
-            loss_definitions.append(
-                LossDef(
-                    name=MLPLossNames.load_balancing_loss,
-                    formatted_name="load balancing loss",
-                    count=1,
-                )
-            )
+            loss_definitions.append(LossDef(name=MLPLossNames.load_balancing_loss))
         if self._config.z_loss_coefficient:
-            loss_definitions.append(
-                LossDef(
-                    name=MLPLossNames.router_z_loss,
-                    formatted_name="router z loss",
-                    count=1,
-                )
-            )
+            loss_definitions.append(LossDef(name=MLPLossNames.router_z_loss))
         return loss_definitions
 
 

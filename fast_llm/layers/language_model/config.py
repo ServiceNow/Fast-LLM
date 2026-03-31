@@ -24,6 +24,7 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     token_map = "token_map"
     sample_map = "sample_map"
     embedding_map = "embedding_map"
+    num_documents_in_batch = "num_documents_in_batch"
     # TODO: These are generic
     phase = "phase"
     loss_mask = "loss_mask"

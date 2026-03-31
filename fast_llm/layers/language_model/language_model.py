@@ -82,14 +82,14 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
         self.head.preprocess(kwargs)
         self.multi_token_prediction.preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
         return sum(
             (
-                self.embeddings.get_loss_definitions(count),
-                self.decoder.get_loss_definitions(count),
-                self.head.get_loss_definitions(count),
-                self.multi_token_prediction.get_loss_definitions(count),
+                self.embeddings.get_loss_definitions(),
+                self.decoder.get_loss_definitions(),
+                self.head.get_loss_definitions(),
+                self.multi_token_prediction.get_loss_definitions(),
             ),
             [],
         )

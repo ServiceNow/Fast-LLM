@@ -10,8 +10,8 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
+from fast_llm.functional.utils import AuxiliaryLoss, grad_is_context, wrap_forward_backward
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import (
@@ -136,7 +136,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     (scalar_dim,),
                     tensor_name=f"{self.module_name} output",
                     reductions=(
-                        (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
+                        (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.SUM),
                     ),
                 )
             else:
@@ -221,13 +221,13 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
                     total_losses.append(total_loss_)
                 # TODO: Avoid copy with explicit out argument.
                 input_grad_.copy_(grad_)
-            total_loss = sum(total_losses) / self._config.cross_entropy_splits if total_losses else None
+            total_loss = torch.stack(total_losses).sum() if total_losses else None
 
         # TODO: ====== Drop return value, treat as normal loss ======
         #  Return value only needed because stage expects a return tensor
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(total_loss, op=ReduceOp.AVG, group=self._parallel_dim.group)
+            all_reduce(total_loss, op=ReduceOp.SUM, group=self._parallel_dim.group)
 
         if losses is not None:
             losses[self._total_loss_name].append(total_loss)
@@ -277,14 +277,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             output_parallel_linear_backward(grad, context) if self.training else None
         )
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         return [
-            LossDef(name=self._total_loss_name, formatted_name=self._total_loss_name, count=count),
-            *(
-                loss_
-                for loss in self.losses
-                for loss_ in loss.get_loss_definitions(count * self._config.cross_entropy_splits)
-            ),
+            LossDef(name=self._total_loss_name),
+            *(loss_ for loss in self.losses for loss_ in loss.get_loss_definitions()),
         ]
 
     def _get_full_loss_name(self, name) -> str:

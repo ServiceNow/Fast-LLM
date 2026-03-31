@@ -68,13 +68,12 @@ def _run_model_distributed(
     ModelTestingGroup.distributed,
 )
 def test_run_model_distributed(run_parallel_script, model_testing_config, run_test_script_base_path):
-    if torch.cuda.device_count() < 2:
-        pytest.skip(f"Not enough GPUs")
     run_parallel_script(
         _run_model_distributed,
         (run_test_script_base_path, model_testing_config),
-        world_size=torch.cuda.device_count(),
+        world_size=torch.cuda.device_count() if torch.cuda.is_available() else 8,
         backend=model_testing_config.distributed_backend,
+        use_cuda=torch.cuda.is_available(),
     )
 
 
@@ -94,9 +93,7 @@ def test_model_distributed(
     config = DISTRIBUTED_TESTING_CONFIGS[config_name]
     if model_testing_config.should_skip(config):
         pytest.skip(f"Configuration not supported.")
-    if torch.cuda.device_count() < config.num_gpus:
-        pytest.skip(f"Not enough GPUs: {torch.cuda.device_count()} < {config.num_gpus}")
-    report_subtest(run_test_script_base_path / config.name, config.num_gpus)
+    report_subtest(run_test_script_base_path / config.name, config.num_gpus, use_cuda=torch.cuda.is_available())
     if config.compare is not None:
         if not check_subtest_success(run_test_script_base_path / config.compare):
             pytest.fail(f"Test {config.compare} failed", pytrace=False)

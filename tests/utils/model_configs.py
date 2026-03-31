@@ -154,7 +154,9 @@ class ModelTestingConfig:
         return DistributedBackend(self.config_dict["model"]["distributed"]["backend"])
 
     def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
-        return any(re.search(pattern, distributed_config.name) for pattern in self.skip_tests)
+        return (distributed_config.requires_cuda and not torch.cuda.is_available()) or any(
+            re.search(pattern, distributed_config.name) for pattern in self.skip_tests
+        )
 
 
 def update_and_add_testing_config(
@@ -264,7 +266,7 @@ MODEL_CONFIGS["gpt_2"] = ModelTestingConfig(
             "distributed": {
                 "reproducible_init": True,
                 "timeout": 20,
-                "backend": "nccl",
+                "backend": DistributedBackend.nccl if torch.cuda.device_count() >= 2 else DistributedBackend.gloo,
                 "use_cuda": torch.cuda.is_available(),
             },
         },
@@ -802,7 +804,7 @@ update_and_add_testing_config(
     # note: tp is excluded because there is currently no gradient reductions implemented for tp norm in gdn.py (STP works though).
     # we should be using STP with this model, not TP!
     skip_tests=("sdp", "ms", TP_NO_STP),
-    requires_cuda=False,
+    requires_cuda=True,  # GDN available on CPU, but not in the converted model (also runs very slow).
 )
 
 _gdn_block = MODEL_CONFIGS["apriel2_gdn"].config_dict["model"]["base_model"]["decoder"]["block"]

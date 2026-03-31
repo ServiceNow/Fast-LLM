@@ -66,8 +66,6 @@ def redis_batch_producer(config: RedisConfig, sequence_length):
 
 @contextlib.contextmanager
 def fake_redis_server(config: RedisConfig):
-    # We search for free port as port from previous test can still be not free even after server shutdown
-
     # ----- Monkey-patch handler to suppress broken pipes -----
     orig_handle = fakeredis._tcp_server.TCPFakeRequestHandler.handle
 
@@ -83,6 +81,34 @@ def fake_redis_server(config: RedisConfig):
 
     fakeredis._tcp_server.TCPFakeRequestHandler.handle = safe_handle
 
+    # ----- Monkey-patch setup to use Resp2Writer instead of Resp3Writer -----
+    # fakeredis 2.34+ hardcodes Resp3Writer for all connections, causing blocked
+    # XREADGROUP timeouts to return RESP3 null (b'_\r\n') even on RESP2 connections
+    # (i.e. clients that never sent HELLO 3). The redis-py RESP2 parser raises
+    # Protocol Error: b'_' on this byte. Fix: replace with Resp2Writer at setup time.
+    # The Resp2Writer class was introduced alongside the bug in 2.34, so use its
+    # presence as the version guard.
+    orig_setup = fakeredis._tcp_server.TCPFakeRequestHandler.setup
+    if hasattr(fakeredis._tcp_server, "Resp3Writer"):
+        # fakeredis 2.34+ hardcodes Resp3Writer for all connections, causing blocked
+        # XREADGROUP timeouts to return RESP3 null (b'_\r\n') even on RESP2 connections
+        # (i.e. clients that never sent HELLO 3). The redis-py RESP2 parser raises
+        # Protocol Error: b'_' on this byte. Fix: replace with Resp2Writer at setup time.
+        if not hasattr(fakeredis._tcp_server, "Resp2Writer"):
+            raise RuntimeError(
+                f"fakeredis {fakeredis.__version__} has Resp3Writer but not Resp2Writer — "
+                "the workaround for the RESP2/RESP3 null encoding bug no longer applies. "
+                "See tests/utils/redis.py for details."
+            )
+
+        def resp2_setup(self):
+            orig_setup(self)
+            if not isinstance(self.writer, fakeredis._tcp_server.Resp2Writer):
+                self.writer = fakeredis._tcp_server.Resp2Writer(self.client_address, self.wfile, self)
+                self.current_client.writer = self.writer
+
+        fakeredis._tcp_server.TCPFakeRequestHandler.setup = resp2_setup
+
     server = fakeredis.TcpFakeServer((config.host, config.port), server_type="redis")
     print(f"Starting fake redis server at {config.host}:{config.port}")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -96,3 +122,5 @@ def fake_redis_server(config: RedisConfig):
         server.shutdown()
         server.server_close()
         thread.join()
+        fakeredis._tcp_server.TCPFakeRequestHandler.setup = orig_setup
+        fakeredis._tcp_server.TCPFakeRequestHandler.handle = orig_handle

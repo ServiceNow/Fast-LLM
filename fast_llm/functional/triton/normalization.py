@@ -2,9 +2,9 @@ import typing
 
 import torch
 
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, tl_full, triton, triton_jit
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 

@@ -127,12 +127,14 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
-        self._preprocessed_meta = self._multi_stage.base_model.preprocess_batch(
-            batch_meta,
-            phase=self._phase,
-            iteration=0,
-            device=None,
-        )
+        self._preprocessed_meta = [
+            self._multi_stage.base_model.preprocess_batch(
+                model_input,
+                phase=self._phase,
+                iteration=0,
+            )
+            for model_input in batch_meta
+        ]
 
         self._steps, self._first_grad_stage = self._create_steps()
 
@@ -536,6 +538,6 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def get_compute_metrics(self, time_per_iteration: float) -> dict[str, float]:
         model_compute, hardware_compute = self.compute_usage
         return {
-            "model_tflops": math.nan if model_compute is None else model_compute / time_per_iteration,
-            "hardware_tflops": math.nan if hardware_compute is None else hardware_compute / time_per_iteration,
+            "model_tflops": math.nan if model_compute is None else model_compute / time_per_iteration / 1e12,
+            "hardware_tflops": math.nan if hardware_compute is None else hardware_compute / time_per_iteration / 1e12,
         }

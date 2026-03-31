@@ -80,6 +80,16 @@ class DistributedDim:
     def __post_init__(self):
         self._is_setup = False
 
+    def __getstate__(self):
+        # Prevent process groups from being pickled, ex. in the data loader.
+        state = self.__dict__.copy()
+        if "_group" in state:
+            del state["_group"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     @property
     def group(self) -> "ProcessGroup|None":
         assert hasattr(self, "_group")
@@ -117,7 +127,9 @@ class DistributedDim:
             elif isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start:
                 global_ranks = range(start, start + size * stride, global_ranks.step)
             else:
-                global_ranks = [rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks]
+                global_ranks = tuple(
+                    rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks
+                )
         Assert.eq(len(global_ranks), world_size)
         return DistributedDim(name=name, size=world_size, rank=rank, global_ranks=global_ranks)
 

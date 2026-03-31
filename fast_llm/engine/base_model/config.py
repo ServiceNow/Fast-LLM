@@ -1,5 +1,6 @@
 import abc
 import dataclasses
+import enum
 import typing
 
 from fast_llm.config import MISSING, Config, Field, FieldHint, FieldVerboseLevel, config_class
@@ -11,6 +12,7 @@ if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.engine.base_model.base_model import BaseModel
+    from fast_llm.engine.distributed.distributed import Distributed
 
 
 @config_class()
@@ -103,12 +105,81 @@ class ResourceUsageConfig:
     backward: int = 1
 
 
+class ReductionType(enum.StrEnum):
+    """
+    An enum to represent data types independently of third party libraries,
+    so we can swap them more easily and allow for lazy imports.
+    """
+
+    sum = "float64"
+    average = "float32"
+    minimum = "float16"
+    maximum = "bfloat16"
+
+    @property
+    def torch(self) -> "typing.Callable[[torch.Tensor], torch.Tensor]":
+        if not _TORCH_REDUCTION_MAP:
+            _set_torch_reduction_map()
+        return _TORCH_REDUCTION_MAP[self]
+
+    @property
+    def distributed(self) -> "torch.distributed.ReduceOp.RedOpType":
+        if not _DISTRIBUTED_REDUCTION_MAP:
+            _set_distributed_reduction_map()
+        return _DISTRIBUTED_REDUCTION_MAP[self]
+
+
+_TORCH_REDUCTION_MAP: dict[ReductionType, "typing.Callable[[torch.Tensor], torch.Tensor]"] = {}
+
+
+def _set_torch_reduction_map() -> None:
+    import torch
+
+    global _TORCH_REDUCTION_MAP
+
+    _TORCH_REDUCTION_MAP = {
+        ReductionType.sum: torch.sum,
+        ReductionType.average: torch.mean,
+        ReductionType.minimum: torch.min,
+        ReductionType.maximum: torch.max,
+    }
+
+
+_DISTRIBUTED_REDUCTION_MAP: dict[ReductionType, "torch.distributed.ReduceOp.RedOpType"] = {}
+
+
+def _set_distributed_reduction_map() -> None:
+    import torch
+
+    global _DISTRIBUTED_REDUCTION_MAP
+
+    _DISTRIBUTED_REDUCTION_MAP = {
+        ReductionType.sum: torch.distributed.ReduceOp.SUM,
+        ReductionType.average: torch.distributed.ReduceOp.AVG,
+        ReductionType.minimum: torch.distributed.ReduceOp.MIN,
+        ReductionType.maximum: torch.distributed.ReduceOp.MAX,
+    }
+
+
 @dataclasses.dataclass()
 class LossDef:
     # A name for the loss
     name: str
-    formatted_name: str
-    # The number of times this loss is evaluated by the model for each micro-batch. Used as a denominator for averaging.
-    # TODO: Allow variable count?  Would need a reduction across PP devices.
-    count: int = 1
     dtype: DataType = DataType.float32
+    reduction: ReductionType = ReductionType.sum
+
+    def reduce(self, losses: "list[torch.Tensor]", distributed: "Distributed") -> "torch.Tensor | None":
+        import torch
+
+        from fast_llm.core.ops import reduce_op
+
+        if losses or distributed.pipeline_group:
+            if losses:
+                reduced_loss = losses[0] if len(losses) == 1 else self.reduction.torch(torch.stack(losses))
+                reduce_op(reduced_loss, group=distributed.data_group, op=self.reduction.distributed)
+            else:
+                reduced_loss = torch.zeros([1], dtype=self.dtype.torch, device=distributed.device)
+            reduce_op(reduced_loss, group=distributed.pipeline_group, op=self.reduction.distributed)
+            return reduced_loss
+        else:
+            return None

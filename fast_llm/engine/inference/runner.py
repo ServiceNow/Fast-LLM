@@ -1,6 +1,7 @@
 import abc
 import typing
 
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import ScheduleConfig
@@ -57,15 +58,14 @@ class InferenceRunner(abc.ABC):
             Assert.is_(self._runner._distributed, self._fast_llm_model.distributed)
 
     def forward(
-        self, input_, kwargs: dict, *, iteration: int = 1, return_metrics: bool = False
+        self, model_input: ModelInput, *, iteration: int = 1, return_metrics: bool = False
     ) -> tuple[dict[str, float | int], dict[str, typing.Any] | None]:
         # TODO: Return an actual model output.
         reduced_losses, update_successful, metrics = self._runner.run_step(
-            iter((((input_, kwargs),),)),
+            iter(((model_input,),)),
             self._schedule,
             iteration=iteration,
             return_metrics=return_metrics,
-            preprocessed=True,
         )
         assert update_successful
         return reduced_losses, metrics

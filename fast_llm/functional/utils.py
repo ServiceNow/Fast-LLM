@@ -69,3 +69,12 @@ class AuxiliaryLoss(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return grad_output, ctx.grad, None
+
+
+@torch.compile
+def reduce_losses(
+    losses: torch.Tensor, divisor: float | None = None, mask: torch.Tensor | None = None
+) -> torch.Tensor:
+    if mask is not None:
+        losses = losses * mask
+    return losses.mean() if divisor is None else losses.sum() / divisor

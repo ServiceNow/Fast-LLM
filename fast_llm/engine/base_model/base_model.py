@@ -48,11 +48,11 @@ class LayerBase(torch.nn.Module, abc.ABC):
             out += layer.get_compute_usage(input_, kwargs, config)
         return out
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         losses = []
         for layer in self.get_layers():
             if layer is not self:
-                losses += layer.get_loss_definitions(count)
+                losses += layer.get_loss_definitions()
         return losses
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
@@ -178,14 +178,13 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
     @abc.abstractmethod
     def preprocess_batch(
         self,
-        model_inputs: list[ModelInput],
+        model_input: ModelInput,
         *,
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
         extra_kwargs: dict[str, typing.Any] | None = None,
-        device: torch.device | None,
-    ) -> list[tuple[torch.Tensor, dict]]:
+    ) -> tuple[torch.Tensor, dict]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass
 

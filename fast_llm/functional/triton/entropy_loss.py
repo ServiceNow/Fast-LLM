@@ -2,6 +2,7 @@ import torch
 
 from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
+from fast_llm.functional.utils import reduce_losses
 
 
 @triton_jit()
@@ -656,7 +657,7 @@ def _cross_entropy_loss_from_labels(
     sum_exp_logits: torch.Tensor,
     max_logits: torch.Tensor,
 ) -> torch.Tensor:
-    return torch.where(target.flatten() >= 0, sum_exp_logits.log() + max_logits - predicted_logits, 0).mean()
+    return torch.where(target.flatten() >= 0, sum_exp_logits.log() + max_logits - predicted_logits, 0)
 
 
 @torch.compile
@@ -700,6 +701,7 @@ def triton_entropy_loss_forward_backward(
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
     block_size: int | None = None,
     num_warps: int | None = None,
+    divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -712,6 +714,8 @@ def triton_entropy_loss_forward_backward(
     assert target.is_contiguous()
     n_rows = logits.shape[:-1].numel()
     n_cols = logits.size(-1)
+    if divisor is None:
+        divisor = n_rows
     if block_size is None:
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:
@@ -730,7 +734,7 @@ def triton_entropy_loss_forward_backward(
         grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
         backward_kwargs = {
             "grad_logits_ptr": grad_logits,
-            "grad_losses": grad_output / n_rows,
+            "grad_losses": grad_output / divisor,
             "grad_logits_stride_0": grad_logits.stride(-2),
             "accumulate": accumulate,
         }
@@ -745,23 +749,22 @@ def triton_entropy_loss_forward_backward(
                 **kwargs,
                 **backward_kwargs,
             )
-            loss = losses.mean()
         else:
-            partial_losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
-            local_max_logits = torch.empty_like(partial_losses)
-            sum_exp_logits = torch.empty_like(partial_losses)
+            losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
+            local_max_logits = torch.empty_like(losses)
+            sum_exp_logits = torch.empty_like(losses)
             triton_cross_entropy_forward_from_labels_parallel_kernel[(n_rows,)](
                 logits,
                 target,
                 max_logits_ptr=local_max_logits,
                 sum_exp_logits_ptr=sum_exp_logits,
-                predicted_logits_ptr=partial_losses,
+                predicted_logits_ptr=losses,
                 col_min=n_cols * group.rank(),
                 **kwargs,
             )
             max_logits, sum_exp_logits = parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
-            torch.distributed.all_reduce(partial_losses, op=torch.distributed.ReduceOp.SUM, group=group)
-            loss = _cross_entropy_loss_from_labels(partial_losses, target, sum_exp_logits, max_logits)
+            torch.distributed.all_reduce(losses, op=torch.distributed.ReduceOp.SUM, group=group)
+            losses = _cross_entropy_loss_from_labels(losses, target, sum_exp_logits, max_logits)
             if grad_output is not None:
                 triton_cross_entropy_forward_backward_from_labels_kernel[(n_rows,)](
                     logits,
@@ -798,14 +801,13 @@ def triton_entropy_loss_forward_backward(
                 **kwargs,
                 **backward_kwargs,
             )
-            loss = losses.mean()
         else:
-            partial_losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
-            local_max_logits = torch.empty_like(partial_losses)
-            sum_exp_logits = torch.empty_like(partial_losses)
+            losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
+            local_max_logits = torch.empty_like(losses)
+            sum_exp_logits = torch.empty_like(losses)
             if target_format == TargetFormat.logits:
-                local_target_max_logits = torch.empty_like(partial_losses)
-                target_sum_exp_logits = torch.empty_like(partial_losses)
+                local_target_max_logits = torch.empty_like(losses)
+                target_sum_exp_logits = torch.empty_like(losses)
             else:
                 local_target_max_logits = target_sum_exp_logits = None
 
@@ -823,7 +825,7 @@ def triton_entropy_loss_forward_backward(
                 sum_exp_logits_ptr=sum_exp_logits,
                 target_max_logits_ptr=local_target_max_logits,
                 target_sum_exp_logits_ptr=target_sum_exp_logits,
-                partial_losses_ptr=partial_losses,
+                partial_losses_ptr=losses,
                 target_stride_0=target.stride(-2),
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
@@ -835,14 +837,12 @@ def triton_entropy_loss_forward_backward(
                     target_sum_exp_logits, local_target_max_logits, group
                 )
                 if entropy_loss_type != EntropyLossType.reverse_kl:
-                    partial_losses = _rescale_predicted_logits(
-                        partial_losses, local_target_max_logits, target_max_logits
-                    )
+                    losses = _rescale_predicted_logits(losses, local_target_max_logits, target_max_logits)
             else:
                 target_max_logits = None
             if entropy_loss_type == EntropyLossType.reverse_kl:
-                partial_losses = _rescale_predicted_logits(partial_losses, local_max_logits, max_logits)
-            torch.distributed.all_reduce(partial_losses, op=torch.distributed.ReduceOp.SUM, group=group)
+                losses = _rescale_predicted_logits(losses, local_max_logits, max_logits)
+            torch.distributed.all_reduce(losses, op=torch.distributed.ReduceOp.SUM, group=group)
 
             kernel[(n_rows,)](
                 logits,
@@ -852,13 +852,13 @@ def triton_entropy_loss_forward_backward(
                 sum_exp_logits_ptr=sum_exp_logits,
                 target_max_logits_ptr=target_max_logits,
                 target_sum_exp_logits_ptr=target_sum_exp_logits,
-                partial_losses_ptr=partial_losses,
-                losses_ptr=partial_losses,
+                partial_losses_ptr=losses,
+                losses_ptr=losses,
                 target_stride_0=target.stride(-2),
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
                 **kwargs,
                 **backward_kwargs,
             )
-            loss = partial_losses.mean()
+    loss = reduce_losses(losses, divisor)
     return loss, grad_logits

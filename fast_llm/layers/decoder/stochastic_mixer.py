@@ -231,7 +231,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
         return int(expected_usage)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         """
         Merge loss definitions from all mixers with namespacing.
 
@@ -241,13 +241,11 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         """
         all_losses = []
         for mixer_name, mixer in self.mixers.items():
-            mixer_losses = mixer.get_loss_definitions(count=count)
+            mixer_losses = mixer.get_loss_definitions()
             # Namespace each loss with the mixer name to avoid conflicts
             for loss_def in mixer_losses:
                 namespaced_loss = LossDef(
                     name=f"{mixer_name}/{loss_def.name}",
-                    formatted_name=f"{mixer_name}/{loss_def.formatted_name}",
-                    count=loss_def.count,
                     dtype=loss_def.dtype,
                 )
                 all_losses.append(namespaced_loss)

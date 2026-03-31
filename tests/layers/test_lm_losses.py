@@ -147,7 +147,7 @@ def reference_grpo_loss(
     # new_logprobs: sum of per-sequence mean log-probs
     log_probs = torch.nn.functional.log_softmax(logits_, -1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
     new_logprobs = (log_probs * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
-    return (loss * loss_mask).mean(), new_logprobs
+    return (loss * loss_mask).sum() / loss_mask.sum(), new_logprobs
 
 
 _BATCH_SHAPES = ((64,), (16, 8))
@@ -272,6 +272,7 @@ def _test_grpo_loss(
         grad_output=grad_output,
         group=group,
         logits_scale_factor=logits_scale_factor,
+        divisor=(target >= 0).sum().item(),
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
 

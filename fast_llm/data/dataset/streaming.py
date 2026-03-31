@@ -1,5 +1,6 @@
 import functools
 import json
+import logging
 import time
 import typing
 
@@ -13,6 +14,8 @@ from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.range import RangeDocument
 from fast_llm.data.document.token_data import TokenDataDocument
 from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 @config_class()

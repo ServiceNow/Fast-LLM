@@ -144,7 +144,7 @@ def test_streaming_sampled_dataset(
         assert batch.old_log_probabilities is None
 
 
-_NUM_BATCHES = 2
+_NUM_BATCHES = 10
 _SEQUENCE_LENGTH = 10
 
 
@@ -160,7 +160,9 @@ def _get_distributed_config(distributed_config_dict: dict[str, typing.Any], worl
     )
 
 
-def _run_test_data_streaming(path: pathlib.Path, distributed_config: DistributedConfig, port: int):
+def _run_test_data_streaming(
+    path: pathlib.Path, distributed_config: DistributedConfig, port: int, num_workers: int = 1
+):
     redis_config = RedisConfig(port=port + 100, timeout=1)
 
     data = GPTData(
@@ -186,7 +188,7 @@ def _run_test_data_streaming(path: pathlib.Path, distributed_config: Distributed
             distributed_config.batch_data_parallel * _NUM_BATCHES,
         )
         data_iter = data.get_iterator(
-            "train", consumed_samples=0, num_workers=0, prefetch_factor=None, timeout=5, preprocess=False
+            "train", consumed_samples=0, num_workers=num_workers, prefetch_factor=None, timeout=5, preprocess=False
         )
         batches = [next(data_iter) for _ in range(_NUM_BATCHES)]
         path.mkdir(parents=True, exist_ok=True)
@@ -228,10 +230,11 @@ def _run_test_data_streaming_distributed(
                 _run_test_data_streaming(base_path / name, distributed_config, port)
 
 
-def test_data_streaming(result_path, worker_resources):
+@pytest.mark.parametrize("num_workers", (0, 1))
+def test_data_streaming(result_path, worker_resources, num_workers):
     distributed_config = _get_distributed_config({})
     path = result_path / "data_streaming/single_gpu"
-    _run_test_data_streaming(path, distributed_config, worker_resources.torchrun_port)
+    _run_test_data_streaming(path, distributed_config, worker_resources.torchrun_port, num_workers)
     check_data_streaming_results(path, distributed_config)
 
 

@@ -69,12 +69,12 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
         self.encoder.preprocess(kwargs)
         self.adapter.preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
         return (
-            self.embeddings.get_loss_definitions(count)
-            + self.encoder.get_loss_definitions(count)
-            + self.adapter.get_loss_definitions(count)
+            self.embeddings.get_loss_definitions()
+            + self.encoder.get_loss_definitions()
+            + self.adapter.get_loss_definitions()
         )
 
 
@@ -123,8 +123,8 @@ class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageMod
         self._vision_encoder_with_namespace.preprocess(kwargs)
         super().preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.vision_encoder.get_loss_definitions(count) + super().get_loss_definitions(count)
+    def get_loss_definitions(self) -> list[LossDef]:
+        return self.vision_encoder.get_loss_definitions() + super().get_loss_definitions()
 
     @functools.cached_property
     def _vision_encoder_namespace(self) -> str:

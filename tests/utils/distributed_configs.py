@@ -18,6 +18,7 @@ class DistributedTestingConfig:
     compare_config: CompareConfig | None = None
     # Scale the comparison thresholds for specific distributed configs.
     compare_factor: float = 1.0
+    requires_cuda: bool = False
 
 
 def get_config(relative: float = 0, absolute: float = 0, **kwargs) -> CompareConfig:
@@ -53,6 +54,7 @@ _compare_layer_match_duplicate_gradients.sub_configs[(None, "gradient")].ignore_
 _compare_layer_mismatch_duplicate_gradients = copy.deepcopy(_compare_layer_mismatch)
 _compare_layer_mismatch_duplicate_gradients.sub_configs[(None, "bias")].ignore_duplicates = True
 _compare_layer_mismatch_duplicate_gradients.sub_configs[(None, "gradient")].ignore_duplicates = True
+_pp_tied_weight_compare.sub_configs[(None, "bias")].ignore_duplicates = True
 _pp_tied_weight_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
 _pp_tied_weight_compare.sub_configs[("init", None)].ignore_duplicates = True
 for tensor in ("fw", "bw"):
@@ -70,7 +72,7 @@ _bf16_compare = get_config(
             if torch.cuda.is_available()
             else {
                 (None, "norm"): get_config(ignore_tensors=True),
-                (None, "word_embeddings_weight"): get_config(8e-2, 1e-4),
+                (None, "embeddings_weight"): get_config(8e-2, 1e-4),
             }
         ),
         (None, "bias"): get_config(2e-2, 1e-3) if torch.cuda.is_available() else get_config(2e-2, 2e-3),
@@ -113,6 +115,7 @@ SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
 )
 
 _SINGLE_GPU_TESTING_CONFIGS = [
+    # TODO: 16-bit matmuls extremely slow on cpu
     DistributedTestingConfig(
         name="bf16",
         compare="simple",
@@ -124,6 +127,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         ],
         num_gpus=1,
         compare_config=_bf16_compare,
+        requires_cuda=True,
     ),
     DistributedTestingConfig(
         name="fp16",
@@ -131,6 +135,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         config_args=["model.distributed.compute_dtype=fp16", "data.micro_batch_size=4096"],
         num_gpus=1,
         compare_config=_fp16_compare,
+        requires_cuda=True,
     ),
     # Cross-entropy splits.
     DistributedTestingConfig(
@@ -397,17 +402,17 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Simple
     DistributedTestingConfig(
         name="dp2_stp2_pp2s2_bf4",
-        compare="dp2_z2_df4",
+        compare="df8",
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.breadth_first_micro_batches=4",
-            "data.micro_batch_size=412",
+            "data.micro_batch_size=512",
         ],
         num_gpus=8,
-        compare_config=_compare_layer_match,
+        compare_config=_compare_layer_mismatch,
     ),
     # Tied weights on different ranks
     DistributedTestingConfig(
@@ -427,7 +432,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     # Micro-sequence
     DistributedTestingConfig(
         name="sdp2_stp2_pp2s2_ms4",
-        compare="df2",
+        compare="simple",
         config_args=[
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
@@ -435,7 +440,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "schedule.micro_batch_splits=4",
-            "data.micro_batch_size=2048",
+            "data.micro_batch_size=4096",
         ],
         num_gpus=8,
         compare_config=_compare_layer_mismatch,

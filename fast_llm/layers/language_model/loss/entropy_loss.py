@@ -35,6 +35,7 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
             logits_scale_factor=self._logits_scale_factor,
             target_format=TargetFormat.labels,
             entropy_loss_type=self._config.loss_type,
+            divisor=self._get_label_count(kwargs),
         )
 
 
@@ -61,6 +62,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             logits_scale_factor=self._logits_scale_factor,
             target_format=TargetFormat.logits,
             entropy_loss_type=self._config.loss_type,
+            divisor=self._get_label_count(kwargs),
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
