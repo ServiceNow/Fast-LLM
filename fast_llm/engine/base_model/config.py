@@ -45,6 +45,8 @@ class ModuleConfig(Config):
             assert isinstance(field, Field), f"{name}, {field}"
             if field.hint == FieldHint.architecture:
                 architecture[name] = self._serialize_architecture_field(getattr(self, name, MISSING))
+            else:
+                assert not isinstance(field, ModuleConfig)
         return architecture
 
     def _serialize_architecture_field(self, value: typing.Any) -> typing.Any:

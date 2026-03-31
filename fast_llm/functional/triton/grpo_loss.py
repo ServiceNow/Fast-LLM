@@ -152,14 +152,17 @@ def triton_grpo_loss_forward_backward(
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:
         num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
-    kwargs = {
+    shared_kwargs = {
         "logits_stride_0": logits.stride(-2),
         "n_cols": n_cols,
         "logits_scale_factor": logits_scale_factor,
-        "epsilon_low": epsilon_low,
-        "epsilon_high": epsilon_high,
         "block_size": block_size,
         "num_warps": num_warps,
+    }
+    kwargs = {
+        **shared_kwargs,
+        "epsilon_low": epsilon_low,
+        "epsilon_high": epsilon_high,
     }
     if grad_output is None:
         backward_kwargs = {}
@@ -205,7 +208,7 @@ def triton_grpo_loss_forward_backward(
             sum_exp_logits_ptr=sum_exp_logits,
             predicted_logits_ptr=predicted_logits_local,
             col_min=n_cols * group.rank(),
-            **kwargs,
+            **shared_kwargs,
         )
         max_logits, sum_exp_logits = parallel_sum_exp_logits(sum_exp_logits, local_max_logits, group)
         torch.distributed.all_reduce(predicted_logits_local, op=torch.distributed.ReduceOp.SUM, group=group)
