@@ -9,6 +9,8 @@ import pytest
 import safetensors
 import torch
 
+from fast_llm.core.distributed import broadcast as _broadcast
+from fast_llm.core.distributed import broadcast_object as _broadcast_object
 from fast_llm.engine.distributed.config import DistributedBackend
 from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig
@@ -68,27 +70,34 @@ def _run_event_consumer(
     path.mkdir(parents=True, exist_ok=True)
     field = REDIS_TRAINING_FIELD.encode()
     # TODO: Create a custom process group instead.
+    pool = None
     try:
         world_size = streaming_config.broadcast.external_world_size + 1
+        consumer_rank = consumer_index + 1
         backend = DistributedBackend.nccl if torch.cuda.is_available() else DistributedBackend.gloo
-        process_group = ProcessGroupPool(
-            rank=0,
+        pool = ProcessGroupPool(
+            rank=consumer_rank,
             world_size=world_size,
-            local_world_size=world_size,
             timeout=streaming_config.timeout,
-            use_cuda=backend == DistributedBackend.nccl,
             init_method=init_method,
             backend=backend,
-        ).get_process_group(range(world_size), 0)
+            device=(
+                torch.device("cuda", torch.cuda.current_device())
+                if backend == DistributedBackend.nccl
+                else torch.device("cpu")
+            ),
+        )
+        process_group = pool.get_process_group(range(world_size), consumer_rank)
+        timeout_ms = int(streaming_config.timeout * 1000)
         last_id = "0-0"
         while True:
             result = client.xread(
                 streams={REDIS_TRAINING_STREAM: last_id},
                 count=1,
-                block=10000,
+                block=timeout_ms,
             )
             if not result:
-                raise TimeoutError("No message received after 10000 ms...")
+                raise TimeoutError(f"No message received after {timeout_ms} ms...")
 
             ((stream, events),) = result
             Assert.eq(stream.decode(), REDIS_TRAINING_STREAM)
@@ -102,15 +111,14 @@ def _run_event_consumer(
                 elif message["type"] == "weights_ready":
                     weights = {}
                     while True:
-                        meta = [None]
-                        torch.distributed.broadcast_object_list(meta, group=process_group, group_src=0)
-                        if meta[0] is None:
+                        meta = _broadcast_object(None, process_group, src=0)
+                        if meta is None:
                             print(f"Weight broadcast finished")
                             break
-                        logging.info(f"receiving {meta[0]}")
-                        shard_name, layer_name, tensor_size, tensor_type = meta[0]
+                        logging.info(f"receiving {meta}")
+                        shard_name, layer_name, tensor_size, tensor_type = meta
                         tensor = torch.zeros(tuple(tensor_size), dtype=tensor_type, device="cuda")
-                        torch.distributed.broadcast(tensor, group=process_group, group_src=0)
+                        _broadcast(tensor, 0, process_group)
                         if shard_name == "weights":
                             weights[layer_name] = tensor
                     safetensors.torch.save_file(
@@ -118,7 +126,8 @@ def _run_event_consumer(
                     )
 
     finally:
-        torch.distributed.destroy_process_group(process_group)
+        if pool is not None:
+            pool.shutdown()
 
 
 def _run_model_streaming_configs(
@@ -127,23 +136,24 @@ def _run_model_streaming_configs(
     # Import all dynamic classes.
     import fast_llm.cli  # noqa
 
-    for config in _DISTRIBUTED_STREAMING_CONFIGS:
+    for config_index, config in enumerate(_DISTRIBUTED_STREAMING_CONFIGS):
+        config_port = port + config_index
         model_testing_config = update_and_add_testing_config(
             model_testing_config,
             None,
             updates={
-                ("data", "datasets"): {"training": {"port": port, "timeout": 1.0}},
+                ("data", "datasets"): {"training": {"port": config_port, "timeout": 1.0}},
                 ("training", "export"): {"format": model_testing_config.checkpoint_format.name, "interval": 1},
                 "callbacks": {
                     "streaming": {
                         "type": "streaming",
-                        "port": port,
+                        "port": config_port,
                         "broadcast": {
-                            "port": port + 1000,
+                            "port": config_port + 1000,
                             "external_world_size": config.consumer_count,
                         },
                         "export": {"format": model_testing_config.checkpoint_format.name},
-                        "timeout": 1.0,
+                        "timeout": 120,
                     }
                 },
                 # Disable tensor logging.
@@ -192,9 +202,12 @@ def test_run_model_distributed_streaming(
 ):
     if torch.cuda.device_count() < 2:
         pytest.skip(f"Not enough GPUs")
+    model_testing_config.get_dataset()
+    # Use a fixed shift to avoid port conflicts with other distributed tests.
+    port = worker_resources.torchrun_port + 4321
     run_parallel_script(
         _run_model_streaming_configs,
-        (run_test_script_base_path, model_testing_config, worker_resources.torchrun_port),
+        (run_test_script_base_path, model_testing_config, port),
         world_size=torch.cuda.device_count(),
         backend=model_testing_config.distributed_backend,
     )

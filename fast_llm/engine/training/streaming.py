@@ -2,6 +2,8 @@ import json
 import logging
 import typing
 
+import torch
+
 from fast_llm.core.distributed import broadcast as _broadcast
 from fast_llm.core.distributed import broadcast_object as _broadcast_object
 from fast_llm.engine.distributed.config import DistributedBackend
@@ -26,15 +28,16 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             init_method = f"tcp://{config.broadcast.host}:{config.broadcast.port}"
             logger.info(f"Waiting for weights broadcast rendezvous at {init_method} ...")
             world_size = config.broadcast.external_world_size + 1
-            self._process_group = ProcessGroupPool(
+            self._pool = ProcessGroupPool(
                 rank=0,
                 world_size=world_size,
                 local_world_size=1,
                 timeout=self._config.timeout,
-                use_cuda=self._config.broadcast.backend == DistributedBackend.nccl,
+                device=None if self._config.broadcast.backend == DistributedBackend.nccl else torch.device("cpu"),
                 init_method=init_method,
                 backend=self._config.broadcast.backend,
-            ).get_process_group(range(world_size), 0)
+            )
+            self._process_group = self._pool.get_process_group(range(world_size), 0)
             logger.info(f"Weights broadcast rendezvous at {init_method} connected")
 
     def run_begin(self, step: int):
@@ -61,8 +64,9 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         self._clear()
 
     def _clear(self):
-        if hasattr(self, "_process_group"):
-            self._process_group.shutdown()
+        if hasattr(self, "_pool"):
+            self._pool.shutdown()
+            del self._pool
             del self._process_group
 
     def _broadcast_weights(self, step: int):

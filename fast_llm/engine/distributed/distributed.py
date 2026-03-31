@@ -27,9 +27,9 @@ class ProcessGroupPool:
         world_size: int | None = None,
         local_world_size: int | None = None,
         timeout: float = 60,
-        use_cuda: bool = True,
         init_method: str = "env://",
         backend: DistributedBackend = DistributedBackend.nccl,
+        device: torch.device | None = None,
     ):
 
         self._rank = DistributedConfig.default_rank if rank is None else rank
@@ -38,20 +38,24 @@ class ProcessGroupPool:
             DistributedConfig.default_local_world_size if local_world_size is None else local_world_size
         )
         self._timeout = timeout
-        self._use_cuda = use_cuda
         self._backend = backend
         self._process_groups = {}
 
-        if self._use_cuda:
+        if device is None:
             assert torch.cuda.is_available()
             Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
             torch.cuda.init()
             self._device = torch.device(self._rank % self._local_world_size)
             torch.cuda.set_device(self._device)
+        elif device.type == "cuda":
+            assert torch.cuda.is_available()
+            torch.cuda.init()
+            self._device = device
+            torch.cuda.set_device(self._device)
         else:
             if backend == DistributedBackend.nccl:
                 Assert.eq(self._world_size, 1)
-            self._device = torch.device("cpu")
+            self._device = device
 
         if self._world_size > 1:
             if self._rank == 0:
@@ -165,8 +169,8 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 self._config.world_size,
                 self._config.local_world_size,
                 self._config.timeout,
-                self._config.use_cuda,
                 backend=self._config.backend,
+                device=None if self._config.use_cuda else torch.device("cpu"),
             )
         else:
             self._pool = _default_pool
