@@ -188,36 +188,68 @@ class MLPLayer2Converter(WeightConverter):
 class LlamaAttentionConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        try:
-            rope_type = config["rope_scaling"]["rope_type"]
-        except (KeyError, TypeError):
-            rope_type = "default"
-        rotary_config = {
-            "type": rope_type,
-            "theta": config["rope_theta"],
-        }
-        if rope_type == "default":
-            pass
-        elif rope_type == "llama3":
-            rotary_config.update(
-                {
-                    "scale_factor": config["rope_scaling"]["factor"],
-                    "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
-                    "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
-                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
-                }
-            )
-        elif rope_type == "yarn":
-            rotary_config.update(
-                {
-                    "attention_factor": config["rope_scaling"]["attention_factor"],
-                    "beta_fast": config["rope_scaling"]["beta_fast"],
-                    "beta_slow": config["rope_scaling"]["beta_slow"],
-                    "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
-                }
-            )
+        # transformers 5.x consolidates rope_theta + rope_scaling into rope_parameters
+        if "rope_parameters" in config:
+            rope_params = config["rope_parameters"]
+            rope_type = rope_params.get("rope_type", "default")
+            rotary_config = {
+                "type": rope_type,
+                "theta": rope_params["rope_theta"],
+            }
+            if rope_type == "default":
+                pass
+            elif rope_type == "llama3":
+                rotary_config.update(
+                    {
+                        "scale_factor": rope_params["factor"],
+                        "low_frequency_factor": rope_params["low_freq_factor"],
+                        "high_frequency_factor": rope_params["high_freq_factor"],
+                        "original_context_length": rope_params["original_max_position_embeddings"],
+                    }
+                )
+            elif rope_type == "yarn":
+                rotary_config.update(
+                    {
+                        "attention_factor": rope_params["attention_factor"],
+                        "beta_fast": rope_params["beta_fast"],
+                        "beta_slow": rope_params["beta_slow"],
+                        "original_context_length": rope_params["original_max_position_embeddings"],
+                    }
+                )
+            else:
+                raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
         else:
-            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
+            # transformers 4.x format: rope_theta at top level, rope_scaling separate
+            try:
+                rope_type = config["rope_scaling"]["rope_type"]
+            except (KeyError, TypeError):
+                rope_type = "default"
+            rotary_config = {
+                "type": rope_type,
+                "theta": config["rope_theta"],
+            }
+            if rope_type == "default":
+                pass
+            elif rope_type == "llama3":
+                rotary_config.update(
+                    {
+                        "scale_factor": config["rope_scaling"]["factor"],
+                        "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
+                        "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
+                        "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
+                    }
+                )
+            elif rope_type == "yarn":
+                rotary_config.update(
+                    {
+                        "attention_factor": config["rope_scaling"]["attention_factor"],
+                        "beta_fast": config["rope_scaling"]["beta_fast"],
+                        "beta_slow": config["rope_scaling"]["beta_slow"],
+                        "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
+                    }
+                )
+            else:
+                raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
         out = {
             "rotary": rotary_config,
             "heads": config["num_attention_heads"],
@@ -235,36 +267,40 @@ class LlamaAttentionConverter:
     def export_config(cls, config: AttentionConfig) -> dict:
         cls._check_config(config)
         Assert.eq(config.softmax_scale_power, 0.5)
-        out = {
+        rope_parameters = {"rope_theta": config.rotary.theta}
+        if type(config.rotary) is DefaultRotaryConfig:
+            rope_parameters["rope_type"] = "default"
+        elif type(config.rotary) is Llama3RotaryConfig:
+            rope_parameters.update(
+                {
+                    "rope_type": "llama3",
+                    "factor": config.rotary.scale_factor,
+                    "low_freq_factor": config.rotary.low_frequency_factor,
+                    "high_freq_factor": config.rotary.high_frequency_factor,
+                    "original_max_position_embeddings": config.rotary.original_context_length,
+                }
+            )
+        elif type(config.rotary) is YarnRotaryConfig:
+            rope_parameters.update(
+                {
+                    "rope_type": "yarn",
+                    "attention_factor": config.rotary.attention_factor,
+                    "beta_fast": config.rotary.beta_fast,
+                    "beta_slow": config.rotary.beta_slow,
+                    "original_max_position_embeddings": config.rotary.original_context_length,
+                }
+            )
+        else:
+            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
+
+        return {
             "num_attention_heads": config.heads,
             "num_key_value_heads": config.head_groups,
             "head_dim": config.head_size,
             "attention_bias": config.add_linear_biases,
             "attention_dropout": config.dropout,
-            "rope_theta": config.rotary.theta,
+            "rope_parameters": rope_parameters,
         }
-        if type(config.rotary) is DefaultRotaryConfig:
-            pass
-        elif type(config.rotary) is Llama3RotaryConfig:
-            out["rope_scaling"] = {
-                "rope_type": "llama3",
-                "factor": config.rotary.scale_factor,
-                "low_freq_factor": config.rotary.low_frequency_factor,
-                "high_freq_factor": config.rotary.high_frequency_factor,
-                "original_max_position_embeddings": config.rotary.original_context_length,
-            }
-        elif type(config.rotary) is YarnRotaryConfig:
-            out["rope_scaling"] = {
-                "rope_type": "yarn",
-                "attention_factor": config.rotary.attention_factor,
-                "beta_fast": config.rotary.beta_fast,
-                "beta_slow": config.rotary.beta_slow,
-                "original_max_position_embeddings": config.rotary.original_context_length,
-            }
-        else:
-            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
-
-        return out
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:

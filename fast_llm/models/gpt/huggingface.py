@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
     model_type = "fast_llm_gpt"
     model_config_class = GPTModelConfig
-    fast_llm_config: GPTModelConfig
+
+    if typing.TYPE_CHECKING:
+        fast_llm_config: GPTModelConfig
 
 
 class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):

@@ -7,6 +7,7 @@ import torch
 import transformers.generation.utils
 import transformers.modeling_outputs
 import transformers.utils.generic
+from transformers.initialization import no_init_weights as transformers_no_init_weights
 
 from fast_llm.core.distributed import broadcast, broadcast_object, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
@@ -38,7 +39,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         **kwargs,
     ):
         if config is None:
-            config = self.config_class(fast_llm_model.config)
+            config = self.config_class(fast_llm_config=fast_llm_model.config)
 
         assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
@@ -70,7 +71,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
 
-        with transformers.modeling_utils.no_init_weights():
+        with transformers_no_init_weights():
             self.post_init()
 
         if fast_llm_model.config.multi_stage.zero_stage == 3:

@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 class HuggingfaceModelConfig(transformers.PretrainedConfig):
     model_type = "fast_llm"
     model_config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
+    fast_llm_config: FastLLMModelConfig | None = None
+    use_cache: bool = True
 
-    def __init__(self, fast_llm_config: FastLLMModelConfig | None = None, **kwargs):
+    def __post_init__(self, **kwargs):
         # Needed for `to_diff_dict` (`__repr__`)
-        if fast_llm_config is None:
-            fast_llm_config = self.model_config_class()
-        self.fast_llm_config = fast_llm_config
-        self.use_cache = kwargs.pop("use_cache", True)
-        super().__init__(**kwargs)
-        if self.torch_dtype is not None:
-            assert self.torch_dtype == self.fast_llm_config.distributed.compute_dtype.torch
+        if self.fast_llm_config is None:
+            self.fast_llm_config = self.model_config_class()
+        super().__post_init__(**kwargs)
+        if self.dtype is not None:
+            assert self.dtype == self.fast_llm_config.distributed.compute_dtype.torch
 
     def save_pretrained(self, save_directory: str | os.PathLike, push_to_hub: bool = False, **kwargs) -> None:
         # Hack the method to save at the right place.
@@ -88,9 +88,9 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
             )
         metadata = cls.model_config_class.load_metadata(pretrained)
         updates = {}
-        torch_dtype = kwargs.pop("torch_dtype", None)
-        if torch_dtype is not None:
-            updates[("distributed", "compute_dtype")] = torch_dtype
+        dtype = kwargs.pop("dtype", kwargs.pop("torch_dtype", None))
+        if dtype is not None:
+            updates[("distributed", "compute_dtype")] = dtype
         fast_llm_config = cls.model_config_class.from_metadata(
             pretrained, metadata, default=kwargs.pop("fast_llm_config", None), updates=updates
         )

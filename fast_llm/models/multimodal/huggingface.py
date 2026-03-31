@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 class HuggingfaceMultiModalModelConfig(HuggingfaceGPTModelConfig):
     model_type = "fast_llm_multi_modal"
     model_config_class = MultiModalModelConfig
-    fast_llm_config: MultiModalModelConfig
+
+    if typing.TYPE_CHECKING:
+        fast_llm_config: MultiModalModelConfig
 
 
 class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
