@@ -391,13 +391,16 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
             hidden_states = output.hidden_states + (output.logits,)
             # Llava models doesn't return vision hidden states, so we run the vision model directly instead.
             if model_testing_config.model_type == "multimodal":
-                if hasattr(model, "vision_tower"):
-                    vision_output = model.vision_tower(
+                vision_model = (
+                    model.model if hasattr(model, "model") and hasattr(model.model, "vision_tower") else model
+                )
+                if hasattr(vision_model, "vision_tower"):
+                    vision_output = vision_model.vision_tower(
                         pixel_values=kwargs["pixel_values"],
                         image_sizes=kwargs["image_sizes"],
                         output_hidden_states=True,
                     )
-                    adapter_output = model.multi_modal_projector(vision_output.hidden_states[-1])
+                    adapter_output = vision_model.multi_modal_projector(vision_output.hidden_states[-1])
                     hidden_states = vision_output.hidden_states + (adapter_output,) + hidden_states
                 hidden_states_ref_ = hidden_states_ref.copy()
                 # Adjust the vision hidden states

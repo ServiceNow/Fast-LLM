@@ -48,6 +48,9 @@ except ImportError:
     fused_recurrent_kda = None
     fused_kda_gate = None
 
+_gdn_fla_available = chunk_gated_delta_rule is not None and rms_norm_gated is not None
+_kda_fla_available = chunk_kda is not None
+
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
@@ -289,7 +292,7 @@ class Apriel2Cache(Cache):
         For SSM/linear layers:
             kv_offset = 0, kv_length = query_length (no KV cache to attend to)
         """
-        query_length = cache_position.shape[0]
+        query_length = cache_position if isinstance(cache_position, int) else cache_position.shape[0]
         layer = self.layers[layer_idx]
 
         # Handle stochastic layers by getting the active mixer's cache
@@ -794,6 +797,7 @@ class Apriel2Attention(nn.Module):
                 hidden_size=hidden_size,
                 num_attention_heads=num_heads,
                 partial_rotary_factor=1.0,
+                rope_parameters={"rope_theta": rope_theta, "rope_type": "default"},
             )
             return nn.ModuleDict({"rotary_emb": MistralRotaryEmbedding(config=rotary_config)})
 
