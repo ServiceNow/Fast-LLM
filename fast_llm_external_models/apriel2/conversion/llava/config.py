@@ -24,7 +24,7 @@ def convert_config(llava_config: dict) -> dict:
     hidden_size = text_config["hidden_size"]
     num_heads = text_config["num_attention_heads"]
     num_kv_heads = text_config["num_key_value_heads"]
-    rope_theta = text_config["rope_theta"]
+    rope_theta = text_config.get("rope_theta") or text_config.get("rope_parameters", {}).get("rope_theta", 10000.0)
     # Use explicit head_dim if available (some models have head_dim != hidden_size // num_heads)
     # Note: MistralConfig.head_dim is None by default, so we must check for None explicitly
     head_dim = text_config.get("head_dim")
@@ -98,7 +98,7 @@ def _convert_vision_config(llava_config: dict) -> dict:
     num_heads = vision_config["num_attention_heads"]
     num_layers = vision_config["num_hidden_layers"]
     intermediate_size = vision_config["intermediate_size"]
-    rope_theta = vision_config["rope_theta"]
+    rope_theta = vision_config.get("rope_theta") or vision_config.get("rope_parameters", {}).get("rope_theta", 10000.0)
     patch_size = vision_config["patch_size"]
     num_channels = vision_config["num_channels"]
     # Use explicit head_dim if available

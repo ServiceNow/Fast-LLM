@@ -1,5 +1,6 @@
 """Apriel2 HuggingFace model implementation."""
 
+import dataclasses
 import math
 import random
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from typing import Any, Optional, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
+import transformers
 from einops import rearrange, repeat
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
@@ -50,6 +52,7 @@ except ImportError:
 
 _gdn_fla_available = chunk_gated_delta_rule is not None and rms_norm_gated is not None
 _kda_fla_available = chunk_kda is not None
+_TRANSFORMERS_V5 = dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 
 try:
@@ -784,6 +787,7 @@ class Apriel2Attention(nn.Module):
                 rope_theta=rope_theta,
                 image_size=rotary_config_dict["max_image_size"],
                 patch_size=rotary_config_dict["patch_size"],
+                rope_parameters={"rope_theta": rope_theta, "rope_type": "default"},
             )
             return nn.ModuleDict({"rotary_emb": PixtralRotaryEmbedding(config=rotary_config)})
 
@@ -2439,7 +2443,7 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
 class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
     """Apriel2 model with a language modeling head (text-only)."""
 
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"} if _TRANSFORMERS_V5 else ["lm_head.weight"]
 
     def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
@@ -3062,7 +3066,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
     """
 
     config_class = Apriel2Config
-    _tied_weights_keys = []  # No weight tying by default, but can be configured
+    _tied_weights_keys = {} if _TRANSFORMERS_V5 else []  # No weight tying by default, but can be configured
 
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
@@ -3072,7 +3076,9 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
 
         # Handle weight tying if configured
         if config.tie_word_embeddings:
-            self._tied_weights_keys = ["lm_head.weight"]
+            self._tied_weights_keys = (
+                {"lm_head.weight": "model.embed_tokens.weight"} if _TRANSFORMERS_V5 else ["lm_head.weight"]
+            )
 
         self.post_init()
 

@@ -1,6 +1,7 @@
 """Llava to Apriel2 weight conversion plan."""
 
 from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan, Ref, W
+from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V5
 
 
 def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
@@ -14,26 +15,42 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
     num_text_layers = llava_config.get("text_config", {}).get("num_hidden_layers", 0)
     num_vision_layers = llava_config.get("vision_config", {}).get("num_hidden_layers", 0)
 
+    # In transformers 5.x, LlavaForConditionalGeneration adds a "model." prefix to most submodules.
+    # 4.x: language_model.model.*, vision_tower.*, multi_modal_projector.*
+    # 5.x: model.language_model.model.*, model.vision_tower.*, model.multi_modal_projector.*
+    # lm_head stays as language_model.lm_head.weight in both versions.
+    if _TRANSFORMERS_V5:
+        llava_text_model = W("model", "language_model", "model")
+        llava_vision_tower = W("model", "vision_tower")
+        llava_projector = W("model", "multi_modal_projector")
+    else:
+        llava_text_model = W("language_model", "model")
+        llava_vision_tower = W("vision_tower")
+        llava_projector = W("multi_modal_projector")
+
     # Static mappings
     static_mappings = [
-        (W("language_model", "model", "embed_tokens", "weight"), W("model", "embed_tokens", "weight")),
+        (llava_text_model / "embed_tokens" / "weight", W("model", "embed_tokens", "weight")),
         (W("language_model", "lm_head", "weight"), W("lm_head", "weight")),
-        (W("language_model", "model", "norm", "weight"), W("model", "norm", "weight")),
+        (llava_text_model / "norm" / "weight", W("model", "norm", "weight")),
         (
-            W("vision_tower", "patch_conv", "weight"),
+            llava_vision_tower / "patch_conv" / "weight",
             W("model", "vision_encoder", "embeddings", "patch_embeddings", "weight"),
         ),
-        (W("vision_tower", "ln_pre", "weight"), W("model", "vision_encoder", "embeddings", "normalization", "weight")),
         (
-            W("multi_modal_projector", "linear_1", "weight"),
+            llava_vision_tower / "ln_pre" / "weight",
+            W("model", "vision_encoder", "embeddings", "normalization", "weight"),
+        ),
+        (
+            llava_projector / "linear_1" / "weight",
             W("model", "vision_encoder", "adapter", "linear_1", "weight"),
         ),
-        (W("multi_modal_projector", "linear_1", "bias"), W("model", "vision_encoder", "adapter", "linear_1", "bias")),
+        (llava_projector / "linear_1" / "bias", W("model", "vision_encoder", "adapter", "linear_1", "bias")),
         (
-            W("multi_modal_projector", "linear_2", "weight"),
+            llava_projector / "linear_2" / "weight",
             W("model", "vision_encoder", "adapter", "linear_2", "weight"),
         ),
-        (W("multi_modal_projector", "linear_2", "bias"), W("model", "vision_encoder", "adapter", "linear_2", "bias")),
+        (llava_projector / "linear_2" / "bias", W("model", "vision_encoder", "adapter", "linear_2", "bias")),
     ]
 
     for src, tgt in static_mappings:
@@ -41,7 +58,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
 
     # Text decoder layers
     for layer in range(num_text_layers):
-        llava_layer = W("language_model", "model", "layers", layer)
+        llava_layer = llava_text_model / "layers" / layer
         apriel_layer = W("model", "decoder", "blocks", layer)
 
         # Attention projections
@@ -64,7 +81,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
 
     # Vision encoder layers
     for layer in range(num_vision_layers):
-        llava_layer = W("vision_tower", "transformer", "layers", layer)
+        llava_layer = llava_vision_tower / "transformer" / "layers" / layer
         apriel_layer = W("model", "vision_encoder", "encoder", "blocks", layer)
 
         # Attention projections

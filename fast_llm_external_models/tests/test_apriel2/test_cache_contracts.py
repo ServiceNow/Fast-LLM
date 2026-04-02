@@ -27,7 +27,11 @@ Fixtures used from conftest.py:
 import pytest
 import torch
 
-from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, _AttentionCache
+from fast_llm_external_models.apriel2.modeling_apriel2 import (
+    _TRANSFORMERS_V5,
+    Apriel2Cache,
+    _AttentionCache,
+)
 
 # =============================================================================
 # SECTION 1: FULL ATTENTION - _AttentionCache vs DynamicLayer
@@ -113,7 +117,9 @@ class TestFullAttentionContract:
 
         # Verify HF's kv_length follows the expected formula
         cache_position = torch.arange(1)  # Single token decode
-        hf_kv_len, hf_kv_offset = hf_dynamic_layer.get_mask_sizes(cache_position)
+        hf_kv_len, hf_kv_offset = hf_dynamic_layer.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+        )
         expected_kv_len = hf_dynamic_layer.get_seq_length() + cache_position.shape[0]
         assert hf_kv_len == expected_kv_len
 
@@ -130,7 +136,9 @@ class TestFullAttentionContract:
             hf_dynamic_layer.update(key.clone(), value.clone())
 
             cache_position = torch.arange(1)
-            _, hf_kv_offset = hf_dynamic_layer.get_mask_sizes(cache_position)
+            _, hf_kv_offset = hf_dynamic_layer.get_mask_sizes(
+                cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+            )
 
             assert hf_kv_offset == 0, "DynamicLayer always returns kv_offset=0"
 
@@ -248,7 +256,9 @@ class TestSlidingWindowContract:
             apriel_sliding_cache.update(key.clone(), value.clone())
 
             cache_position = torch.arange(1)
-            hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(cache_position)
+            hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(
+                cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+            )
 
             # Verify HF returns 0 offset before window full
             assert hf_kv_offset == 0, f"HF offset should be 0 at step {i}"
@@ -271,7 +281,9 @@ class TestSlidingWindowContract:
             apriel_sliding_cache.update(key.clone(), value.clone())
 
         cache_position = torch.arange(1)
-        hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(cache_position)
+        hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+        )
 
         # At window boundary, offset should be 1
         assert hf_kv_offset == 1, "HF offset should be 1 at window boundary"
@@ -284,7 +296,9 @@ class TestSlidingWindowContract:
             hf_sliding_layer.update(key.clone(), value.clone())
             apriel_sliding_cache.update(key.clone(), value.clone())
 
-            hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(cache_position)
+            hf_kv_len, hf_kv_offset = hf_sliding_layer.get_mask_sizes(
+                cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+            )
 
             expected_offset = i + 2
             assert hf_kv_offset == expected_offset
@@ -306,7 +320,7 @@ class TestSlidingWindowContract:
             apriel_sliding_cache.update(key.clone(), value.clone())
 
         cache_position = torch.arange(1)
-        hf_kv_len, _ = hf_sliding_layer.get_mask_sizes(cache_position)
+        hf_kv_len, _ = hf_sliding_layer.get_mask_sizes(cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position)
 
         # HF returns window (window-1 cached + 1 query)
         assert hf_kv_len == window_size
@@ -443,8 +457,12 @@ class TestApriel2CacheIntegration:
         hf_layer.update(key.clone(), value.clone())
 
         cache_position = torch.arange(1)
-        hf_kv_len, hf_kv_offset = hf_layer.get_mask_sizes(cache_position)
-        apr_kv_len, apr_kv_offset = cache.get_mask_sizes(cache_position, layer_idx=0)
+        hf_kv_len, hf_kv_offset = hf_layer.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+        )
+        apr_kv_len, apr_kv_offset = cache.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position, layer_idx=0
+        )
 
         assert apr_kv_len == hf_kv_len
         assert apr_kv_offset == hf_kv_offset
@@ -464,8 +482,12 @@ class TestApriel2CacheIntegration:
             hf_layer.update(key.clone(), value.clone())
 
         cache_position = torch.arange(1)
-        hf_kv_len, hf_kv_offset = hf_layer.get_mask_sizes(cache_position)
-        apr_kv_len, apr_kv_offset = cache.get_mask_sizes(cache_position, layer_idx=0)
+        hf_kv_len, hf_kv_offset = hf_layer.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position
+        )
+        apr_kv_len, apr_kv_offset = cache.get_mask_sizes(
+            cache_position.shape[0] if _TRANSFORMERS_V5 else cache_position, layer_idx=0
+        )
 
         assert apr_kv_len == hf_kv_len
         assert apr_kv_offset == hf_kv_offset
@@ -508,13 +530,23 @@ class TestMaskCorrectness:
         kv_length = cache.cumulative_length + 1
         kv_offset = 0
 
-        mask = sdpa_mask(
-            batch_size=1,
-            cache_position=cache_position,
-            kv_length=kv_length,
-            kv_offset=kv_offset,
-            mask_function=causal_mask_function,
-        )
+        if _TRANSFORMERS_V5:
+            mask = sdpa_mask(
+                batch_size=1,
+                q_length=cache_position.shape[0],
+                q_offset=cache_position[0].item(),
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=causal_mask_function,
+            )
+        else:
+            mask = sdpa_mask(
+                batch_size=1,
+                cache_position=cache_position,
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=causal_mask_function,
+            )
 
         if mask is not None:
             # Query at position 10 should attend to positions 0-10
@@ -540,13 +572,23 @@ class TestMaskCorrectness:
         kv_offset = max(cumulative - window_size + 1, 0)
         kv_length = window_size - 1 + 1  # cached + query
 
-        mask = sdpa_mask(
-            batch_size=1,
-            cache_position=cache_position,
-            kv_length=kv_length,
-            kv_offset=kv_offset,
-            mask_function=sliding_window_causal_mask_function(window_size),
-        )
+        if _TRANSFORMERS_V5:
+            mask = sdpa_mask(
+                batch_size=1,
+                q_length=cache_position.shape[0],
+                q_offset=cache_position[0].item(),
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=sliding_window_causal_mask_function(window_size),
+            )
+        else:
+            mask = sdpa_mask(
+                batch_size=1,
+                cache_position=cache_position,
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=sliding_window_causal_mask_function(window_size),
+            )
 
         if mask is not None:
             query_mask = mask[0, 0, 0, :]
@@ -573,14 +615,25 @@ class TestMaskCorrectness:
         kv_length = cache.cumulative_length
         kv_offset = 0
 
-        mask = sdpa_mask(
-            batch_size=1,
-            cache_position=cache_position,
-            kv_length=kv_length,
-            kv_offset=kv_offset,
-            mask_function=causal_mask_function,
-            allow_is_causal_skip=False,  # Force mask creation
-        )
+        if _TRANSFORMERS_V5:
+            mask = sdpa_mask(
+                batch_size=1,
+                q_length=cache_position.shape[0],
+                q_offset=cache_position[0].item(),
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=causal_mask_function,
+                allow_is_causal_skip=False,  # Force mask creation
+            )
+        else:
+            mask = sdpa_mask(
+                batch_size=1,
+                cache_position=cache_position,
+                kv_length=kv_length,
+                kv_offset=kv_offset,
+                mask_function=causal_mask_function,
+                allow_is_causal_skip=False,  # Force mask creation
+            )
 
         if mask is not None:
             # Check causal pattern

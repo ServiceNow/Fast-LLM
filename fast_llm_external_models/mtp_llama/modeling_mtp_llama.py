@@ -1,8 +1,10 @@
+import dataclasses
 from functools import partial
 from typing import Callable, Optional, Union
 
 import torch
 import torch.utils.checkpoint
+import transformers
 from torch import nn
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
@@ -28,6 +30,7 @@ from .configuration_mtp_llama import MTPLlamaConfig
 logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "MTPLlamaConfig"
+_TRANSFORMERS_V5 = dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 
 class LlamaRMSNorm(nn.Module):
@@ -779,7 +782,7 @@ class MTPLlamaModel(LlamaPreTrainedModel):
 
 
 class MTPLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"} if _TRANSFORMERS_V5 else ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
