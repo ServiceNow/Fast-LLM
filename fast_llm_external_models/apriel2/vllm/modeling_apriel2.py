@@ -145,6 +145,12 @@ _patch_kv_cache_grouping()
 # Lazy triton allocator setup - only called when a triton kernel needs scratch memory
 _triton_allocator_installed = False
 
+# Guard: release fragmented GPU memory before the first Triton-autotuned kernel
+# (chunk_gated_delta_rule / chunk_kda).  Triton's autotuner allocates temporary
+# benchmark buffers; if CUDA memory is fragmented after model loading + profile
+# tensor allocation, these allocations OOM even when total free memory suffices.
+_triton_autotune_cache_warmed = False
+
 
 def _install_triton_allocator() -> None:
     """Install triton allocator lazily to avoid early CUDA initialization."""
@@ -2082,6 +2088,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                     f"num_actual_tokens={num_actual_tokens}, "
                     f"kernel_token_count={kernel_token_count}"
                 )
+            # Free fragmented CUDA memory before Triton autotuning on first call.
+            global _triton_autotune_cache_warmed
+            if not _triton_autotune_cache_warmed:
+                torch.cuda.empty_cache()
+                _triton_autotune_cache_warmed = True
+
             core_out, last_state = chunk_gated_delta_rule(
                 q=query,
                 k=key,
@@ -2569,6 +2581,12 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                     f"num_actual_tokens={num_actual_tokens}, "
                     f"kernel_token_count={kernel_token_count}"
                 )
+            # Free fragmented CUDA memory before Triton autotuning on first call.
+            global _triton_autotune_cache_warmed
+            if not _triton_autotune_cache_warmed:
+                torch.cuda.empty_cache()
+                _triton_autotune_cache_warmed = True
+
             core_attn_out_non_spec, last_recurrent_state = chunk_kda(
                 q=q,
                 k=k,
