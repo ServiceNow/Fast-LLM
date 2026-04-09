@@ -18,7 +18,7 @@ def download_santacoder_tokenizer():
     if not TOKENIZER_FILE.is_file():
         import transformers
 
-        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+        transformers.AutoTokenizer.from_pretrained("gpt2").save_pretrained(TOKENIZER_PATH)
 
 
 def get_random_text(
