@@ -75,7 +75,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         print("Model config directory: ", directory)
         import sys
         if directory not in sys.path:
-            sys.path.insert(0, directory)
+            sys.path.insert(0, directory.as_posix())
 
         # import transformers_modules
         # print(transformers_modules.__file__)
