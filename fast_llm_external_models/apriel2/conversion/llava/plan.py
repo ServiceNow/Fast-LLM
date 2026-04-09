@@ -58,47 +58,47 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
 
     # Text decoder layers
     for layer in range(num_text_layers):
+        llava_layer = W(*text_model_prefix, "layers", layer)
+        apriel_layer = W("model", "decoder", "blocks", layer)
+
         # Attention projections
         for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
-            mappings[W("model", "decoder", "blocks", layer, "mixer", proj, "weight")] = Ref(
-                key=W(*text_model_prefix, "layers", layer, "self_attn", proj, "weight")
-            )
+            src = llava_layer / "self_attn" / proj / "weight"
+            tgt = apriel_layer / "mixer" / proj / "weight"
+            mappings[tgt] = Ref(key=src)
 
         # MLP projections
         for proj in ["gate_proj", "up_proj", "down_proj"]:
-            mappings[W("model", "decoder", "blocks", layer, "mlp", proj, "weight")] = Ref(
-                key=W(*text_model_prefix, "layers", layer, "mlp", proj, "weight")
-            )
+            src = llava_layer / "mlp" / proj / "weight"
+            tgt = apriel_layer / "mlp" / proj / "weight"
+            mappings[tgt] = Ref(key=src)
 
         # Layer norms
-        mappings[W("model", "decoder", "blocks", layer, "input_layernorm", "weight")] = Ref(
-            key=W(*text_model_prefix, "layers", layer, "input_layernorm", "weight")
-        )
-        mappings[W("model", "decoder", "blocks", layer, "post_attention_layernorm", "weight")] = Ref(
-            key=W(*text_model_prefix, "layers", layer, "post_attention_layernorm", "weight")
+        mappings[apriel_layer / "input_layernorm" / "weight"] = Ref(key=llava_layer / "input_layernorm" / "weight")
+        mappings[apriel_layer / "post_attention_layernorm" / "weight"] = Ref(
+            key=llava_layer / "post_attention_layernorm" / "weight"
         )
 
     # Vision encoder layers
     for layer in range(num_vision_layers):
+        llava_layer = W(*vision_tower_prefix, "transformer", "layers", layer)
+        apriel_layer = W("model", "vision_encoder", "encoder", "blocks", layer)
+
         # Attention projections
         for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
-            mappings[W("model", "vision_encoder", "encoder", "blocks", layer, "mixer", proj, "weight")] = Ref(
-                key=W(*vision_tower_prefix, "transformer", "layers", layer, "attention", proj, "weight")
-            )
+            src = llava_layer / "attention" / proj / "weight"
+            tgt = apriel_layer / "mixer" / proj / "weight"
+            mappings[tgt] = Ref(key=src)
 
         # MLP projections (llava uses feed_forward, apriel uses mlp)
         for proj in ["gate_proj", "up_proj", "down_proj"]:
-            mappings[W("model", "vision_encoder", "encoder", "blocks", layer, "mlp", proj, "weight")] = Ref(
-                key=W(*vision_tower_prefix, "transformer", "layers", layer, "feed_forward", proj, "weight")
-            )
+            src = llava_layer / "feed_forward" / proj / "weight"
+            tgt = apriel_layer / "mlp" / proj / "weight"
+            mappings[tgt] = Ref(key=src)
 
         # Layer norms (different naming)
-        mappings[W("model", "vision_encoder", "encoder", "blocks", layer, "input_layernorm", "weight")] = Ref(
-            key=W(*vision_tower_prefix, "transformer", "layers", layer, "attention_norm", "weight")
-        )
-        mappings[W("model", "vision_encoder", "encoder", "blocks", layer, "post_attention_layernorm", "weight")] = Ref(
-            key=W(*vision_tower_prefix, "transformer", "layers", layer, "ffn_norm", "weight")
-        )
+        mappings[apriel_layer / "input_layernorm" / "weight"] = Ref(key=llava_layer / "attention_norm" / "weight")
+        mappings[apriel_layer / "post_attention_layernorm" / "weight"] = Ref(key=llava_layer / "ffn_norm" / "weight")
 
     return ExprPlan(
         mappings=mappings,
