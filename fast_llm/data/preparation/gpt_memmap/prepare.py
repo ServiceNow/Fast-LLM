@@ -80,7 +80,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def _get_croissant_metadata(self):
-        token = huggingface_hub.HfFolder.get_token()
+        token = huggingface_hub.get_token()
         try:
             # Retrieve the dataset metadata in croissant format
             url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"

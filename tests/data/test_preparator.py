@@ -21,7 +21,7 @@ from tests.utils.dataset import (
 from tests.utils.global_variables import DATASET_CACHE, TOKENIZER_NAME
 
 COMMON_DATASET_LENGTH = 1000
-COMMON_DATASET_TOKENS = 44883
+COMMON_DATASET_TOKENS = 47178
 COMMON_DATASET_TEXT = {
     27: "`s,uh",
     30: "@vo<CO_L",
@@ -30,11 +30,11 @@ COMMON_DATASET_TEXT = {
     87: "Uzl,h",
 }
 COMMON_DATASET_SAMPLES = {
-    27: [49152, 63, 82, 11, 27799, 49152],
-    30: [49152, 31, 2327, 27, 1448, 62, 43, 49152],
-    31: [49152, 60, 55, 80, 30, 85, 22, 18, 49152],
-    77: [49152, 13736, 85, 52, 22, 46, 5, 11807, 49152],
-    87: [49152, 52, 42536, 11, 71, 49152],
+    27: [50256, 63, 82, 11, 7456, 50256],
+    30: [50256, 31, 13038, 27, 8220, 62, 43, 50256],
+    31: [50256, 60, 55, 80, 30, 85, 4790, 50256],
+    77: [50256, 73, 44179, 52, 22, 46, 5, 8226, 50256],
+    87: [50256, 52, 48274, 11, 71, 50256],
 }
 
 
@@ -87,10 +87,10 @@ def test_preparator_sharded():
 
     dataset_config = get_dataset_config(config, GPTDatasetFromFileConfig)._load_config()
     Assert.custom(isinstance, dataset_config, BlendedDatasetConfig)
-    Assert.eq(dataset_config.weights, [0.33003587104248827, 0.3455874161709333, 0.3243767127865784])
+    Assert.eq(dataset_config.weights, [0.32985713680105133, 0.34579676968078343, 0.32434609351816523])
     datasets_ = [dataset_config_.build() for dataset_config_ in dataset_config.datasets]
     Assert.eq([len(dataset) for dataset in datasets_], lengths := [334, 333, 333])
-    Assert.eq([dataset.num_tokens for dataset in datasets_], [14813, 15511, 14559])
+    Assert.eq([dataset.num_tokens for dataset in datasets_], [15562, 16314, 15302])
 
     hf_dataset = datasets.load_from_disk(hf_path)["train"]
     tokenizer = TokenizerConfig(path=TOKENIZER_NAME).get_tokenizer()
@@ -112,14 +112,14 @@ def test_preparator_split():
         "training": {
             "type": "slice",
             "dataset": {"type": "memmap", "path": str(path / "shard_0_0.fast_llm_dataset")},
-            "begin": 0,
+            "begin": 0.0,
             "end": 0.501,
         },
         "validation": {
             "type": "slice",
             "dataset": {"type": "memmap", "path": str(path / "shard_0_0.fast_llm_dataset")},
             "begin": 0.501,
-            "end": 1,
+            "end": 1.0,
         },
     }
     Assert.eq(dataset_config, expected_config)
@@ -140,11 +140,11 @@ def test_preparator_split_sharded():
                 {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": str(path / "shard_0_1.fast_llm_dataset")},
-                    "begin": 0,
+                    "begin": 0.0,
                     "end": 0.5015015015015015,
                 },
             ],
-            "weights": [0.6602629819478494, 0.3397370180521507],
+            "weights": [0.6596583442838371, 0.3403416557161629],
         },
         "validation": {
             "type": "blended",
@@ -153,11 +153,11 @@ def test_preparator_split_sharded():
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": str(path / "shard_0_1.fast_llm_dataset")},
                     "begin": 0.5015015015015015,
-                    "end": 1,
+                    "end": 1.0,
                 },
                 {"type": "memmap", "path": str(path / "shard_0_2.fast_llm_dataset")},
             ],
-            "weights": [0.3514344262295082, 0.6485655737704918],
+            "weights": [0.35125280875058296, 0.648747191249417],
         },
     }
     Assert.eq(dataset_config, expected_config)
@@ -191,7 +191,7 @@ def test_dataset_preparator_from_hub():
     tokenizer = preparator_config.tokenizer.get_tokenizer()
 
     Assert.eq(len(dataset), len(hf_dataset), 1319)
-    Assert.eq(dataset.num_tokens, 179248)
+    Assert.eq(dataset.num_tokens, 131610)
     for index in range(0, 200, 8):
         Assert.eq(
             tokenizer.detokenize(dataset.get_document(index).tokens),
