@@ -46,6 +46,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        return_all_prediction_heads: bool = False,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
             self._get_batch(input_ids, attention_mask),
@@ -57,6 +58,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             output_attentions,
             output_hidden_states,
             return_dict,
+            return_all_prediction_heads,
         )
 
     def _get_batch(
@@ -94,6 +96,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        return_all_prediction_heads: bool = False,
     ) -> transformers.modeling_outputs.CausalLMOutputWithPast:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -127,7 +130,18 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         }
 
         # TODO: Handle MTP.
-        logits = hidden_states.pop("head.logits")
+
+        self.fast_llm_base_model.head.module_name
+        logits = hidden_states.pop(f"{self.fast_llm_base_model.head.module_name}.logits")
+        if return_all_prediction_heads:
+            logits = torch.stack(
+                [logits]
+                + [
+                    hidden_states.pop(f"{head.module_name}.logits")
+                    for head in self.fast_llm_base_model.multi_token_prediction.heads
+                ],
+                dim=-2,
+            )
 
         output = transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
@@ -156,7 +170,13 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
                 output_hidden_states = (
                     [self.fast_llm_base_model.embeddings.module_name + "$"]
                     + [layer.module_name + "$" for layer in self.fast_llm_base_model.decoder][:-1]
-                    + [self.fast_llm_base_model.head.final_norm.module_name + "$"]
+                    + [
+                        head.final_norm.module_name + "$"
+                        for head in [
+                            self.fast_llm_base_model.head,
+                            *self.fast_llm_base_model.multi_token_prediction.heads,
+                        ]
+                    ]
                 )
 
             # This needs to be set before preprocessing so it propagates to layers with namespace.

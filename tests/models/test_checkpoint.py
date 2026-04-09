@@ -333,6 +333,8 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
         device=testing_device,
     )
     kwargs = {"output_hidden_states": True}
+    if is_mtp := (model_ref.fast_llm_base_model.config.head.prediction_heads > 1):
+        kwargs["return_all_prediction_heads"] = True
     if model_testing_config.model_type == "multimodal":
         kwargs["pixel_values"] = torch.rand([6, 3, 20, 20]).to(testing_device)
         kwargs["image_sizes"] = torch.tensor(
@@ -388,7 +390,10 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
             if model_testing_config.model_type == "multimodal" and hasattr(model, "vision_encoder"):
                 kwargs["output_vision_hidden_states"] = True
             output = model(test_input, **kwargs)
-            hidden_states = output.hidden_states + (output.logits,)
+            # Fast-LLM doesn't concatenate the head hidden states.
+            hidden_states = (
+                output.hidden_states[:-1] + output.hidden_states[-1].unbind(-2) if is_mtp else output.hidden_states
+            ) + (output.logits,)
             # Llava models doesn't return vision hidden states, so we run the vision model directly instead.
             if model_testing_config.model_type == "multimodal":
                 # transformers v5: LlavaForConditionalGeneration wraps submodules under model.*
