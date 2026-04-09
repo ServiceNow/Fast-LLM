@@ -52,7 +52,7 @@ except ImportError:
 
 _gdn_fla_available = chunk_gated_delta_rule is not None and rms_norm_gated is not None
 _kda_fla_available = chunk_kda is not None
-_TRANSFORMERS_V5 = dataclasses.is_dataclass(transformers.PretrainedConfig)
+_TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 
 try:
@@ -2443,7 +2443,7 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
 class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
     """Apriel2 model with a language modeling head (text-only)."""
 
-    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"} if _TRANSFORMERS_V5 else ["lm_head.weight"]
+    _tied_weights_keys = ["lm_head.weight"] if _TRANSFORMERS_V4 else {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
@@ -3066,7 +3066,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
     """
 
     config_class = Apriel2Config
-    _tied_weights_keys = {} if _TRANSFORMERS_V5 else []  # No weight tying by default, but can be configured
+    _tied_weights_keys = [] if _TRANSFORMERS_V4 else {}  # No weight tying by default, but can be configured
 
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
@@ -3077,7 +3077,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
         # Handle weight tying if configured
         if config.tie_word_embeddings:
             self._tied_weights_keys = (
-                {"lm_head.weight": "model.embed_tokens.weight"} if _TRANSFORMERS_V5 else ["lm_head.weight"]
+                ["lm_head.weight"] if _TRANSFORMERS_V4 else {"lm_head.weight": "model.embed_tokens.weight"}
             )
 
         self.post_init()

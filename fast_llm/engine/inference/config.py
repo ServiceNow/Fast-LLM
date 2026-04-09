@@ -13,7 +13,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 
 logger = logging.getLogger(__name__)
 
-_TRANSFORMERS_V5 = dataclasses.is_dataclass(transformers.PretrainedConfig)
+_TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 
 class HuggingfaceModelConfig(transformers.PretrainedConfig):
@@ -22,17 +22,15 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
     fast_llm_config: FastLLMModelConfig | None = None
     use_cache: bool = True
 
-    if _TRANSFORMERS_V5:
+    def __post_init__(self, **kwargs):
+        # Needed for `to_diff_dict` (`__repr__`)
+        if self.fast_llm_config is None:
+            self.fast_llm_config = self.model_config_class()
+        super().__post_init__(**kwargs)
+        if self.dtype is not None:
+            assert self.dtype == self.fast_llm_config.distributed.compute_dtype.torch
 
-        def __post_init__(self, **kwargs):
-            # Needed for `to_diff_dict` (`__repr__`)
-            if self.fast_llm_config is None:
-                self.fast_llm_config = self.model_config_class()
-            super().__post_init__(**kwargs)
-            if self.dtype is not None:
-                assert self.dtype == self.fast_llm_config.distributed.compute_dtype.torch
-
-    else:
+    if _TRANSFORMERS_V4:
 
         def __init__(self, fast_llm_config: FastLLMModelConfig | None = None, **kwargs):
             # Needed for `to_diff_dict` (`__repr__`)
@@ -103,7 +101,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
             )
         metadata = cls.model_config_class.load_metadata(pretrained)
         updates = {}
-        dtype = kwargs.pop("dtype", kwargs.pop("torch_dtype", None))
+        dtype = kwargs.pop("dtype", None) or kwargs.pop("torch_dtype", None)  # torch_dtype: transformers v4
         if dtype is not None:
             updates[("distributed", "compute_dtype")] = dtype
         fast_llm_config = cls.model_config_class.from_metadata(

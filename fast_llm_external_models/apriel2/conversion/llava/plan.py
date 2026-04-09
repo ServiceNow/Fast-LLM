@@ -1,7 +1,7 @@
 """Llava to Apriel2 weight conversion plan."""
 
 from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan, Ref, W
-from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V5
+from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V4
 
 
 def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
@@ -19,14 +19,14 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
     # 4.x: language_model.model.*, vision_tower.*, multi_modal_projector.*
     # 5.x: model.language_model.model.*, model.vision_tower.*, model.multi_modal_projector.*
     # lm_head stays as language_model.lm_head.weight in both versions.
-    if _TRANSFORMERS_V5:
-        llava_text_model = W("model", "language_model", "model")
-        llava_vision_tower = W("model", "vision_tower")
-        llava_projector = W("model", "multi_modal_projector")
-    else:
+    if _TRANSFORMERS_V4:
         llava_text_model = W("language_model", "model")
         llava_vision_tower = W("vision_tower")
         llava_projector = W("multi_modal_projector")
+    else:
+        llava_text_model = W("model", "language_model", "model")
+        llava_vision_tower = W("model", "vision_tower")
+        llava_projector = W("model", "multi_modal_projector")
 
     # Static mappings
     static_mappings = [

@@ -391,6 +391,7 @@ def test_huggingface_model(model_testing_config, get_convert_path, testing_devic
             hidden_states = output.hidden_states + (output.logits,)
             # Llava models doesn't return vision hidden states, so we run the vision model directly instead.
             if model_testing_config.model_type == "multimodal":
+                # transformers v5: LlavaForConditionalGeneration wraps submodules under model.*
                 vision_model = (
                     model.model if hasattr(model, "model") and hasattr(model.model, "vision_tower") else model
                 )

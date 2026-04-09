@@ -23,6 +23,9 @@ class HuggingfaceMultiModalModelConfig(HuggingfaceGPTModelConfig):
     model_type = "fast_llm_multi_modal"
     model_config_class = MultiModalModelConfig
 
+    # transformers v5: PretrainedConfig is a dataclass, so redefining a field in a subclass
+    # would create a new dataclass field with a different default. Guard with TYPE_CHECKING
+    # so type checkers see the narrowed type without affecting the runtime dataclass layout.
     if typing.TYPE_CHECKING:
         fast_llm_config: MultiModalModelConfig
 

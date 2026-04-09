@@ -11,17 +11,17 @@ import transformers.utils.generic
 from fast_llm.core.distributed import broadcast, broadcast_object, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.inference.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.config import _TRANSFORMERS_V4, HuggingfaceModelConfig
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.utils import Assert
 
-try:
-    from transformers.initialization import no_init_weights as transformers_no_init_weights
-except ImportError:
+if _TRANSFORMERS_V4:
     from transformers.modeling_utils import no_init_weights as transformers_no_init_weights
+else:
+    from transformers.initialization import no_init_weights as transformers_no_init_weights
 
 
 logger = logging.getLogger(__name__)

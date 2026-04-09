@@ -21,7 +21,7 @@ from safetensors import safe_open
 from fast_llm_external_models.apriel2.configuration_apriel2 import Apriel2Config
 from fast_llm_external_models.apriel2.conversion import convert_llava_config as convert_config
 from fast_llm_external_models.apriel2.conversion import execute, plan_llava_to_apriel2, plan_surgery
-from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V5, Apriel2ForConditionalGeneration
+from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V4, Apriel2ForConditionalGeneration
 
 # =============================================================================
 # Config Conversion Tests
@@ -130,9 +130,9 @@ class TestPlanConversion:
 
         # Check specific weights are identical
         source_embed_key = (
-            "model.language_model.model.embed_tokens.weight"
-            if _TRANSFORMERS_V5
-            else "language_model.model.embed_tokens.weight"
+            "language_model.model.embed_tokens.weight"
+            if _TRANSFORMERS_V4
+            else "model.language_model.model.embed_tokens.weight"
         )
         source_embed = source_weights[source_embed_key]
         target_embed = apriel2_weights["model.embed_tokens.weight"]

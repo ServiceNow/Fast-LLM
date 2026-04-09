@@ -32,7 +32,7 @@ from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, div, safe_merge_dicts
 
-_TRANSFORMERS_V5 = dataclasses.is_dataclass(transformers.PretrainedConfig)
+_TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 logger = logging.getLogger(__name__)
 
@@ -192,68 +192,41 @@ class MLPLayer2Converter(WeightConverter):
 class LlamaAttentionConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        # transformers 5.x consolidates rope_theta + rope_scaling into rope_parameters
-        if "rope_parameters" in config:
+        # Normalize rope params to a single dict before dispatching on rope_type.
+        # transformers v5 consolidates rope_theta + rope_scaling into rope_parameters.
+        # transformers v4: rope_theta at top level, rope_scaling dict for non-default types.
+        # Note: detection is on checkpoint format, not transformers version — old checkpoints
+        # remain loadable with v5 transformers.
+        if "rope_parameters" in config:  # transformers v5
             rope_params = config["rope_parameters"]
-            rope_type = rope_params.get("rope_type", "default")
-            rotary_config = {
-                "type": rope_type,
-                "theta": rope_params["rope_theta"],
-            }
-            if rope_type == "default":
-                pass
-            elif rope_type == "llama3":
-                rotary_config.update(
-                    {
-                        "scale_factor": rope_params["factor"],
-                        "low_frequency_factor": rope_params["low_freq_factor"],
-                        "high_frequency_factor": rope_params["high_freq_factor"],
-                        "original_context_length": rope_params["original_max_position_embeddings"],
-                    }
-                )
-            elif rope_type == "yarn":
-                rotary_config.update(
-                    {
-                        "attention_factor": rope_params["attention_factor"],
-                        "beta_fast": rope_params["beta_fast"],
-                        "beta_slow": rope_params["beta_slow"],
-                        "original_context_length": rope_params["original_max_position_embeddings"],
-                    }
-                )
-            else:
-                raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
+            rope_theta = rope_params["rope_theta"]
+        else:  # transformers v4
+            rope_params = config.get("rope_scaling") or {}
+            rope_theta = config["rope_theta"]
+        rope_type = rope_params.get("rope_type", "default")
+        rotary_config = {"type": rope_type, "theta": rope_theta}
+        if rope_type == "default":
+            pass
+        elif rope_type == "llama3":
+            rotary_config.update(
+                {
+                    "scale_factor": rope_params["factor"],
+                    "low_frequency_factor": rope_params["low_freq_factor"],
+                    "high_frequency_factor": rope_params["high_freq_factor"],
+                    "original_context_length": rope_params["original_max_position_embeddings"],
+                }
+            )
+        elif rope_type == "yarn":
+            rotary_config.update(
+                {
+                    "attention_factor": rope_params["attention_factor"],
+                    "beta_fast": rope_params["beta_fast"],
+                    "beta_slow": rope_params["beta_slow"],
+                    "original_context_length": rope_params["original_max_position_embeddings"],
+                }
+            )
         else:
-            # transformers 4.x format: rope_theta at top level, rope_scaling separate
-            try:
-                rope_type = config["rope_scaling"]["rope_type"]
-            except (KeyError, TypeError):
-                rope_type = "default"
-            rotary_config = {
-                "type": rope_type,
-                "theta": config["rope_theta"],
-            }
-            if rope_type == "default":
-                pass
-            elif rope_type == "llama3":
-                rotary_config.update(
-                    {
-                        "scale_factor": config["rope_scaling"]["factor"],
-                        "low_frequency_factor": config["rope_scaling"]["low_freq_factor"],
-                        "high_frequency_factor": config["rope_scaling"]["high_freq_factor"],
-                        "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
-                    }
-                )
-            elif rope_type == "yarn":
-                rotary_config.update(
-                    {
-                        "attention_factor": config["rope_scaling"]["attention_factor"],
-                        "beta_fast": config["rope_scaling"]["beta_fast"],
-                        "beta_slow": config["rope_scaling"]["beta_slow"],
-                        "original_context_length": config["rope_scaling"]["original_max_position_embeddings"],
-                    }
-                )
-            else:
-                raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
+            raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
         out = {
             "rotary": rotary_config,
             "heads": config["num_attention_heads"],
@@ -304,13 +277,12 @@ class LlamaAttentionConverter:
             "attention_bias": config.add_linear_biases,
             "attention_dropout": config.dropout,
         }
-        if _TRANSFORMERS_V5:
-            return {**common, "rope_parameters": rope_parameters}
-        else:
+        if _TRANSFORMERS_V4:
             out = {**common, "rope_theta": rope_parameters["rope_theta"]}
             if type(config.rotary) is not DefaultRotaryConfig:
                 out["rope_scaling"] = {k: v for k, v in rope_parameters.items() if k != "rope_theta"}
             return out
+        return {**common, "rope_parameters": rope_parameters}
 
     @classmethod
     def _check_config(cls, config: AttentionConfig) -> None:
