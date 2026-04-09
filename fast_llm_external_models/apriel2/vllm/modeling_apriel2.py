@@ -9,7 +9,6 @@ optimized for vLLM inference.
 
 import logging
 import math
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import islice
@@ -156,23 +155,6 @@ def _patch_kv_cache_grouping() -> None:
 
 
 _patch_kv_cache_grouping()
-
-# =============================================================================
-# Debug Flags
-# =============================================================================
-# Top-level debug flags that control all debug output in the module.
-# Set these to True to enable debugging for specific components.
-
-DEBUG_GDN_LAYER = False  # Debug GDN layer forward pass (tensors, shapes)
-DEBUG_GDN_STATE = False  # Debug GDN recurrent state during decode
-DEBUG_GDN_OUTPUT = False  # Debug GDN output hidden states during decode
-DEBUG_KDA_LAYER = False  # Debug KDA layer outputs
-DEBUG_DECODER_LAYER = False  # Debug decoder layer outputs (residual, norm)
-DEBUG_FINAL_NORM = False  # Debug final norm before LM head
-DEBUG_LM_HEAD = False  # Debug LM head input/output
-# Sync CUDA before/between GDN kernels to catch the exact source of async
-# illegal-memory-access errors.  Very slow — only for debugging.
-DEBUG_SYNC = os.environ.get("APRIEL2_DEBUG_SYNC", "0") == "1"
 
 
 # =============================================================================
@@ -1351,38 +1333,6 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         value = rearrange(value, "l (h d) -> 1 l h d", d=self.head_v_dim)
         return query.contiguous(), key.contiguous(), value.contiguous()
 
-    def _debug_state_stats(self, name: str, state: torch.Tensor, seq_len: int):
-        """Debug recurrent state with statistics."""
-        if not DEBUG_GDN_STATE or state is None:
-            return
-        flat = state.flatten()
-        first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
-        print(
-            f"[vLLM-GDN {self.prefix}] {name} (seq_len={seq_len}): shape={state.shape}, "
-            f"mean={state.float().mean().item():.6f}, std={state.float().std().item():.6f}, "
-            f"min={state.float().min().item():.6f}, max={state.float().max().item():.6f}, "
-            f"first8=[{first8}]"
-        )
-
-    def _debug_tensor(self, name: str, t: torch.Tensor):
-        if not DEBUG_GDN_LAYER:
-            return
-        if t is None:
-            print(f"[GDN {self.prefix}] {name}: None")
-            return
-        flat = t.flatten()[:8]
-        vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
-        print(
-            f"[GDN {self.prefix}] {name}: shape={t.shape}, dtype={t.dtype}, "
-            f"mean={t.float().mean().item():.6f}, std={t.float().std().item():.6f}, "
-            f"first8=[{vals}]"
-        )
-
-    def _debug_print(self, msg: str):
-        if not DEBUG_GDN_LAYER:
-            return
-        print(f"[GDN {self.prefix}] {msg}")
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1393,30 +1343,17 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         """Forward pass with custom op for core attention."""
         num_tokens = hidden_states.size(0)
 
-        # self._cached_hidden_states = hidden_states  # Cache for debug in _forward_core
-        # self._debug_print(f"===== FORWARD START (num_tokens={num_tokens}) =====")
-        # self._debug_tensor("hidden_states", hidden_states)
-
         # Part 1: Input Projection
         projected_states_qkvz, _ = self.in_proj_qkvz(hidden_states)
         projected_states_ba, _ = self.in_proj_ba(hidden_states)
-        # self._debug_tensor("projected_states_qkvz", projected_states_qkvz)
-        # self._debug_tensor("projected_states_ba", projected_states_ba)
 
         query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
-        # self._debug_tensor("query (after fix_ordering)", query)
-        # self._debug_tensor("key (after fix_ordering)", key)
-        # self._debug_tensor("value (after fix_ordering)", value)
-        # self._debug_tensor("z (after fix_ordering)", z)
-        # self._debug_tensor("b (after fix_ordering)", b)
-        # self._debug_tensor("a (after fix_ordering)", a)
 
         # Flatten heads: [tokens, heads, head_dim] -> [tokens, heads * head_dim]
         query = query.reshape(query.size(0), -1)
         key = key.reshape(key.size(0), -1)
         value = value.reshape(value.size(0), -1)
         mixed_qkv = torch.cat((query, key, value), dim=-1)
-        # self._debug_tensor("mixed_qkv (flattened)", mixed_qkv)
 
         # Part 2: Core Attention (Custom Op)
         core_attn_out = torch.zeros(
@@ -1425,10 +1362,6 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             device=hidden_states.device,
         )
 
-        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-            torch.cuda.synchronize()
-            print(f"[SYNC-1] {self.prefix}: pre-custom-op sync OK", flush=True)
-
         torch.ops.vllm.apriel2_gdn_attention_core(
             mixed_qkv,
             b,
@@ -1436,58 +1369,19 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
             core_attn_out,
             self.prefix,
         )
-        # self._debug_tensor("core_attn_out (after custom op)", core_attn_out)
 
         # Part 3: Output Projection
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
         z = z.reshape(-1, z.shape[-1])
-        # self._debug_tensor("core_attn_out (before norm)", core_attn_out)
-        # self._debug_tensor("z (before norm)", z)
-        # Debug last token before norm (reshaped has tokens * heads rows)
-        if DEBUG_GDN_LAYER and num_tokens > 0:
-            num_heads = self.num_v_heads // self.tp_size
-            last_token_start = (num_tokens - 1) * num_heads
-            last_attn = core_attn_out[last_token_start : last_token_start + 1, :8]
-            last_z = z[last_token_start : last_token_start + 1, :8]
-            print(
-                f"[GDN {self.prefix}] core_attn_out before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn.flatten().float().tolist())}]"
-            )
-            print(
-                f"[GDN {self.prefix}] z before norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_z.flatten().float().tolist())}]"
-            )
-        # self._debug_tensor("norm.weight", self.norm.weight)
-        # self._debug_print(f"norm.norm_before_gate={self.norm.norm_before_gate}, norm.eps={self.norm.eps}")
         core_attn_out = self.norm(core_attn_out, z)
-        # self._debug_tensor("core_attn_out (after norm)", core_attn_out)
-        # Debug last token after norm
-        if DEBUG_GDN_LAYER and num_tokens > 0:
-            last_attn_after = core_attn_out[last_token_start : last_token_start + 1, :8]
-            print(
-                f"[GDN {self.prefix}] core_attn_out after norm (last token, head 0): [{', '.join(f'{v:.6f}' for v in last_attn_after.flatten().float().tolist())}]"
-            )
         core_attn_out = core_attn_out.reshape(z_shape_og)
         core_attn_out = rearrange(core_attn_out, "... h d -> ... (h d)")
         # Align dtype with projection weights (FA kernels may yield float32)
         target_dtype = self.out_proj.weight.dtype
         if core_attn_out.dtype != target_dtype:
             core_attn_out = core_attn_out.to(target_dtype)
-        # self._debug_tensor("core_attn_out (before out_proj)", core_attn_out)
         output[:num_tokens], _ = self.out_proj(core_attn_out)
-        # self._debug_tensor("output (final)", output[:num_tokens])
-        # Show last token specifically
-        if DEBUG_GDN_LAYER:
-            last_token = output[num_tokens - 1, :8]
-            vals = ", ".join(f"{v:.6f}" for v in last_token.float().tolist())
-            print(f"[GDN {self.prefix}] output (last token): last_token_first8=[{vals}]")
-        # Debug output hidden states during decode (num_tokens == 1)
-        if DEBUG_GDN_OUTPUT and num_tokens == 1:
-            flat = output[:num_tokens].flatten()
-            first8 = ", ".join(f"{v:.6f}" for v in flat[:8].float().tolist())
-            print(
-                f"[vLLM-GDN {self.prefix}] OUTPUT hs: shape={output[:num_tokens].shape}, mean={output[:num_tokens].float().mean().item():.6f}, std={output[:num_tokens].float().std().item():.6f}, first8=[{first8}]"
-            )
-        # self._debug_print("===== FORWARD END =====")
 
     def _forward_core(
         self,
@@ -1497,16 +1391,11 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         core_attn_out: torch.Tensor,
     ):
         """Core attention computation (called by custom op)."""
-        # self._debug_print("===== _forward_core START =====")
-        # self._debug_tensor("mixed_qkv (input to core)", mixed_qkv)
-        # self._debug_tensor("b (input to core)", b)
-        # self._debug_tensor("a (input to core)", a)
 
         forward_context = get_forward_context()
         attn_metadata: AttentionMetadata = forward_context.attn_metadata
 
         if attn_metadata is None:
-            # self._debug_print("attn_metadata is None, returning early")
             return
 
         assert isinstance(attn_metadata, dict)
@@ -1519,10 +1408,6 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         non_spec_query_start_loc = attn_metadata.non_spec_query_start_loc
         non_spec_state_indices_tensor = attn_metadata.non_spec_state_indices_tensor
         num_actual_tokens = attn_metadata.num_actual_tokens
-
-        # self._debug_print(f"num_actual_tokens={num_actual_tokens}, num_prefills={attn_metadata.num_prefills}, num_decodes={attn_metadata.num_decodes}")
-        # self._debug_print(f"has_initial_state={has_initial_state}")
-        # self._debug_print(f"non_spec_query_start_loc={non_spec_query_start_loc}")
 
         self_kv_cache = self.kv_cache[forward_context.virtual_engine]
         conv_state = self_kv_cache[0].transpose(-1, -2)
@@ -1547,38 +1432,12 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
         b = b[:num_actual_tokens]
         a = a[:num_actual_tokens]
 
-        # self._debug_tensor("mixed_qkv (truncated)", mixed_qkv)
-        # self._debug_tensor("b (truncated)", b)
-        # self._debug_tensor("a (truncated)", a)
-
         # Convolution
         conv_weights = self.conv1d.weight.view(self.conv1d.weight.size(0), self.conv1d.weight.size(2))
-        # self._debug_tensor("conv_weights", conv_weights)
-        # self._debug_tensor("conv1d.bias", self.conv1d.bias)
-        # self._debug_print(f"activation={self.activation}")
 
         if attn_metadata.num_prefills > 0:
-            # self._debug_print("Using causal_conv1d_fn (prefill path)")
             mixed_qkv_T = mixed_qkv.transpose(0, 1)
-            # self._debug_tensor("mixed_qkv_T (before conv)", mixed_qkv_T)
 
-            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-                max_ci = non_spec_state_indices_tensor.max().item()
-                print(
-                    f"[PRE-CONV] {self.prefix}: conv_state.shape={conv_state.shape}, "
-                    f"x.shape={mixed_qkv_T.shape}, "
-                    f"cache_indices={non_spec_state_indices_tensor.tolist()} (max={max_ci}), "
-                    f"num_cache_lines={num_cache_lines}, "
-                    f"query_start_loc={non_spec_query_start_loc.tolist()}, "
-                    f"has_initial_state={has_initial_state.tolist()}, "
-                    f"num_prefills={attn_metadata.num_prefills}",
-                    flush=True,
-                )
-                if max_ci >= num_cache_lines:
-                    print(
-                        f"[OOB-CONV] {self.prefix}: cache_index {max_ci} >= num_cache_lines {num_cache_lines}!",
-                        flush=True,
-                    )
             mixed_qkv = causal_conv1d_fn(
                 mixed_qkv_T,
                 conv_weights,
@@ -1590,11 +1449,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 query_start_loc=non_spec_query_start_loc,
                 metadata=attn_metadata,
             ).transpose(0, 1)
-            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-                torch.cuda.synchronize()
-                print(f"[SYNC-2] {self.prefix}: post-causal_conv1d_fn sync OK", flush=True)
         else:
-            # self._debug_print("Using causal_conv1d_update (decode path)")
             causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
@@ -1605,68 +1460,21 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 validate_data=True,
             )
 
-        # self._debug_tensor("mixed_qkv (after conv)", mixed_qkv)
-
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
-        # self._debug_tensor("query (after rearrange)", query)
-        # self._debug_tensor("key (after rearrange)", key)
-        # self._debug_tensor("value (after rearrange)", value)
 
         # Expand K heads to V heads for grouped query attention
         # (matches Fast-LLM and transformers reference implementations)
         # Always call repeat_interleave (no-op when value_heads_per_key == 1) to avoid
         # conditional branches that confuse torch.compile
-        # self._debug_print(f"Expanding K heads to V heads (value_heads_per_key={self.value_heads_per_key})")
         query = query.repeat_interleave(self.value_heads_per_key, dim=2)
         key = key.repeat_interleave(self.value_heads_per_key, dim=2)
-        # self._debug_tensor("query (after expand)", query)
-        # self._debug_tensor("key (after expand)", key)
-
-        # self._debug_tensor("A_log", self.A_log)
-        # self._debug_tensor("dt_bias", self.dt_bias)
 
         g, beta = fused_gdn_gating(self.A_log, a, b, self.dt_bias)
-        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-            torch.cuda.synchronize()
-            print(f"[SYNC-3] {self.prefix}: post-fused_gdn_gating sync OK", flush=True)
-        # self._debug_tensor("g (from gating)", g)
-        # self._debug_tensor("beta (from gating)", beta)
 
         # Recurrent attention
         if attn_metadata.num_prefills > 0:
-            # self._debug_print("Using chunk_gated_delta_rule (prefill)")
-            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-                max_idx = non_spec_state_indices_tensor.max().item()
-                print(
-                    f"[SYNC-4] {self.prefix}: prefill ssm_state.shape={ssm_state.shape}, "
-                    f"indices={non_spec_state_indices_tensor.tolist()}, "
-                    f"max_idx={max_idx}, num_cache_lines={num_cache_lines}, "
-                    f"has_initial_state={has_initial_state.tolist()}, "
-                    f"num_prefills={attn_metadata.num_prefills}",
-                    flush=True,
-                )
-                if max_idx >= ssm_state.shape[0]:
-                    print(
-                        f"[OOB] {self.prefix}: max_idx={max_idx} >= ssm_state.shape[0]={ssm_state.shape[0]}!",
-                        flush=True,
-                    )
             initial_state = ssm_state[non_spec_state_indices_tensor].contiguous()
             initial_state[~has_initial_state, ...] = 0
-            # self._debug_tensor("initial_state", initial_state)
-            # Debug PREFILL INPUTS before kernel call
-            if DEBUG_GDN_STATE:
-                print(f"[vLLM-GDN {self.prefix}] PREFILL INPUTS:")
-                print(
-                    f"  hidden_states: shape={self._cached_hidden_states.shape}, first8={self._cached_hidden_states.flatten()[:8].tolist()}"
-                )
-                print(f"  mixed_qkv (input): shape={mixed_qkv.shape}, first8={mixed_qkv.flatten()[:8].tolist()}")
-                print(f"  q: shape={query.shape}, first8={query.flatten()[:8].tolist()}")
-                print(f"  k: shape={key.shape}, first8={key.flatten()[:8].tolist()}")
-                print(f"  v: shape={value.shape}, first8={value.flatten()[:8].tolist()}")
-                print(f"  g: shape={g.shape}, first8={g.flatten()[:8].tolist()}")
-                print(f"  beta: shape={beta.shape}, first8={beta.flatten()[:8].tolist()}")
-                print(f"  initial_state: {initial_state}")
-                print(f"  cu_seqlens: {non_spec_query_start_loc}")
             core_out, last_state = chunk_gated_delta_rule(
                 q=query,
                 k=key,
@@ -1679,18 +1487,8 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
-            if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-                torch.cuda.synchronize()
-                print(f"[SYNC-5] {self.prefix}: post-chunk_gated_delta_rule sync OK", flush=True)
-            # self._debug_tensor("core_out (from chunk_gated_delta_rule)", core_out)
-            # self._debug_tensor("last_state", last_state)
             ssm_state[non_spec_state_indices_tensor] = last_state.to(ssm_state.dtype)
         else:
-            # self._debug_print("Using fused_recurrent_gated_delta_rule (decode)")
-            if DEBUG_GDN_STATE:
-                print(
-                    f"[vLLM-GDN {self.prefix}] DECODE inputs: q={query.flatten()[:4].tolist()}, k={key.flatten()[:4].tolist()}, v={value.flatten()[:4].tolist()}, g={g.flatten()[:4].tolist()}, beta={beta.flatten()[:4].tolist()}"
-                )
             # num_actual_tokens already clamped to cache lines above
             num_decodes = min(attn_metadata.num_decodes, num_actual_tokens)
             core_out, _ = fused_recurrent_gated_delta_rule(
@@ -1705,14 +1503,7 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
                 use_qk_l2norm_in_kernel=True,
             )
-            # self._debug_tensor("core_out (from fused_recurrent)", core_out)
-            # if non_spec_state_indices_tensor is not None and len(non_spec_state_indices_tensor) > 0:
-            #     actual_state = ssm_state[slot_idx:slot_idx+1]
-            #     # self._debug_state_stats("DECODE out_state", actual_state, num_actual_tokens)
-
         core_attn_out[:num_actual_tokens] = core_out.squeeze(0)[:num_actual_tokens]
-        # self._debug_tensor("core_attn_out (final output)", core_attn_out)
-        # self._debug_print("===== _forward_core END =====")
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         # Checkpoint uses "convolution", model uses "conv1d"
@@ -1966,9 +1757,6 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
-        if DEBUG_SYNC and not torch.compiler.is_compiling() and not _compile_monitor.cudagraph_capturing_enabled:
-            torch.cuda.synchronize()
-            print(f"[SYNC-6] {self.prefix}: pre-kda_attention sync OK", flush=True)
 
         torch.ops.vllm.kda_attention(
             q,
@@ -2369,51 +2157,22 @@ class Apriel2GDNDecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=rms_norm_eps)
 
-    def _debug_tensor(self, name: str, t: torch.Tensor, show_last=False):
-        if not DEBUG_DECODER_LAYER or t is None:
-            return
-        if show_last:
-            # Show last token
-            last = t[-1, :8] if t.dim() == 2 else t[0, -1, :8]
-            vals = ", ".join(f"{v:.6f}" for v in last.float().tolist())
-            print(f"[vLLM Layer] {name}: shape={t.shape}, last_token_first8=[{vals}]")
-        else:
-            flat = t.flatten()[:8]
-            vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
-            print(f"[vLLM Layer] {name}: shape={t.shape}, first8=[{vals}]")
-
     def forward(
         self,
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
         **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # self._debug_tensor("input hidden_states", hidden_states)
-        # self._debug_tensor("input residual", residual)
-
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        # self._debug_tensor("after input_layernorm", hidden_states)
-        # self._debug_tensor("residual after input_layernorm", residual)
-
         output = torch.empty_like(hidden_states)
         self.mixer(hidden_states, output)
-        # self._debug_tensor("mixer output", output)
-
         hidden_states, residual = self.post_attention_layernorm(output, residual)
-        # self._debug_tensor("after post_attention_layernorm", hidden_states)
-        # self._debug_tensor("residual after post_attention_layernorm", residual)
-
         hidden_states = self.mlp(hidden_states)
-        # self._debug_tensor("after mlp", hidden_states)
-        # Also show last token for final layer comparison
-        # self._debug_tensor("after mlp (last token)", hidden_states, show_last=True)
-        # self._debug_tensor("residual (last token)", residual, show_last=True)
-
         return hidden_states, residual
 
 
@@ -2900,33 +2659,7 @@ class Apriel2Model(nn.Module):
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({"hidden_states": hidden_states, "residual": residual})
 
-        # Debug final norm
-        if DEBUG_FINAL_NORM:
-            # Show LAST token (to match TF)
-            last_hs = hidden_states[-1, :8]
-            last_res = residual[-1, :8] if residual is not None else None
-            hs_vals = ", ".join(f"{v:.6f}" for v in last_hs.float().tolist())
-            res_vals = ", ".join(f"{v:.6f}" for v in last_res.float().tolist()) if last_res is not None else "None"
-            print(
-                f"[vLLM Final] hidden_states (before norm): shape={hidden_states.shape}, last_token_first8=[{hs_vals}]"
-            )
-            print(
-                f"[vLLM Final] residual (before norm): shape={residual.shape if residual is not None else None}, last_token_first8=[{res_vals}]"
-            )
-            print(
-                f"[vLLM Final] norm.weight: first8=[{', '.join(f'{v:.6f}' for v in self.norm.weight.flatten()[:8].float().tolist())}]"
-            )
-            print(f"[vLLM Final] norm.variance_epsilon={self.norm.variance_epsilon}")
-
         hidden_states, _ = self.norm(hidden_states, residual)
-
-        if DEBUG_FINAL_NORM:
-            last_out = hidden_states[-1, :8]
-            out_vals = ", ".join(f"{v:.6f}" for v in last_out.float().tolist())
-            print(
-                f"[vLLM Final] hidden_states (after norm): shape={hidden_states.shape}, last_token_first8=[{out_vals}]"
-            )
-
         return hidden_states
 
 
@@ -3007,28 +2740,7 @@ class Apriel2ForCausalLM(nn.Module, HasInnerState, SupportsPP):
         self,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor | None:
-        # Debug LM head input
-        if DEBUG_LM_HEAD:
-            flat = hidden_states.flatten()[:8]
-            vals = ", ".join(f"{v:.6f}" for v in flat.float().tolist())
-            print(f"[vLLM LM Head] input hidden_states: shape={hidden_states.shape}, first8=[{vals}]")
-            if self.lm_head is not None:
-                lm_weight = self.lm_head.weight
-                print(
-                    f"[vLLM LM Head] lm_head.weight: shape={lm_weight.shape}, first8=[{', '.join(f'{v:.6f}' for v in lm_weight.flatten()[:8].float().tolist())}]"
-                )
-
         logits = self.logits_processor(self.lm_head, hidden_states)
-
-        if DEBUG_LM_HEAD and logits is not None:
-            # Get last token logits
-            last_logits = logits[-1] if logits.dim() == 2 else logits[0, -1]
-            top_vals, top_idx = last_logits.topk(5)
-            print(f"[vLLM LM Head] logits shape={logits.shape}")
-            print(
-                f"[vLLM LM Head] last token top-5 logits: {[(idx.item(), val.item()) for idx, val in zip(top_idx, top_vals)]}"
-            )
-
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
