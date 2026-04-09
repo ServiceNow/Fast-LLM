@@ -89,9 +89,6 @@ class GatedDeltaNetConfig(MixerConfig):
 
         return GatedDeltaNet
 
-    def _validate(self) -> None:
-        super()._validate()
-
 
 @config_class(dynamic_type={MixerConfig: "kda"})
 class KimiDeltaAttentionConfig(MixerConfig):

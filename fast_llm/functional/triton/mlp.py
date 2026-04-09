@@ -156,7 +156,7 @@ def triton_mlp_activation_forward(
         input_,
         output,
         gated=gated,  # noqa
-        activation_type=activation_type.value,  # noqa
+        activation_type=activation_type,  # noqa
         n_cols=n_cols,  # noqa
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     )

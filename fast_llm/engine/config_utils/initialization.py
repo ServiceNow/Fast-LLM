@@ -46,7 +46,7 @@ class DefaultInitializationConfig(InitializationConfig):
 @config_class(dynamic_type={InitializationConfig: "fill"})
 class FillInitializationConfig(InitializationConfig):
     """
-    Normal initialization: normal(mean, std).clamp(min,max)
+    Fill initialization: fills the tensor with a constant value.
     """
 
     _abstract = False
@@ -88,7 +88,7 @@ class NormalInitializationConfig(InitializationConfig):
     )
     max: float | None = Field(
         default=None,
-        desc="Min value for initialization clamping.",
+        desc="Max value for initialization clamping.",
         hint=FieldHint.optional,
     )
 
@@ -105,16 +105,14 @@ class UniformInitializationConfig(InitializationConfig):
     _abstract = False
 
     scale: float = Field(
-        default=None,
         desc="Initialization scale.",
-        hint=FieldHint.optional,
+        hint=FieldHint.core,
         valid=check_field(Assert.geq, 0),
     )
     mean: float = Field(
-        default=None,
+        default=0.0,
         desc="Initialization mean.",
         hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
     )
 
     def get_initializer(self) -> "Initializer":

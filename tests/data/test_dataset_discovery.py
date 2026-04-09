@@ -141,11 +141,11 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
     ),
 )
 def test_dataset_discovery(
-    result_path: pathlib.Path, name: str, paths: tuple[pathlib.Path], ignore_paths, expected_config: dict
+    data_result_path: pathlib.Path, name: str, paths: tuple[pathlib.Path], ignore_paths, expected_config: dict
 ):
     """Test end-to-end discovery with multiple datasets in various structure."""
     test_dataset_path = [get_common_test_dataset()[0], get_alt_test_dataset()[0]]
-    (dataset_path := result_path / f"dataset_discovery/{name}").mkdir(parents=True)
+    (dataset_path := data_result_path / f"dataset_discovery/{name}").mkdir(parents=True)
     for index, path in enumerate(paths):
         (path_ := dataset_path / path).mkdir(parents=True, exist_ok=True)
         shutil.copy(
@@ -157,7 +157,7 @@ def test_dataset_discovery(
     # Run dataset discovery
     config = DatasetDiscoveryConfig(
         directory=dataset_path,
-        output=result_path / f"dataset_discovery/configs/{name}.yaml",
+        output=data_result_path / f"dataset_discovery/configs/{name}.yaml",
         ignore_paths=ignore_paths,
     )
     config.run()

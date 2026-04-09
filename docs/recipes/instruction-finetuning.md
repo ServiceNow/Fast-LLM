@@ -107,7 +107,7 @@ splits:
 
 ## ⚙️ Step 4: Configure Fast-LLM
 
-It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `truncate_documents` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
+It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with one additional option, namely `truncate_documents`, which is important for improving the task performance of instruction-tuned models.
 
 ```yaml
 training:
@@ -124,16 +124,12 @@ training:
   checkpoint:
     interval: 1000
     keep: 5
-  test_iters: 0
   export:
     format: llama
     interval: 1000
-batch:
-  micro_batch_size: 1
-  sequence_length: 4096
-  batch_size: 32
-  cross_document_attention: no # (1)!
 data:
+  micro_batch_size: 4096
+  maximum_document_length: 4096
   datasets:
     training:
       type: file
@@ -141,7 +137,7 @@ data:
     validation:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_validation.yaml
-  truncate_documents: no # (2)!
+  truncate_documents: no # (1)!
   sampling:
     use_loss_masking_spans: yes
 optimizer:
@@ -160,19 +156,19 @@ pretrained:
   model_weights: yes
 model:
   base_model:
-    transformer:
-      use_flash_attention: yes
-    cross_entropy_impl: fused
+    decoder:
+      block:
+        mixer:
+          use_flash_attention: yes
   multi_stage:
     zero_stage: 3
   distributed:
     timeout: 3600
-    training_dtype: bf16
+    compute_dtype: bf16
 run:
   experiment_dir: ./sft-tutorial/llama-3.1-8b-instruct-magpie
 ```
 
-1. Prevents paying attention to other documents in a packed sequence
-2. Avoids truncating documents to fit into a packed sequence and starts a new sequence instead. Documents longer than sequence length will be skipped altogether.
+1. Avoids truncating documents to fit into a packed sequence and starts a new sequence instead. Documents longer than sequence length will be skipped altogether.
 
 Launching the training run is similar to Step 7 in the [Quick Start](../quick-start.md) guide.

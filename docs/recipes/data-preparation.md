@@ -12,7 +12,7 @@ For this guide, you would need:
 
 -   **Software**: Depending on your setup, you'll need one of the following:
     -   **Docker**: If you're using the prebuilt Docker image on your local machine.
-    -   **Python 3.10**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
+    -   **Python 3.12**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
     -   **Cluster Setup**: Access to a Docker-enabled Slurm cluster or to a Kubernetes cluster with Kubeflow if you're using those environments.
 
 ## 📚 Step 1: Download the dataset from Huggingface
@@ -104,7 +104,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
 
 === "Custom Installation"
 
-    Please follow the instructions in the [Quick-Start guide](quick-start/#step-1-initial-setup-custom-installation) to set up Fast-LLM in your environment.
+    Please follow the instructions in the [Quick-Start guide](quick-start/#step-1-initial-setup) to set up Fast-LLM in your environment.
 
     Then, run the following command:
 

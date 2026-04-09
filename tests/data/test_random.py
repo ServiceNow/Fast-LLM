@@ -15,7 +15,7 @@ RANDOM_DATASET_EXPECTED_SAMPLES = [
 ]
 
 
-def test_gpt_random_dataset():
+def test_gpt_random_dataset(data_result_path):
     # Make sure the random dataset works and check for unintended changes in behavior.
     preprocessing = LanguageModelBatchPreprocessingConfig(vocab_size=8192)
     sampled = get_dataset_config(config := {"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
@@ -30,4 +30,5 @@ def test_gpt_random_dataset():
         sequence_length=7,
         expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "random",
     )

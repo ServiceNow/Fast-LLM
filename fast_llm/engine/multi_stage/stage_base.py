@@ -204,17 +204,19 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                     meta.init_parameter(parameter, self._distributed, debug=self._config.debug_param_init)
 
             if self.mode.on_device:
-                fsdp.reset_shard_pad(fsdp.weight_shard, ShardName.weights)
+                for fsdp in self._fsdps:
+                    fsdp.reset_shard_pad(fsdp.weight_shard, ShardName.weights)
 
         if self._config.debug_param_init:
             if self._mode.on_device:
-                fsdp.log_shard(
-                    name="param",
-                    shard=fsdp.weight_shard,
-                    distributed=self._distributed,
-                    level=self._config.debug_param_init,
-                    global_=self._config.debug_global_tensors,
-                )
+                for fsdp in self._fsdps:
+                    fsdp.log_shard(
+                        name="param",
+                        shard=fsdp.weight_shard,
+                        distributed=self._distributed,
+                        level=self._config.debug_param_init,
+                        global_=self._config.debug_global_tensors,
+                    )
 
     def get_param_groups(
         self, optimizer_state_shards: dict[str, tuple[torch.Tensor]], param_group_cls: type[ParamGroup]
@@ -238,9 +240,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                     continue
                 chunk_size = div(parameter_meta.numel(), len(parameter_meta.lr_scale))
                 buffer_begin = fsdp.get_parameter_begin_in_buffer(parameter_meta.tensor_name)
-                for i, lr_scale in enumerate(parameter_meta.lr_scale):
-                    begin = fsdp.index_buffer_to_shard(buffer_begin + i * chunk_size)
-                    end = fsdp.index_buffer_to_shard(buffer_begin + (i + 1) * chunk_size)
+                for lr_scale_index, lr_scale in enumerate(parameter_meta.lr_scale):
+                    begin = fsdp.index_buffer_to_shard(buffer_begin + lr_scale_index * chunk_size)
+                    end = fsdp.index_buffer_to_shard(buffer_begin + (lr_scale_index + 1) * chunk_size)
                     if lr_scale == 0 or begin == end:
                         continue
                     optimizer_params = (parameter_meta.param_weight_decay, lr_scale)
@@ -279,7 +281,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             grads_norm_slices = []
             for name in grad_norm_names:
                 begin, end = fsdp._get_parameter_range_in_shard(name)
-                if len(grads_norm_slices) < 0 and begin == grads_norm_slices[-1].stop:
+                if len(grads_norm_slices) > 0 and begin == grads_norm_slices[-1].stop:
                     grads_norm_slices[-1] = slice(grads_norm_slices[-1].start, end)
                 else:
                     grads_norm_slices.append(slice(begin, end))

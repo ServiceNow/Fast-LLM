@@ -112,9 +112,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             ),
             num_workers=num_workers,
             prefetch_factor=prefetch_factor,
-            pin_memory=True,
+            pin_memory=self._distributed_config.use_cuda,
             collate_fn=functools.partial(self._collate_fn, dataset_name=dataset_name, preprocess=preprocess),
-            multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
+            multiprocessing_context=self._config.multiprocessing_context if num_workers > 0 else None,
         )
         if self._datasets[dataset_name].requires_broadcast:
             data_loader = DistributedDataLoaderWrapper(

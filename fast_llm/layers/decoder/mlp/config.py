@@ -18,13 +18,15 @@ class MLPLossNames:
     router_z_loss = "router_z_loss"
 
 
-class RoutingType(str, enum.Enum):
+class RoutingType(enum.StrEnum):
     topk = "aux_loss"
     sinkhorn = "sinkhorn"
 
 
 @config_class(dynamic_type={MLPBaseConfig: "mlp"})
 class MLPConfig(MLPBaseConfig):
+    """Configuration for a dense feedforward (MLP) layer with optional gating and activation recomputation."""
+
     # TODO: Review names
     # TODO: Separate MoE?
     _abstract = False
@@ -81,6 +83,8 @@ class MLPConfig(MLPBaseConfig):
 
 @config_class(dynamic_type={MLPBaseConfig: "moe"})
 class MoEMLPConfig(MLPConfig):
+    """Configuration for a Mixture-of-Experts (MoE) feedforward layer with top-k token routing."""
+
     router: LinearConfig = Field(
         # TODO: Improve default?
         desc="Configuration for the MoE router.",

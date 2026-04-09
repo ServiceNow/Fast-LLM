@@ -45,6 +45,8 @@ class ModuleConfig(Config):
             assert isinstance(field, Field), f"{name}, {field}"
             if field.hint == FieldHint.architecture:
                 architecture[name] = self._serialize_architecture_field(getattr(self, name, MISSING))
+            else:
+                assert not isinstance(field, ModuleConfig)
         return architecture
 
     def _serialize_architecture_field(self, value: typing.Any) -> typing.Any:
@@ -57,7 +59,7 @@ class ModuleConfig(Config):
         elif isinstance(value, (list, tuple, set)):
             return [self._serialize_architecture_field(value_) for value_ in value]
         elif isinstance(value, dict):
-            return {self._serialize_architecture_field(value_) for name, value_ in value.items()}
+            return {name: self._serialize_architecture_field(value_) for name, value_ in value.items()}
         else:
             return self._serialize_value(value)
 
@@ -106,15 +108,10 @@ class ResourceUsageConfig:
 
 
 class ReductionType(enum.StrEnum):
-    """
-    An enum to represent data types independently of third party libraries,
-    so we can swap them more easily and allow for lazy imports.
-    """
-
-    sum = "float64"
-    average = "float32"
-    minimum = "float16"
-    maximum = "bfloat16"
+    sum = "sum"
+    average = "average"
+    minimum = "minimum"
+    maximum = "maximum"
 
     @property
     def torch(self) -> "typing.Callable[[torch.Tensor], torch.Tensor]":

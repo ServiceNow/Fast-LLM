@@ -1,9 +1,13 @@
+import dataclasses
+import functools
+import pathlib
+
 import numpy as np
 import pytest
 import torch
 
 from fast_llm.data.dataset.config import ShufflingType
-from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig
+from fast_llm.data.dataset.gpt.config import GPTDatasetFromFileConfig, GPTSamplingConfig
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.document.language_model import LanguageModelBatch, LanguageModelDocument
 from fast_llm.utils import Assert
@@ -35,24 +39,6 @@ GPT_MEMMAP_SAMPLES = [
 ]
 
 
-def test_gpt_sampled():
-    # Make sure the memmap dataset works and check for unintended changes in behavior.
-    _, config, _, preprocessing = get_common_test_dataset()
-    sampled = get_dataset_config(
-        dataset_config := config, GPTDatasetFromFileConfig[LanguageModelDocument]
-    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
-    validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
-
-    # Test in data.
-    get_test_data_and_compare_samples(
-        {"datasets": {"training": dataset_config}},
-        8,
-        sequence_length=5,
-        expected_samples=GPT_MEMMAP_SAMPLES,
-        preprocessing=preprocessing,
-    )
-
-
 class SimpleGPTIndexedDataset[DocumentType: LanguageModelDocument](IndexedDataset[DocumentType]):
     # TODO: worth adding to the main codebase?
     def __init__(self, samples):
@@ -72,6 +58,7 @@ class SimpleGPTIndexedDataset[DocumentType: LanguageModelDocument](IndexedDatase
     def get_document_size(self, index: int) -> int:
         return len(self._samples[index])
 
+    @property
     def name(self) -> str:
         return "dataset"
 
@@ -86,6 +73,130 @@ TEST_DATASET = SimpleGPTIndexedDataset(
         [19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
     ]
 )
+
+# Document sizes: 3, 5, 2, 4, 6.
+# With maximum_document_length=4, truncate_documents=False: docs of size 5 and 6 are dropped.
+# With maximum_document_length=4, truncate_documents=True: docs of size 5 and 6 are split into chunks of ≤4.
+TRUNCATE_DATASET = SimpleGPTIndexedDataset(
+    [
+        [0, 1, 2],  # length 3 — fits
+        [3, 4, 5, 6, 7],  # length 5 — exceeds maximum_document_length=4
+        [8, 9],  # length 2 — fits
+        [10, 11, 12, 13],  # length 4 — exactly at limit
+        [14, 15, 16, 17, 18, 19],  # length 6 — exceeds
+    ]
+)
+
+
+@dataclasses.dataclass
+class SamplingTestConfig:
+    name: str
+    num_samples: int
+    sequence_length: int = 5
+    seed: int = 54983
+    shuffle: ShufflingType = ShufflingType.epoch
+    truncate_documents: bool = True
+    maximum_document_length: int | None = None
+    expected_samples: list[list[int]] | None = None
+    # Tokens that must not appear in any sample (validated for drop/filter cases).
+    # Defaults to empty — the check is always run but trivially passes.
+    forbidden_tokens: frozenset[int] = frozenset()
+    # Tokens that must collectively appear across all samples (validated for truncate cases).
+    # Defaults to empty — the check is always run but trivially passes.
+    required_tokens: frozenset[int] = frozenset()
+    requires_extension: bool = False
+    dataset: SimpleGPTIndexedDataset | None = dataclasses.field(default=None, compare=False, repr=False)
+
+    @functools.cached_property
+    def sampling_config_overrides(self) -> dict:
+        if self.maximum_document_length is not None:
+            return {"maximum_document_length": self.maximum_document_length}
+        return {}
+
+
+_SAMPLING_TEST_CASES = [
+    SamplingTestConfig(
+        name="simple",
+        num_samples=20,
+    ),
+    SamplingTestConfig(
+        # With truncate_documents=False, documents exceeding maximum_document_length are dropped entirely.
+        # Only the 3 docs with length ≤ 4 contribute tokens: [0,1,2], [8,9], [10,11,12,13] = 9 tokens.
+        name="maximum_document_length_drop",
+        num_samples=2,
+        sequence_length=4,
+        shuffle=ShufflingType.disabled,
+        truncate_documents=False,
+        maximum_document_length=4,
+        forbidden_tokens=frozenset(range(3, 8)) | frozenset(range(14, 20)),
+        dataset=TRUNCATE_DATASET,
+        requires_extension=True,
+    ),
+    SamplingTestConfig(
+        # With truncate_documents=True, documents exceeding maximum_document_length are split into chunks.
+        # All tokens should appear in the output; none should be dropped.
+        name="maximum_document_length_truncate",
+        num_samples=10,
+        sequence_length=4,
+        shuffle=ShufflingType.disabled,
+        truncate_documents=True,
+        maximum_document_length=4,
+        required_tokens=frozenset(range(20)),
+        dataset=TRUNCATE_DATASET,
+    ),
+]
+
+
+@pytest.mark.parametrize("test_config", [pytest.param(c, id=c.name) for c in _SAMPLING_TEST_CASES])
+def test_sampling(test_config: SamplingTestConfig):
+    if test_config.requires_extension and not _extension_available:
+        pytest.skip("CPP Extension not available")
+
+    dataset = test_config.dataset if test_config.dataset is not None else TEST_DATASET
+    base_config, num_samples, seed = get_sampling_config(
+        test_config.num_samples,
+        sequence_length=test_config.sequence_length,
+        seed=test_config.seed,
+        shuffle=test_config.shuffle,
+        truncate_documents=test_config.truncate_documents,
+    )
+    sampling_config = GPTSamplingConfig.from_dict(base_config.to_dict(), test_config.sampling_config_overrides)
+    sampled = dataset.sample(sampling_config, num_samples, seed)
+
+    # validate_indexed_dataset_sampling's reference implementation concatenates tokens without padding,
+    # so it only applies when truncate_documents=True (no padding between documents).
+    if test_config.truncate_documents:
+        tokens = validate_indexed_dataset_sampling(sampled, test_config.expected_samples)
+    else:
+        tokens = torch.stack(
+            [
+                LanguageModelBatch.from_documents(sampled[i], test_config.sequence_length + 1).tokens
+                for i in range(len(sampled))
+            ]
+        )
+
+    valid_tokens = set(tokens[tokens >= 0].tolist())
+    assert test_config.forbidden_tokens.isdisjoint(valid_tokens)
+    assert test_config.required_tokens.issubset(valid_tokens)
+
+
+def test_gpt_sampled(data_result_path: pathlib.Path):
+    # Make sure the memmap dataset works and check for unintended changes in behavior.
+    _, config, _, preprocessing = get_common_test_dataset()
+    sampled = get_dataset_config(
+        dataset_config := config, GPTDatasetFromFileConfig[LanguageModelDocument]
+    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
+    validate_indexed_dataset_sampling(sampled, GPT_MEMMAP_SAMPLES)
+
+    # Test in data.
+    get_test_data_and_compare_samples(
+        {"datasets": {"training": dataset_config}},
+        8,
+        sequence_length=5,
+        expected_samples=GPT_MEMMAP_SAMPLES,
+        preprocessing=preprocessing,
+        cache_directory=data_result_path / "sampling/gpt_sampled",
+    )
 
 
 @pytest.mark.parametrize("seed", (0, 32, 88))
@@ -109,6 +220,42 @@ def test_gpt_sample(seed, shuffle):
             # Check that the sequence is independent of `num_sample`.
             Assert.all_equal(samples, previous_samples[: len(samples)])
         previous_samples = samples
+
+
+@pytest.mark.parametrize("token_cumsum_rate", (1, 3, 7, 20))
+def test_token_cumsum_rate(token_cumsum_rate):
+    # Different token_cumsum_rate values are a performance/memory tradeoff only —
+    # sampling output must be identical regardless of the rate chosen.
+    config, num_samples, seed = get_sampling_config(20, sequence_length=5)
+    reference = validate_indexed_dataset_sampling(TEST_DATASET.sample(config, num_samples, seed))
+
+    config_with_rate = GPTSamplingConfig.from_dict(config.to_dict(), {"token_cumsum_rate": token_cumsum_rate})
+    result = validate_indexed_dataset_sampling(TEST_DATASET.sample(config_with_rate, num_samples, seed))
+    Assert.all_equal(result, reference)
+
+
+def test_cache_directory(data_result_path: pathlib.Path):
+    # Verify that the cache is written on first run and reused on subsequent runs.
+    cache_dir = data_result_path / "sampling/cache_directory"
+    config, num_samples, seed = get_sampling_config(20, sequence_length=5, cache_directory=cache_dir)
+
+    first = validate_indexed_dataset_sampling(TEST_DATASET.sample(config, num_samples, seed))
+    assert cache_dir.exists() and any(cache_dir.iterdir())
+
+    # Second run with the same config must produce identical output (reads from cache).
+    second = validate_indexed_dataset_sampling(TEST_DATASET.sample(config, num_samples, seed))
+    Assert.all_equal(first, second)
+
+
+def test_cache_invalidated_on_config_change(data_result_path: pathlib.Path):
+    # Changing a sampling parameter should raise rather than silently return stale data.
+    cache_dir = data_result_path / "sampling/cache_invalidation"
+    config, num_samples, seed = get_sampling_config(20, sequence_length=5, cache_directory=cache_dir)
+    TEST_DATASET.sample(config, num_samples, seed)
+
+    config_changed = GPTSamplingConfig.from_dict(config.to_dict(), {"token_cumsum_rate": 3})
+    with pytest.raises(RuntimeError, match="Invalid dataset cache"):
+        TEST_DATASET.sample(config_changed, num_samples, seed)
 
 
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")

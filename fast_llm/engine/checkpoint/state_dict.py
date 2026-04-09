@@ -154,7 +154,7 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         path = config.path / f"metadata.yaml"
         logger.warning(f"Loading metadata from {path}")
-        return CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
+        return CheckpointMetadata.from_dict(yaml.safe_load(path.read_text()))
 
     @classmethod
     def _save_serialized_metadata(
@@ -166,7 +166,7 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
         if "metadata" not in serialized_metadata:
             serialized_metadata["metadata"] = {}
         serialized_metadata["metadata"]["state_index"] = index
-        yaml.safe_dump(serialized_metadata, path.open("w"))
+        path.write_text(yaml.safe_dump(serialized_metadata))
 
     @classmethod
     def _get_key(cls, parameter_name: str, shard_name: str) -> str:
@@ -259,15 +259,15 @@ class StateDictSaver:
         if self._do_save and self._distributed_config.pipeline_parallel != 1:
             # Combine the indexes from all pipeline ranks.
             logger.info(f"Merging pipeline-parallel indexes.")
-            yaml.dump(
-                self._index, (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").open("w")
+            (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").write_text(
+                yaml.dump(self._index)
             )
             safe_barrier(self._distributed.pipeline_group, "save state dict", timeout=self._config.timeout)
             self._index = {}
             if self._distributed_config.pipeline_rank == 0:
                 for rank in range(self._distributed_config.pipeline_parallel):
                     file_name = self._config.path / f"index_{rank}.yaml"
-                    local_index = yaml.safe_load(file_name.open("r"))
+                    local_index = yaml.safe_load(file_name.read_text())
                     for key, value in local_index.items():
                         assert key not in self._index, key
                         self._index[key] = value

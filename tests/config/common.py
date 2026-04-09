@@ -33,6 +33,12 @@ class ExampleConfig(Config):
     core_field: int = Field(default=4, hint=FieldHint.core)
     complex_field: dict[str, list[tuple[str, int]] | None] = Field(default_factory=dict, hint=FieldHint.optional)
 
+    @classmethod
+    def _from_dict(cls, default: dict, strict: bool = True):
+        cls._handle_renamed_field(default, "old_int_field", "int_field")
+        cls._handle_renamed_field(default, "original_float_field", "float_field", fn=lambda value: value * 2)
+        return super()._from_dict(default, strict)
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.implicit_field is None:

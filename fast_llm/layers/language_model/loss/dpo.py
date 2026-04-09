@@ -13,8 +13,6 @@ class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModel
             raise NotImplementedError()
         if self._num_splits > 1:
             raise NotImplementedError()
-        if self._prediction_distance > 1:
-            raise NotImplementedError()
         if self._vocab_parallel:
             raise NotImplementedError()
 

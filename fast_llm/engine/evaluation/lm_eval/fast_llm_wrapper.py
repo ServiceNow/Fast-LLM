@@ -116,7 +116,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if isinstance(self._config.fast_llm_config.base_model.transformer.mixer.rotary, NoRotaryConfig):
                 return self._config.fast_llm_config.base_model.max_position_embeddings
 
-        # check if tokenizer holds model sequence leigh info
+        # check if tokenizer holds model sequence length info
         if hasattr(self._tokenizer, "model_max_length"):
             if self._tokenizer.model_max_length == 1000000000000000019884624838656:
                 return self._DEFAULT_MAX_LENGTH
@@ -528,7 +528,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         if left_truncate_len:
             original_lengths = encoding["input_ids"].size(1)
             if original_lengths > left_truncate_len:
-                logger.warn(
+                logger.warning(
                     f"Left truncation applied. Original sequence length was {original_lengths}, "
                     f"truncating to last {left_truncate_len} tokens. Some content will be lost.",
                 )

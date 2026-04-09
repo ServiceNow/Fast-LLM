@@ -28,15 +28,12 @@ Let's start from the following training configuration:
       checkpoint:
         interval: 1000
         keep: 5
-      test_iters: 0
       export:
         format: llama
         interval: 20_000
-    batch:
-      micro_batch_size: 2
-      sequence_length: 4096
-      batch_size: 256
     data:
+      micro_batch_size: 4096
+      maximum_document_length: 4096
       datasets:
         training:
           type: file
@@ -55,12 +52,10 @@ Let's start from the following training configuration:
         decay_iterations: 100_000
         warmup_iterations: 2000
     model:
-      base_model:
-        cross_entropy_impl: fused
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16
+        compute_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -80,15 +75,12 @@ Let's start from the following training configuration:
       checkpoint:
         interval: 1000
         keep: 5
-      test_iters: 0
       export:
         format: qwen2
         interval: 20_000
-    batch:
-      micro_batch_size: 1
-      sequence_length: 8192
-      batch_size: 256
     data:
+      micro_batch_size: 8192
+      maximum_document_length: 8192
       datasets:
         training:
           type: file
@@ -107,12 +99,10 @@ Let's start from the following training configuration:
         decay_iterations: 100_000
         warmup_iterations: 2000
     model:
-      base_model:
-        cross_entropy_impl: fused
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16
+        compute_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -155,47 +145,72 @@ Alternatively, we define the model architecture ourselves as follows:
       ```yaml
       model:
         base_model:
-          tie_word_embeddings: false
-          use_position_embeddings: false
-          vocab_size: 128256
-          transformer:
-            activation_type: silu
-            add_linear_biases: false
-            ffn_hidden_size: 14336
-            gated: true
-            head_groups: 8
-            hidden_size: 4096  # (1)!
-            kv_channels: 128
+          tied_embedding_weight: false
+          hidden_size: 4096  # (1)!
+          embeddings:
+            vocab_size: 128256
+          decoder:
+            num_blocks: 32
+            block:
+              mixer:
+                heads: 32
+                head_groups: 8
+                head_size: 128
+                add_linear_biases: false
+                rotary:
+                  type: llama3
+                  theta: 500_000
+              mlp:
+                intermediate_size: 14336
+                gated: true
+                activation: silu
+                add_linear_biases: false
+              normalization:
+                type: rms_norm
+          head:
             normalization:
               type: rms_norm
-            num_attention_heads: 32
-            num_layers: 32
-            rotary:
-              type: llama3
-              theta: 500_000
       ```
 === "Qwen 2.5 7B"
       ```yaml
       model:
         base_model:
-          tie_word_embeddings: false
-          use_position_embeddings: false
-          vocab_size: 152064
-          transformer:
-            activation_type: silu
-            add_linear_biases: only_attn_qkv
-            ffn_hidden_size: 18944
-            gated: true
-            head_groups: 4
-            hidden_size: 3584  # (1)!
+          tied_embedding_weight: false
+          hidden_size: 3584  # (1)!
+          embeddings:
+            vocab_size: 152064
+          decoder:
+            num_blocks: 28
+            block:
+              mixer:
+                heads: 28
+                head_groups: 4
+                head_size: 128
+                add_linear_biases: false
+                query_layer:
+                  bias:
+                    enabled: true
+                key_layer:
+                  bias:
+                    enabled: true
+                value_layer:
+                  bias:
+                    enabled: true
+                rotary:
+                  type: default
+                  theta: 1_000_000
+              mlp:
+                intermediate_size: 18944
+                gated: true
+                activation: silu
+                add_linear_biases: false
+              normalization:
+                type: rms_norm
+                epsilon: 1e-06
+          head:
             normalization:
               type: rms_norm
               epsilon: 1e-06
-            num_attention_heads: 28
-            num_layers: 28
-            rotary:
-              type: default
-              theta: 1_000_000
       ```
 
 1.  Hidden-size/num-layers will be used to provide good defaults for weight initialization std.

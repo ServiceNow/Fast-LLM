@@ -51,10 +51,11 @@ class TokenReader[ConfigType: TokenReaderConfig](MemmapIndexedDatasetReader[Conf
 
 
 def _get_nearest_split(cumsum: torch.Tensor, value: float) -> int:
-    left = torch.searchsorted(cumsum, value, side="right")
-    if left == len(cumsum):
-        return left.item()
-    return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
+    right = torch.searchsorted(cumsum, value, side="right")
+    if right == len(cumsum):
+        return right.item()
+    left = cumsum[right - 1].item() if right > 0 else 0
+    return right.item() + 1 if (value - left) / (cumsum[right].item() - left) > 0.5 else right.item()
 
 
 class TokenWriter(MemmapWriter):

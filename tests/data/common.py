@@ -167,7 +167,7 @@ def validate_indexed_dataset_sampling(sampled: SampledIndexedDataset, expected_s
     token_ids = torch.stack([LanguageModelBatch.from_documents(sampled[i]).tokens for i in range(len(sampled))]).to(
         torch.int64
     )
-    Assert.all_equal(token_ids, validate_samples)
+    Assert.all_equal(token_ids, np.array(validate_samples))
     if expected_samples is not None:
         Assert.all_equal(token_ids, expected_samples)
     return token_ids

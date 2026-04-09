@@ -20,7 +20,7 @@ GPT_FIM_SAMPLES = [
 ]
 
 
-def test_gpt_fim():
+def test_gpt_fim(data_result_path):
     # Make sure the FIM wrapper works in a simple case and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     # The test tokenizer doesn't have fim tokens, so we work around it.
@@ -45,4 +45,5 @@ def test_gpt_fim():
         sequence_length=5,
         expected_samples=GPT_FIM_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "fim",
     )

@@ -200,6 +200,11 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":

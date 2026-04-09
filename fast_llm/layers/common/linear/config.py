@@ -1,6 +1,7 @@
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.initialization import Initialization, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, ParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
@@ -14,7 +15,7 @@ if typing.TYPE_CHECKING:
 
 
 @config_class()
-class LinearBaseConfig(Config):
+class LinearBaseConfig(ModuleConfig):
     """
     Configuration for a linear-like layer without bias.
     """
@@ -45,6 +46,10 @@ class AffineLinearBaseConfig(LinearBaseConfig):
 
 @config_class()
 class LinearConfig(LinearBaseConfig):
+    """Configuration for a linear (weight-only, no bias) layer with optional PEFT and tensor-parallelism support."""
+
+    _abstract = False
+
     apply_peft: bool | None = Field(
         default=None,
         desc="Wrap this layer ."
@@ -104,6 +109,10 @@ class LinearConfig(LinearBaseConfig):
 
 @config_class()
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
+    """Configuration for an affine linear layer (weight + optional bias) with optional PEFT and tensor-parallelism support."""
+
+    _abstract = False
+
     def get_layer(
         self,
         in_dim: TensorDim,
@@ -167,6 +176,8 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
     Configuration for a 1d causal convolution, as used in mamba layers.
     """
 
+    _abstract = False
+
     kernel_size: int = Field(
         default=4,
         desc="Convolution kernel size.",
@@ -175,6 +186,7 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
     )
     activation: ActivationType | None = Field(
         default=None,
+        desc="Activation function applied after the convolution. None means no activation.",
         hint=FieldHint.architecture,
     )
 

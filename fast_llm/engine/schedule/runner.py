@@ -164,7 +164,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
-                lambda: log_memory_usage(f"Beginning of {context.phase.value} iteration {iteration}", str)
+                lambda: log_memory_usage(f"Beginning of {context.phase} iteration {iteration}", str)
             )
         self._multi_stage.train(context.is_training)
         self._distributed.set_step(iteration, schedule.phase)
@@ -278,7 +278,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
-                lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
+                lambda: log_memory_usage(f"End of {context.phase} iteration {iteration}", str)
             )
 
         return self._reduce_losses(context), update_successful, metrics
@@ -487,12 +487,12 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _save_events(self, events, context: BatchContext) -> None:
         out = {
             "iteration": context.iteration,
-            "phase": context.phase.value,
+            "phase": context.phase,
             "rank": self._distributed_config.rank,
             "events": [
                 {
-                    "event_type": type_.value,
-                    "stream": stream.value,
+                    "event_type": type_,
+                    "stream": stream,
                     "gpu_time": gpu_time,
                     "cpu_time": cpu_time,
                     **(
@@ -500,7 +500,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         if step is None
                         else {
                             "step_idx": step.global_index,
-                            "step_type": step.type_.value,
+                            "step_type": step.type_,
                             "step_stage": step.stage,
                             "step_depth_first_micro_batch": step.depth_first_micro_batch,
                             "step_breadth_first_micro_batch": step.breadth_first_micro_batch,
@@ -514,7 +514,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         yaml.safe_dump(
             out,
             get_run().open_artifact(
-                f"schedule_profile_rank_{self._distributed_config.rank}_{context.phase.value}_step_{context.iteration}"
+                f"schedule_profile_rank_{self._distributed_config.rank}_{context.phase}_step_{context.iteration}"
             ),
         )
 

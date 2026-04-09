@@ -277,7 +277,7 @@ def worker_resources(request) -> WorkerResources:
     return request.config.worker_resources
 
 
-@pytest.mark.trylast
+@pytest.hookimpl(trylast=True)
 def pytest_xdist_make_scheduler(config, log):
     # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
     assert config.getvalue("dist") == "load"

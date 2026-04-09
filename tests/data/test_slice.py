@@ -29,7 +29,7 @@ GPT_SLICE_VALIDATION_SAMPLES = [
 ]
 
 
-def test_gpt_slice():
+def test_gpt_slice(data_result_path):
     # Make sure dataset splitting works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     memmap_config = GPTDatasetFromFileConfig.from_dict(config)._load_config()
@@ -73,4 +73,5 @@ def test_gpt_slice():
             "validation": GPT_SLICE_VALIDATION_SAMPLES,
         },
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "slice",
     )

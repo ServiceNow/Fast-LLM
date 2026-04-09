@@ -4,6 +4,7 @@ import typing
 import torch
 
 from fast_llm.engine.base_model.config import LossDef
+from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
@@ -19,7 +20,13 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        loss, grad, new_logprobs_mean = fused_grpo_loss_forward_backward(
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
+
+            fn = triton_grpo_loss_forward_backward
+        else:
+            fn = fused_grpo_loss_forward_backward
+        loss, grad, new_logprobs_mean = fn(
             logits,
             self._get_labels(kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),

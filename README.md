@@ -60,12 +60,12 @@ As a truly open-source project, Fast-LLM allows full customization and extension
 
 We'll walk you through how to use Fast-LLM to train a large language model on a cluster with multiple nodes and GPUs. We'll show an example setup using a Slurm cluster and a Kubernetes cluster.
 
-For this demo, we will train a Mistral-7B model from scratch for 100 steps on random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
+For this demo, we will train a Mistral-7B model from scratch for 100 steps on random data. The config file `examples/mistral.yaml` defines the model architecture and training settings, while the example launch scripts are pre-configured for a 4-node setup with 8 GPUs per node.
 
 > [!NOTE]
 > Fast-LLM scales from a single GPU to large clusters. You can start small and expand based on your resources.
 
-Expect to see a significant speedup in training time compared to other libraries! For training Mistral-7B, Fast-LLM is expected to achieve a throughput of **9,800 tokens/s/H100** (batch size 32, sequence length 8k) on a 4-node cluster with 32 H100s.
+Expect to see a significant speedup in training time compared to other libraries! For training Mistral-7B, Fast-LLM is expected to achieve a throughput of **9,800 tokens/s/H100** (micro-batch size 8k tokens, total batch size 256k tokens) on a 4-node cluster with 32 H100s.
 
 ### Running Fast-LLM on a Slurm Cluster
 
@@ -77,7 +77,7 @@ Expect to see a significant speedup in training time compared to other libraries
 
 #### Steps
 
-1. Deploy the [nvcr.io/nvidia/pytorch:24.07-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) Docker image to all nodes (recommended), because it contains all the necessary dependencies.
+1. Deploy the [nvcr.io/nvidia/pytorch:25.11-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) Docker image to all nodes (recommended), because it contains all the necessary dependencies.
 2. Install Fast-LLM on all nodes:
 
     ```bash
@@ -88,7 +88,7 @@ Expect to see a significant speedup in training time compared to other libraries
     #SBATCH --ntasks=$(scontrol show node | grep -c NodeName)
     #SBATCH --exclusive
 
-    srun bash -c 'pip install --no-cache-dir -e "git+https://github.com/ServiceNow/Fast-LLM.git#egg=llm[CORE,OPTIONAL,DEV]"'
+    srun bash -c 'pip install --no-cache-dir "fast-llm[CORE,OPTIONAL] @ git+https://github.com/ServiceNow/Fast-LLM.git"'
     EOF
     ```
 
@@ -115,7 +115,7 @@ Now, you can sit back and relax while Fast-LLM trains your model at full speed! 
 
 #### Steps
 
-1. Create a Kubernetes [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVC) named `fast-llm-home` that will be mounted to `/home/fast-llm` in the container using [examples/fast-llm-pvc.yaml](examples/fast-llm-pvc.yaml):
+1. Create a Kubernetes [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVC) named `pvc-fast-llm-home` that will be mounted to `/home/fast-llm` in the container using [examples/fast-llm-pvc.yaml](examples/fast-llm-pvc.yaml):
 
     ```bash
     kubectl apply -f examples/fast-llm-pvc.yaml
