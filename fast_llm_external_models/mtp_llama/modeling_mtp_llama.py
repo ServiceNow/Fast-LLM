@@ -577,11 +577,13 @@ class MTPLlamaModel(LlamaPreTrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
-        # MTP: The last layer is not part of the shared trunk
-        for decoder_layer in self.layers[:-1]:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+        # MTP: The last layer is not part of the shared trunk.
+        # Always add the initial embedding state first, then add the output of each trunk layer.
+        # This is consistent with how standard transformers models collect hidden states via @capture_outputs.
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
 
+        for decoder_layer in self.layers[:-1]:
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
                     partial(decoder_layer.__call__, **flash_attn_kwargs),
@@ -608,6 +610,9 @@ class MTPLlamaModel(LlamaPreTrainedModel):
                 )
 
             hidden_states = layer_outputs[0]
+
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
