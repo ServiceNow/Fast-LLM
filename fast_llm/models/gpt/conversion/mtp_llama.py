@@ -58,7 +58,7 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
             converters += cls.block_converter_class.get_converters(
                 config.decoder.last_block_config,
                 f"multi_token_prediction.blocks.{prediction_distance-2}",
-                f"model.mtp_heads.{prediction_distance - 1}",
+                f"model.mtp_heads.{prediction_distance - 2}",
             )
             converters += cls.normalization_converter_class.get_converters(
                 config.head.normalization,
@@ -73,7 +73,7 @@ class MTPLlamaDecoderConverter(LlamaDecoderConverter):
     def import_config(cls, config: dict) -> dict:
         return {
             "block": cls.block_converter_class.import_config(config),
-            "num_blocks": config["num_hidden_layers"] - 1,
+            "num_blocks": config["num_hidden_layers"],
         }
 
     @classmethod
@@ -82,7 +82,7 @@ class MTPLlamaDecoderConverter(LlamaDecoderConverter):
         Assert.custom(isinstance, config, FixedBlockSequenceConfig)
         return safe_merge_dicts(
             cls.block_converter_class.export_config(config.block),
-            {"num_hidden_layers": config.num_blocks + 1},
+            {"num_hidden_layers": config.num_blocks},
         )
 
 
