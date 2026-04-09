@@ -113,12 +113,12 @@ def test_preparator_split():
             "type": "slice",
             "dataset": {"type": "memmap", "path": str(path / "shard_0_0.fast_llm_dataset")},
             "begin": 0.0,
-            "end": 0.501,
+            "end": 0.5,
         },
         "validation": {
             "type": "slice",
             "dataset": {"type": "memmap", "path": str(path / "shard_0_0.fast_llm_dataset")},
-            "begin": 0.501,
+            "begin": 0.5,
             "end": 1.0,
         },
     }
@@ -140,11 +140,11 @@ def test_preparator_split_sharded():
                 {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": str(path / "shard_0_1.fast_llm_dataset")},
-                    "begin": 0.0,
-                    "end": 0.5015015015015015,
+                    "begin": 0,
+                    "end": 0.4984984984984985,
                 },
             ],
-            "weights": [0.6596583442838371, 0.3403416557161629],
+            "weights": [0.6608629182945474, 0.3391370817054527],
         },
         "validation": {
             "type": "blended",
@@ -152,12 +152,12 @@ def test_preparator_split_sharded():
                 {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": str(path / "shard_0_1.fast_llm_dataset")},
-                    "begin": 0.5015015015015015,
-                    "end": 1.0,
+                    "begin": 0.4984984984984985,
+                    "end": 1,
                 },
                 {"type": "memmap", "path": str(path / "shard_0_2.fast_llm_dataset")},
             ],
-            "weights": [0.35125280875058296, 0.648747191249417],
+            "weights": [0.3524333474396953, 0.6475666525603047],
         },
     }
     Assert.eq(dataset_config, expected_config)
