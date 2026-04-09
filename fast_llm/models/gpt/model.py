@@ -296,9 +296,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             audio_kwargs.update(
                 {
                     AudioTransformerKwargs.hidden_dims: audio_hidden_dims,
-                    AudioTransformerKwargs.sequence_length: 1500,  # TODO: Toby Parameterize
-                    AudioTransformerKwargs.sequence_k_dim: 1500,
-                    AudioTransformerKwargs.sequence_q_dim: 1500,
+                    AudioTransformerKwargs.sequence_length: self._config.audio_encoder.max_source_positions,
+                    AudioTransformerKwargs.sequence_k_dim: self._config.audio_encoder.max_source_positions,
+                    AudioTransformerKwargs.sequence_q_dim: self._config.audio_encoder.max_source_positions,
                 }
             )
 

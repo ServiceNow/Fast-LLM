@@ -22,6 +22,7 @@ class AudioEncoderKwargs:
     audio = "audio"
     audio_mel = "audio_mel"
     audio_positions = "audio_positions"
+    audio_token_lens = "audio_token_lens"  # int32 tensor [N_audio] — actual LLM token count per audio clip
 
     kv_channels = "audio_kv_channels"  # TODO: check this
     out_channels = "audio_out_channels"
@@ -121,6 +122,21 @@ class AudioEncoderConfig(BaseModelConfig):
         desc="Audio sampling rate to use.",
         hint=FieldHint.feature,
     )
+    aud_padding_duration: int = Field(
+        default=30,
+        desc="Audio padding duration in seconds, used by the preprocessor to determine mel spectrogram length. Should match batch.aud_padding_duration.",
+        hint=FieldHint.feature,
+    )
+    audio_padding: str = Field(
+        default="max_length",
+        desc='Audio padding strategy used by the preprocessor. "max_length" pads all audio to aud_padding_duration. "longest" pads to the longest audio in the batch.',
+        hint=FieldHint.feature,
+    )
+    max_source_positions: int = Field(
+        default=1500,
+        desc="Max audio positions after conv downsampling (= aud_padding_duration * aud_sampling_rate / hop / conv_stride). Default 1500 = 30s × 16 kHz / 160 hop / 2 stride.",
+        hint=FieldHint.architecture,
+    )
 
     # audio start/end tokens
     audio_start_token: int | None = Field(
@@ -143,8 +159,8 @@ class AudioEncoderConfig(BaseModelConfig):
         )
         tensor_space.add_tensor_dim(TensorDim(AudioEncoderDimNames.adapter_size, self.adapter_size))
         tensor_space.add_tensor_dim(
-            TensorDim(AudioEncoderDimNames.max_source_positions, 1500)
-        )  # TODO: configure later
+            TensorDim(AudioEncoderDimNames.max_source_positions, self.max_source_positions)
+        )
 
         tensor_space.add_tensor_dim(
             TensorDim(

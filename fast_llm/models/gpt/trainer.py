@@ -49,6 +49,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                     "aud_sampling_rate": self._config.model.base_model.audio_encoder.aud_sampling_rate,
                     "audio_start_token": self._config.model.base_model.audio_encoder.audio_start_token,
                     "audio_end_token": self._config.model.base_model.audio_encoder.audio_end_token,
+                    "audio_padding": self._config.batch.audio_padding,
                 }
             )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

@@ -36,6 +36,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         image_positions: list[torch.Tensor] | None,
         image_sizes: list[list[tuple[int, int]]] | None,
         audio_positions: list[torch.Tensor] | None,
+        kwargs: dict | None = None,
     ) -> torch.Tensor:
         """
         Forward pass for the multi-modal embedding layer.
@@ -160,11 +161,17 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                     # Move to the next image in the input tensor
                     image_embedding_offset += num_patches
 
+            audio_token_lens = kwargs.get(AudioEncoderKwargs.audio_token_lens) if kwargs else None
             audio_position_idx = 0
             for sample_idx, positions in enumerate(audio_positions):
                 for position in positions:
-                    num_audio_tokens = input_.shape[1]  # TODO: Toby better way to get this?
-                    embeddings[sample_idx, position : position + num_audio_tokens] = input_[audio_position_idx]
+                    if audio_token_lens is not None:
+                        num_audio_tokens = int(audio_token_lens[audio_position_idx].item())
+                    else:
+                        num_audio_tokens = input_.shape[1]
+                    embeddings[sample_idx, position : position + num_audio_tokens] = (
+                        input_[audio_position_idx, :num_audio_tokens]
+                    )
                     audio_position_idx += 1
 
             if self._use_absolute_position_embeddings:
@@ -197,4 +204,4 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         audio_positions = kwargs.get(AudioEncoderKwargs.audio_positions, [])
         tokens = kwargs.get(LanguageModelKwargs.tokens)
 
-        return self._forward(input_, tokens, position_ids, image_positions, image_sizes, audio_positions)
+        return self._forward(input_, tokens, position_ids, image_positions, image_sizes, audio_positions, kwargs)

@@ -87,7 +87,12 @@ class AudioConv(Layer):
         input_ = torch.nn.functional.gelu(input_)
 
         audio_embeddings = input_.permute(0, 2, 1)
-        audio_embeddings = audio_embeddings + self.positional_embeddings
+        assert audio_embeddings.size(1) <= self.positional_embeddings.size(0), (
+            f"Audio conv output length {audio_embeddings.size(1)} exceeds max_source_positions "
+            f"{self.positional_embeddings.size(0)}. Ensure aud_padding_duration * sr / hop / conv_stride "
+            f"<= max_source_positions, or that over-long audio is filtered before reaching the encoder."
+        )
+        audio_embeddings = audio_embeddings + self.positional_embeddings[: audio_embeddings.size(1)]
         audio_embeddings = torch.nn.functional.dropout(audio_embeddings, p=self.dropout_p, training=self.training)
 
         return audio_embeddings.contiguous()

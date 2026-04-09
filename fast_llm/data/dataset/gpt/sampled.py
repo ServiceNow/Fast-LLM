@@ -174,6 +174,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._parameters.aud_downsampling_k,
                 self._parameters.audio_start_token,
                 self._parameters.audio_end_token,
+                audio_padding=self._parameters.audio_padding,
             )
             audio_token_sizes[i] = audio_token_size_arr.sum()
             long_audio_filter[i] = to_filter
@@ -507,6 +508,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._parameters.aud_downsampling_k,
                 self._parameters.audio_start_token,
                 self._parameters.audio_end_token,
+                audio_padding=self._parameters.audio_padding,
             )
             audio_tokens = int(audio_token_size_arr.sum())
 

@@ -60,6 +60,11 @@ class BatchConfig(Config):
         desc="Audio padding duration in seconds.",
         hint=FieldHint.feature,
     )
+    audio_padding: str = Field(
+        default="max_length",
+        desc='Audio padding strategy for dataset sampling. "max_length" bills all audio as aud_padding_duration long. "longest" uses actual audio durations for more efficient packing.',
+        hint=FieldHint.feature,
+    )
 
     def setup(self, distributed_config: DistributedConfig) -> None:
         self._distributed = distributed_config

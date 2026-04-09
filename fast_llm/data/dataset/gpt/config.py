@@ -79,6 +79,7 @@ class GPTSamplingParameters(SamplingParameters):
     aud_downsampling_k: int | None = None
     aud_padding_duration: int | None = None
     aud_sampling_rate: int | None = None
+    audio_padding: str = "max_length"
     image_break_token: int | None = None
     image_end_token: int | None = None
     audio_start_token: int | None = None
