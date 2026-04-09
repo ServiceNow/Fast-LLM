@@ -40,121 +40,87 @@ class Tokenizer:
             ([self.bod_id] if begin else [])
             + self.tokenizer.encode(text, add_special_tokens=False)
             + ([self.eod_id] if end else [])
-        )
+        ) # type: ignore
 
     def tokenize(
         self, text: str, char_spans=None, image_positions=None, audio_positions=None
-    ) -> tuple[list[int], list[tuple[int, int]]]:
+    ) -> tuple[list[int], list[tuple[int, int]], list[int], list[int]]:
         """
-        Tokenize the input text and return the tokenized input_ids and if provided, token spans and image positions.
+        Tokenize text that may contain multimodal markers and character spans of interest.
+
+        Approach: collect all "cut points" — mm positions, span boundaries, and end-of-text —
+        then make a single left-to-right pass. At each cut point, the text segment since the
+        last cut is tokenized and the current token index is recorded in char_to_token. BOS is
+        prepended to the first non-empty chunk; EOS is appended to the chunk ending at len(text).
+
+        Token spans are derived directly from the mapping:
+            token_span = (char_to_token[s], char_to_token[e+1] - 1)
+
+        Args:
+            text: Raw input string.
+            char_spans: Character-index ranges (start, end inclusive) to track; returned as
+                inclusive token-index ranges in token_spans.
+            image_positions: Character positions where an image token will be inserted.
+            audio_positions: Character positions where an audio token will be inserted.
+                Image and audio positions must be disjoint.
+
+        Returns:
+            token_ids: Flat list of token IDs for the full text.
+            token_spans: Inclusive token-index ranges corresponding to each input char_span.
+            image_token_positions: Token indices at which image markers are to be inserted.
+            audio_token_positions: Token indices at which audio markers are to be inserted.
         """
-        image_positions = image_positions or []
-        audio_positions = audio_positions or []
+        image_positions = set(image_positions or [])
+        audio_positions = set(audio_positions or [])
         char_spans = char_spans or []
 
-        if len(set(image_positions).intersection(audio_positions)) > 0:
-            raise ValueError("Image and audio can not have the same position.")
-        multimodal_positions = sorted(image_positions + audio_positions)
+        if image_positions & audio_positions:
+            raise ValueError("Image and audio cannot have the same position.")
 
-        mm_idx = 0
+        text_len = len(text)
+
+        # All positions where we need to record a token index or insert an mm marker.
+        # Always include text_len so the final chunk is emitted inside the loop.
+        cut_points = sorted(
+            (image_positions | audio_positions)
+            | {s for s, _ in char_spans}
+            | {e + 1 for _, e in char_spans}
+            | {text_len}
+        )
+
+        # BOS and EOS are emitted unconditionally, bracketing everything including mm markers.
+        # This ensures mm markers always land between BOS and EOS even for empty text.
+        # char_to_token[0] is pre-set to 0 so that spans starting at char 0 include BOS.
+        # setdefault in the loop prevents that entry from being overwritten.
+        token_ids: list[int] = [self.bod_id]
+        image_token_positions: list[int] = []
+        audio_token_positions: list[int] = []
+        char_to_token: dict[int, int] = {0: 0}  # char index -> token index of first token from text[char:]
+
         char_pos = 0
-        token_ids = []
-        image_token_positions = []
-        audio_token_positions = []
-        token_spans = []
-        beginning_of_text = True
-        multimodal_position = multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
-        for start, end in char_spans:
-            # tokenize text, compute mm token position before span
-            while multimodal_position <= start:
-                # tokenize text before mm position
-                tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                token_ids.extend(tokenized_text)
 
-                # update mm token positions
-                multimodal_type = "image" if multimodal_position in image_positions else "audio"
-                if multimodal_type == "image":
-                    image_token_positions.append(len(token_ids))
-                else:
-                    audio_token_positions.append(len(token_ids))
+        for cut in cut_points:
+            # Emit text[char_pos:cut] with no BOS/EOS (handled outside the loop)
+            if char_pos < cut:
+                tokens = self._tokenize(text[char_pos:cut], begin=False, end=False)
+                token_ids.extend(tokens)
+                char_pos = cut
 
-                # updates
-                mm_idx += 1
-                char_pos = multimodal_position
-                multimodal_position = (
-                    multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
-                )
+            # Record token index at this cut point; setdefault preserves the char 0 → token 0 entry
+            char_to_token.setdefault(cut, len(token_ids))
 
-            # tokenize remaining text before span
-            if char_pos < start:
-                self._tokenize(text[char_pos:start], begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                token_ids.extend(tokenized_text)
-
-            char_pos = start
-            span_length = 0
-            token_start = len(token_ids)
-
-            # tokenize text, compute mm token position within span
-            while multimodal_position <= end:
-                # tokenize text before mm position
-                tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                token_ids.extend(tokenized_text)
-
-                # update mm token positions
-                multimodal_type = "image" if multimodal_position in image_positions else "audio"
-                if multimodal_type == "image":
-                    image_token_positions.append(len(token_ids))
-                else:
-                    audio_token_positions.append(len(token_ids))
-
-                # updates
-                span_length += len(tokenized_text)
-                char_pos = multimodal_position
-                mm_idx += 1
-                multimodal_position = (
-                    multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
-                )
-
-            # tokenize remaining text until end of span
-            if char_pos < end:
-                if end >= len(text) - 1:
-                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=True)
-                else:
-                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                token_ids.extend(tokenized_text)
-                span_length += len(tokenized_text)
-                char_pos = end + 1
-
-            # update token spans
-            token_spans.append((token_start, token_start + span_length - 1))
-
-        # tokenize text, compute mm token position after all spans
-        while multimodal_position <= len(text):
-            # tokenize text before mm position
-            multimodal_position = multimodal_positions[mm_idx]
-            tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
-            beginning_of_text = False
-            token_ids.extend(tokenized_text)
-
-            # update mm token positions
-            multimodal_type = "image" if multimodal_position in image_positions else "audio"
-            if multimodal_type == "image":
+            # Record mm marker position (placeholder; caller inserts actual modality tokens here)
+            if cut in image_positions:
                 image_token_positions.append(len(token_ids))
-            else:
+            elif cut in audio_positions:
                 audio_token_positions.append(len(token_ids))
 
-            # updates
-            char_pos = multimodal_position
-            mm_idx += 1
-            multimodal_position = multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
+        token_ids.append(self.eod_id)
 
-        # tokenize text after all spans
-        tokenized_text = self._tokenize(text[char_pos:], begin=beginning_of_text, end=True)
-        token_ids.extend(tokenized_text)
+        token_spans = [
+            (char_to_token[s], char_to_token[e + 1] - 1)
+            for s, e in char_spans
+        ]
 
         return token_ids, token_spans, image_token_positions, audio_token_positions
 
