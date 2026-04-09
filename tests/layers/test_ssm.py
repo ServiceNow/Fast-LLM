@@ -146,7 +146,7 @@ def test_gdn(testing_device, use_backup, monkeypatch):
     "use_backup",
     [
         pytest.param(False, marks=pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")),
-        True,
+        pytest.param(True, marks=pytest.mark.skipif(not _kda_available, reason="KDA fla package not available")),
     ],
     ids=["fast", "backup"],
 )
