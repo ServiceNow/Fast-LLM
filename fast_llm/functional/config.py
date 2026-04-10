@@ -53,6 +53,7 @@ class ActivationType(enum.StrEnum):
     """
 
     gelu = "gelu"
+    gelu_pytorch_tanh = "gelu_pytorch_tanh"
     silu = "silu"
     relu = "relu"
     sigmoid = "sigmoid"
@@ -81,7 +82,8 @@ def _set_activation_fn_map() -> None:
     global _ACTIVATION_FN_MAP
 
     _ACTIVATION_FN_MAP = {
-        ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
+        ActivationType.gelu: torch.nn.functional.gelu,
+        ActivationType.gelu_pytorch_tanh: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ActivationType.silu: torch.nn.functional.silu,
         ActivationType.relu: torch.nn.functional.relu,
         ActivationType.sigmoid: torch.nn.functional.sigmoid,
@@ -93,7 +95,8 @@ def _set_activation_fn_map() -> None:
 _ACTIVATION_FN_MAP: dict[ActivationType, typing.Callable[["torch.Tensor"], "torch.Tensor"]] = {}
 
 _ACTIVATION_HF_NAMES = {
-    ActivationType.gelu: "gelu_pytorch_tanh",
+    ActivationType.gelu: "gelu",
+    ActivationType.gelu_pytorch_tanh: "gelu_pytorch_tanh",
     ActivationType.silu: "silu",
     ActivationType.relu: "relu",
     ActivationType.squared_relu: "relu2",
@@ -102,6 +105,7 @@ _ACTIVATION_HF_NAMES = {
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 _ACTIVATION_HF_NAMES_INV["gelu"] = ActivationType.gelu
+
 
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 

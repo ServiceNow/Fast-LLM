@@ -18,6 +18,11 @@ if typing.TYPE_CHECKING:
 class VisionKwargs(BlockKwargs):
     patches = "patches"
     patch_positions = "patch_positions"
+    # Multimodal injection kwargs (used by MultiModalEmbedding / MultiModalBaseModel)
+    images = "images"
+    image_positions = "image_positions"
+    image_sizes = "image_sizes"
+    max_image_tokens = "max_image_tokens"
 
 
 @config_class()
@@ -84,6 +89,16 @@ class VisionEncoderConfig(BlockConfig):
         desc="Size of the vision encoder main hidden dimension.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
+    )
+    image_break_token: int | None = Field(
+        default=None,
+        desc="Token id inserted between image rows when tiled (Pixtral-style). None = no break token.",
+        hint=FieldHint.optional,
+    )
+    image_end_token: int | None = Field(
+        default=None,
+        desc="Token id inserted at the end of each image. None = no end token.",
+        hint=FieldHint.optional,
     )
 
     @property

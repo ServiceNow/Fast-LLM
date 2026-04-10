@@ -110,7 +110,7 @@ def pytest_configure(config):
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0 and is_parallel:
         # We spread workers across GPUs.
-        logger.warning(f"[Worker {worker_id}] Using GPUs {os.environ["CUDA_VISIBLE_DEVICES"]}")
+        logger.warning(f"[Worker {worker_id}] Using GPUs {os.environ['CUDA_VISIBLE_DEVICES']}")
     elif num_gpus > 0:
         if "CUDA_VISIBLE_DEVICES" not in os.environ:
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(num_gpus))

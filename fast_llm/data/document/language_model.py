@@ -6,6 +6,7 @@ import torch
 
 from fast_llm.core.distributed import allreduce_scalar
 from fast_llm.data.document.abstract import ModelInput
+from fast_llm.data.document.audio import AudioBatch, AudioDocument
 from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.patch import PatchBatch, PatchDocument, PatchModelInput
 from fast_llm.data.document.range import RangeBatch, RangeDocument
@@ -24,6 +25,7 @@ class LanguageModelDocument(TokenDocument):
     chosen_spans: RangeDocument | None = None
     rejected_spans: RangeDocument | None = None
     image_patches: PatchDocument | None = None
+    audio: AudioDocument | None = None
     advantages: TokenDataDocument | None = None
     old_log_probabilities: TokenDataDocument | None = None
 
@@ -55,6 +57,7 @@ class LanguageModelTargetInput(ModelInput):
 class LanguageModelInput(TokenModelInput):
     targets: list[LanguageModelTargetInput] = dataclasses.field(default_factory=list)
     image_patches: PatchModelInput | None = None
+    audio: AudioBatch | None = None
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[LanguageModelInput]", distributed: "Distributed"):
@@ -89,6 +92,8 @@ class LanguageModelInput(TokenModelInput):
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
             out[LanguageModelKwargs.token_ids] = self.tokens
+        if self.audio is not None:
+            out.update(self.audio.to_kwargs())
         return out
 
     def to_device_(self, device: "torch.device") -> typing.Self:
@@ -103,6 +108,7 @@ class LanguageModelBatch(TokenBatch):
     _model_input_class: typing.ClassVar[type[LanguageModelInput]] = LanguageModelInput
     loss_masking_spans: RangeBatch | None = None
     image_patches: PatchBatch | None = None
+    audio: AudioBatch | None = None
     advantages: TokenDataBatch | None = None
     old_log_probabilities: TokenDataBatch | None = None
 
@@ -117,6 +123,7 @@ class LanguageModelBatch(TokenBatch):
             [document.loss_masking_spans for document in documents], lengths
         )
         batch.image_patches = PatchBatch.from_documents([document.image_patches for document in documents], lengths)
+        batch.audio = AudioBatch.from_documents([document.audio for document in documents], lengths)
         batch.advantages = TokenDataBatch.from_documents(
             [document.advantages for document in documents], lengths, pad_to_size
         )
@@ -146,6 +153,9 @@ class LanguageModelBatch(TokenBatch):
                 model_input.image_patches = self.image_patches.get_model_input(
                     sequence_k_past, sequence_k_past + local_input_length, config.vision_encoder
                 )
+
+            if self.audio is not None:
+                model_input.audio = self.audio
 
             model_input.pasts = presents
             presents = None if micro_sequence_index == config.micro_batch_splits - 1 else []

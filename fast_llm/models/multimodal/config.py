@@ -6,6 +6,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.layers.audio_encoder.config import AudioMultiModalModelConfig
 from fast_llm.layers.vision.config import VisionMultiModalModelConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
@@ -15,8 +16,10 @@ from fast_llm.models.gpt.config import (
 )
 from fast_llm.models.multimodal.conversion.config import (
     Apriel2CheckpointFormat,
+    AyraCheckpointFormat,
     LlavaCheckpointFormat,
     LlavaHybridSSMCheckpointFormat,
+    WhisperCheckpointFormat,
 )
 
 if typing.TYPE_CHECKING:
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 @config_class()
-class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig):
+class MultiModalBaseModelConfig(VisionMultiModalModelConfig, AudioMultiModalModelConfig, GPTBaseModelConfig):
     @property
     def base_model_class(self) -> type["MultiModalBaseModel"]:
         from fast_llm.models.multimodal.model import MultiModalBaseModel
@@ -45,6 +48,8 @@ class MultiModalModelConfig(GPTModelConfig):
         LlavaCheckpointFormat,
         LlavaHybridSSMCheckpointFormat,
         Apriel2CheckpointFormat,
+        WhisperCheckpointFormat,
+        AyraCheckpointFormat,
     )
 
     @classmethod
