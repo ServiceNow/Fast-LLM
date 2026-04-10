@@ -86,21 +86,23 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         return transformers.AutoConfig.from_pretrained(directory, trust_remote_code=True).to_dict()
 
     @classmethod
-    def _import_config(cls, config: dict) -> dict:
+    def _import_config(cls, config: dict) -> "FastLLMModelConfig":
         from fast_llm.models.gpt.conversion.auto import AutoGPTHuggingfaceCheckpointHandler
 
         audio_config = config.get("audio_config", {})
         text_config = config.get("text_config", {})
 
-        # Import LLM config from text handler
+        # Import LLM config from text handler.
+        # In main's API, _import_config returns a FastLLMModelConfig, not a dict.
         text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(
             text_config.get("model_type", cls.text_handler_name)
         )
-        imported = dict(text_handler_cls._import_config(text_config))
+        gpt_model_config = text_handler_cls._import_config(text_config)
+        base_model_dict = gpt_model_config.base_model.to_dict()
 
-        # Import audio encoder config
-        imported["audio_encoder"] = cls.audio_encoder_converter_class.import_config(audio_config, config)
-        return imported
+        # Import audio encoder config and merge into base_model dict
+        base_model_dict["audio_encoder"] = cls.audio_encoder_converter_class.import_config(audio_config, config)
+        return cls._model_class.from_dict({"base_model": base_model_dict})
 
     @classmethod
     def _export_config(cls, config: MultiModalBaseModelConfig) -> dict:

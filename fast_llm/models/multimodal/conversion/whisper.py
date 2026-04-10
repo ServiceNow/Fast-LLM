@@ -116,7 +116,7 @@ class WhisperAttentionConverter:
         n_heads = config["encoder_attention_heads"]
         d_model = config["d_model"]
         return {
-            "type": "default",
+            "type": "attention",
             "heads": n_heads,
             "head_groups": n_heads,
             "head_size": d_model // n_heads,
