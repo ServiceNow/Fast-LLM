@@ -1525,10 +1525,10 @@ class Apriel2GatedDeltaNet(nn.Module, AttentionLayerBase):
                 self.norm.weight.data.copy_(weight)
                 loaded.add("norm.weight")
             elif name == "A_log":
-                self.A_log.data.copy_(weight)
+                self.A_log.weight_loader(self.A_log, weight)
                 loaded.add("A_log")
             elif name == "dt_bias":
-                self.dt_bias.data.copy_(weight)
+                self.dt_bias.weight_loader(self.dt_bias, weight)
                 loaded.add("dt_bias")
         return loaded
 
@@ -1963,10 +1963,10 @@ class Apriel2KDAMixer(nn.Module, AttentionLayerBase):
                 self.g_b_proj.weight_loader(self.g_b_proj.weight, weight)
                 loaded.add("g_b_proj.weight")
             elif name == "A_log":
-                self.A_log.data.copy_(weight)
+                self.A_log.weight_loader(self.A_log, weight)
                 loaded.add("A_log")
             elif name == "dt_bias":
-                self.dt_bias.data.copy_(weight)
+                self.dt_bias.weight_loader(self.dt_bias, weight)
                 loaded.add("dt_bias")
         return loaded
 
