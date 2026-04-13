@@ -48,6 +48,10 @@ class LanguageModelSourceConfig(Config):
     def has_images(self) -> bool:
         return False
 
+    @functools.cached_property
+    def has_grpo_data(self) -> bool:
+        return False
+
 
 @config_class(dynamic_type={LanguageModelSourceConfig: "document"})
 class DocumentSourceConfig(LanguageModelSourceConfig):
@@ -91,6 +95,13 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
         desc="Field containing image positions in the text.",
         hint=FieldHint.optional,
     )
+    # TODO: Old log probabilities are made up (zeros) since we don't know the token count in advance.
+    advantages: str | None = Field(
+        default=None,
+        desc="Field containing advantaged for policy optimization."
+        " Mainly for debugging purposed as advantages are typically generated at runtime.",
+        hint=FieldHint.optional,
+    )
 
     @functools.cached_property
     def columns(self) -> list[str]:
@@ -116,6 +127,10 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
     def has_images(self) -> bool:
         Assert.eq(self.images is None, self.image_positions is None)
         return self.images is not None
+
+    @functools.cached_property
+    def has_grpo_data(self) -> bool:
+        return self.advantages is not None
 
     def _validate(self):
         super()._validate()

@@ -153,7 +153,7 @@ class RunnableConfig(Config):
         elif urllib.parse.urlparse(parsed.config).scheme == "https":
             return yaml.safe_load(cls._load_url(parsed.config, parsed.config_auth_token_file))
         elif pathlib.Path(parsed.config).is_file():
-            return yaml.safe_load(pathlib.Path(parsed.config).open("r").read())
+            return yaml.safe_load(pathlib.Path(parsed.config).read_text())
         else:
             raise FileNotFoundError(parsed.config)
 
@@ -165,9 +165,8 @@ class RunnableConfig(Config):
 
         headers = {"Accept": "application/vnd.github.v3.raw"}
         if config_auth_token_file is not None:
-            config_auth_token = config_auth_token_file.open("r").read().strip()
-            with open(config_auth_token_file) as f:
-                headers["Authorization"] = f"token {config_auth_token}"
+            config_auth_token = config_auth_token_file.read_text().strip()
+            headers["Authorization"] = f"token {config_auth_token}"
         response = requests.get(config_url, headers=headers)
         if response.status_code == 200:
             return response.text

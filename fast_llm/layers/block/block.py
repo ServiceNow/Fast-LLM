@@ -68,7 +68,7 @@ class DebugLayer:
                     "",
                     tensor,
                     level=level,
-                    meta=self._get_meta(tensor, name + f"{name}.grad", dims),
+                    meta=self._get_meta(tensor, f"{name}.grad", dims),
                     **logging_kwargs,
                 )
 

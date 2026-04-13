@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def reduce_op(
-    input_: torch.Tensor, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM, async_op: bool = False
+    input_: torch.Tensor, group: ProcessGroup | None, *, op: ReduceOp.RedOpType = ReduceOp.SUM, async_op: bool = False
 ) -> tuple[torch.Tensor, torch.distributed.Work] | torch.Tensor:
     if group:
         handle = all_reduce(input_, group=group, async_op=async_op, op=op)

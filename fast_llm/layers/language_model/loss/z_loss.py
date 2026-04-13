@@ -5,15 +5,17 @@ import torch
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_softmax_base
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
+from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
-    def forward_backward(
+    def _forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
@@ -28,7 +30,11 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             group=self._parallel_dim.group if self._vocab_parallel else None,
             logits_scale_factor=self._logits_scale_factor,
             grad_logits=grad_logits,
+            divisor=self._get_label_count(kwargs),
         )
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_prediction_mask": True}
 
 
 @torch.compile
@@ -53,19 +59,19 @@ def fused_z_loss_forward_backward(
     grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
+    divisor: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
     Grad = 2 * log_sum_exp_logits * softmax(logits)
     """
-    grad_output = None if grad_output is None else grad_output / logits.shape[:-1].numel() * logits_scale_factor
+    if divisor is None:
+        divisor = logits.shape[:-1].numel()
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
     log_sum_exp_logits = sum_exp_logits.log() + logits_max
 
-    per_sample_loss = log_sum_exp_logits**2
-    if loss_mask is not None:
-        per_sample_loss = per_sample_loss * loss_mask
-    loss = per_sample_loss.mean()
+    loss = reduce_losses(log_sum_exp_logits**2, divisor, loss_mask)
 
     if grad_output is not None:
         grad_base = 2 * grad_output * (log_sum_exp_logits / sum_exp_logits)

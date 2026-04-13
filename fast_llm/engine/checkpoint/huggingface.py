@@ -58,11 +58,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         path = config.path / f"{cls.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
         # Save the index.
-        json.dump(
-            {"metadata": metadata, "weight_map": index},
-            path.open("w"),
-            indent=4,
-        )
+        path.write_text(json.dumps({"metadata": metadata, "weight_map": index}, indent=4))
 
     def _serialize_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
         huggingface_config = self._export_config(self._model.config)
@@ -145,7 +141,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             logger.info(f"Loading index from {config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME}")
             paths = {
                 config.path / path
-                for path in json.load((config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).open("r"))[
+                for path in json.loads((config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).read_text())[
                     "weight_map"
                 ].values()
             }
@@ -155,7 +151,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             logger.info(f"Loading index from {config.path / transformers.utils.WEIGHTS_INDEX_NAME}")
             paths = {
                 config.path / path
-                for path in json.load((config.path / transformers.utils.WEIGHTS_INDEX_NAME).open("r"))[
+                for path in json.loads((config.path / transformers.utils.WEIGHTS_INDEX_NAME).read_text())[
                     "weight_map"
                 ].values()
             }
@@ -169,7 +165,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                     for key in f.keys():
                         yield key, "weights", f.get_slice(key)
             elif path.suffix == ".bin":
-                # TODO: Confirm that loading works with `weights_only=True`
-                yield from torch.load(path, weights_only=True)
+                for key, tensor in torch.load(path, weights_only=True).items():
+                    yield key, "weights", tensor
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")

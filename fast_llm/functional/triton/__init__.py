@@ -27,7 +27,20 @@ if not triton_available:
     tl_arange = None
     tl_full = None
 elif triton_interpret:
-    # Workaround for a triton bug.
+    # Workaround for a triton interpreter bug: constexpr int arguments to device functions
+    # arrive as 1-d numpy arrays rather than scalars. The interpreter's _patch_lang_tensor sets
+    # tensor.__index__ = lambda self: int(self.handle.data), which fails for 1-d arrays.
+    # Patch _patch_lang_tensor to use .item() instead, which works for both 0-d and 1-d arrays.
+    import triton.runtime.interpreter as _triton_interpreter
+
+    _orig_patch_lang_tensor = _triton_interpreter._patch_lang_tensor
+
+    def _fixed_patch_lang_tensor(tensor):
+        _orig_patch_lang_tensor(tensor)
+        tensor.__index__ = lambda self: self.handle.data.item()
+
+    _triton_interpreter._patch_lang_tensor = _fixed_patch_lang_tensor
+
     @triton_jit
     def tl_arange(start, end):
         return tl.arange(int(start), int(end))

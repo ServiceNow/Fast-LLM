@@ -13,10 +13,11 @@ from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
 class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossConfig](LanguageModelLoss[ConfigType]):
-    def forward_backward(
+    def _forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
@@ -34,14 +35,16 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
             logits_scale_factor=self._logits_scale_factor,
             target_format=TargetFormat.labels,
             entropy_loss_type=self._config.loss_type,
+            divisor=self._get_label_count(kwargs),
         )
 
 
 class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossConfig](LanguageModelLoss[ConfigType]):
-    def forward_backward(
+    def _forward_backward(
         self,
         logits: "torch.Tensor",
         kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
@@ -59,6 +62,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             logits_scale_factor=self._logits_scale_factor,
             target_format=TargetFormat.logits,
             entropy_loss_type=self._config.loss_type,
+            divisor=self._get_label_count(kwargs),
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:

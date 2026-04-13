@@ -8,10 +8,10 @@ import torch
 
 from fast_llm.data.dataset.memmap.abstract import MemmapIndexedDatasetReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import LanguageModelReaderConfig, NullReaderConfig
-from fast_llm.data.dataset.memmap.patch import PatchReader, PatchWriter
-from fast_llm.data.dataset.memmap.range import RangeReader, RangeWriter
+from fast_llm.data.dataset.memmap.patch import PatchWriter
+from fast_llm.data.dataset.memmap.range import RangeWriter
 from fast_llm.data.dataset.memmap.token import TokenWriter
-from fast_llm.data.document.abstract import Document
+from fast_llm.data.dataset.memmap.token_data import TokenDataWriter
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert
 
@@ -25,12 +25,14 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         self._chosen_spans = self._config.chosen_spans.get_reader(buffer)
         self._rejected_spans = self._config.rejected_spans.get_reader(buffer)
         self._image_patches = self._config.image_patches.get_reader(buffer)
+        self._advantages = self._config.advantages.get_reader(buffer)
+        self._old_log_probabilities = self._config.old_log_probabilities.get_reader(buffer)
 
     @property
     def num_tokens(self) -> int:
         return self._config.tokens.num_tokens
 
-    def get_document(self, index: int, begin: int, end: int) -> Document:
+    def get_document(self, index: int, begin: int, end: int) -> LanguageModelDocument:
         image_patches = self._image_patches.get_document(index, begin, end)
         return LanguageModelDocument(
             **dataclasses.asdict(self._tokens.get_document(index, begin, end)),
@@ -38,6 +40,8 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             chosen_spans=self._chosen_spans.get_document(index, begin, end),
             rejected_spans=self._rejected_spans.get_document(index, begin, end),
             image_patches=image_patches,
+            advantages=self._advantages.get_document(index, begin, end),
+            old_log_probabilities=self._old_log_probabilities.get_document(index, begin, end),
         )
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -52,15 +56,16 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             "num_tokens": token_metadata["num_tokens"],
             "tokens": token_metadata,
         }
-        if isinstance(self._loss_masking_spans, RangeReader):
+        if self._config.has_loss_masking_spans:
             metadata["loss_masking_spans"] = self._loss_masking_spans.get_split(begin_index, end_index)
-        if isinstance(self._chosen_spans, RangeReader):
+        if self._config.has_preference_spans:
             metadata["chosen_spans"] = self._chosen_spans.get_split(begin_index, end_index)
-        if isinstance(self._rejected_spans, RangeReader):
             metadata["rejected_spans"] = self._rejected_spans.get_split(begin_index, end_index)
-        if isinstance(self._image_patches, PatchReader):
+        if self._config.has_image_patches:
             metadata["image_patches"] = self._image_patches.get_split(begin_index, end_index)
-
+        if self._config.has_grpo_data:
+            metadata["advantages"] = self._advantages.get_split(begin_index, end_index)
+            metadata["old_log_probabilities"] = self._old_log_probabilities.get_split(begin_index, end_index)
         return begin_index, end_index, metadata
 
 
@@ -68,6 +73,7 @@ class LanguageModelWriter(MemmapWriter):
     _use_loss_masking_spans: bool
     _use_preference_spans: bool
     _use_image_patches: bool
+    _use_grpo_data: bool
 
     def __enter__(self):
         super().__enter__()
@@ -79,6 +85,8 @@ class LanguageModelWriter(MemmapWriter):
         self._chosen_spans_writer = RangeWriter(self._path.joinpath("chosen_spans")).__enter__()
         self._rejected_spans_writer = RangeWriter(self._path.joinpath("rejected_spans")).__enter__()
         self._image_patches_writer = PatchWriter(self._path.joinpath("image_patches")).__enter__()
+        self._advantages_writer = TokenDataWriter(self._path.joinpath("advantages")).__enter__()
+        self._old_log_probabilities_writer = TokenDataWriter(self._path.joinpath("old_log_probabilities")).__enter__()
         return self
 
     def write(self, document: LanguageModelDocument):
@@ -89,14 +97,17 @@ class LanguageModelWriter(MemmapWriter):
         use_loss_masking_spans = document.loss_masking_spans is not None
         use_preference_spans = document.chosen_spans is not None
         use_image_patches = document.image_patches is not None
+        use_grpo_data = document.advantages is not None
         if hasattr(self, "_use_loss_masking_spans"):
             Assert.eq(self._use_loss_masking_spans, use_loss_masking_spans)
             Assert.eq(self._use_preference_spans, use_preference_spans)
             Assert.eq(self._use_image_patches, use_image_patches)
+            Assert.eq(self._use_grpo_data, use_grpo_data)
         else:
             self._use_loss_masking_spans = use_loss_masking_spans
             self._use_preference_spans = use_preference_spans
             self._use_image_patches = use_image_patches
+            self._use_grpo_data = use_grpo_data
 
         # Write loss masking spans.
         if use_loss_masking_spans:
@@ -112,12 +123,20 @@ class LanguageModelWriter(MemmapWriter):
         if use_image_patches:
             self._image_patches_writer.write(document.image_patches)
 
+        if use_grpo_data:
+            assert document.advantages is not None
+            assert document.old_log_probabilities is not None
+            self._advantages_writer.write(document.advantages)
+            self._old_log_probabilities_writer.write(document.old_log_probabilities)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._token_writer.__exit__(exc_type, exc_val, exc_tb)
         self._loss_masking_span_writer.__exit__(exc_type, exc_val, exc_tb)
         self._chosen_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         self._rejected_spans_writer.__exit__(exc_type, exc_val, exc_tb)
         self._image_patches_writer.__exit__(exc_type, exc_val, exc_tb)
+        self._advantages_writer.__exit__(exc_type, exc_val, exc_tb)
+        self._old_log_probabilities_writer.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
             # A dummy config so we can verify the begin and end offsets.
@@ -152,7 +171,19 @@ class LanguageModelWriter(MemmapWriter):
                     config.image_patches.begin,
                     config.image_patches.end,
                 )
-
+            if self._use_grpo_data:
+                _copy_chunked(
+                    self._path.joinpath("advantages"),
+                    self._stream,
+                    config.advantages.begin,
+                    config.advantages.end,
+                )
+                _copy_chunked(
+                    self._path.joinpath("old_log_probabilities"),
+                    self._stream,
+                    config.old_log_probabilities.begin,
+                    config.old_log_probabilities.end,
+                )
         self._directory.cleanup()
         super().__exit__(exc_type, exc_val, exc_tb)
 
@@ -181,7 +212,14 @@ class LanguageModelWriter(MemmapWriter):
             offset = image_patches.end
         else:
             image_patches = NullReaderConfig()
-
+        if self._use_grpo_data:
+            advantages = self._advantages_writer.get_config(offset)
+            offset = advantages.end
+            old_log_probabilities = self._old_log_probabilities_writer.get_config(offset)
+            offset = old_log_probabilities.end
+        else:
+            advantages = NullReaderConfig()
+            old_log_probabilities = NullReaderConfig()
         if end is None:
             end = offset + len(LanguageModelReaderConfig.footer)
 
@@ -193,6 +231,8 @@ class LanguageModelWriter(MemmapWriter):
             chosen_spans=chosen_spans,
             rejected_spans=rejected_spans,
             image_patches=image_patches,
+            advantages=advantages,
+            old_log_probabilities=old_log_probabilities,
         )
 
 

@@ -38,7 +38,7 @@ class MemmapDataset[DocumentType: Document](IndexedDataset[DocumentType]):
             config_bytes = stream.read(int.from_bytes(stream.read(4), signed=False))
             reader_config = MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
 
-        self._memmap = np.memmap(self._path, mode="r")
+        self._memmap = np.memmap(self._path, mode="c")
         self._reader = reader_config.get_reader(memoryview(self._memmap))
 
     def __getstate__(self) -> tuple[str, pathlib.Path]:

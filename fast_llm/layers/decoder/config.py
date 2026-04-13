@@ -56,6 +56,8 @@ class BlockWithBiasConfig(BlockConfig):
 
 @config_class(registry=True)
 class MLPBaseConfig(BlockWithBiasConfig):
+    """Abstract base configuration for MLP (feedforward) layers. Use `type: mlp` or `type: moe` to select a variant."""
+
     _abstract = True
 
     def get_layer(
@@ -232,9 +234,17 @@ class StochasticMixerConfig(MixerConfig):
 
 @config_class(dynamic_type={BlockConfig: "decoder"})
 class DecoderBlockConfig(BlockConfig):
+    """Configuration for a transformer decoder block (attention + MLP + normalization + residual)."""
+
     _abstract = False
-    mixer: MixerConfig = Field()
-    mlp: MLPBaseConfig = Field()
+    mixer: MixerConfig = Field(
+        desc="Configuration for the attention/mixer layer.",
+        hint=FieldHint.architecture,
+    )
+    mlp: MLPBaseConfig = Field(
+        desc="Configuration for the feedforward (MLP) layer.",
+        hint=FieldHint.architecture,
+    )
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the block normalization layers.",

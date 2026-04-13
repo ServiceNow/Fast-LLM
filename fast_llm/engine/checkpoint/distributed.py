@@ -32,17 +32,17 @@ class DistributedCheckpointHandler(CheckpointHandler):
     def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata):
         serialized_metadata = metadata.to_dict()
         config.path.mkdir(parents=True, exist_ok=True)
-        yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
+        (config.path / "metadata.yaml").write_text(yaml.safe_dump(serialized_metadata))
 
     @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
-        return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
+        return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").read_text()))
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
         serialized_metadata = metadata.to_dict()
         config.path.mkdir(parents=True, exist_ok=True)
         if self._model.config.distributed.rank == 0:
-            yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
+            (config.path / "metadata.yaml").write_text(yaml.safe_dump(serialized_metadata))
         safetensors.torch.save_file(
             tensors={f"{shard_name}_shard": self._model.get_shard(shard_name) for shard_name in metadata.shards},
             filename=config.path / f"rank_{self._model.config.distributed.rank}.safetensors",

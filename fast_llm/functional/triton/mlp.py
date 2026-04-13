@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
 from fast_llm.functional.linear import (
     input_parallel_linear_forward,
@@ -23,6 +22,7 @@ from fast_llm.functional.triton.sparse_copy import (
     copy_sparse_to_dense_forward,
 )
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
@@ -156,7 +156,7 @@ def triton_mlp_activation_forward(
         input_,
         output,
         gated=gated,  # noqa
-        activation_type=activation_type.value,  # noqa
+        activation_type=activation_type,  # noqa
         n_cols=n_cols,  # noqa
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     )

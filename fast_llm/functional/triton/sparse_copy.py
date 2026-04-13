@@ -3,9 +3,9 @@ import dataclasses
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig
 from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
+from fast_llm.functional.utils import wrap_forward_backward
 
 
 @dataclasses.dataclass()

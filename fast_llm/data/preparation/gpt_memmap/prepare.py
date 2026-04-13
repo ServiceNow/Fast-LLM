@@ -30,6 +30,7 @@ from fast_llm.data.dataset.memmap.memmap import MemmapDataset
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.patch import PatchDocument
 from fast_llm.data.document.range import RangeDocument
+from fast_llm.data.document.token_data import TokenDataDocument
 from fast_llm.data.preparation.config import DatasetPreparator
 from fast_llm.data.preparation.gpt_memmap.config import (
     ConversationSourceConfig,
@@ -79,7 +80,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def _get_croissant_metadata(self):
-        token = huggingface_hub.HfFolder.get_token()
+        token = huggingface_hub.get_token()
         try:
             # Retrieve the dataset metadata in croissant format
             url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
@@ -209,7 +210,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def _prepare_sample(self, sample: dict[str, typing.Any]) -> LanguageModelDocument:
         token_spans_by_type = collections.defaultdict(list)
-        image_patches = image_token_maps = image_position_ids = patch_counts = None
+        image_patches = image_token_maps = image_position_ids = patch_counts = advantages = old_log_probabilities = (
+            None
+        )
 
         if isinstance(self._source_schema, ConversationSourceConfig):
             # Conversation format: tokenize messages and get loss masking spans from chat template
@@ -315,7 +318,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         else:
             raise NotImplementedError(f"Unsupported source schema type: {type(self._source_schema)}")
 
-        len(tokens)
+        if self._source_schema.has_grpo_data:
+            advantages = torch.full_like(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
+            old_log_probabilities = torch.zeros_like(tokens, dtype=torch.float32)
 
         return LanguageModelDocument(
             tokens=tokens,
@@ -344,6 +349,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 )
                 if self._source_schema.has_images
                 else None
+            ),
+            advantages=TokenDataDocument(data=advantages) if self._source_schema.has_grpo_data else None,
+            old_log_probabilities=(
+                TokenDataDocument(data=old_log_probabilities) if self._source_schema.has_grpo_data else None
             ),
         )
 

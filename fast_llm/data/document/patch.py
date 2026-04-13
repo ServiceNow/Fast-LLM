@@ -59,7 +59,7 @@ class PatchModelInput(BlockModelInput):
 class PatchBatch(Batch, PatchDocument):
     @classmethod
     def from_documents(
-        cls, documents: typing.Iterable[PatchDocument], sizes: typing.Iterable[int]
+        cls, documents: typing.Sequence[PatchDocument], sizes: typing.Iterable[int]
     ) -> typing.Self | None:
         # Note: `sizes` refers to the number of tokens in each document, not the number of patches.
         # But `pad_to_sizes` refers to patches. TODO: Make less confusing?

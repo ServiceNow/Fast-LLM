@@ -60,7 +60,7 @@ class CausalConv1d(torch.nn.Module):
             input_,
             self.weight.squeeze(1),
             self.bias,
-            activation=(None if self._activation == ActivationType.identity else self._activation.value),
+            activation=(None if self._activation == ActivationType.identity else self._activation),
             seq_idx=document_index,
         )
 

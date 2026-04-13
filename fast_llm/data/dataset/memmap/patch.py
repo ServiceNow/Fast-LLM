@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.data.dataset.memmap.abstract import MemmapReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import PatchReaderConfig
-from fast_llm.data.document.abstract import Document
 from fast_llm.data.document.patch import PatchDocument, filter_lengths
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
@@ -55,7 +54,7 @@ class PatchReader[ConfigType: PatchReaderConfig](MemmapReader[ConfigType]):
             offset=offset,
         )
 
-    def get_document(self, index: int, begin: int, end: int) -> Document:
+    def get_document(self, index: int, begin: int, end: int) -> PatchDocument:
         token_map = self._token_map[
             token_slice := slice(self._patch_count_cumsums[index], self._patch_count_cumsums[index + 1])
         ]

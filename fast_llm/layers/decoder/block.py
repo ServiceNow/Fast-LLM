@@ -9,7 +9,7 @@ from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.functional.autograd import AuxiliaryLoss
+from fast_llm.functional.utils import AuxiliaryLoss
 from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
@@ -216,18 +216,8 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
     # TODO: add layer_index
     _distillation_loss_name = "activation_distillation_loss"
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         loss_definitions = []
         if self._config.distillation_model is not None:
-            loss_definitions.append(
-                LossDef(
-                    name=self._distillation_loss_name,
-                    formatted_name=self._distillation_loss_name,
-                    count=count,
-                )
-            )
-        return (
-            loss_definitions
-            + self.mixer.get_loss_definitions(count=count)
-            + self.mlp.get_loss_definitions(count=count)
-        )
+            loss_definitions.append(LossDef(name=self._distillation_loss_name))
+        return loss_definitions + self.mixer.get_loss_definitions() + self.mlp.get_loss_definitions()

@@ -25,7 +25,7 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                     {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                     {"type": "memmap", "path": "dataset_1.fast_llm_dataset"},
                 ],
-                "weights": [44883, 43910],
+                "weights": [47178, 46208],
             },
         ),
         (
@@ -39,7 +39,7 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                     {"type": "memmap", "path": "dataset0/dataset_0.fast_llm_dataset"},
                     {"type": "memmap", "path": "dataset1/dataset_1.fast_llm_dataset"},
                 ],
-                "weights": [44883, 43910],
+                "weights": [47178, 46208],
             },
         ),
         (
@@ -59,7 +59,7 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                     {"type": "memmap", "path": "dataset/dataset_1.fast_llm_dataset"},
                     {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                 ],
-                "weights": [43910, 44883],
+                "weights": [46208, 47178],
             },
         ),
         (
@@ -78,10 +78,10 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                             {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                             {"type": "memmap", "path": "dataset_1.fast_llm_dataset"},
                         ],
-                        "weights": [44883, 43910],
+                        "weights": [47178, 46208],
                     },
                 ],
-                "weights": [44883, 88793],
+                "weights": [47178, 93386],
             },
         ),
         (
@@ -99,11 +99,11 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                             {"type": "memmap", "path": "dataset/dataset_1.fast_llm_dataset"},
                             {"type": "memmap", "path": "dataset/dataset_2.fast_llm_dataset"},
                         ],
-                        "weights": [43910, 44883],
+                        "weights": [46208, 47178],
                     },
                     {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                 ],
-                "weights": [88793, 44883],
+                "weights": [93386, 47178],
             },
         ),
         (
@@ -130,22 +130,22 @@ from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
                             {"type": "memmap", "path": "dataset1/dataset3/dataset_2.fast_llm_dataset"},
                             {"type": "memmap", "path": "dataset1/dataset_1.fast_llm_dataset"},
                         ],
-                        "weights": [44883, 43910],
+                        "weights": [47178, 46208],
                     },
                     {"type": "memmap", "path": "dataset2/dataset_3.fast_llm_dataset"},
                     {"type": "memmap", "path": "dataset_0.fast_llm_dataset"},
                 ],
-                "weights": [88793, 43910, 44883],
+                "weights": [93386, 46208, 47178],
             },
         ),
     ),
 )
 def test_dataset_discovery(
-    result_path: pathlib.Path, name: str, paths: tuple[pathlib.Path], ignore_paths, expected_config: dict
+    data_result_path: pathlib.Path, name: str, paths: tuple[pathlib.Path], ignore_paths, expected_config: dict
 ):
     """Test end-to-end discovery with multiple datasets in various structure."""
     test_dataset_path = [get_common_test_dataset()[0], get_alt_test_dataset()[0]]
-    (dataset_path := result_path / f"dataset_discovery/{name}").mkdir(parents=True)
+    (dataset_path := data_result_path / f"dataset_discovery/{name}").mkdir(parents=True)
     for index, path in enumerate(paths):
         (path_ := dataset_path / path).mkdir(parents=True, exist_ok=True)
         shutil.copy(
@@ -157,7 +157,7 @@ def test_dataset_discovery(
     # Run dataset discovery
     config = DatasetDiscoveryConfig(
         directory=dataset_path,
-        output=result_path / f"dataset_discovery/configs/{name}.yaml",
+        output=data_result_path / f"dataset_discovery/configs/{name}.yaml",
         ignore_paths=ignore_paths,
     )
     config.run()

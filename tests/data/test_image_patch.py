@@ -14,7 +14,7 @@ from tests.data.common import get_dataset_config
 from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_TEXT
 from tests.utils.dataset import get_test_dataset_with_image_patches
 
-DATASET_WITH_IMAGE_PATCHES_TOKENS = [55750, 56809, 59145, 59145]
+DATASET_WITH_IMAGE_PATCHES_TOKENS = [58021, 59080, 61416, 61416]
 DATASET_WITH_IMAGE_PATCHES_IMAGE_MD5 = {
     27: [],
     30: ["a2c34e404506fe664efcdb520642f260"],
@@ -37,11 +37,11 @@ DATASET_WITH_IMAGE_PATCHES_IMAGE_SHAPES = {
     87: [(17, 4), (15, 12)],
 }
 DATASET_WITH_IMAGE_PATCHES_SAMPLES = {
-    27: [49152, 63, 82, 11, 27799, 49152],
-    30: [49152, 31, 2327, (4, 1), 27, 1448, 62, 43, 49152],
-    31: [49152, 60, 55, (2, 4), 80, 30, (3, 4), 85, 22, 18, 49152],
-    77: [49152, 13736, 85, 52, 22, 46, 5, 11807, 49152],
-    87: [49152, 52, (4, 1), 89, (4, 3), 75, 11, 71, 49152],
+    27: [50256, 63, 82, 11, 7456, 50256],
+    30: [50256, 31, 13038, (4, 1), 27, 8220, 62, 43, 50256],
+    31: [50256, 60, 55, (2, 4), 80, 30, (3, 4), 85, 4790, 50256],
+    77: [50256, 73, 44179, 52, 22, 46, 5, 8226, 50256],
+    87: [50256, 52, (4, 1), 89, (4, 3), 75, 11, 71, 50256],
 }
 
 

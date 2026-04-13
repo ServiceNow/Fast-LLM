@@ -481,7 +481,7 @@ class TestDiagnostics:
         with torch.no_grad():
             # Batch processing
             batch_src = get_pixtral_vision_features(source, pixel_values)
-            batch_tgt, _ = target.get_image_features(pixel_values).view(-1, batch_src.shape[-1])
+            batch_tgt = target.get_image_features(pixel_values)[0].view(-1, batch_src.shape[-1])
 
             # Sequential processing
             singles_src = [get_pixtral_vision_features(source, pixel_values[i : i + 1]) for i in range(3)]

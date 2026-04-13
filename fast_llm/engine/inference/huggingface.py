@@ -154,7 +154,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
             # TODO: Bypassed if passed as positional argument.
             assert kwargs.get("past_key_values") is None and not kwargs.get("use_cache")
             broadcast_kwargs = {**kwargs, **{i: arg for i, arg in enumerate(args)}, "continue_work": continue_work}
-            tensor_kwargs = {key: value for key, value in broadcast_kwargs if torch.is_tensor(value)}
+            tensor_kwargs = {key: value for key, value in broadcast_kwargs.items() if torch.is_tensor(value)}
             broadcast_object(
                 [(key, tensor.shape, tensor.dtype) for key, tensor in tensor_kwargs.items()],
                 distributed.tensor_group,
@@ -162,7 +162,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
             )
             for tensor in tensor_kwargs.values():
                 broadcast(tensor.to(distributed.device), 0, distributed.tensor_group)
-            non_tensor_kwargs = {key: value for key, value in broadcast_kwargs if key not in tensor_kwargs}
+            non_tensor_kwargs = {key: value for key, value in broadcast_kwargs.items() if key not in tensor_kwargs}
             broadcast_object(
                 non_tensor_kwargs,
                 distributed.tensor_group,
@@ -240,6 +240,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         self.forward(coordinator_forward=True, continue_work=False)
         safe_barrier(distributed.world_group, "forward_work_end")
 
-    def inner_forward(*args, **kwargs) -> tuple | transformers.utils.generic.ModelOutput:
+    def inner_forward(self, *args, **kwargs) -> tuple | transformers.utils.generic.ModelOutput:
         # Meant to be overridden in derived classes
         raise NotImplementedError()

@@ -235,7 +235,7 @@ def test_load_pretrained(
 ):
     # Test that loadind a pretrained model from either converted checkpoint always yields the exact same model.
     reference_config = model_testing_config.model_config_class.from_dict(
-        yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").open("r"))["model"]
+        yaml.safe_load(get_convert_path().parents[1].joinpath("config.yaml").read_text())["model"]
     )
     reference_shard = safetensors.torch.load_file(
         get_convert_path() / "rank_0.safetensors", device=str(testing_device)
@@ -260,7 +260,7 @@ def test_load_pretrained(
             "base_model": yaml.safe_load(
                 get_convert_path(FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
                 .joinpath("metadata.yaml")
-                .open("r")
+                .read_text()
             )["config"]["base_model"]
         }
     )
@@ -472,13 +472,12 @@ def test_save_and_load_in_parallel(run_parallel_script, run_test_script_base_pat
     # Save and load checkpoints to and from various distributed configurations.
     # Combined in a single test to mitigate process creation overhead.
     # TODO: Test beyond 2 gpu configs?
-    if torch.cuda.device_count() < 2:
-        pytest.skip(f"Not enough GPUs2")
     run_parallel_script(
         _save_and_load_in_parallel,
         (run_test_script_base_path, model_testing_config),
         world_size=2,
         backend=model_testing_config.distributed_backend,
+        use_cuda=torch.cuda.is_available(),
     )
 
 
@@ -503,6 +502,7 @@ def test_load_parallel_checkpoint_in_single_gpu(
     load_and_compare_checkpoints,
     reference_distributed_shard,
     report_subtest,
+    testing_device,
 ):
     if (
         model_testing_config.checkpoint_format is None
@@ -514,16 +514,16 @@ def test_load_parallel_checkpoint_in_single_gpu(
     distributed_save_load_config = distributed_save_load_config.resolve(
         base_path=run_test_script_base_path, model_testing_config=model_testing_config
     )
-    if torch.cuda.device_count() < distributed_save_load_config.num_gpus:
-        pytest.skip(
-            f"Not enough GPUs to run dependency: {torch.cuda.device_count()} < {distributed_save_load_config.num_gpus}"
-        )
-    report_subtest(distributed_save_load_config.save_path, distributed_save_load_config.num_gpus)
+    report_subtest(
+        distributed_save_load_config.save_path,
+        distributed_save_load_config.num_gpus,
+        use_cuda=torch.cuda.is_available(),
+    )
     load_and_compare_checkpoints(
         DistributedCheckpointFormat,
         distributed_save_load_config.save_path / DistributedCheckpointFormat.name,
         None,
-        reference_distributed_shard.to(device="cuda"),
+        reference_distributed_shard.to(device=testing_device),
     )
 
 

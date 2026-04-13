@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.autograd import wrap_forward_backward
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias

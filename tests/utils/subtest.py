@@ -43,7 +43,10 @@ class DistributedTestContext:
             )
 
         self._pool = ProcessGroupPool(
-            timeout=self._timeout, init_method=self._init_method, backend=self._backend, use_cuda=self._use_cuda
+            timeout=self._timeout,
+            init_method=self._init_method,
+            backend=self._backend,
+            device=None if self._use_cuda else torch.device("cpu"),
         ).__enter__()
         self._rank = self._pool.rank
         self._world_size = self._pool.world_size

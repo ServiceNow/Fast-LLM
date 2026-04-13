@@ -34,7 +34,7 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 Fast-LLM offers all the capabilities you need to accelerate your LLM training and **push the boundaries of what's possible**:
 
--   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **10,350 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 64, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
+-   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **10,350 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (micro-batch size 8k tokens, total batch size 256k tokens). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
 
 -   **📡 Unmatched Scalability:** Seamlessly scale from a single GPU to large compute clusters. Fast-LLM supports 3D parallelism (data, tensor, and pipeline), sequence length parallelism, and ZeRO-1,2,3 techniques for maximum memory efficiency. Scale to the size you need without sacrificing performance.
 

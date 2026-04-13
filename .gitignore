@@ -9,6 +9,7 @@ __pycache__/
 # Doc build
 .cache
 site
+docs/reference/
 
 # Distribution / packaging
 *.egg-info/

@@ -8,6 +8,12 @@ testpaths = [
     "fast_llm_external_models/tests"      # External models tests
 ]
 norecursedirs = ["Megatron-LM"]
+filterwarnings = [
+    # PYTHONHASHSEED is not set by pytest; DataLoader workers will use a deterministic seed anyway.
+    "ignore:PYTHONHASHSEED should be set:UserWarning",
+    # Python 3.14 will remove pickle/copy support from itertools; comes from multiprocessing internals.
+    "ignore:Pickle, copy, and deepcopy support will be removed from itertools:DeprecationWarning",
+]
 
 [tool.isort]
 profile = "black"

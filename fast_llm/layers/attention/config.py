@@ -42,6 +42,8 @@ class AttentionImplementation(enum.StrEnum):
 
 @config_class(dynamic_type={MixerConfig: "attention"})
 class AttentionConfig(MixerConfig):
+    """Configuration for multi-head and grouped-query attention with optional rotary embeddings."""
+
     # TODO: Make mixer class dynamic.
     _abstract = False
 

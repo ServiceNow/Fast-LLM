@@ -10,6 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
+from fast_llm.layers.ssm.gdn import _fast_gdn_available
 from fast_llm.layers.ssm.kda import _kda_available
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
@@ -24,6 +25,7 @@ try:
 except ImportError:
     Apriel2GatedDeltaNet = None
     Apriel2Mamba = None
+    KimiDeltaAttention = None
     is_fast_path_available = False
 
 HIDDEN_SIZE = 16
@@ -98,7 +100,20 @@ def _compare_mixers(
 @pytest.mark.slow
 # Arguments ('seq_idx',) not implemented for torch implementation of 1d convolution.
 @pytest.mark.skipif(not is_fast_path_available, reason="GDN deps missing")
-def test_gdn(testing_device):
+@pytest.mark.parametrize(
+    "use_backup",
+    [
+        pytest.param(False, marks=pytest.mark.skipif(not _fast_gdn_available, reason="FLA not available")),
+        True,
+    ],
+    ids=["fast", "backup"],
+)
+def test_gdn(testing_device, use_backup, monkeypatch):
+    if use_backup:
+        import fast_llm.layers.ssm.gdn as gdn_module
+
+        monkeypatch.setattr(gdn_module, "_fast_gdn_available", False)
+
     dtype = torch.bfloat16
 
     NUM_V_HEADS = 4
@@ -120,12 +135,27 @@ def test_gdn(testing_device):
         .eval()
     )
     fast_llm_config = GatedDeltaNetConfig.from_dict(config_common, {"normalization": {"epsilon": 1e-5}})
-    _compare_mixers(fast_llm_config, hf_layer, {})
+    # The backup uses float32 arithmetic while the reference uses the FLA kernel, so
+    # bfloat16-level numerical differences are expected; use a looser threshold.
+    _compare_mixers(fast_llm_config, hf_layer, {}, threshold=1e-2 if use_backup else 1e-5)
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")
-def test_kda():
+@pytest.mark.skipif(KimiDeltaAttention is None, reason="KDA external model not available")
+@pytest.mark.parametrize(
+    "use_backup",
+    [
+        pytest.param(False, marks=pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")),
+        pytest.param(True, marks=pytest.mark.skipif(not _kda_available, reason="KDA fla package not available")),
+    ],
+    ids=["fast", "backup"],
+)
+def test_kda(testing_device, use_backup, monkeypatch):
+    if use_backup:
+        import fast_llm.layers.ssm.kda as kda_module
+
+        monkeypatch.setattr(kda_module, "_kda_available", False)
+
     NUM_HEADS = 4
     HEAD_DIM = 4
     KERNEL_SIZE = 4
@@ -141,7 +171,9 @@ def test_kda():
 
     fast_llm_config = KimiDeltaAttentionConfig.from_dict(kda_config, {})
 
-    _compare_mixers(fast_llm_config, hf_layer, {})
+    # The backup uses float32 arithmetic while the reference uses FLA kernels, so
+    # bfloat16-level numerical differences are expected; use a looser threshold.
+    _compare_mixers(fast_llm_config, hf_layer, {}, threshold=1e-2 if use_backup else 1e-5)
 
 
 @pytest.mark.slow

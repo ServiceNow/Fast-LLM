@@ -169,7 +169,7 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
         if missing := used_blocks - available_blocks:
             raise ValueError(f"The following blocks are present in the pattern but undefined: {missing}")
         if extra := available_blocks - used_blocks:
-            raise warnings.warn(f"The following blocks are defined but unused: {extra}")
+            warnings.warn(f"The following blocks are defined but unused: {extra}")
 
         super()._validate()
 

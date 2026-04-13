@@ -9,7 +9,7 @@ import torch
 import yaml
 
 from fast_llm.config import FieldVerboseLevel
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SamplableIterableDataset, SampledDataset
 from fast_llm.data.dataset.config import SamplingConfig, ShufflingType
 from fast_llm.data.dataset.indexed import IndexedDataset
 from fast_llm.data.document.abstract import Document
@@ -63,10 +63,6 @@ class MemmapArray:
             self._array = np.load(self._path, mmap_mode="r")
 
 
-# TODO: Make configurable?
-TOKEN_CUMSUM_RATE = 10
-
-
 class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A sampled dataset.
@@ -108,6 +104,10 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `Data`.
+
+    @property
+    def requires_broadcast(self) -> bool:
+        return self._indexed_dataset.requires_broadcast
 
     def _sample(self) -> None:
         """
@@ -249,9 +249,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
         # The starting point `(document[idx], token[idx])` corresponds to the `(idx * sequence_length)` th token, i.e.
         # `document_sizes[all_document_index][:document[idx]].sum() + token[idx] == idx * sequence_length`.
         # This can be computed quickly provided we know a (partial) sum close to `(idx * sequence_length)`.
-        # So it is enough to pre-compute the (zero-padded) token cumsum at regular intervals `TOKEN_CUMSUM_RATE`.
-        # Using `TOKEN_CUMSUM_RATE > 1` reduces pre-computation overhead at the cost of runtime computation.
-        # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
+        # So it is enough to pre-compute the (zero-padded) token cumsum at regular intervals (`token_cumsum_rate`).
+        # A larger rate reduces pre-computation overhead at the cost of more runtime scanning per sample.
+        # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::token_cumsum_rate]))`
         if unshuffled_epochs > 0:
             token_cumsum_unshuffled, unshuffled_tokens = self._get_token_cumsum(
                 document_sizes,
@@ -284,7 +284,7 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             )
             self._token_cumsum_shuffled.save(token_cumsum_shuffled)
             self._document_shuffling.save(
-                document_shuffling[: (token_cumsum_shuffled.size + 1) * TOKEN_CUMSUM_RATE].numpy(
+                document_shuffling[: (token_cumsum_shuffled.size + 1) * self._config.token_cumsum_rate].numpy(
                     force=self._config.gpu
                 )
             )
@@ -294,10 +294,12 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: DataType) -> tuple[np.ndarray, int | None]:
         if self._config.truncate_documents:
             # Create the output tensor.
-            out = sizes.new_empty(sizes.numel() // TOKEN_CUMSUM_RATE + 1, dtype=dtype.torch)
+            out = sizes.new_empty(sizes.numel() // self._config.token_cumsum_rate + 1, dtype=dtype.torch)
             # Get partial sums for regular intervals, excluding the last incomplete interval.
             torch.sum(
-                sizes[: sizes.numel() - sizes.numel() % TOKEN_CUMSUM_RATE].view(-1, TOKEN_CUMSUM_RATE),
+                sizes[: sizes.numel() - sizes.numel() % self._config.token_cumsum_rate].view(
+                    -1, self._config.token_cumsum_rate
+                ),
                 dim=1,
                 out=out[1:],
             )
@@ -315,7 +317,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
             return out.numpy(force=self._config.gpu), None
         else:
             # TODO: dynamically handle int64 or int32 in CPP
-            out = build_padded_token_cumsum(sizes.cpu().numpy(), self._config.sample_size, TOKEN_CUMSUM_RATE, offset)
+            out = build_padded_token_cumsum(
+                sizes.cpu().numpy(), self._config.sample_size, self._config.token_cumsum_rate, offset
+            )
             num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(
@@ -354,7 +358,9 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
         # Find the rightmost location `token_start_cumsum_index` in `token_cumsum` with `token_cumsum[token_start_cumsum_index] <= token_start`
         token_start_cumsum_index = np.searchsorted(token_start_array, token_start, side="right").item() - 1
 
-        document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
+        document_sampling_index = (
+            token_start_cumsum_index * self._config.token_cumsum_rate + token_start_array_document_offset
+        )
 
         token_count = token_start_array[token_start_cumsum_index].item()
 
@@ -425,3 +431,57 @@ class SampledIndexedDataset[DocumentType: Document](SampledDataset[DocumentType]
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
+
+
+class SampledIterableDataset[DocumentType: Document](SampledDataset[DocumentType]):
+    def __init__(
+        self,
+        dataset: SamplableIterableDataset[DocumentType],
+        config: SamplingConfig,
+        num_samples: int,
+        seed: int,
+    ):
+        self._dataset = dataset
+        self._config = config
+        self._num_samples = num_samples
+        self._seed = seed
+        # TODO: ====== Bring back truncation? ======
+        assert not self._config.truncate_documents
+        self._documents: list[DocumentType] = []
+        self._current_length = 0
+        # Delay iterator creation to avoid pickling issues.
+        self._iterator: typing.Iterator[DocumentType] | None = None
+
+    @property
+    def requires_broadcast(self) -> bool:
+        # TODO: ====== fix ======
+        # return self._iterator.requires_broadcast
+        return True
+
+    def __getitem__(self, index: int) -> list[DocumentType]:
+        if self._iterator is None:
+            self._iterator = self._dataset.iterate(self._config, self._num_samples, self._seed)
+        while self._current_length < self._config.sample_size:
+            document = next(self._iterator)
+            if len(document) > self._config.sample_size:
+                logging.warning(f"Dropping document with length {len(document)} > {self._config.sample_size}.")
+                continue
+            self._documents.append(document)
+            self._current_length += len(document)
+
+        if self._current_length == self._config.sample_size:
+            documents = self._documents
+            self._documents = []
+            self._current_length = 0
+        else:
+            documents = self._documents[:-1]
+            self._documents = [self._documents[-1]]
+            self._current_length = len(self._documents[0])
+        return documents
+
+    def __len__(self) -> int:
+        return self._num_samples
+
+    @property
+    def name(self) -> str:
+        return self._dataset.name

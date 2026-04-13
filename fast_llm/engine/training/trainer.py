@@ -66,6 +66,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed_config=self._config.model.distributed,
         )
         self._loss_definitions = self._multi_stage.base_model.get_loss_definitions()
+        self._callbacks = {
+            name: config.get_callback(self._multi_stage) for name, config in self._config.callbacks.items()
+        }
 
         self._evaluators = {
             name: config.get_evaluator(name, self._config.training.num_workers)
@@ -158,6 +161,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._is_setup
         with self._wandb:
             self._run_training()
+        for callback in self._callbacks.values():
+            callback.train_end(self._completed_steps)
 
     def _run_training(self) -> None:
         self._prepare_training_state()
@@ -187,7 +192,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         interrupter = Interrupter(self._config.training.checkpoint.enabled())
         train_iterator = self._get_data_iterator(
-            PhaseType.training.value,
+            PhaseType.training,
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
@@ -196,6 +201,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # TODO: Synchronization is probably unnecessary.
         safe_barrier(self._distributed.world_group, "train begin")
+
+        for callback in self._callbacks.values():
+            callback.run_begin(self._completed_steps)
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         start_time = time.perf_counter()
@@ -227,6 +236,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     skipped_iters += 1
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
 
+                for callback in self._callbacks.values():
+                    callback.step_end(self._completed_steps, reduced_losses, update_successful, train_metrics)
                 # Logging.
                 metrics = {}
                 if is_logging:
@@ -243,7 +254,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        metrics_key = PhaseType.training.value
+                        metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
                             **{
@@ -391,7 +402,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         )
         # Mark the checkpoint as complete.
         if self._run.is_main_rank:
-            (checkpoint_directory / "ok").open("w")
+            (checkpoint_directory / "ok").touch()
             logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
 
             to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))
@@ -418,7 +429,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
-            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
+            self._completed_steps = metadata["schedules"][PhaseType.training]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
         # TODO: Move barrier, ok file to FastLLMModel

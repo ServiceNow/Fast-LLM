@@ -487,13 +487,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self, shard_names: tuple[str, ...], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for shard_name in shard_names:
-            shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
+            shard_split = self._shards[shard_name].split(self._get_stage_shard_sizes(shard_name), 0)
             for shard_index, ((stage_index, stage), shard) in enumerate(
                 zip(self._stages_on_device.items(), shard_split, strict=True)
             ):
                 if stage_index in self._stages_owned:
                     for name, tensor in stage._export_shard(
-                        shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
+                        shard.split(self._get_fsdp_shard_sizes(shard_name)[shard_index]), data_type=data_type
                     ):  # noqa
                         yield name, shard_name, tensor
 
@@ -508,8 +508,8 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         shard_index = self._stage_shard_indices[self._parameter_stages[parameter_name]]
         stage_shards = (
             self._shards[shard_name]
-            .split(self._stage_weight_shard_sizes, 0)[shard_index]
-            .split(self._fsdp_weight_shard_sizes[shard_index])
+            .split(self._get_stage_shard_sizes(shard_name), 0)[shard_index]
+            .split(self._get_fsdp_shard_sizes(shard_name)[shard_index])
         )
         return self.get_parameter_stage(parameter_name).import_state_tensor(parameter_name, stage_shards, tensor)
 

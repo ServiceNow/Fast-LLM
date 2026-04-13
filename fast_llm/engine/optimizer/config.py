@@ -17,6 +17,8 @@ class LearningRateStageType:
 
 @config_class()
 class LearningRateScheduleConfig(Config):
+    """Configuration for the learning rate schedule (warmup, decay style, and bounds)."""
+
     base: float = Field(default=0.0001, desc="Base learning rate for the optimizer.", hint=FieldHint.core)
     decay_style: str = Field(default="constant", desc="The learning rate decay formula.", hint=FieldHint.feature)
     decay_iterations: int | None = Field(
@@ -38,6 +40,8 @@ class LearningRateScheduleConfig(Config):
 
 @config_class()
 class GradientScalerConfig(Config):
+    """Configuration for loss scaling, either fixed (constant) or dynamic (for fp16 training)."""
+
     constant: float | None = Field(
         default=None,
         desc="Constant multiplier applied to the loss. Setting this disables dynamic scaling.",
@@ -72,6 +76,7 @@ class GradientScalerConfig(Config):
 
 @config_class()
 class OptimizerConfig(Config):
+    """Configuration for the AdamW optimizer: learning rate schedule, gradient scaling, and hyperparameters."""
 
     learning_rate: LearningRateScheduleConfig = Field(
         desc="A schedule for the learning rate.",

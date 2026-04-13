@@ -13,11 +13,14 @@ from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.data.document.language_model import LanguageModelDocument
 
 logger = logging.getLogger(__name__)
 
 
-class ShufflingType(str, enum.Enum):
+class ShufflingType(enum.StrEnum):
+    """Strategy for shuffling dataset samples across training epochs."""
+
     # Shuffle all epochs together. Not extendable.
     full = "full"
     # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
@@ -78,6 +81,13 @@ class SamplingConfig(SamplingConfigBase):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     predicted_tokens: int = Field(default=1)
+    token_cumsum_rate: int = Field(
+        default=10,
+        desc="Sampling interval for the token cumulative sum index."
+        " A smaller value reduces per-sample seek time at the cost of a larger index.",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0),
+    )
     cache_directory: pathlib.Path | None = Field(default=None)
     dataset_name: str = Field(default="dataset")
     world_size: int = Field(default=1)
@@ -107,6 +117,8 @@ class SamplingConfig(SamplingConfigBase):
 
 @config_class()
 class DatasetConfig[DocumentType: Document](Config):
+    """Abstract base configuration for all dataset types."""
+
     _abstract: typing.ClassVar[bool] = True
 
 
@@ -122,6 +134,8 @@ class SampledDatasetConfig[DocumentType: Document](DatasetConfig[DocumentType]):
 
 @config_class()
 class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    """Abstract configuration for datasets that can be built and then sampled."""
+
     def build(self) -> SamplableDataset[DocumentType]:
         raise NotImplementedError()
 
@@ -131,6 +145,8 @@ class SamplableDatasetConfig[DocumentType: Document](SampledDatasetConfig[Docume
 
 @config_class()
 class IndexedDatasetConfig[DocumentType: Document](SamplableDatasetConfig[DocumentType]):
+    """Abstract configuration for indexed datasets that support random access by index."""
+
     def build(self) -> "IndexedDataset[DocumentType]":
         raise NotImplementedError()
 
@@ -203,6 +219,8 @@ class DatasetSliceConfig[DocumentType: Document](SamplableDatasetConfig[Document
 
 @config_class(dynamic_type={SampledDatasetConfig: "blended"})
 class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[DocumentType]):
+    """Mixes multiple datasets together, sampling from each according to specified weights."""
+
     _abstract = False
     name: str = Field(
         default="blended",
@@ -249,3 +267,50 @@ class BlendedDatasetConfig[DocumentType: Document](SampledDatasetConfig[Document
             config,
             num_samples,
         )
+
+
+REDIS_DATA_STREAM = "fast_llm_streaming"
+REDIS_GROUP_NAME = "fast_llm_group"
+
+
+@config_class()
+class RedisConfig(Config):
+    """Configuration for connecting to a Redis server (host, port, timeout)."""
+
+    REDIS_FIELD: typing.ClassVar[str] = "data"
+    REDIS_FIELD_B: typing.ClassVar[bytes] = REDIS_FIELD.encode()
+    REDIS_GROUP_NAME: typing.ClassVar[str] = "fast_llm_group"
+    REDIS_GROUP_NAME_B: typing.ClassVar[bytes] = REDIS_GROUP_NAME.encode()
+
+    # TODO: Move elsewhere? (Also used in trainer) Get it from the trainer in sampling config?
+    host: str = Field(
+        default="localhost",
+        desc="Hostname or IP address of the Redis server.",
+        hint=FieldHint.core,
+    )
+
+    port: int = Field(
+        default=6379,
+        desc="Port number on which the Redis server is running.",
+        hint=FieldHint.core,
+    )
+    timeout: float = Field(default=600.0, desc="Timeout (seconds) for sending and receiving data.")
+
+    def get_client(self):
+        import redis
+
+        return redis.Redis(self.host, self.port)
+
+
+@config_class(dynamic_type={SampledDatasetConfig: "streaming"})
+class StreamingDatasetConfig[DocumentType: LanguageModelDocument](RedisConfig, SamplableDatasetConfig[DocumentType]):
+    """
+    Configuration for a streaming dataset that reads training data from a Redis stream.
+    """
+
+    _abstract = False
+
+    def build_and_sample(self, config: SamplingConfig, num_samples: int, seed: int) -> SampledDataset[DocumentType]:
+        from fast_llm.data.dataset.streaming import RedisStreamingDataset
+
+        return RedisStreamingDataset[StreamingDatasetConfig, DocumentType](self).sample(config, num_samples, seed)

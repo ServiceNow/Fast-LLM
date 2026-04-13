@@ -7,7 +7,7 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldOverride, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
@@ -92,6 +92,8 @@ class ModelConfigType(enum.StrEnum):
 
 @config_class()
 class CheckpointConfigBase(Config):
+    """Abstract base configuration for all checkpoint operations, holding the checkpoint format."""
+
     _abstract = True
     # Note: the `format` may be a str when configuring from file or cli.
     #   The actual class should be set through `setup` in a parent config validation.
@@ -117,6 +119,8 @@ class CheckpointConfigBase(Config):
 
 @config_class()
 class CheckpointStateConfigBase(CheckpointConfigBase):
+    """Abstract base configuration for checkpoint operations that include model weights and/or optimizer state."""
+
     _abstract = True
     # Defaults and descriptions are set in derived classes.
     model_weights: bool = Field(default=True, hint=FieldHint.feature)
@@ -125,6 +129,8 @@ class CheckpointStateConfigBase(CheckpointConfigBase):
 
 @config_class()
 class CheckpointSaveConfigBase(CheckpointConfigBase):
+    """Abstract base configuration for saving checkpoints, with file-size and dtype options."""
+
     _abstract = True
     parameters_per_file: int = Field(
         default=2**32,
@@ -141,9 +147,11 @@ class CheckpointSaveConfigBase(CheckpointConfigBase):
 
 @config_class()
 class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
+    """Configuration for saving model weights and/or optimizer state to a checkpoint."""
+
     _abstract = False
-    model_weights: bool = FieldUpdate(desc="Save the model weights.")
-    optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
+    model_weights: bool = FieldOverride(desc="Save the model weights.")
+    optimizer_state: bool = FieldOverride(desc="Save the optimizer state. Default: save if supported by the `format`.")
 
     def _validate(self) -> None:
         if self.optimizer_state is None and hasattr(self.format, "support_optimizer"):
@@ -157,6 +165,8 @@ class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateCon
 
 @config_class()
 class CheckpointPathConfigBase(CheckpointConfigBase):
+    """Abstract base configuration for checkpoint operations that require a filesystem path and optional timeout."""
+
     _abstract = True
     path: pathlib.Path | None = Field(
         default=None,
@@ -173,16 +183,22 @@ class CheckpointPathConfigBase(CheckpointConfigBase):
 
 @config_class()
 class CheckpointSaveMetadataConfig(CheckpointPathConfigBase):
+    """Configuration for saving checkpoint metadata (path and format) without weights or optimizer state."""
+
     _abstract = False
 
 
 @config_class()
 class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConfigBase):
+    """Full configuration for saving a checkpoint: path, format, weights, optimizer state, and file options."""
+
     _abstract = False
 
 
 @config_class()
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
+    """Configuration for loading checkpoint metadata, controlling which config sections are loaded."""
+
     _abstract = False
     # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
@@ -194,10 +210,12 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
 
 @config_class()
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
+    """Full configuration for loading a checkpoint: path, format, and which state to restore."""
+
     _abstract = False
 
-    model_weights: bool = FieldUpdate(desc="Load the model weights.")
-    optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
+    model_weights: bool = FieldOverride(desc="Load the model weights.")
+    optimizer_state: bool = FieldOverride(default=False, desc="Load the optimizer state.")
 
     def _validate(self) -> None:
         super()._validate()

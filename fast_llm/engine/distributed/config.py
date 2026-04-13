@@ -1,5 +1,6 @@
 import dataclasses
 import enum
+import functools
 import logging
 import os
 import typing
@@ -80,6 +81,16 @@ class DistributedDim:
     def __post_init__(self):
         self._is_setup = False
 
+    def __getstate__(self):
+        # Prevent process groups from being pickled, ex. in the data loader.
+        state = self.__dict__.copy()
+        if "_group" in state:
+            del state["_group"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     @property
     def group(self) -> "ProcessGroup|None":
         assert hasattr(self, "_group")
@@ -117,7 +128,9 @@ class DistributedDim:
             elif isinstance(global_ranks, range) and stride == global_ranks.stop - global_ranks.start:
                 global_ranks = range(start, start + size * stride, global_ranks.step)
             else:
-                global_ranks = [rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks]
+                global_ranks = tuple(
+                    rank0 + rank1 for rank1 in range(0, size * stride, stride) for rank0 in global_ranks
+                )
         Assert.eq(len(global_ranks), world_size)
         return DistributedDim(name=name, size=world_size, rank=rank, global_ranks=global_ranks)
 
@@ -160,11 +173,6 @@ class DistributedConfig(Config):
     pipeline_parallel: int = Field(
         default=1, desc="Pipeline parallelism group size.", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
     )
-    data_parallel: int = Field(init=False, desc="Data parallelism group size.", hint=FieldHint.derived)
-    model_parallel: int = Field(
-        init=False, desc="Model parallelism group size (tensor * pipeline).", hint=FieldHint.derived
-    )
-    num_nodes: int = Field(init=False, desc="Number of GPU nodes.", hint=FieldHint.derived)
     sequence_tensor_parallel: bool = Field(
         default=False, desc="Enable sequence tensor parallelism.", hint=FieldHint.performance
     )
@@ -174,7 +182,6 @@ class DistributedConfig(Config):
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
-    batch_data_parallel: int = Field(init=False, desc="Batch data parallelism group size.", hint=FieldHint.performance)
     world_size: int = Field(
         default=None,
         desc="Size of the world group, e.e., total number of GPUs. Typically provided by torchrun or equivalent through the `WORLD_SIZE` environment variable.",
@@ -186,23 +193,6 @@ class DistributedConfig(Config):
         desc="Rank of the local process. Typically provided by torchrun or equivalent through the `RANK` environment variable.",
         hint=FieldHint.expert,
         valid=check_field(Assert.geq, 0),
-    )
-    data_rank: int = Field(init=False, desc="Data-parallel rank of the local process.", hint=FieldHint.derived)
-    pipeline_rank: int = Field(init=False, desc="Pipeline-parallel rank of the local process.", hint=FieldHint.derived)
-    tensor_rank: int = Field(init=False, desc="Tensor-parallel rank of the local process.", hint=FieldHint.derived)
-    sequence_data_rank: int = Field(
-        init=False, desc="Sequence-data-parallel rank of the local process.", hint=FieldHint.derived
-    )
-    batch_data_rank: int = Field(
-        init=False, desc="Batch-data-parallel rank of the local process.", hint=FieldHint.derived
-    )
-    distributed_dims: dict[str, DistributedDim] = Field(
-        init=False, desc="The `DistributedDim` objects for the distributed dimensions.", hint=FieldHint.derived
-    )
-    local_rank: int = Field(
-        init=False,
-        desc="The rank of the process on the current node.",
-        hint=FieldHint.derived,
     )
     local_world_size: int = Field(
         default=None,
@@ -298,6 +288,112 @@ class DistributedConfig(Config):
         hint=FieldHint.derived,
     )
 
+    @functools.cached_property
+    def model_parallel(self) -> int:
+        return self.tensor_parallel * self.pipeline_parallel
+
+    @functools.cached_property
+    def data_parallel(self) -> int:
+        return div(self.world_size, self.model_parallel)
+
+    @functools.cached_property
+    def num_nodes(self) -> int:
+        return div(self.world_size, self.local_world_size)
+
+    @functools.cached_property
+    def local_rank(self) -> int:
+        return self.rank % self.local_world_size
+
+    @functools.cached_property
+    def tensor_rank(self) -> int:
+        return self.rank % self.tensor_parallel
+
+    @functools.cached_property
+    def data_rank(self) -> int:
+        if self.pipeline_first:
+            # Smaller models can be more demanding on pipeline parallel.
+            return (self.rank // self.tensor_parallel) // self.pipeline_parallel
+        else:
+            # Larger models are more demanding on data parallel.
+            return (self.rank // self.tensor_parallel) % self.data_parallel
+
+    @functools.cached_property
+    def pipeline_rank(self) -> int:
+        if self.pipeline_first:
+            return (self.rank // self.tensor_parallel) % self.pipeline_parallel
+        else:
+            return (self.rank // self.tensor_parallel) // self.data_parallel
+
+    @functools.cached_property
+    def batch_data_parallel(self) -> int:
+        return div(self.data_parallel, self.sequence_data_parallel)
+
+    @functools.cached_property
+    def sequence_data_rank(self) -> int:
+        return self.data_rank % self.sequence_data_parallel
+
+    @functools.cached_property
+    def batch_data_rank(self) -> int:
+        return self.data_rank // self.sequence_data_parallel
+
+    @functools.cached_property
+    def distributed_dims(self) -> dict[str, "DistributedDim"]:
+        if self.reference_config is not None:
+            return self.reference_config.distributed_dims
+        dims: dict[str, DistributedDim] = {}
+        tensor_stride = 1
+        sequence_data_stride = self.tensor_parallel * (self.pipeline_parallel if self.pipeline_first else 1)
+        batch_data_stride = sequence_data_stride * self.sequence_data_parallel
+        pipeline_stride = self.tensor_parallel * (1 if self.pipeline_first else self.data_parallel)
+        self._add_distributed_dim_from_sizes_and_strides(dims, DistributedDimNames.world, (self.world_size, 1))
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims,
+            DistributedDimNames.data,
+            (self.sequence_data_parallel, sequence_data_stride),
+            (self.batch_data_parallel, batch_data_stride),
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims, DistributedDimNames.pipeline, (self.pipeline_parallel, pipeline_stride)
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims, DistributedDimNames.tensor, (self.tensor_parallel, tensor_stride)
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims, DistributedDimNames.sequence_data, (self.sequence_data_parallel, sequence_data_stride)
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims, DistributedDimNames.batch_data, (self.batch_data_parallel, batch_data_stride)
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims,
+            DistributedDimNames.tensor_and_sequence_data,
+            (self.tensor_parallel, tensor_stride),
+            (self.sequence_data_parallel, sequence_data_stride),
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims,
+            DistributedDimNames.tensor_and_data,
+            (self.tensor_parallel, tensor_stride),
+            (self.sequence_data_parallel, sequence_data_stride),
+            (self.batch_data_parallel, batch_data_stride),
+        )
+        self._add_distributed_dim_from_sizes_and_strides(
+            dims,
+            DistributedDimNames.model_and_sequence_data,
+            (self.tensor_parallel, tensor_stride),
+            (
+                (self.pipeline_parallel, pipeline_stride)
+                if self.pipeline_first
+                else (self.sequence_data_parallel, sequence_data_stride)
+            ),
+            (
+                (self.sequence_data_parallel, sequence_data_stride)
+                if self.pipeline_first
+                else (self.pipeline_parallel, pipeline_stride)
+            ),
+        )
+        return dims
+
     def _validate(self) -> None:
         if self.world_size is None:
             self.world_size = self.default_world_size
@@ -305,112 +401,36 @@ class DistributedConfig(Config):
             self.rank = self.default_rank
         if self.local_world_size is None:
             self.local_world_size = self.default_local_world_size
-        self.model_parallel = self.tensor_parallel * self.pipeline_parallel
-        self.data_parallel = div(self.world_size, self.model_parallel)
-        self.num_nodes = div(self.world_size, self.local_world_size)
-        self.local_rank = self.rank % self.local_world_size
-        Assert.multiple(self.local_world_size, self.tensor_parallel)
-
-        if self.pipeline_first:
-            # Smaller models can be more demanding on pipeline parallel.
-            self.data_rank = (self.rank // self.tensor_parallel) // self.pipeline_parallel
-            self.pipeline_rank = (self.rank // self.tensor_parallel) % self.pipeline_parallel
-        else:
-            # Larger models are more demanding on data parallel.
-            self.data_rank = (self.rank // self.tensor_parallel) % self.data_parallel
-            self.pipeline_rank = (self.rank // self.tensor_parallel) // self.data_parallel
-        self.sequence_data_rank = self.data_rank % self.sequence_data_parallel
-        self.batch_data_parallel = div(self.data_parallel, self.sequence_data_parallel)
-        self.batch_data_rank = self.data_rank // self.sequence_data_parallel
-
-        self.tensor_rank = self.rank % self.tensor_parallel
         if self.tensor_parallel == 1 and self.sequence_tensor_parallel:
             self.sequence_tensor_parallel = False
-
         if self.reference_config is not None:
             self.reference_config.validate()
             if self.reference_config.reference_config is not None:
                 self.reference_config = self.reference_config.reference_config
             assert self.reference_config.reference_config is None
-            self.distributed_dims = self.reference_config.distributed_dims
-        else:
-            self.distributed_dims = {}
-
-            tensor_stride = 1
-            sequence_data_stride = self.tensor_parallel * (self.pipeline_parallel if self.pipeline_first else 1)
-            batch_data_stride = sequence_data_stride * self.sequence_data_parallel
-            pipeline_stride = self.tensor_parallel * (1 if self.pipeline_first else self.data_parallel)
-
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.world,
-                (self.world_size, 1),
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.data,
-                (self.sequence_data_parallel, sequence_data_stride),
-                (self.batch_data_parallel, batch_data_stride),
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.pipeline, (self.pipeline_parallel, pipeline_stride)
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.tensor, (self.tensor_parallel, tensor_stride)
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.sequence_data,
-                (self.sequence_data_parallel, sequence_data_stride),
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.batch_data, (self.batch_data_parallel, batch_data_stride)
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.tensor_and_sequence_data,
-                (self.tensor_parallel, tensor_stride),
-                (self.sequence_data_parallel, sequence_data_stride),
-            )
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.tensor_and_data,
-                (self.tensor_parallel, tensor_stride),
-                (self.sequence_data_parallel, sequence_data_stride),
-                (self.batch_data_parallel, batch_data_stride),
-            )
-
-            self._add_distributed_dim_from_sizes_and_strides(
-                DistributedDimNames.model_and_sequence_data,
-                (self.tensor_parallel, tensor_stride),
-                (
-                    (self.pipeline_parallel, pipeline_stride)
-                    if self.pipeline_first
-                    else (self.sequence_data_parallel, sequence_data_stride)
-                ),
-                (
-                    (self.sequence_data_parallel, sequence_data_stride)
-                    if self.pipeline_first
-                    else (self.pipeline_parallel, pipeline_stride)
-                ),
-            )
-
         super()._validate()
+        Assert.multiple(self.local_world_size, self.tensor_parallel)
         if self.reference_config is not None:
             self.compare(self.reference_config, ValueError)
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
 
-    def _add_distributed_dim_from_sizes_and_strides(self, name: str, *sizes_and_strides: tuple[int, int]) -> None:
-        self._add_distributed_dim(DistributedDim.from_sizes_and_strides(name, self.rank, *sizes_and_strides))
+    def _add_distributed_dim_from_sizes_and_strides(
+        self, dims: dict[str, DistributedDim], name: str, *sizes_and_strides: tuple[int, int]
+    ) -> None:
+        self._add_distributed_dim(dims, DistributedDim.from_sizes_and_strides(name, self.rank, *sizes_and_strides))
 
-    def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
+    def _add_distributed_dim(self, dims: dict[str, DistributedDim], distributed_dim: DistributedDim) -> None:
         Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
-
         try:
             distributed_dim.check_ranks_in_range(0, self.world_size)
         except:
             logger.info(str(self))
             raise
-        if distributed_dim.name in self.distributed_dims:
-            Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
+        if distributed_dim.name in dims:
+            Assert.eq(distributed_dim, dims[distributed_dim.name])
         else:
-            self.distributed_dims[distributed_dim.name] = distributed_dim
+            dims[distributed_dim.name] = distributed_dim
 
     def get_distributed_dim(self, name: str) -> DistributedDim:
         return self.distributed_dims[name]

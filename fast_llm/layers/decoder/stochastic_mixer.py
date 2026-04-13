@@ -162,8 +162,6 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         return self.mixers[mixer_name]._forward(input_, kwargs, losses, metrics)
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
-        for mixer in self.mixers.values():
-            mixer.get_preprocessing_config()
         return safe_merge_dicts(*(mixer.get_preprocessing_config() for mixer in self.mixers.values()))
 
     def _sample_allocation(self, num_layers: int, generator: torch.Generator) -> list[int]:
@@ -253,7 +251,7 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
 
         return int(expected_usage)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         """
         Merge loss definitions from all mixers with namespacing.
 
@@ -263,13 +261,11 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         """
         all_losses = []
         for mixer_name, mixer in self.mixers.items():
-            mixer_losses = mixer.get_loss_definitions(count=count)
+            mixer_losses = mixer.get_loss_definitions()
             # Namespace each loss with the mixer name to avoid conflicts
             for loss_def in mixer_losses:
                 namespaced_loss = LossDef(
                     name=f"{mixer_name}/{loss_def.name}",
-                    formatted_name=f"{mixer_name}/{loss_def.formatted_name}",
-                    count=loss_def.count,
                     dtype=loss_def.dtype,
                 )
                 all_losses.append(namespaced_loss)

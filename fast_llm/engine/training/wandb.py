@@ -19,14 +19,14 @@ class Wandb:
             # Wandb login from file
             api_key_path = os.environ.get("WANDB_API_KEY_PATH")
             if api_key_path:
-                os.environ["WANDB_API_KEY"] = pathlib.Path(api_key_path).open("r").read().strip()
+                os.environ["WANDB_API_KEY"] = pathlib.Path(api_key_path).read_text().strip()
             wandb_path = (
                 None
                 if self._run.experiment_directory is None
                 else self._run.experiment_directory / "wandb_config.yaml"
             )
             if wandb_path is not None and wandb_path.is_file():
-                wandb_config = yaml.safe_load(wandb_path.open("r"))
+                wandb_config = yaml.safe_load(wandb_path.read_text())
             else:
                 wandb_config = {
                     "id": wandb.sdk.lib.runid.generate_id(16),
@@ -38,7 +38,7 @@ class Wandb:
                     "resume": "allow",
                 }
                 if wandb_path is not None:
-                    yaml.safe_dump(wandb_config, wandb_path.open("w"))
+                    wandb_path.write_text(yaml.safe_dump(wandb_config))
             # TODO: Does wandb work with nested configs?
             self._wandb = wandb.init(config=experiment_config.to_dict(), **wandb_config)
         else:
@@ -53,8 +53,6 @@ class Wandb:
 
     def alert(self, title, text, level="INFO", wait=0.001) -> None:
         if self._wandb is not None and self._config.alert.post_alerts:
-            pass
-
             self._wandb.alert(  # noqa
                 title=title() if callable(title) else title,
                 text=f"[{self._config.project_name}/{self._run.experiment_name}, run {self._run.index}]"

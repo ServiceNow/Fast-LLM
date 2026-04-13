@@ -181,7 +181,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   });
 
   const auto byte_size = sizeof(int64_t);
-  return py::array(std::vector<int64_t>{token_cumsum.size()},
+  return py::array(std::vector<int64_t>{static_cast<int64_t>(token_cumsum.size())},
                    {byte_size},
                    token_cumsum_result,
                    free_when_done);

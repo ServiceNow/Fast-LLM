@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.data.dataset.memmap.abstract import MemmapReader, MemmapWriter
 from fast_llm.data.dataset.memmap.config import RangeReaderConfig
-from fast_llm.data.document.abstract import Document
 from fast_llm.data.document.range import RangeDocument
 from fast_llm.utils import Assert
 
@@ -25,7 +24,7 @@ class RangeReader[ConfigType: RangeReaderConfig](MemmapReader[ConfigType]):
             offset=self._ranges.nbytes,
         )
 
-    def get_document(self, index: int, begin: int, end: int) -> Document:
+    def get_document(self, index: int, begin: int, end: int) -> RangeDocument:
         sample_size = end - begin
         cropped_ranges = (
             (max(begin_ - begin, 0), min(end_ - begin, sample_size))

@@ -242,8 +242,11 @@ class VariableGradScaler(GradScaler):
 
 class ConstantGradScaler(VariableGradScaler):
     def load(self, state, validate=True) -> None:
-        if validate:
-            Assert.eq(self._scale, state["scale"])
+        if hasattr(self, "_scale"):
+            if validate:
+                Assert.eq(self._scale, state["scale"])
+        else:
+            self._set_scale(state["scale"])
         super().load(state, validate=validate)
 
     def _set_scale(self, value) -> None:
@@ -282,6 +285,7 @@ class DynamicGradScaler(VariableGradScaler):
 
     def load(self, state, validate=True) -> None:
         super().load(state, validate=validate)
+        self._set_scale(state["scale"])
         self._growth_tracker = state["growth"]
         self._hysteresis_tracker = state["hysteresis"]
 

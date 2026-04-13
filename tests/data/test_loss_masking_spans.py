@@ -11,13 +11,13 @@ from tests.data.test_preparator import COMMON_DATASET_LENGTH, COMMON_DATASET_TEX
 from tests.utils.dataset import get_test_dataset_with_loss_masking_spans
 from tests.utils.global_variables import TOKENIZER_NAME
 
-DATASET_WITH_SPAN_TOKENS = 45577
+DATASET_WITH_SPAN_TOKENS = 47782
 DATASET_WITH_SPAN_SAMPLES = {
-    27: [49152, 63, 82, 11, 27799, 49152],
-    30: [49152, 31, 85, 78, 27, 1448, 62, 43, 49152],
-    31: [49152, 60, 55, 80, 30, 85, 22, 18, 49152],
-    77: [49152, 73, 80, 85, 52, 22, 46, 5, 88, 78, 49152],
-    87: [49152, 52, 42536, 11, 71, 49152],
+    27: [50256, 63, 82, 11, 7456, 50256],
+    30: [50256, 31, 85, 78, 27, 8220, 62, 43, 50256],
+    31: [50256, 60, 55, 80, 30, 85, 22, 18, 50256],
+    77: [50256, 73, 80, 85, 52, 22, 46, 5, 88, 78, 50256],
+    87: [50256, 52, 48274, 11, 71, 50256],
 }
 HF_LOSS_MASKING_SPANS = {
     27: [[0, 1]],

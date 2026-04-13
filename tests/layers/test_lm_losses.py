@@ -13,8 +13,10 @@ from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
+from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
+from fast_llm.layers.language_model.loss.grpo import fused_grpo_loss_forward_backward
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
 from fast_llm.utils import Assert
@@ -43,6 +45,19 @@ def _get_lm_loss_inputs(
             # Probabilities need to be in full precision for accuracy.
             target = torch.softmax(target, -1, dtype=torch.float32)
     return logits, target, loss_mask
+
+
+def _get_grpo_loss_inputs(num_columns: int, loss_masking: bool, batch_shape: tuple[int], dtype):
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    advantages = torch.randn_like(target, dtype=torch.float32)
+    # We want some correlation between the old and new log probabilities for the test to be meaningful.
+    old_log_probabilities = (
+        torch.nn.functional.log_softmax(logits, dim=-1)
+        .gather(dim=-1, index=(target * (target >= 0) if loss_masking else target).unsqueeze(-1))
+        .squeeze(-1)
+        + torch.randn_like(target, dtype=torch.float32) / 2
+    )
+    return logits, target, advantages, old_log_probabilities
 
 
 def _compare_losses_and_grads(
@@ -106,8 +121,37 @@ def reference_dpo_loss(
     return -torch.nn.functional.logsigmoid(beta * (pi_logratios - ref_logratios)).mean()
 
 
-# _BATCH_SHAPES = ((64,), (16, 8))
-_BATCH_SHAPES = ((1,),)
+def reference_grpo_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    advantages: torch.Tensor,
+    old_log_probabilities: torch.Tensor,
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    logits_ = logits.float()
+
+    # Log probabilities.
+    loss_mask = labels >= 0
+    labels = labels * loss_mask
+    target_log_probabilities = (
+        torch.nn.functional.log_softmax(logits_ * logits_scale_factor, dim=-1)
+        .gather(dim=-1, index=labels.unsqueeze(-1))
+        .squeeze(-1)
+    )
+    probability_ratio = torch.exp(target_log_probabilities - old_log_probabilities)
+    loss = -torch.min(
+        probability_ratio * advantages,
+        torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantages,
+    )
+    # new_logprobs: sum of per-sequence mean log-probs
+    log_probs = torch.nn.functional.log_softmax(logits_, -1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+    new_logprobs = (log_probs * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
+    return (loss * loss_mask).sum() / loss_mask.sum(), new_logprobs
+
+
+_BATCH_SHAPES = ((64,), (16, 8))
 _LOSS_PARAMETERS = (
     (500, 1.0, 1.0, False, DataType.float32, None, False),  # Simple
     (256, 1.0, 1.0, False, DataType.float32, None, False),  # Power of 2
@@ -199,6 +243,65 @@ def _test_entropy_loss(
         threshold=1e-5 if target_format != TargetFormat.probabilities and data_type == DataType.float32 else 1e-4,
         group=group,
     )
+
+
+def _test_grpo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    divisor = max(num_labels, 1)
+    out_ref, grad_ref = loss_forward_backward(
+        grad_output,
+        lambda *args, **kwargs: reference_grpo_loss(*args, **kwargs)[0],
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        logits_scale_factor=logits_scale_factor,
+    )
+    if accumulate:
+        previous_grad = torch.randn_like(grad_ref)
+        grad_ref = grad_ref + previous_grad
+        local_previous_grad = split_op(previous_grad, group, -1).contiguous()
+    out_fused, grad_fused, new_logprobs_fused = fused_grpo_loss_forward_backward(
+        split_op(logits, group, -1),
+        target,
+        advantages,
+        old_log_probabilities,
+        grad_logits=local_previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
+        divisor=divisor,
+    )
+    _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+
+    if not triton_available:
+        return
+    out_triton, grad_triton, new_logprobs_triton = triton_grpo_loss_forward_backward(
+        split_op(logits, group, -1).contiguous(),
+        target,
+        advantages,
+        old_log_probabilities,
+        grad_logits=local_previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
 def _test_z_loss(
@@ -304,6 +407,20 @@ def test_z_loss(
     )
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_grpo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_grpo_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
 @pytest.mark.skip(reason="DPO loss is broken")
 def test_dpo_loss():
     logits = torch.normal(0, 1, (200, 100))
@@ -366,6 +483,21 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # GRPO
+            with test_context.subtest(base_path, f"grpo-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_grpo_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        block_size,
+                        accumulate,
+                        test_context.group,
+                    )
 
 
 @pytest.mark.slow
@@ -405,6 +537,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
             if target_format != TargetFormat.labels or entropy_loss_type != EntropyLossType.reverse_kl
         ),
         "z_loss",
+        "grpo",
     ),
 )
 def test_lm_loss_distributed(
