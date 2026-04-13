@@ -1,8 +1,9 @@
 import typing
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.functional.config import EntropyLossImplementation, EntropyLossType
+from fast_llm.functional.config import EntropyLossType
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
@@ -14,6 +15,7 @@ if typing.TYPE_CHECKING:
         LanguageModelDistillationLoss,
         LanguageModelLabelEntropyLoss,
     )
+    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
     from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
     from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
@@ -24,6 +26,8 @@ class LanguageModelLossKwargs(BlockKwargs):
     rejected_spans = "rejected_spans"
     advantages = "advantages"
     old_log_probabilities = "old_log_probabilities"
+    label_counts = "label_counts"
+    num_labels_in_batch = "num_labels_in_batch"
 
 
 @config_class(registry=True)
@@ -41,12 +45,13 @@ class LanguageModelLossConfig(Config):
         self,
         distributed_config: DistributedConfig,
         name: str,
-        prediction_distance: int = 0,
+        prediction_distance: int = 1,
         prediction_heads: int = 1,
         vocab_parallel: bool = False,
         num_splits: int = 1,
         logits_scale_factor: float = 1.0,
         weight: float = 1.0,
+        register_loss: bool = False,
     ):
         return self.loss_class(
             self,
@@ -58,6 +63,7 @@ class LanguageModelLossConfig(Config):
             num_splits=num_splits,
             logits_scale_factor=logits_scale_factor,
             weight=weight,
+            register_loss=register_loss,
         )
 
     @property
@@ -77,12 +83,18 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
     )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `label`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
 
     @property
     def loss_class(self) -> "type[LanguageModelLabelEntropyLoss]":
@@ -100,11 +112,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-    implementation: EntropyLossImplementation = Field(
-        default=EntropyLossImplementation.auto,
-        desc="Loss implementation.",
-        hint=FieldHint.performance,
-    )
     reference_model: str = Field(
         default="teacher",
         desc="Name of the reference model for knowledge distillation.",
@@ -116,6 +123,18 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
     )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        if "implementation" in default:
+            warnings.warn("`implementation` field is no longer supported for loss type `distillation`.")
+            del default["implementation"]
+        return super()._from_dict(default, strict)
 
     @property
     def loss_class(self) -> "type[LanguageModelDistillationLoss]":
@@ -161,8 +180,34 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
 
     _abstract: typing.ClassVar[bool] = False
 
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
     @property
     def loss_class(self) -> "type[LanguageModelZLoss]":
         from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
         return LanguageModelZLoss
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
+class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
+
+    _abstract: typing.ClassVar[bool] = False
+
+    epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
+    epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+    @property
+    def loss_class(self) -> "type[LanguageModelGRPOLoss]":
+        from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
+
+        return LanguageModelGRPOLoss

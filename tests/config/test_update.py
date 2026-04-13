@@ -6,27 +6,58 @@ from tests.config.common import ExampleNestedConfig
 
 TEST_CONFIGS = (
     (
-        # Empty config
+        # Empty config: updating nothing changes nothing.
         {},
         {},
         {},
         None,
     ),
     (
-        # Update unset field; don't update set field; update
+        # Flat fields: update adds new fields and overwrites shared fields; unrelated base fields survive.
         {"int_field": 4, "str_field": "text"},
         {"float_field": 3.0, "str_field": ""},
         {"int_field": 4, "float_field": 3.0, "str_field": ""},
         None,
     ),
     (
-        # Update/override nested field.
+        # Nested field: update merges sub-fields; override replaces the whole nested config.
         {"nested_field": {"int_field": 4, "str_field": "text"}},
         {"nested_field": {"float_field": 3.0, "str_field": ""}},
         {"nested_field": {"int_field": 4, "float_field": 3.0, "str_field": ""}},
         {"nested_field": {"float_field": 3.0, "str_field": ""}},
     ),
-    # TODO: Add more complex cases
+    (
+        # Top-level and nested fields together: top-level fields and nested sub-fields both update correctly.
+        {"int_field": 1, "nested_field": {"int_field": 4, "str_field": "text"}},
+        {"str_field": "new", "nested_field": {"float_field": 3.0}},
+        {
+            "int_field": 1,
+            "str_field": "new",
+            "nested_field": {"int_field": 4, "float_field": 3.0, "str_field": "text"},
+        },
+        {"int_field": 1, "str_field": "new", "nested_field": {"float_field": 3.0}},
+    ),
+    (
+        # Update from empty: base has no fields set; all update fields appear in result.
+        {},
+        {"int_field": 7, "str_field": "hello"},
+        {"int_field": 7, "str_field": "hello"},
+        None,
+    ),
+    (
+        # Update to empty: update has no fields set; base is preserved unchanged.
+        {"int_field": 7, "str_field": "hello"},
+        {},
+        {"int_field": 7, "str_field": "hello"},
+        None,
+    ),
+    (
+        # Collection fields: list and dict fields in update replace their counterparts in base.
+        {"int_field": 1, "list_field": [1, 2, 3]},
+        {"list_field": [4, 5]},
+        {"int_field": 1, "list_field": [4, 5]},
+        None,
+    ),
 )
 
 

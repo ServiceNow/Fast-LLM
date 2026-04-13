@@ -1,9 +1,14 @@
+import abc
 import logging
 import typing
 
+import torch
+
 from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
-from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.data.document.config import BatchPreprocessingConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointStateSaveConfigBase
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
@@ -29,6 +34,20 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
             metadata={} if extra_metadata is None else extra_metadata,
         )
         converter.save(config, fast_llm_metadata)
+
+    def iter_checkpoint(
+        self,
+        config: CheckpointStateSaveConfigBase,
+        extra_metadata: dict | None = None,
+    ) -> typing.Iterator[tuple[str, str, torch.Tensor]]:
+        # TODO: Handle barriers, ok file, mkdir, etc. here
+        converter = config.format.get_handler_class()(self)
+        fast_llm_metadata = self._config.to_metadata(
+            config,
+            shards=converter.get_shard_names(config),
+            metadata={} if extra_metadata is None else extra_metadata,
+        )
+        yield from converter.iter_tensors(config, fast_llm_metadata)
 
     def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         # TODO: Simplify branching.
@@ -76,6 +95,10 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
                 else:
                     model.initialize_weights()
         return model
+
+    @abc.abstractmethod
+    def get_preprocessing_config(self, phase: PhaseType, micro_batch_splits: int = 1) -> BatchPreprocessingConfig:
+        pass
 
     def initialize_weights(self, timeout: float | None = None) -> None:
         assert self._is_setup

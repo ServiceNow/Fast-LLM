@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _AUTO_VALIDATE = True
 
 MISSING = Tag("<MISSING>")
-DEFAULT = Tag("<DEFAULT>")
+# DEFAULT = Tag("<DEFAULT>")
 
 
 class NoAutoValidate:
@@ -40,17 +40,16 @@ class NoAutoValidate:
         _AUTO_VALIDATE = self._old_value
 
 
-class UpdateType(str, enum.Enum):
+class UpdateType(enum.StrEnum):
     # Override entries no matter what they contain.
     override = "override"
     # Override atomic entries and lists, but update dicts recursively by setting or overriding only the specified entries.
     update = "update"
 
 
-class FieldHint:
+class FieldHint(enum.StrEnum):
     """
     A label defined for each config field, to let the user and some methods know how important each field is.
-    * core:
     """
 
     core = "core"
@@ -127,7 +126,7 @@ class Field(dataclasses.Field):
         *,
         desc: str | None = None,
         doc: str | None = None,
-        hint: str = FieldHint.unknown,
+        hint: FieldHint = FieldHint.unknown,
         # Validation function on the field to satisfy.
         # Should raise an Exception in case of failure, and return the validated value.
         # Run before the default validation (type check).
@@ -164,9 +163,9 @@ class Field(dataclasses.Field):
         # self.auto_instantiate = auto_instantiate
 
 
-class FieldUpdate(dict):
+class FieldOverride(dict):
     """
-    Specify some entries in the field that should be updated from the base class.
+    Override some entries in the field inherited from the base class.
     Useful for changing the default or description in a derived class.
     Processed in `__init_subclass__`.
     """
@@ -180,20 +179,6 @@ def check_field(fn, *args, **kwargs):
 
     def valid(x):
         fn(x, *args, **kwargs)
-        return x
-
-    return valid
-
-
-def test_field(fn, *args, **kwargs):
-    """
-    Helper function to define a condition that a config field should satisfy,
-    in the form of a function that returns a boolean.
-    """
-
-    def valid(x):
-        if not fn(x, *args, **kwargs):
-            raise ValueError(fn, x, args, kwargs)
         return x
 
     return valid
@@ -243,9 +228,9 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class[
-    T: Config
-](registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
+def config_class[T: Config](
+    registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None
+) -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -425,12 +410,12 @@ class Config(metaclass=ConfigMeta):
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 value = getattr(self, name)
-                if isinstance(value, Tag):
-                    Assert.is_(value, DEFAULT)
-                    # Replace the value with its default.
-                    # We still need to validate because some fields have invalid defaults.
-                    # TODO: Improve (still needed with new config update format? Do earlier to allow implicit defaults?)
-                    value = field.default
+                # if isinstance(value, Tag):
+                #    Assert.is_(value, DEFAULT)
+                #    # Replace the value with its default.
+                #    # We still need to validate because some fields have invalid defaults.
+                #    # TODO: Improve (still needed with new config update format? Do earlier to allow implicit defaults?)
+                #    value = field.default
                 new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
                 setattr(self, name, new_value)
         for name in getattr(self, "_unknown_fields", {}):
@@ -536,7 +521,7 @@ class Config(metaclass=ConfigMeta):
             )
         else:
             if not issubclass(origin, tuple) and len(args) != 1:
-                FieldTypeError(f"Invalid array specification")
+                raise FieldTypeError(f"Invalid array specification")
             new_value = origin(
                 cls._validate_nested(value_, args[0], f"{name}[{i}]", None, errors, True)
                 for i, value_ in enumerate(value)
@@ -649,8 +634,8 @@ class Config(metaclass=ConfigMeta):
         all_fields: bool = False,
         serializable: bool = True,
     ) -> None:
-        if field is not None and (not field.init or field._field_type != dataclasses._FIELD) and not all_fields:
-            # Exclude class variables and derived fields unless requested explicitly.
+        if field is not None and (field._field_type != dataclasses._FIELD or (not field.init and not all_fields)):
+            # Always exclude class variables; exclude derived (init=False) fields unless all_fields=True.
             return
         explicit_field = (
             field is None
@@ -715,9 +700,7 @@ class Config(metaclass=ConfigMeta):
     def __repr__(self):
         return self.to_logs(log_fn=str)
 
-    def to_logs[
-        T
-    ](
+    def to_logs[T](
         self,
         verbose: int | None = FieldVerboseLevel.core,
         log_fn: typing.Callable[[str], T] = logger.info,
@@ -783,7 +766,15 @@ class Config(metaclass=ConfigMeta):
                     continue
                 # Check for nested configs to instantiate.
                 try:
-                    value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                    value = default.pop(name, MISSING)
+                    # Skip fields for which we want to use the provided default.
+                    # This will prevent unwanted config instantiation in union fields with non-config defaults,
+                    # For example optional config fields.
+                    if value is MISSING and (
+                        field.default is not dataclasses.MISSING or field.default_factory is not dataclasses.MISSING
+                    ):
+                        continue
+                    value = cls._from_dict_nested(value, field.type, strict)
                     if value is not MISSING:
                         out_arg_dict[name] = value
                 except FieldTypeError as e:
@@ -803,7 +794,6 @@ class Config(metaclass=ConfigMeta):
         if type_ in (typing.Any, types.NoneType):
             pass
         elif isinstance(type_, types.UnionType):
-            # Takes care of Optional too
             value = cls._from_dict_union(value, type_, strict)
         elif hasattr(type_, "__origin__"):
             # TODO: Improve error messages for nested entries.
@@ -860,7 +850,7 @@ class Config(metaclass=ConfigMeta):
                 new_value += value[len(value) - len(new_value) :]
         else:
             if not issubclass(origin, tuple) and len(args) != 1:
-                FieldTypeError(f"Invalid array specification")
+                raise FieldTypeError(f"Invalid array specification")
             new_value = origin(cls._from_dict_nested(value_, args[0], strict) for i, value_ in enumerate(value))
         return new_value
 
@@ -968,7 +958,7 @@ class Config(metaclass=ConfigMeta):
 
         for name in list(cls.__dict__):
             value = getattr(cls, name)
-            if isinstance(value, FieldUpdate):
+            if isinstance(value, FieldOverride):
                 # In case of multiple inheritance, the base class field may not appear in `cls.__dataclass_fields__`.
                 # so we iterate over superclasses following mro and use the first match.
                 base_class_field = None
@@ -1048,9 +1038,7 @@ class Configurable[ConfigType: Config](abc.ABC):
         return self._config
 
 
-def set_nested_dict_value[
-    KeyType, ValueType
-](
+def set_nested_dict_value[KeyType, ValueType](
     d: dict[KeyType, ValueType],
     keys: KeyType | tuple[KeyType, ...],
     value: ValueType,
@@ -1094,9 +1082,9 @@ def set_nested_dict_value[
         raise NotImplementedError(update_type)
 
 
-def get_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+def get_nested_dict_value[KeyType, ValueType](
+    d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]
+) -> ValueType:
     if isinstance(keys, tuple):
         for key in keys:
             d = d[key]
@@ -1105,9 +1093,9 @@ def get_nested_dict_value[
         return d[keys]
 
 
-def pop_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+def pop_nested_dict_value[KeyType, ValueType](
+    d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]
+) -> ValueType:
     if isinstance(keys, tuple):
         for key in keys[:-1]:
             d = d[key]

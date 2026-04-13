@@ -9,6 +9,7 @@ from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
+from fast_llm.utils import safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -34,38 +35,61 @@ class LanguageModel[ConfigType: LanguageModelConfig](BlockBase[ConfigType]):
             peft=peft,
         )
         self.embeddings: LanguageModelEmbedding = self._config.embeddings.get_layer(
-            distributed_config,
+            self._distributed_config,
             hidden_dim=self._hidden_dim,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.decoder = self._config.decoder.get_layer(
-            distributed_config,
+            self._distributed_config,
             self._hidden_dim,
             lr_scale=self._lr_scale,
             peft=self._peft,
+            **({"return_last_layer_input": True} if self._config.head.prediction_heads > 1 else {}),
         )
-        self.head = self._config.head.get_layer(
-            distributed_config,
+        self.head, self.multi_token_prediction = self._config.head.get_layer(
+            self._distributed_config,
             self._config.embeddings,
             hidden_dim=self._hidden_dim,
             lr_scale=self._lr_scale,
             peft=self._peft,
+            **(
+                {"block_config": self._config.decoder.last_block_config}
+                if self._config.head.prediction_heads > 1
+                else {}
+            ),
         )
 
     def get_layers(self) -> list[Layer]:
-        return self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
+        layers = self.embeddings.get_layers() + self.decoder.get_layers() + self.head.get_layers()
+        if self.multi_token_prediction is not None:
+            layers += self.multi_token_prediction.get_layers()
+        return layers
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            {"distributed": self._distributed_config},
+            self.embeddings.get_preprocessing_config(),
+            self.decoder.get_preprocessing_config(),
+            self.head.get_preprocessing_config(),
+            self.multi_token_prediction.get_preprocessing_config(),
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
         self.embeddings.preprocess(kwargs)
         self.decoder.preprocess(kwargs)
         self.head.preprocess(kwargs)
+        self.multi_token_prediction.preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder and head. TODO: Avoidable?
-        return (
-            self.embeddings.get_loss_definitions(count)
-            + self.decoder.get_loss_definitions(count)
-            + self.head.get_loss_definitions(count)
+        return sum(
+            (
+                self.embeddings.get_loss_definitions(),
+                self.decoder.get_loss_definitions(),
+                self.head.get_loss_definitions(),
+                self.multi_token_prediction.get_loss_definitions(),
+            ),
+            [],
         )

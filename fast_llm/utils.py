@@ -172,19 +172,21 @@ class Assert:
 
         # Make it work for lists and numpy arrays.
         x = torch.as_tensor(x)
-        for arg in args:
+        for i, arg in enumerate(args):
             arg = torch.as_tensor(arg)
-
-            Assert.eq(x.shape, arg.shape)
-            neq = x != arg
-            if neq.any().item():  # noqa
-                index = None if x.numel() == 1 else torch.where(neq)  # noqa
-                raise AssertionError(
-                    f"Tensors have {index[0].numel()} different entries out of "
-                    f"{x.numel()}: {x[index]} != {arg[index]} at index {torch.stack(index, -1)}" + ""
-                    if msg is None
-                    else f"| {msg}"
-                )
+            try:
+                Assert.eq(x.shape, arg.shape)
+                neq = x != arg
+                if neq.any().item():  # noqa
+                    index = None if x.numel() == 1 else torch.where(neq)  # noqa
+                    raise AssertionError(
+                        f"Tensors have {index[0].numel()} different entries out of "
+                        f"{x.numel()}: {x[index]} != {arg[index]} at index {torch.stack(index, -1)}" + ""
+                        if msg is None
+                        else f"| {msg}"
+                    )
+            except AssertionError as e:
+                raise AssertionError(f"[{i}] {x} != {arg}: {e}") from e
 
     @staticmethod
     def all_different(x, y):
@@ -261,9 +263,9 @@ class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
         return super().__getitem__(key)()
 
 
-def log[
-    T
-](*message: typing.Any, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
+def log[T](
+    *message: typing.Any, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", "
+) -> T:
     message = join.join([str(m() if callable(m) else m) for m in message])
     logged = log_fn(message)
     if isinstance(logged, BaseException):

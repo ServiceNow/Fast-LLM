@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedDim
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
     input_parallel_linear_autograd,
     input_parallel_linear_backward,
@@ -15,6 +14,7 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 

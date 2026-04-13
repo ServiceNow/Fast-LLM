@@ -35,7 +35,7 @@ def set_testing_global_variables():
 # TODO: Fixtures
 TOKENIZER_PATH = SHARED_RESULT_PATH / "tokenizer"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
-TOKENIZER_NAME = "bigcode/santacoder"
+TOKENIZER_NAME = "gpt2"
 
 DATASET_CACHE = SHARED_RESULT_PATH / "dataset"
 

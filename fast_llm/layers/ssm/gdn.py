@@ -2,8 +2,6 @@ import logging
 import typing
 
 import torch
-import torch.nn.functional as F
-from einops import rearrange
 
 from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
@@ -11,8 +9,6 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import MixerKwargs
-from fast_llm.layers.attention.preprocessing import preprocess_for_varlen
-from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig
@@ -41,84 +37,176 @@ def _l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
     return x * torch.rsqrt((x * x).sum(dim=dim, keepdim=True) + eps)
 
 
-def torch_chunk_gated_delta_rule(
-    query,
-    key,
-    value,
-    g,
-    beta,
-    chunk_size=64,
-    initial_state=None,
-    output_final_state=False,
-    use_qk_l2norm_in_kernel=False,
-):
-    initial_dtype = query.dtype
+@torch.compile
+def _torch_chunk_gated_delta_rule_single(
+    query: torch.Tensor,  # batch, sequence, heads, key_head_dim
+    key: torch.Tensor,  # batch, sequence, heads, key_head_dim
+    value: torch.Tensor,  # batch, sequence, heads, value_head_dim
+    g: torch.Tensor,  # batch, sequence, heads (log decay rates)
+    beta: torch.Tensor,  # batch, sequence, heads (write gate strengths)
+    chunk_size: int = 64,
+    initial_state: torch.Tensor | None = None,  # batch, heads, key_head_dim, value_head_dim
+    output_final_state: bool = False,
+    use_qk_l2norm_in_kernel: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    input_dtype = query.dtype
+
     if use_qk_l2norm_in_kernel:
         query = _l2norm(query, dim=-1, eps=1e-6)
         key = _l2norm(key, dim=-1, eps=1e-6)
+
+    # Transpose to head-first layout and upcast for numerical stability.
+    # batch, sequence, heads, dim -> batch, heads, sequence, dim
     query, key, value, beta, g = (
         x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
     )
 
-    batch_size, num_heads, sequence_length, k_head_dim = key.shape
-    v_head_dim = value.shape[-1]
+    batch_size, num_heads, sequence_length, key_head_dim = key.shape
+    value_head_dim = value.shape[-1]
+
+    # Pad sequence length to a multiple of chunk_size.
     pad_size = (chunk_size - sequence_length % chunk_size) % chunk_size
-    query = F.pad(query, (0, 0, 0, pad_size))
-    key = F.pad(key, (0, 0, 0, pad_size))
-    value = F.pad(value, (0, 0, 0, pad_size))
-    beta = F.pad(beta, (0, pad_size))
-    g = F.pad(g, (0, pad_size))
-    total_sequence_length = sequence_length + pad_size
-    scale = 1 / (query.shape[-1] ** 0.5)
-    query = query * scale
+    query = torch.nn.functional.pad(query, (0, 0, 0, pad_size))
+    key = torch.nn.functional.pad(key, (0, 0, 0, pad_size))
+    value = torch.nn.functional.pad(value, (0, 0, 0, pad_size))
+    beta = torch.nn.functional.pad(beta, (0, pad_size))
+    g = torch.nn.functional.pad(g, (0, pad_size))
+    padded_sequence_length = sequence_length + pad_size
+    num_chunks = padded_sequence_length // chunk_size
 
-    v_beta = value * beta.unsqueeze(-1)
-    k_beta = key * beta.unsqueeze(-1)
-    # reshape to chunks
-    query, key, value, k_beta, v_beta = (
-        x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)
+    query = query * (key_head_dim**-0.5)
+
+    # Beta-weighted keys and values for the delta rule write operations.
+    key_beta = key * beta.unsqueeze(-1)  # batch, heads, sequence, key_head_dim
+    value_beta = value * beta.unsqueeze(-1)  # batch, heads, sequence, value_head_dim
+
+    # Reshape into chunks: batch, heads, num_chunks, chunk_size, dim
+    query, key, value, key_beta, value_beta = (
+        x.reshape(batch_size, num_heads, num_chunks, chunk_size, x.shape[-1])
+        for x in (query, key, value, key_beta, value_beta)
     )
-    g = g.reshape(g.shape[0], g.shape[1], -1, chunk_size)
-    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
+    g = g.reshape(batch_size, num_heads, num_chunks, chunk_size)
 
-    # chunk decay
-    g = g.cumsum(dim=-1)
-    decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().float()).tril()
-    attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    for i in range(1, chunk_size):
-        row = attn[..., i, :i].clone()
-        sub = attn[..., :i, :i].clone()
-        attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
-    attn = attn + torch.eye(chunk_size, dtype=attn.dtype, device=attn.device)
-    value = attn @ v_beta
-    k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
-    last_recurrent_state = (
-        torch.zeros(batch_size, num_heads, k_head_dim, v_head_dim).to(value)
-        if initial_state is None
-        else initial_state.to(value)
+    # Cumulative sum of log-decay rates within each chunk.
+    # log_decay_cumsum[..., t] = sum_{s=0}^{t} g[s]
+    log_decay_cumsum = g.cumsum(dim=-1)  # batch, heads, num_chunks, chunk_size
+
+    # Intra-chunk decay matrix: entry [t, s] = exp(log_decay_cumsum[t] - log_decay_cumsum[s]) for t >= s.
+    intra_chunk_decay = (log_decay_cumsum.unsqueeze(-1) - log_decay_cumsum.unsqueeze(-2)).tril().exp()
+    # batch, heads, num_chunks, chunk_size, chunk_size
+
+    # --- Intra-chunk delta rule transformation ---
+    # Build the triangular transformation matrix that encodes how prior writes within a chunk
+    # are corrected by later writes (the delta rule update).
+    # Initial: T[t, s] = -(key_beta[t] · key[s]) * decay[t, s], strictly lower-triangular.
+    upper_triangular_mask = torch.triu(
+        torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0
     )
-    core_attn_out = torch.zeros_like(value)
-    mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
+    intra_chunk_transform = -(key_beta @ key.transpose(-1, -2) * intra_chunk_decay).masked_fill(
+        upper_triangular_mask, 0
+    )
+    # Iteratively apply the delta rule to build up the full transformation.
+    for chunk_pos in range(1, chunk_size):
+        row = intra_chunk_transform[..., chunk_pos, :chunk_pos].clone()
+        above = intra_chunk_transform[..., :chunk_pos, :chunk_pos].clone()
+        intra_chunk_transform[..., chunk_pos, :chunk_pos] = row + (row.unsqueeze(-1) * above).sum(-2)
+    intra_chunk_transform = intra_chunk_transform + torch.eye(
+        chunk_size, dtype=intra_chunk_transform.dtype, device=query.device
+    )
 
-    # for each chunk
-    for i in range(0, total_sequence_length // chunk_size):
-        q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
-        attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
-        v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
-        v_new = v_i - v_prime
-        attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-        core_attn_out[:, :, i] = attn_inter + attn @ v_new
-        last_recurrent_state = (
-            last_recurrent_state * g[:, :, i, -1, None, None].exp()
-            + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+    # Apply the transformation to get: corrected intra-chunk values and keys scaled by cumulative decay.
+    intra_chunk_value = intra_chunk_transform @ value_beta
+    # batch, heads, num_chunks, chunk_size, value_head_dim
+    key_cumulative_decay = intra_chunk_transform @ (key_beta * log_decay_cumsum.exp().unsqueeze(-1))
+    # batch, heads, num_chunks, chunk_size, key_head_dim
+
+    # --- Recurrent loop over chunks ---
+    if initial_state is None:
+        recurrent_state = torch.zeros(
+            batch_size, num_heads, key_head_dim, value_head_dim, device=query.device, dtype=query.dtype
+        )
+    else:
+        recurrent_state = initial_state.to(query)
+    output = torch.zeros_like(intra_chunk_value)
+    causal_mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
+
+    for chunk_index in range(num_chunks):
+        q = query[:, :, chunk_index]  # batch, heads, chunk_size, key_head_dim
+        k = key[:, :, chunk_index]  # batch, heads, chunk_size, key_head_dim
+        v = intra_chunk_value[:, :, chunk_index]  # batch, heads, chunk_size, value_head_dim
+        log_decay = log_decay_cumsum[:, :, chunk_index]  # batch, heads, chunk_size
+
+        # Intra-chunk causal attention weighted by decay.
+        intra_chunk_attn = (q @ k.transpose(-1, -2) * intra_chunk_decay[:, :, chunk_index]).masked_fill_(
+            causal_mask, 0
+        )  # batch, heads, chunk_size, chunk_size
+
+        # Delta rule correction: subtract the recurrent state's contribution from the values.
+        state_contribution = key_cumulative_decay[:, :, chunk_index] @ recurrent_state
+        corrected_value = v - state_contribution  # batch, heads, chunk_size, value_head_dim
+
+        # Combine cross-chunk output (from recurrent state) and intra-chunk output.
+        cross_chunk_output = (q * log_decay.exp().unsqueeze(-1)) @ recurrent_state
+        output[:, :, chunk_index] = cross_chunk_output + intra_chunk_attn @ corrected_value
+
+        # Update recurrent state: decay existing state and add new writes from this chunk.
+        last_log_decay = log_decay[:, :, -1]  # batch, heads
+        recurrent_state = (
+            recurrent_state * last_log_decay.exp()[..., None, None]
+            + (k * (last_log_decay.unsqueeze(-1) - log_decay).exp().unsqueeze(-1)).transpose(-1, -2) @ corrected_value
         )
 
     if not output_final_state:
-        last_recurrent_state = None
-    core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
-    core_attn_out = core_attn_out[:, :, :sequence_length]
-    core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
-    return core_attn_out, last_recurrent_state
+        recurrent_state = None
+
+    # Restore original layout: batch, sequence, heads, value_head_dim
+    output = output.reshape(batch_size, num_heads, padded_sequence_length, value_head_dim)
+    output = output[:, :, :sequence_length]
+    output = output.transpose(1, 2).contiguous().to(input_dtype)
+
+    return output, recurrent_state
+
+
+def torch_chunk_gated_delta_rule(
+    query: torch.Tensor,  # batch, sequence, heads, key_head_dim
+    key: torch.Tensor,  # batch, sequence, heads, key_head_dim
+    value: torch.Tensor,  # batch, sequence, heads, value_head_dim
+    g: torch.Tensor,  # batch, sequence, heads (log decay rates)
+    beta: torch.Tensor,  # batch, sequence, heads (write gate strengths)
+    chunk_size: int = 64,
+    initial_state: torch.Tensor | None = None,  # batch, heads, key_head_dim, value_head_dim
+    output_final_state: bool = False,
+    use_qk_l2norm_in_kernel: bool = False,
+    cu_seqlens: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    if cu_seqlens is None:
+        return _torch_chunk_gated_delta_rule_single(
+            query,
+            key,
+            value,
+            g,
+            beta,
+            chunk_size=chunk_size,
+            initial_state=initial_state,
+            output_final_state=output_final_state,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+        )
+    # Process each document independently and concatenate results.
+    # Inputs have batch=1 with documents packed along the sequence dimension.
+    sequence_boundaries = cu_seqlens.tolist()
+    outputs = []
+    for seq_start, seq_end in zip(sequence_boundaries, sequence_boundaries[1:]):
+        out, _ = _torch_chunk_gated_delta_rule_single(
+            query[:, seq_start:seq_end],
+            key[:, seq_start:seq_end],
+            value[:, seq_start:seq_end],
+            g[:, seq_start:seq_end],
+            beta[:, seq_start:seq_end],
+            chunk_size=chunk_size,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+        )
+        outputs.append(out)
+    return torch.cat(outputs, dim=1), None
 
 
 class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
@@ -168,15 +256,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
 
         z_dim = CompositeTensorDim("gdn_z", (self._value_heads_dim, self._value_head_dim))
         qkvz_dim = ConcatenatedTensorDim("gdn_qkvz", (query_dim, key_dim, value_dim, z_dim))
-        # for Qwen's layour use soemthing like this instead:
-        # n_vheads_per_k_head = self._config.value_heads // self._config.key_heads
-        # head_size = 2 * self._config.key_head_dim + 2 * self._config.value_head_dim * n_vheads_per_k_head
-        # n_heads = self._config.key_heads
-        # qkvz_dim = TensorDim(e
-        #     "gdn_qkvz",
-        #     n_heads * head_size,
-        #     self._parallel_dim if n_heads > 1 else None,
-        # )
         ba_dim = ConcatenatedTensorDim(
             "gdn_ba",
             (
@@ -184,13 +263,6 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
                 CompositeTensorDim("gdn_alpha", (self._value_heads_dim,)),
             ),
         )
-        # for Qwen's layour use something like this instead:
-        # ba_dim = TensorDim(
-        #     "gdn_ba",
-        #     2 * self._config.value_heads,
-        #     self._parallel_dim if 2 * self._config.value_heads > 1 else None,
-        # )
-
         qkv_channels_dim = ConcatenatedTensorDim("gdn_qkv", (query_dim, key_dim, value_dim))
 
         self.in_proj_qkvz = self._config.qkv_projection_layer.get_layer(
@@ -245,43 +317,13 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
             self._value_head_dim, lr_scale=self._lr_scale, peft=self._peft
         )
 
-        if _fast_gdn_available:
+        if _fast_gdn_available and distributed_config.use_cuda:
             self.chunk_gated_delta_rule = chunk_gated_delta_rule
         else:
             logger.warning(
                 "Fast implementation for GatedDeltaNet is not available. Please ensure that 'fla' is properly installed."
             )
             self.chunk_gated_delta_rule = torch_chunk_gated_delta_rule
-
-        if not _causal_conv1d_available:
-            raise RuntimeError("Gated delta net requires `causal_conv1d`.")
-
-    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-        """
-        Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
-        Replaces fix_query_key_value_ordering from Qwen due to layout differences.
-        """
-
-        local_qkv_sizes = (
-            self._local_key_heads * self._config.key_head_dim,
-            self._local_key_heads * self._config.key_head_dim,
-            self._local_value_heads * self._config.value_head_dim,
-            self._local_value_heads * self._config.value_head_dim,
-        )
-        query, key, value, z = torch.split(mixed_qkvz, local_qkv_sizes, dim=-1)
-        query = query.reshape(*query.shape[:-1], self._local_key_heads, self._config.key_head_dim)
-        key = key.reshape(*key.shape[:-1], self._local_key_heads, self._config.key_head_dim)
-        value = value.reshape(*value.shape[:-1], self._local_value_heads, self._config.value_head_dim)
-        z = z.reshape(*z.shape[:-1], self._local_value_heads, self._config.value_head_dim)
-
-        beta, alpha = torch.split(
-            mixed_ba,
-            (self._local_value_heads, self._local_value_heads),
-            dim=-1,
-        )
-        beta = beta.reshape(*beta.shape[:-1], self._local_value_heads)
-        alpha = alpha.reshape(*alpha.shape[:-1], self._local_value_heads)
-        return query, key, value, z, beta, alpha
 
     def _forward(
         self,
@@ -301,89 +343,76 @@ class GatedDeltaNet[ConfigType: GatedDeltaNetConfig](BlockWithBias[ConfigType]):
         -
         """
 
-        sequence_first = kwargs[BlockKwargs.sequence_first]
         # in sequence parallel TP the input here is already scattered across sequence dimension
-        # TODO: fuse soome of the reshapes into rearranges
+        # TODO: fuse some of the reshapes into rearranges
         hidden_states = input_
 
+        # TODO: Merge qkvz and ba?
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)  # bs/seq x seq_len/bs x (qkvz)
         projected_states_ba = self.in_proj_ba(hidden_states)  # bs/seq x seq_len/bs x (b a)
-        if sequence_first:
-            projected_states_qkvz = projected_states_qkvz.transpose(0, 1)
-            projected_states_ba = projected_states_ba.transpose(0, 1)
 
-        batch_size, sequence_length = projected_states_qkvz.shape[:2]
-
-        # note: to support var len training (packing) we need to flatten hidden states to batch_size = 1
-        # this is does not seem to be required by causal_conv1d_fn, but it it required by chunked_gdn_rule: https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/ops/gated_delta_rule/chunk.py#L299
-        # similarly to kimi linear and to SHortCOnv from fla, we pass it flattened tro conv_1d as well, i.e. see https://github.com/fla-org/flash-linear-attention/blob/71260ecd573cfaaa94305b726465143199e99734/fla/modules/convolution.py#L914
-        query, key, value, z, beta, alpha = self.fix_query_key_value_ordering(
-            projected_states_qkvz, projected_states_ba
+        query_key_value, z = torch.split(
+            projected_states_qkvz,
+            [
+                2 * self._local_key_heads * self._config.key_head_dim
+                + self._local_value_heads * self._config.value_head_dim,
+                self._local_value_heads * self._config.value_head_dim,
+            ],
+            dim=-1,
         )
-        query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
 
-        mixed_qkv = torch.cat((query, key, value), dim=-1)
-        mixed_qkv = rearrange(mixed_qkv, "b s ... -> (b s) ...").unsqueeze(0)  # 1 s d
-        mixed_qkv = rearrange(mixed_qkv, "b t d -> b d t")  # mixed_qkv.transpose(1, 2)
-        # conv func. gets sequence dim as last dim, see https://github.com/Dao-AILab/causal-conv1d/blob/22a4577d8ace9d5703daea91a7fb56695492152b/causal_conv1d/causal_conv1d_interface.py#L110
-        mixed_qkv = self.convolution(mixed_qkv, seq_idx=kwargs[MixerKwargs.seq_idx].unsqueeze(0))
-        mixed_qkv = rearrange(mixed_qkv, "b d t -> b t d")  # mixed_qkv.transpose(1, 2)
+        # Move sequence dim to last so the convolution acts on it, add pretend batch dimension.
+        # sequence, qkv_total -> 1, qkv_total, sequence
+        query_key_value = query_key_value.unsqueeze(0).transpose(1, 2)
+        query_key_value = self.convolution(
+            query_key_value,
+            document_index=kwargs[MixerKwargs.document_index_q].unsqueeze(0),
+            lengths=kwargs[MixerKwargs.lengths],
+        )
+        # 1, qkv_total, sequence -> 1, sequence, qkv_total
+        query_key_value = query_key_value.transpose(1, 2)
         query, key, value = torch.split(
-            mixed_qkv,
-            (
+            query_key_value,
+            [
                 self._local_key_heads * self._config.key_head_dim,
                 self._local_key_heads * self._config.key_head_dim,
                 self._local_value_heads * self._config.value_head_dim,
-            ),
+            ],
             dim=-1,
         )
-        query = query.reshape(query.shape[0], query.shape[1], -1, self._config.key_head_dim)
-        key = key.reshape(key.shape[0], key.shape[1], -1, self._config.key_head_dim)
-        value = value.reshape(value.shape[0], value.shape[1], -1, self._config.value_head_dim)
 
-        beta = beta.sigmoid()
-        g = -self.A_log.float().exp() * F.softplus(alpha.float() + self.dt_bias)
-
-        beta = rearrange(beta, "b s ... -> (b s) ...").unsqueeze(0)
-        g = rearrange(g, "b s ... -> (b s) ...").unsqueeze(0)
+        # 1, sequence, heads, head_dim
+        query = query.unflatten(-1, (self._local_key_heads, self._config.key_head_dim))
+        key = key.unflatten(-1, (self._local_key_heads, self._config.key_head_dim))
+        value = value.unflatten(-1, (self._local_value_heads, self._config.value_head_dim))
 
         if self._value_heads_per_key > 1:
             query = query.repeat_interleave(self._value_heads_per_key, dim=2)
             key = key.repeat_interleave(self._value_heads_per_key, dim=2)
 
-        core_attn_out, _ = self.chunk_gated_delta_rule(
+        beta, alpha = torch.split(projected_states_ba, [self._local_value_heads, self._local_value_heads], dim=-1)
+
+        out, _ = self.chunk_gated_delta_rule(
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            g=self._calculate_g(alpha).unsqueeze(0),
+            beta=beta.sigmoid().unsqueeze(0),
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
             cu_seqlens=kwargs[MixerKwargs.cu_seqlens_q],
         )
+        out = out.squeeze(0)
+        out = self.norm(out, z.reshape_as(out))
+        return self.out_proj(out.flatten(-2))
 
-        z_shape_og = z.shape
-        core_attn_out = rearrange(core_attn_out.squeeze(0), "(b s) ... -> b s ...", b=batch_size, s=sequence_length)
+    @torch.compile
+    def _calculate_g(self, alpha: torch.Tensor) -> torch.Tensor:
+        return -self.A_log.float().exp() * torch.nn.functional.softplus(alpha.float() + self.dt_bias)
 
-        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
-        z = z.reshape(-1, z.shape[-1])
-        core_attn_out = self.norm(core_attn_out, z)
-        core_attn_out = core_attn_out.reshape(z_shape_og)
-        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
-        if sequence_first:
-            core_attn_out = core_attn_out.transpose(0, 1)
-        output = self.out_proj(core_attn_out)
-
-        return output
-
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        preprocess_for_varlen(
-            kwargs,
-            kwargs[MixerKwargs.device] if MixerKwargs.device in kwargs else self._distributed.device,
-            return_cu_seqlens=True,
-            return_seq_idx=True,
-        )
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"return_cumulative_sequence_lengths": True, "return_document_index": True}
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         raise NotImplementedError()

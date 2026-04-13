@@ -12,7 +12,7 @@ Fast-LLM models support `generate` and `forward` operations through Hugging Face
 
 ---
 
-### 🔧 Generating Text from a Fast-LLM Model
+## 🔧 Generating Text from a Fast-LLM Model
 
 Below is a step-by-step example of how to generate text using a Fast-LLM model checkpoint from Hugging Face Hub.
 
@@ -37,8 +37,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_path)
 
 # Optional: updates to Fast-LLM config before loading the model
 updates = {
-    ("base_model", "transformer", "use_flash_attention"): True,
-    ("distributed", "training_dtype"): "bf16"
+    ("base_model", "decoder", "block", "mixer", "use_flash_attention"): True,
+    ("distributed", "compute_dtype"): "bf16"
 }
 
 # Load the model from the checkpoint with the given configuration

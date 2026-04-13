@@ -4,7 +4,7 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
@@ -73,8 +73,9 @@ class TensorLogsConfig(Config):
         default=8,
         desc="Maximum number of tensor values to print for each tensor when posting tensor logs to stdout.",
         hint=FieldHint.logging,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+        valid=check_field(Assert.gt, 0),
     )
+    full_tensors: bool = Field(default=False, desc="Save and/or print entire tensors.")
 
 
 class TensorLogs:

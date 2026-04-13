@@ -5,7 +5,6 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
 from fast_llm.functional.linear import (
     input_parallel_linear_forward,
@@ -14,7 +13,7 @@ from fast_llm.functional.linear import (
     output_parallel_linear_forward,
     update_linear_gradients,
 )
-from fast_llm.functional.triton import tl, tl_constexpr, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton_jit
 from fast_llm.functional.triton.sparse_copy import (
     SparseMap,
     copy_dense_to_sparse_backward,
@@ -23,6 +22,7 @@ from fast_llm.functional.triton.sparse_copy import (
     copy_sparse_to_dense_forward,
 )
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
@@ -37,7 +37,7 @@ def triton_mlp_activation_forward_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)
-    columns = tl.program_id(1) * block_size + tl.arange(0, block_size)
+    columns = tl.program_id(1) * block_size + tl_arange(0, block_size)
 
     output_offsets = n_cols * row_idx + columns
     input_offsets = 2 * n_cols * row_idx + columns if gated else output_offsets
@@ -85,7 +85,7 @@ def triton_mlp_activation_backward_kernel(
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)
-    columns = tl.program_id(1) * block_size + tl.arange(0, block_size)
+    columns = tl.program_id(1) * block_size + tl_arange(0, block_size)
 
     output_offsets = n_cols * row_idx + columns
     input_offsets = 2 * n_cols * row_idx + columns if gated else output_offsets
@@ -156,7 +156,7 @@ def triton_mlp_activation_forward(
         input_,
         output,
         gated=gated,  # noqa
-        activation_type=activation_type.value,  # noqa
+        activation_type=activation_type,  # noqa
         n_cols=n_cols,  # noqa
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     )
@@ -219,6 +219,7 @@ def mlp_forward(
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
     transposed_layer_2_weight: bool = False,
     sparse_map: SparseMap | None = None,
+    use_triton: bool | None = None,
 ) -> tuple[torch.Tensor, list[typing.Any] | None]:
     # Sparse copy
     input_shape = input_.shape
@@ -235,7 +236,7 @@ def mlp_forward(
         input_ = None
 
     # Activation
-    if TritonConfig.TRITON_ENABLED and intermediate_1.device.type == "cuda":
+    if TritonConfig.enabled(intermediate_1.device, use_triton):
         intermediate_2, _ = triton_mlp_activation_forward(intermediate_1, gated, activation_type)
     else:
         do_grad = training and not recompute_level.recompute_activation
@@ -287,6 +288,7 @@ def mlp_forward(
             transposed_layer_2_weight,
             sparse_map,
             input_shape,
+            use_triton,
         ]
         if training
         else None
@@ -313,6 +315,7 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
         transposed_layer_2_weight,
         sparse_map,
         input_shape,
+        use_triton,
     ) = context
     context.clear()
 
@@ -344,7 +347,7 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
         )[0]
 
     # Activation recomputation and/or backward
-    if TritonConfig.TRITON_ENABLED and grad_output.device.type == "cuda":
+    if TritonConfig.enabled(grad_output.device, use_triton):
         grad_intermediate_1, intermediate_2_ = triton_mlp_activation_backward(
             grad_intermediate_2, (intermediate_1, gated, activation_type), intermediate_2 is None
         )

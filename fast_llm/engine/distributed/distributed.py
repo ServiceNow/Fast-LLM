@@ -27,9 +27,9 @@ class ProcessGroupPool:
         world_size: int | None = None,
         local_world_size: int | None = None,
         timeout: float = 60,
-        use_cuda: bool = True,
         init_method: str = "env://",
         backend: DistributedBackend = DistributedBackend.nccl,
+        device: torch.device | None = None,
     ):
 
         self._rank = DistributedConfig.default_rank if rank is None else rank
@@ -38,20 +38,24 @@ class ProcessGroupPool:
             DistributedConfig.default_local_world_size if local_world_size is None else local_world_size
         )
         self._timeout = timeout
-        self._use_cuda = use_cuda
         self._backend = backend
         self._process_groups = {}
 
-        if self._use_cuda:
+        if device is None:
             assert torch.cuda.is_available()
             Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
             torch.cuda.init()
             self._device = torch.device(self._rank % self._local_world_size)
             torch.cuda.set_device(self._device)
+        elif device.type == "cuda":
+            assert torch.cuda.is_available()
+            torch.cuda.init()
+            self._device = device
+            torch.cuda.set_device(self._device)
         else:
             if backend == DistributedBackend.nccl:
                 Assert.eq(self._world_size, 1)
-            self._device = torch.device("cpu")
+            self._device = device
 
         if self._world_size > 1:
             if self._rank == 0:
@@ -106,12 +110,12 @@ class ProcessGroupPool:
                 return group
 
         prefix = (
-            f"range_{global_ranks.start}_{global_ranks.stop}_{global_ranks.step}"
+            f"range_{global_ranks.start}_{global_ranks.stop}_{global_ranks.step}/"
             if isinstance(global_ranks, range)
-            else f"ranks_{"_".join(str(rank) for rank in global_ranks)}"
+            else f"ranks_{"_".join(str(rank) for rank in global_ranks)}/"
         )
         group = self._backend.process_group_class(
-            torch.distributed.PrefixStore(prefix + "/", self.store),
+            torch.distributed.PrefixStore(prefix, self.store),
             group_rank,
             group_size,
             datetime.timedelta(seconds=self._timeout),
@@ -165,8 +169,8 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 self._config.world_size,
                 self._config.local_world_size,
                 self._config.timeout,
-                self._config.use_cuda,
                 backend=self._config.backend,
+                device=None if self._config.use_cuda else torch.device("cpu"),
             )
         else:
             self._pool = _default_pool
@@ -211,8 +215,8 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
         self.pp_generator = torch.Generator(device=self.device)
         self.tp_generator = torch.Generator(device=self.device)
-        self.pp_init_generator = torch.Generator(device=self.device)
-        self.tp_init_generator = torch.Generator(device=self.device)
+        self.pp_init_generator = torch.Generator(device=self.initialization_device)
+        self.tp_init_generator = torch.Generator(device=self.initialization_device)
 
         self._pp_seed = (pp_base_seed + self._config.pp_gen_seed_shift) % MAX_SEED
         self._tp_seed = (tp_base_seed + self._config.tp_gen_seed_shift) % MAX_SEED
@@ -223,15 +227,18 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self._phase_seeds_shifts = {
             PhaseType.training: self._config.train_seed_shift,
             PhaseType.validation: self._config.valid_seed_shift,
-            PhaseType.test: self._config.test_seed_shift,
-            PhaseType.inference: self._config.test_seed_shift,
+            PhaseType.inference: self._config.inference_seed_shift,
         }
 
         self.set_step(0, PhaseType.training)
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self._pool.device
+
+    @property
+    def initialization_device(self) -> torch.device:
+        return torch.device("cpu") if self._config.force_cpu_initialization else self.device
 
     def add_group(self, distributed_dim: DistributedDim) -> ProcessGroup | None:
         """

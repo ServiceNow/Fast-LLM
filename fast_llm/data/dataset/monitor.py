@@ -2,7 +2,7 @@ import logging
 import time
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.sample.abstract import Sample
+from fast_llm.data.document.abstract import Document
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -14,7 +14,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
+class DatasetMonitor[DocumentType: Document](SampledDataset[DocumentType]):
     """
     A blended sampling of multiple sampled datasets, where each dataset is sampled with the provided probability.
     The sampling order of each dataset is respected, but there is no strict guarantee
@@ -24,7 +24,7 @@ class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
 
     def __init__(
         self,
-        dataset: SampledDataset[SampleType],
+        dataset: SampledDataset[DocumentType],
         data_sample_warn_time_ms: float,
     ):
         self._dataset = dataset
@@ -33,7 +33,7 @@ class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index: int) -> SampleType:
+    def __getitem__(self, index: int) -> list[DocumentType]:
         start_time = time.perf_counter()
         try:
             sample = self._dataset[index]
@@ -51,3 +51,11 @@ class DatasetMonitor[SampleType: Sample](SampledDataset[SampleType]):
     @property
     def name(self) -> str:
         return self._dataset.name
+
+    @property
+    def requires_broadcast(self) -> bool:
+        """
+        Some dataset schemes load the dataset on a batch-data-parallel group leaders,
+        then broadcast to the other devices.
+        """
+        return self._dataset.requires_broadcast

@@ -101,7 +101,7 @@ class ExperimentConfig(RunnableConfig):
     def get_run(self, distributed: "Distributed") -> "Run":
         from fast_llm.functional.config import TritonConfig
 
-        TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels  # and distributed.config.use_cuda
+        TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels
         TritonConfig.TRITON_LINEAR = self.run.triton_linear_kernels
         run = Run(config=self, distributed=distributed)
         set_global_variables(not self.run.torch_dynamo_enable)
@@ -144,9 +144,9 @@ class Run:
                 (self._experiment_directory / "runs").mkdir(exist_ok=True, parents=True)
                 run = len(list((self._experiment_directory / "runs").iterdir()))
                 (self._experiment_directory / "runs" / str(run)).mkdir()
-                yaml.safe_dump(config_dict, (self._experiment_directory / "config.yaml").open("w"))
+                (self._experiment_directory / "config.yaml").write_text(yaml.safe_dump(config_dict))
                 # Dumping a verbose version of the config
-                yaml.safe_dump(config_dict_verbose, (self._experiment_directory / "config_verbose.yaml").open("w"))
+                (self._experiment_directory / "config_verbose.yaml").write_text(yaml.safe_dump(config_dict_verbose))
             else:
                 run = 0
             # Make sure all the workers agree on the run. This also acts as a barrier.
@@ -231,8 +231,12 @@ class Run:
 _run: Run | None = None
 
 
+def run_exists() -> bool:
+    return _run is not None
+
+
 def get_run() -> Run:
-    assert _run is not None
+    assert run_exists()
     return _run
 
 
@@ -240,9 +244,9 @@ def is_main_rank() -> bool:
     return DistributedConfig.default_rank == _MAIN_RANK
 
 
-def log_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
+def log_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", "
+) -> T:
     if is_main_rank():
         return log(*message, log_fn=log_fn, join=join)
 
@@ -251,9 +255,9 @@ def is_model_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_model_parallel_main_rank  # Noqa
 
 
-def log_model_parallel_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
+def log_model_parallel_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info
+) -> T:
     if is_model_parallel_main_rank():
         return log(*message, log_fn=log_fn)
 
@@ -262,8 +266,8 @@ def is_pipeline_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_pipeline_parallel_main_rank  # Noqa
 
 
-def log_pipeline_parallel_main_rank[
-    T
-](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
+def log_pipeline_parallel_main_rank[T](
+    *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info
+) -> T:
     if is_pipeline_parallel_main_rank():
         return log(*message, log_fn=log_fn)

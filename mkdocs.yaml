@@ -77,6 +77,7 @@ theme:
 # Hooks
 hooks:
   - docs/overrides/hooks/shortcodes.py
+  - docs/overrides/hooks/generate_config_docs_hook.py
 
 # Additional configuration
 extra:
@@ -157,6 +158,10 @@ plugins:
       branch: main
   - bibtex:
       bib_file: "docs/refs.bib"
+      enable_inline_citations: false
+
+exclude_docs: |
+  README.md
 
 nav:
   - Welcome: index.md
@@ -182,6 +187,7 @@ nav:
       - Evaluators: user_guide/evaluators.md
     - Developer Guide:
       - Configuration: developer_guide/configuration.md
+      - Parallelism: developer_guide/parallelism.md
       - Model:
         - Model: developer_guide/model.md
         - Conversion: developer_guide/conversion.md
@@ -190,5 +196,249 @@ nav:
     - Style Guide: contributing/style-guide.md
     - Development Practices: contributing/dev-practices.md
     - Testing: contributing/testing.md
+    - How to Release: contributing/how-to-release.md
+  # BEGIN AUTO-GENERATED CONFIG REFERENCE
+  - Configuration Reference:
+    - reference/configuration/index.md
+    - Data:
+      - reference/configuration/data/index.md
+      - Data:
+        - reference/configuration/data/data/index.md
+        - reference/configuration/data/data/DataConfig.md
+        - Gpt:
+          - reference/configuration/data/data/gpt/index.md
+          - reference/configuration/data/data/gpt/GPTDataConfig.md
+      - Dataset:
+        - reference/configuration/data/dataset/index.md
+        - reference/configuration/data/dataset/BlendedDatasetConfig.md
+        - reference/configuration/data/dataset/ConcatenatedDatasetConfig.md
+        - reference/configuration/data/dataset/DatasetConfig.md
+        - reference/configuration/data/dataset/DatasetSliceConfig.md
+        - reference/configuration/data/dataset/IndexedDatasetConfig.md
+        - reference/configuration/data/dataset/RedisConfig.md
+        - reference/configuration/data/dataset/SamplableDatasetConfig.md
+        - reference/configuration/data/dataset/SampledDatasetConfig.md
+        - reference/configuration/data/dataset/SamplingConfig.md
+        - reference/configuration/data/dataset/SamplingConfigBase.md
+        - reference/configuration/data/dataset/StreamingDatasetConfig.md
+        - Gpt:
+          - reference/configuration/data/dataset/gpt/index.md
+          - reference/configuration/data/dataset/gpt/FimConfig.md
+          - reference/configuration/data/dataset/gpt/GPTDatasetFromFileConfig.md
+          - reference/configuration/data/dataset/gpt/GPTFimSampledDatasetConfig.md
+          - reference/configuration/data/dataset/gpt/GPTRandomDatasetConfig.md
+          - reference/configuration/data/dataset/gpt/GPTSamplingConfig.md
+          - reference/configuration/data/dataset/gpt/GPTTestSlowDatasetConfig.md
+        - Memmap:
+          - reference/configuration/data/dataset/memmap/index.md
+          - reference/configuration/data/dataset/memmap/LanguageModelReaderConfig.md
+          - reference/configuration/data/dataset/memmap/MemmapDatasetConfig.md
+          - reference/configuration/data/dataset/memmap/MemmapIndexDatasetReaderConfig.md
+          - reference/configuration/data/dataset/memmap/MemmapReaderBaseConfig.md
+          - reference/configuration/data/dataset/memmap/MemmapReaderConfig.md
+          - reference/configuration/data/dataset/memmap/NullReaderConfig.md
+          - reference/configuration/data/dataset/memmap/PatchReaderBaseConfig.md
+          - reference/configuration/data/dataset/memmap/PatchReaderConfig.md
+          - reference/configuration/data/dataset/memmap/RangeReaderBaseConfig.md
+          - reference/configuration/data/dataset/memmap/RangeReaderConfig.md
+          - reference/configuration/data/dataset/memmap/TokenDataReaderConfig.md
+          - reference/configuration/data/dataset/memmap/TokenReaderConfig.md
+      - Document:
+        - reference/configuration/data/document/index.md
+        - reference/configuration/data/document/BatchPreprocessingConfig.md
+        - reference/configuration/data/document/ImageNormalizationConfig.md
+        - reference/configuration/data/document/LanguageModelBatchPreprocessingConfig.md
+        - reference/configuration/data/document/LengthPreprocessingConfig.md
+        - reference/configuration/data/document/PatchPreprocessingConfig.md
+        - reference/configuration/data/document/TokenPreprocessingConfig.md
+      - Preparation:
+        - reference/configuration/data/preparation/index.md
+        - reference/configuration/data/preparation/DatasetPreparatorConfig.md
+        - Dataset Discovery:
+          - reference/configuration/data/preparation/dataset_discovery/index.md
+          - reference/configuration/data/preparation/dataset_discovery/DatasetDiscoveryConfig.md
+        - Gpt Memmap:
+          - reference/configuration/data/preparation/gpt_memmap/index.md
+          - reference/configuration/data/preparation/gpt_memmap/ConversationSourceConfig.md
+          - reference/configuration/data/preparation/gpt_memmap/DatasetPreparatorDistributedConfig.md
+          - reference/configuration/data/preparation/gpt_memmap/DocumentSourceConfig.md
+          - reference/configuration/data/preparation/gpt_memmap/GPTHuggingfaceDatasetConfig.md
+          - reference/configuration/data/preparation/gpt_memmap/GPTMemmapDatasetPreparatorConfig.md
+          - reference/configuration/data/preparation/gpt_memmap/LanguageModelSourceConfig.md
+        - Image Patch:
+          - reference/configuration/data/preparation/image_patch/index.md
+          - reference/configuration/data/preparation/image_patch/ImagePreparationConfig.md
+        - Tokenizer:
+          - reference/configuration/data/preparation/tokenizer/index.md
+          - reference/configuration/data/preparation/tokenizer/TokenizerConfig.md
+    - Engine:
+      - reference/configuration/engine/index.md
+      - Base Model:
+        - reference/configuration/engine/base_model/index.md
+        - reference/configuration/engine/base_model/BaseModelConfig.md
+        - reference/configuration/engine/base_model/ModuleConfig.md
+      - Checkpoint:
+        - reference/configuration/engine/checkpoint/index.md
+        - reference/configuration/engine/checkpoint/CheckpointConfigBase.md
+        - reference/configuration/engine/checkpoint/CheckpointLoadConfig.md
+        - reference/configuration/engine/checkpoint/CheckpointLoadMetadataConfig.md
+        - reference/configuration/engine/checkpoint/CheckpointPathConfigBase.md
+        - reference/configuration/engine/checkpoint/CheckpointSaveConfig.md
+        - reference/configuration/engine/checkpoint/CheckpointSaveConfigBase.md
+        - reference/configuration/engine/checkpoint/CheckpointSaveMetadataConfig.md
+        - reference/configuration/engine/checkpoint/CheckpointStateConfigBase.md
+        - reference/configuration/engine/checkpoint/CheckpointStateSaveConfigBase.md
+      - Config Utils:
+        - reference/configuration/engine/config_utils/index.md
+        - Initialization:
+          - reference/configuration/engine/config_utils/initialization/index.md
+          - reference/configuration/engine/config_utils/initialization/DefaultInitializationConfig.md
+          - reference/configuration/engine/config_utils/initialization/FillInitializationConfig.md
+          - reference/configuration/engine/config_utils/initialization/InitializationConfig.md
+          - reference/configuration/engine/config_utils/initialization/NormalInitializationConfig.md
+          - reference/configuration/engine/config_utils/initialization/UniformInitializationConfig.md
+        - Interval:
+          - reference/configuration/engine/config_utils/interval/index.md
+          - reference/configuration/engine/config_utils/interval/IntervalConfig.md
+        - Logging:
+          - reference/configuration/engine/config_utils/logging/index.md
+          - reference/configuration/engine/config_utils/logging/TensorLogsConfig.md
+        - Parameter:
+          - reference/configuration/engine/config_utils/parameter/index.md
+          - reference/configuration/engine/config_utils/parameter/OptionalParameterConfig.md
+          - reference/configuration/engine/config_utils/parameter/ParameterConfig.md
+        - Run:
+          - reference/configuration/engine/config_utils/run/index.md
+          - reference/configuration/engine/config_utils/run/ExperimentConfig.md
+          - reference/configuration/engine/config_utils/run/RunConfig.md
+        - Runnable:
+          - reference/configuration/engine/config_utils/runnable/index.md
+          - reference/configuration/engine/config_utils/runnable/RunnableConfig.md
+      - Distributed:
+        - reference/configuration/engine/distributed/index.md
+        - reference/configuration/engine/distributed/DistributedConfig.md
+      - Evaluation:
+        - reference/configuration/engine/evaluation/index.md
+        - reference/configuration/engine/evaluation/EvaluatorConfig.md
+        - reference/configuration/engine/evaluation/LmEvalEvaluatorConfig.md
+        - reference/configuration/engine/evaluation/LossEvaluatorConfig.md
+      - Multi Stage:
+        - reference/configuration/engine/multi_stage/index.md
+        - reference/configuration/engine/multi_stage/CheckpointMetadata.md
+        - reference/configuration/engine/multi_stage/FastLLMModelConfig.md
+        - reference/configuration/engine/multi_stage/MultiStageConfig.md
+        - reference/configuration/engine/multi_stage/PretrainedFastLLMModelConfig.md
+        - reference/configuration/engine/multi_stage/StageConfig.md
+      - Optimizer:
+        - reference/configuration/engine/optimizer/index.md
+        - reference/configuration/engine/optimizer/GradientScalerConfig.md
+        - reference/configuration/engine/optimizer/LearningRateScheduleConfig.md
+        - reference/configuration/engine/optimizer/OptimizerConfig.md
+      - Schedule:
+        - reference/configuration/engine/schedule/index.md
+        - reference/configuration/engine/schedule/ScheduleConfig.md
+      - Training:
+        - reference/configuration/engine/training/index.md
+        - reference/configuration/engine/training/CallbackConfig.md
+        - reference/configuration/engine/training/MetricsLogsConfig.md
+        - reference/configuration/engine/training/ShutdownConfig.md
+        - reference/configuration/engine/training/StreamingTrainerCallbackConfig.md
+        - reference/configuration/engine/training/TrainerCallbackConfig.md
+        - reference/configuration/engine/training/TrainerConfig.md
+        - reference/configuration/engine/training/TrainingCheckpointBaseConfig.md
+        - reference/configuration/engine/training/TrainingCheckpointConfig.md
+        - reference/configuration/engine/training/TrainingConfig.md
+        - reference/configuration/engine/training/TrainingExportConfig.md
+        - reference/configuration/engine/training/WandbAlertConfig.md
+        - reference/configuration/engine/training/WandbConfig.md
+        - reference/configuration/engine/training/WeightsBroadcastConfig.md
+    - Layers:
+      - reference/configuration/layers/index.md
+      - Attention:
+        - reference/configuration/layers/attention/index.md
+        - reference/configuration/layers/attention/AttentionConfig.md
+        - Rotary:
+          - reference/configuration/layers/attention/rotary/index.md
+          - reference/configuration/layers/attention/rotary/DefaultRotaryConfig.md
+          - reference/configuration/layers/attention/rotary/Llama3RotaryConfig.md
+          - reference/configuration/layers/attention/rotary/NoRotaryConfig.md
+          - reference/configuration/layers/attention/rotary/Rotary2DConfig.md
+          - reference/configuration/layers/attention/rotary/RotaryConfig.md
+          - reference/configuration/layers/attention/rotary/YarnRotaryConfig.md
+      - Block:
+        - reference/configuration/layers/block/index.md
+        - reference/configuration/layers/block/BlockConfig.md
+        - reference/configuration/layers/block/BlockSequenceConfig.md
+        - reference/configuration/layers/block/FixedBlockSequenceConfig.md
+        - reference/configuration/layers/block/PatternBlockSequenceConfig.md
+      - Common:
+        - reference/configuration/layers/common/index.md
+        - Linear:
+          - reference/configuration/layers/common/linear/index.md
+          - reference/configuration/layers/common/linear/AffineLinearBaseConfig.md
+          - reference/configuration/layers/common/linear/AffineLinearConfig.md
+          - reference/configuration/layers/common/linear/CausalConv1dConfig.md
+          - reference/configuration/layers/common/linear/LinearBaseConfig.md
+          - reference/configuration/layers/common/linear/LinearConfig.md
+        - Normalization:
+          - reference/configuration/layers/common/normalization/index.md
+          - reference/configuration/layers/common/normalization/GatedRMSNormalizationConfig.md
+          - reference/configuration/layers/common/normalization/LayerNormalizationBaseConfig.md
+          - reference/configuration/layers/common/normalization/LayerNormalizationConfig.md
+          - reference/configuration/layers/common/normalization/NoNormalizationConfig.md
+          - reference/configuration/layers/common/normalization/NormalizationConfig.md
+          - reference/configuration/layers/common/normalization/RMSNormalizationConfig.md
+        - Peft:
+          - reference/configuration/layers/common/peft/index.md
+          - reference/configuration/layers/common/peft/LoRAConfig.md
+          - reference/configuration/layers/common/peft/NoPeftConfig.md
+          - reference/configuration/layers/common/peft/PeftConfig.md
+      - Decoder:
+        - reference/configuration/layers/decoder/index.md
+        - reference/configuration/layers/decoder/BlockWithBiasConfig.md
+        - reference/configuration/layers/decoder/DecoderBlockConfig.md
+        - reference/configuration/layers/decoder/MLPBaseConfig.md
+        - reference/configuration/layers/decoder/MixerConfig.md
+        - reference/configuration/layers/decoder/StochasticMixerConfig.md
+        - Mlp:
+          - reference/configuration/layers/decoder/mlp/index.md
+          - reference/configuration/layers/decoder/mlp/MLPConfig.md
+          - reference/configuration/layers/decoder/mlp/MoEMLPConfig.md
+      - Language Model:
+        - reference/configuration/layers/language_model/index.md
+        - reference/configuration/layers/language_model/LanguageModelConfig.md
+        - reference/configuration/layers/language_model/LanguageModelEmbeddingsConfig.md
+        - reference/configuration/layers/language_model/LanguageModelHeadConfig.md
+        - Loss:
+          - reference/configuration/layers/language_model/loss/index.md
+          - reference/configuration/layers/language_model/loss/LanguageModelDPOLossConfig.md
+          - reference/configuration/layers/language_model/loss/LanguageModelDistillationLossConfig.md
+          - reference/configuration/layers/language_model/loss/LanguageModelGRPOLossConfig.md
+          - reference/configuration/layers/language_model/loss/LanguageModelLabelEntropyLossConfig.md
+          - reference/configuration/layers/language_model/loss/LanguageModelLossConfig.md
+          - reference/configuration/layers/language_model/loss/LanguageModelZLossConfig.md
+      - Vision:
+        - reference/configuration/layers/vision/index.md
+        - reference/configuration/layers/vision/PatchEmbeddingsConfig.md
+        - reference/configuration/layers/vision/VisionEncoderConfig.md
+        - reference/configuration/layers/vision/VisionMultiModalModelConfig.md
+    - Models:
+      - reference/configuration/models/index.md
+      - Gpt:
+        - reference/configuration/models/gpt/index.md
+        - reference/configuration/models/gpt/GPTBaseModelConfig.md
+        - reference/configuration/models/gpt/GPTModelConfig.md
+        - reference/configuration/models/gpt/GPTTrainerConfig.md
+        - reference/configuration/models/gpt/PretrainedGPTModelConfig.md
+      - Multimodal:
+        - reference/configuration/models/multimodal/index.md
+        - reference/configuration/models/multimodal/MultiModalBaseModelConfig.md
+        - reference/configuration/models/multimodal/MultiModalModelConfig.md
+        - reference/configuration/models/multimodal/MultiModalTrainerConfig.md
+        - reference/configuration/models/multimodal/PretrainedMultiModalModelConfig.md
+    - Profile:
+      - reference/configuration/profile/index.md
+      - reference/configuration/profile/ProfilingConfig.md
+  # END AUTO-GENERATED CONFIG REFERENCE
   - About Us: about-us.md
   - Join Us: join-us.md

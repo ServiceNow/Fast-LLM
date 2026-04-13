@@ -1,10 +1,8 @@
 import enum
 import logging
 import typing
-import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
@@ -22,13 +20,13 @@ class MixerKwargs(BlockKwargs):
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
-    seq_idx = "seq_idx"
+    document_index_q = "document_index_q"
+    document_index_k = "document_index_k"
     position_ids = "position_ids"
 
 
 class AttentionKwargs(MixerKwargs):
-    rotary_freq_q = "rotary_freq_q"
-    rotary_freq_k = "rotary_freq_k"
+    rotary_freq = "rotary_freq"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
     # TODO: Review these
@@ -44,6 +42,8 @@ class AttentionImplementation(enum.StrEnum):
 
 @config_class(dynamic_type={MixerConfig: "attention"})
 class AttentionConfig(MixerConfig):
+    """Configuration for multi-head and grouped-query attention with optional rotary embeddings."""
+
     # TODO: Make mixer class dynamic.
     _abstract = False
 
@@ -122,18 +122,9 @@ class AttentionConfig(MixerConfig):
         desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
         hint=FieldHint.feature,
     )
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Allow for cross-document attention.",
-        doc="Disable to prevent attention between tokens belonging to different documents.",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         super()._validate()
-
-        if not TritonConfig.TRITON_ENABLED:
-            warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.multiple(self.heads, self.head_groups)
 

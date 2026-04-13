@@ -13,7 +13,6 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import ShardName, StageConfig, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
 from fast_llm.engine.optimizer.config import ParamGroup
-from fast_llm.logging import log_generator
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice
 from fast_llm.utils import Assert, div
 
@@ -163,10 +162,6 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
         # TODO: Avoid all the _on_device checks
         assert self._is_setup
         with torch.no_grad():
-            if self._config.debug_param_init:
-                log_generator("CPU generator before reset", torch.random.default_generator)
-                log_generator("PP init generator before reset", self._distributed.pp_init_generator)
-                log_generator("TP init generator before reset", self._distributed.tp_init_generator)
 
             # Ensure a reproducible ordering.
             metas = (
@@ -188,40 +183,40 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                 # Multi-gpu init may be different because of TP or FSDP (different shape), or PP (not on device)
                 global_shape = meta.global_shape
 
-                if meta.requires_global_initialization or (
-                    self._distributed_config.reproducible_init
-                    and (global_shape.numel() != parameter.numel() or not self._mode.on_device)
+                if (
+                    meta.requires_global_initialization
+                    or (
+                        self._distributed_config.reproducible_init
+                        and (global_shape.numel() != parameter.numel() or not self._mode.on_device)
+                    )
+                    or self._distributed.initialization_device != self._distributed.device
                 ):
                     # Initialize all global weights on every gpu, then select the appropriate slice if applicable.
-                    global_param = parameter.new_empty(global_shape, device=self._distributed.device)
-                    meta.init_parameter(global_param, distributed=self._distributed)
+                    global_param = parameter.new_empty(global_shape, device=self._distributed.initialization_device)
+                    meta.init_parameter(
+                        global_param, distributed=self._distributed, debug=self._config.debug_param_init
+                    )
                     # It happens.
                     Assert.eq(global_param.shape, global_shape)
                     if self._mode.on_device:
                         parameter.copy_(fsdp.parameter_global_to_shard(global_param, meta.tensor_name))
                 elif self._mode.on_device:
-                    meta.init_parameter(parameter, self._distributed)
+                    meta.init_parameter(parameter, self._distributed, debug=self._config.debug_param_init)
 
             if self.mode.on_device:
-                fsdp.reset_shard_pad(fsdp.weight_shard, ShardName.weights)
+                for fsdp in self._fsdps:
+                    fsdp.reset_shard_pad(fsdp.weight_shard, ShardName.weights)
 
         if self._config.debug_param_init:
-            log_generator("CPU generator after reset", torch.random.default_generator)
-            log_generator("PP init generator after reset", self._distributed.pp_init_generator)
-            log_generator("TP init generator after reset", self._distributed.tp_init_generator)
             if self._mode.on_device:
-                fsdp.log_shard(
-                    name="param",
-                    shard=fsdp.weight_shard,
-                    distributed=self._distributed,
-                    level=self._config.debug_param_init,
-                    global_=self._config.debug_global_tensors,
-                )
-
-    # def reset_shard_pad(self, shard: torch.Tensor) -> int:
-    #    assert self._is_setup
-    #    assert self._mode.on_device
-    #    return sum(fsdp.reset_shard_pad(shard) for fsdp in self._fsdps)
+                for fsdp in self._fsdps:
+                    fsdp.log_shard(
+                        name="param",
+                        shard=fsdp.weight_shard,
+                        distributed=self._distributed,
+                        level=self._config.debug_param_init,
+                        global_=self._config.debug_global_tensors,
+                    )
 
     def get_param_groups(
         self, optimizer_state_shards: dict[str, tuple[torch.Tensor]], param_group_cls: type[ParamGroup]
@@ -245,9 +240,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                     continue
                 chunk_size = div(parameter_meta.numel(), len(parameter_meta.lr_scale))
                 buffer_begin = fsdp.get_parameter_begin_in_buffer(parameter_meta.tensor_name)
-                for i, lr_scale in enumerate(parameter_meta.lr_scale):
-                    begin = fsdp.index_buffer_to_shard(buffer_begin + i * chunk_size)
-                    end = fsdp.index_buffer_to_shard(buffer_begin + (i + 1) * chunk_size)
+                for lr_scale_index, lr_scale in enumerate(parameter_meta.lr_scale):
+                    begin = fsdp.index_buffer_to_shard(buffer_begin + lr_scale_index * chunk_size)
+                    end = fsdp.index_buffer_to_shard(buffer_begin + (lr_scale_index + 1) * chunk_size)
                     if lr_scale == 0 or begin == end:
                         continue
                     optimizer_params = (parameter_meta.param_weight_decay, lr_scale)
@@ -286,7 +281,7 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
             grads_norm_slices = []
             for name in grad_norm_names:
                 begin, end = fsdp._get_parameter_range_in_shard(name)
-                if len(grads_norm_slices) < 0 and begin == grads_norm_slices[-1].stop:
+                if len(grads_norm_slices) > 0 and begin == grads_norm_slices[-1].stop:
                     grads_norm_slices[-1] = slice(grads_norm_slices[-1].start, end)
                 else:
                     grads_norm_slices.append(slice(begin, end))

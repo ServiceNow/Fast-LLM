@@ -5,12 +5,11 @@ from transformers import PretrainedConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig, MultiTokenPredictionConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig, LanguageModelHeadConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
-    LlamaBlockConverter,
     LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
@@ -23,51 +22,49 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
-            "type": "multi_token_prediction",
-            "block": LlamaBlockConverter.import_config(config),
-            "head": super().import_config(config),
+            **super().import_config(config),
             "prediction_heads": config["prediction_heads"],
         }
 
     @classmethod
-    def export_config(cls, config: MultiTokenPredictionConfig) -> dict:
-        Assert.custom(isinstance, config, MultiTokenPredictionConfig)
+    def export_config(cls, config: LanguageModelHeadConfig) -> dict:
         return safe_merge_dicts(
-            super().export_config(config.head),
+            super().export_config(config),
             {"prediction_heads": config.prediction_heads},
         )
 
     @classmethod
     def get_converters(
         cls,
-        config: LanguageModelHeadConfig,
+        config: LanguageModelConfig,
         exported_config: dict,
-        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
-        converters = []
-        for prediction_distance in range(config.prediction_heads):
+        # Override: map head.final_norm to model.mtp_norms.0 (not model.norm as in standard Llama),
+        # since MTPLlamaModel uses mtp_norms[0] for the first prediction head.
+        converters = [
+            *cls.normalization_converter_class.get_converters(
+                config.head.normalization,
+                "head.final_norm",
+                "model.mtp_norms.0",
+            ),
+            get_parameter_converter(
+                "head.output_weights",
+                "lm_head.weight",
+                drop_on_import=exported_config["tie_word_embeddings"],
+                drop_on_export=exported_config["tie_word_embeddings"],
+            ),
+        ]
+        for prediction_distance in range(2, config.head.prediction_heads + 1):
             converters += cls.block_converter_class.get_converters(
-                config.block,
-                f"{fast_llm_prefix}.blocks.{prediction_distance}",
-                (
-                    f"model.layers.{exported_config["num_hidden_layers"]-1}"
-                    if prediction_distance == 0
-                    else f"model.mtp_heads.{prediction_distance - 1}"
-                ),
+                config.decoder.last_block_config,
+                f"multi_token_prediction.blocks.{prediction_distance-2}",
+                f"model.mtp_heads.{prediction_distance - 1}",
             )
             converters += cls.normalization_converter_class.get_converters(
                 config.head.normalization,
-                f"{fast_llm_prefix}.heads.{prediction_distance}.final_norm",
-                f"model.mtp_norms.{prediction_distance}",
+                f"multi_token_prediction.heads.{prediction_distance - 2}.final_norm",
+                f"model.mtp_norms.{prediction_distance - 1}",
             )
-        converters.append(
-            get_parameter_converter(
-                f"{fast_llm_prefix}.heads.0.output_weights",
-                "lm_head.weight",
-                drop_on_import=exported_config["tie_word_embeddings"],
-            )
-        )
-
         return converters
 
 

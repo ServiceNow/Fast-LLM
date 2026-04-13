@@ -76,124 +76,99 @@ class AwesomeHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
 ### Configuration conversion
 
-The configuration conversion utility interfaces between two configurations in the form of nested dictionaries:
-a serialized Fast-LLM configuration and an external configuration.
-The `_load_config` method is expected to read the configuration on disk, as expected by the checkpoint format,
-and return the same configuration in the forma of a nested dictionary,
-with `_save_config` handling the reverse operation.
-See the [Hugging Face implementation](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/engine/checkpoint/huggingface.py) for an example.
+Configuration conversion is handled by a `HuggingFaceBaseModelConverter` subclass,
+which is linked to the handler via a `base_model_converter_class` class variable.
+The converter implements three class methods:
 
-To perform the conversion, the checkpoint handler relies on a list of `ParamConverter` objects,
-which describe how individual parameters (or in some case multiple ones) should be converted.
-The `ParamConverter` base interface is a dataclass consisting of two variables and two methods:
+*   `import_config(cls, config: dict) -> dict`:
+Reads the external (e.g., Hugging Face) configuration dict and returns a Fast-LLM `base_model` config dict.
+*   `export_config(cls, config: BaseModelConfig) -> dict`:
+Takes a Fast-LLM `BaseModelConfig` object and returns the corresponding external configuration dict.
+*   `get_converters(cls, config: BaseModelConfig, exported_config: dict) -> list[WeightConverter]`:
+Returns the list of weight converters for this model (described in the next section).
 
-*   `fast_llm_names: tuple[tuple[str, ...], ...]`: An array of entry names on the Fast-LLM side, in tuple format.
-For example, `((transformer, head_groups),)` refers to the single entry `config["transformer"]["head_groups"]`.
-*   `export_names: tuple[tuple[str, ...], ...]`: An array of entry names on the external side, in the same tuple format.
-*   `export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]`:
-This method takes the configuration parameters corresponding to `fast_llm_names` (in the same order),
-and returns converted parameters corresponding to `export_names`.
-*   `import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]`:
-The converse of`export_params`, converting parameters corresponding to `export_names` into those corresponding to `fast_llm_names`.
+The `_load_config` and `_save_config` methods on the handler read and write the external configuration file.
+See the [Hugging Face implementation](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/engine/checkpoint/huggingface.py) for their default implementation.
 
-While not strictly part of the interface, it may also be useful to define a dataclass `__post_init__`,
-for example to restrict the number of parameters in `fast_llm_names` and `export_names`.
-
-Fast-LLM offers several generic configuration converter classes, including:
-
-*   `RenameParamConverter`: A simple 1-1 mapping between parameters, with optional renaming but identical value.
-Typically, most converters are of this type.
-*   `ConstantImportParamConverter`: A 1-0 mapping for Fast-LLM parameters that without an equivalent in the external format,
-that must take a specific value `fast_llm_value` for conversion to make sense (i.e., they take a hard-coded value in the external format).
-This type of converter is common for Hugging Face converters, as Hugging Face models support much fewer configuration parameters.
-*   `ConstantExportParamConverter`: A 0-1 mapping, the converse of `ConstantImportParamConverter`
-*   `MappedConfigParamConverter`: A 1-1 mapping similar to `RenameParamConverter`, but with a non-trivial relation between values.
-
-In addition to those, you may need to implement your own custom converter.
-Here is an example that associates several Fast-LLM variables with a tuple.
+Continuing our `AwesomeModel` example, the base model converter class could look like:
 
 ```python
-@dataclasses.dataclass(kw_only=True)
-class PackingParamConverter(ParamConverter):
-    def __post_init__(self):
-        # There may be any number of Fast-LLM variables, but only one external one
-        Assert.eq(len(self.export_names), 1)
-
-    def export_params(self, fast_llm_values):
-        # Pack the values into a single tuple.
-        return (fast_llm_values,)
-
-    def import_params(self, export_values):
-        # Unpack the values. We can safely assume `export_values` has length one because of the assertion in `__post_init__`
-        return export_values[0]
-```
-
-Now that we've seen how parameter converters work, we're ready to add them to our handler class.
-We do so by creating a list of converters in the `_create_config_converters` class method.
-Continuing our `AwesomeModel` handler example, we define:
-
-```python
+class AwesomeBaseModelConverter(HuggingFaceBaseModelConverter):
     @classmethod
-    def _create_config_converters(cls) -> list[ParamConverter]:
-        # For Hugging Face handlers, we need to call the superclass method.
-        return super()._create_config_converters() + [
-            # A trivial example where both the name and value are the same on both sides.
-            RenameParamConverter(
-                fast_llm_names=(("vocab_size",),),
-                export_names=(("vocab_size",),),
-            ),
-            # A non-trivial example of `RenameParamConverter` with renaming and handling of nested dictionaries.
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "rotary", "theta"),), export_names=(("rope_theta",),)
-            ),
-            # A constant import example indicating that the external format does not support absolute positional embeddings.
-            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
-            # The `architectures` parameter is a common use case for `ConstantExportParamConverter` in Hugging Face models.
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["AwesomeModelForCausalLM"]),
-            # A value mapping example, where we match Fast-LLM activation types with their Hugging Face equivalents.
-            MappedConfigParamConverter(
-                fast_llm_names=(("transformer", "activation_type"),),
-                export_names=(("hidden_act",),),
-                fast_llm_value=ActivationType.from_hf_name,
-                export_value=lambda activation_type: activation_type.hf_name,
-            ),
-            # A more hypothetical example using `PackingParamConverter` to pack two parameters `epsilon_1`, `epsilon_2` into a tuple `eps`.
-            PackingParamConverter(
-                fast_llm_names=(("epsilon_1",),("epsilon_2",)),
-                export_names=(("eps",),),
-            ),
-        ]
+    def import_config(cls, config: dict) -> dict:
+        # Build and return a Fast-LLM base_model config dict from the external config.
+        return {
+            "hidden_size": config["hidden_size"],
+            "embeddings": {"vocab_size": config["vocab_size"]},
+            "decoder": {
+                "num_blocks": config["num_hidden_layers"],
+                "block": {
+                    "mixer": {
+                        "heads": config["num_attention_heads"],
+                        "head_groups": config.get("num_key_value_heads", config["num_attention_heads"]),
+                        "rotary": {"type": "default", "theta": config.get("rope_theta", 10000)},
+                        "add_linear_biases": False,
+                    },
+                    "mlp": {
+                        "intermediate_size": config["intermediate_size"],
+                        "gated": True,
+                        "activation": ActivationType.from_hf_name(config["hidden_act"]),
+                        "add_linear_biases": False,
+                    },
+                    "normalization": {"type": "rms_norm", "epsilon": config["rms_norm_eps"]},
+                },
+            },
+            "head": {"normalization": {"type": "rms_norm", "epsilon": config["rms_norm_eps"]}},
+            "tied_embedding_weight": config.get("tie_word_embeddings", False),
+        }
+
+    @classmethod
+    def export_config(cls, config: AwesomeBaseModelConfig) -> dict:
+        # Build and return the external config dict from the Fast-LLM config object.
+        decoder_block = config.decoder.block
+        return {
+            "model_type": "awesome_model",
+            "architectures": ["AwesomeModelForCausalLM"],
+            "hidden_size": config.hidden_size,
+            "vocab_size": config.embeddings.vocab_size,
+            "num_hidden_layers": config.decoder.num_blocks,
+            "num_attention_heads": decoder_block.mixer.heads,
+            "num_key_value_heads": decoder_block.mixer.head_groups,
+            "rope_theta": decoder_block.mixer.rotary.theta,
+            "intermediate_size": decoder_block.mlp.intermediate_size,
+            "hidden_act": decoder_block.mlp.activation.hf_name,
+            "rms_norm_eps": decoder_block.normalization.epsilon,
+            "tie_word_embeddings": config.tied_embedding_weight,
+        }
+
+    @classmethod
+    def get_converters(cls, config: AwesomeBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        # Described in the next section.
+        ...
 ```
 
-!!! note "How conversion works"
-    The once the converters are defined, the conversion utility takes it from there.
-    Exporting works as follows (importing work similarly):
-    *The handler creates an empty export config dict, then loops over its list of converters. For each converter, it:
-    *   Reads the value of each parameter defined in `fast_llm_names`, and gathers them in a tuple.
-    *Calls `converter.export_params`, providing the set of read values as argument.
-    *   Ensure that the returned value has the correct length (that of `export_names`)
-    *   Set the respective values in the export config dict.
+Then wire the converter into the handler via `base_model_converter_class`:
 
-!!! note "About `MISSING` and `DEFAULT`"
-    If a value is not found during import, it will be replaced by the `MISSING` tag.
-    The converter's `import_params` has the opportunity to handle this missing value,
-    and if a `MISSING`, the handler will throw an error because it does not know what value to set on the Fast-LLM side.
+```python
+class AwesomeHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    _model_class = AwesomeModelConfig
+    architecture = "AwesomeModelForCausalLM"
+    base_model_converter_class = AwesomeBaseModelConverter
 
-    The `MISSING` tag is also supported during export,
-    but has a different meaning as the value is always expected to be found in the Fast-LLM configuration.
-    Instead, `export_params` may return a `MISSING` tag indicating that no value should not be added to the Fast-LLM config.
-    It may also return `DEFAULT`, which will be replaced by the default value for the configuration parameter.
-
-    Note that the handling of `MISSING` and `DEFAULT` is experimental and may be improved in the future.
+    @classmethod
+    def get_transformers_configuration_class(cls):
+        from transformers import AutoConfig
+        return AutoConfig
+```
 
 ### State conversion
 
 State conversion follows the same principle as configuration conversion, but acts on flat dictionaries of state tensors.
 Converters are defined by subclassing `WeightConverter`, with the interface:
 
-*   `fast_llm_name: str | tuple[str, ...]`: An entry name or array of entry names on the Fast-LLM side.
-For example, `((transformer, head_groups),)` refers to the single entry `config["transformer"]["head_groups"]`.
-*   `export_name: str | tuple[str, ...]`: An entry name or array of entry names on the external side.
+*   `fast_llm_name: str | tuple[str, ...]`: A state dict key, or tuple of keys, on the Fast-LLM side.
+For example, `"layers.0.mixer.weight"` or `("layers.0.weight_1", "layers.0.weight_2")`.
+*   `export_name: str | tuple[str, ...]`: A state dict key, or tuple of keys, on the external side.
 *   `export_weight(self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]) -> tuple[torch.Tensor | SafeTensorSlice, ...]`:
 This method takes the state dict entries corresponding to `fast_llm_name` (in the same order),
 and returns converted entries corresponding to `export_name`.
@@ -225,19 +200,20 @@ class TransposeWeightConverter(WeightConverter):
         return (weight[0][:].transpose().contiguous(),)
 ```
 
-We define the list of weight converters in the `_create_weight_converters` method.
-Continuing our `AwesomeModel` handler example, we define:
+We define the list of weight converters in the `get_converters` class method of the base model converter.
+Continuing our `AwesomeModel` example, we define:
 
 ```python
-    def _create_weight_converters(self) -> list[WeightConverter]:
+    @classmethod
+    def get_converters(cls, config: AwesomeBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         converters = []
-        # The set of converters may depend on the base model configuration, which is accessible through `self._model.base_model_config`.
-        num_layers = len(self._model.config.base_model.decoder)
+        # The set of converters may depend on the base model configuration.
+        num_layers = config.decoder.num_blocks
 
         # A simple renaming example, for the word embeddings.
         converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
 
-        # We usually want to loop dynamically over layers
+        # We usually want to loop dynamically over layers.
         for i in range(num_layers):
             # A `SplitWeightConverter` example, splitting a weight in two.
             converters.append(SplitWeightConverter(

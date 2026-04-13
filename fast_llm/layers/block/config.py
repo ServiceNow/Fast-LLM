@@ -31,13 +31,15 @@ class BlockDimNames:
 
 
 class BlockKwargs:
-    sequence_first = "sequence_first"
-    hidden_dims = "hidden_dims"
-    sequence_q_dim = "sequence_q_dim"
+    batch_dim = "batch_dim"
     sequence_k_dim = "sequence_k_dim"
+    key_value_token_dim = "key_value_token_dim"
+    token_dim = "token_dim"
+    num_tokens = "num_tokens"
+    hidden_token_dim = "hidden_token_dim"
     # TODO: These are confusing
     sequence_length = "sequence_length"
-    sequence_lengths = "sequence_lengths"
+    lengths = "lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
     activation_distillation_targets = "activation_distillation_targets"
@@ -46,6 +48,7 @@ class BlockKwargs:
     hidden_states = "hidden_states"
     output_hidden_states = "output_hidden_states"
     activation_mask = "activation_mask"
+    num_blocks_in_sequence = "num_blocks_in_sequence"
 
 
 @config_class(registry=True)
@@ -83,6 +86,7 @@ class BlockConfig(ModuleConfig):
         *,
         lr_scale: float | None,
         peft: PeftConfig | None,
+        **kwargs,
     ) -> "BlockBase":
         return self.layer_class(
             self,
@@ -90,6 +94,7 @@ class BlockConfig(ModuleConfig):
             hidden_dim=hidden_dim,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
+            **kwargs,
         )
 
     def get_reference_models(self) -> set[str]:
@@ -104,6 +109,10 @@ class BlockSequenceConfig(BlockConfig):
             # Default subclass.
             return FixedBlockSequenceConfig._from_dict(default, strict)
         return super()._from_dict(default, strict=strict)
+
+    @property
+    def last_block_config(self) -> BlockConfig:
+        raise NotImplementedError()
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "fixed"})
@@ -128,6 +137,10 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
 
     def get_reference_models(self) -> set[str]:
         return self.block.get_reference_models()
+
+    @property
+    def last_block_config(self) -> BlockConfig:
+        return self.block
 
 
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
@@ -156,9 +169,13 @@ class PatternBlockSequenceConfig(BlockSequenceConfig):
         if missing := used_blocks - available_blocks:
             raise ValueError(f"The following blocks are present in the pattern but undefined: {missing}")
         if extra := available_blocks - used_blocks:
-            raise warnings.warn(f"The following blocks are defined but unused: {extra}")
+            warnings.warn(f"The following blocks are defined but unused: {extra}")
 
         super()._validate()
+
+    @property
+    def last_block_config(self) -> BlockConfig:
+        return self.blocks[self.expanded_pattern[-1]]
 
     @property
     def layer_class(self) -> "type[PatternBlockSequence]":

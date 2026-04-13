@@ -5,10 +5,12 @@ import typing
 import torch.nn
 
 from fast_llm.config import Configurable
+from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.base_model.config import BaseModelConfig, LossDef, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.utils import safe_merge_dicts
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.runner import InferenceRunner
@@ -46,12 +48,17 @@ class LayerBase(torch.nn.Module, abc.ABC):
             out += layer.get_compute_usage(input_, kwargs, config)
         return out
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         losses = []
         for layer in self.get_layers():
             if layer is not self:
-                losses += layer.get_loss_definitions(count)
+                losses += layer.get_loss_definitions()
         return losses
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            *(layer.get_preprocessing_config() for layer in self.get_layers() if layer is not self)
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         for layer in self.get_layers():
@@ -90,7 +97,7 @@ class LayerBaseWithNamespace(LayerBase):
     TODO: Consider namespace for losses and metrics?
     """
 
-    def __init__(self, layer: LayerBase, namespace: str = None):
+    def __init__(self, layer: LayerBase, namespace: str):
         super().__init__(layer._distributed_config)
         self._layer = layer
         self._namespace = namespace
@@ -106,6 +113,9 @@ class LayerBaseWithNamespace(LayerBase):
         Wrap individual layers so the namespace is used in forward.
         """
         return self._layers_with_namespace
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return self._layer.get_preprocessing_config()
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -129,7 +139,7 @@ class LayerBaseWithNamespace(LayerBase):
 class LayerWithNamespace(LayerBaseWithNamespace, Layer):
     _layer: Layer
 
-    def __init__(self, layer: Layer, namespace: str = None):
+    def __init__(self, layer: Layer, namespace: str):
         super().__init__(layer, namespace)
         self.layer_count = self._layer.layer_count
 
@@ -166,20 +176,15 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], LayerBase
         self._reference_models: dict[str, "InferenceRunner"] = {}
 
     @abc.abstractmethod
-    def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
-        # TODO Remove (Move batch splitting elsewhere)
-        pass
-
-    @abc.abstractmethod
     def preprocess_batch(
         self,
-        batch: typing.Any,
-        preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
+        model_input: ModelInput,
         *,
         phase: PhaseType,
         iteration: int,
         metrics: dict | None = None,
-    ) -> list[tuple[torch.Tensor, dict]]:
+        extra_kwargs: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, dict]:
         # TODO Move batch splitting elsewhere, align interface with LayerBase
         pass
 

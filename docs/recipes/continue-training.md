@@ -48,15 +48,12 @@ This is not much different from a pretraining config. We will:
       checkpoint:
         interval: 1000
         keep: 5
-      test_iters: 0
       export:  # (1)!
         format: llama
         interval: 20_000
-    batch:
-      micro_batch_size: 2
-      sequence_length: 4096
-      batch_size: 256
     data:
+      micro_batch_size: 4096
+      maximum_document_length: 4096
       datasets:
         training:
           type: file
@@ -80,13 +77,14 @@ This is not much different from a pretraining config. We will:
       model_weights: yes  # (5)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes
-        cross_entropy_impl: fused
+        decoder:
+          block:
+            mixer:
+              use_flash_attention: yes
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16
+        compute_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/Llama-3.1-8B-cpt
     ```
@@ -107,15 +105,12 @@ This is not much different from a pretraining config. We will:
       checkpoint:
         interval: 1000
         keep: 5
-      test_iters: 0
       export:  # (1)!
         format: qwen2
         interval: 20_000
-    batch:
-      micro_batch_size: 1
-      sequence_length: 8192
-      batch_size: 256
     data:
+      micro_batch_size: 8192
+      maximum_document_length: 8192
       datasets:
         training:
           type: file
@@ -139,13 +134,14 @@ This is not much different from a pretraining config. We will:
       model_weights: yes  # (5)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes
-        cross_entropy_impl: fused
+        decoder:
+          block:
+            mixer:
+              use_flash_attention: yes
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16
+        compute_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/qwen-2.5-7B-cpt
     ```

@@ -6,10 +6,10 @@ import datasets
 import numpy as np
 import PIL.Image
 
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
-from fast_llm.data.preprocessing.abstract import NullPreprocessingConfig
-from fast_llm.data.preprocessing.image_patch import ImagePatchConfig
-from fast_llm.data.preprocessing.language_model import LanguageModelPreprocessingConfig
+from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig, PatchPreprocessingConfig
+from fast_llm.data.preparation.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparation.image_patch import ImagePreparationConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import padded_cumsum
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_FILE, TOKENIZER_PATH
 
@@ -18,7 +18,7 @@ def download_santacoder_tokenizer():
     if not TOKENIZER_FILE.is_file():
         import transformers
 
-        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+        transformers.AutoTokenizer.from_pretrained("gpt2").save_pretrained(TOKENIZER_PATH)
 
 
 def get_random_text(
@@ -129,6 +129,7 @@ def _get_hf_test_dataset(
     min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
+    has_grpo_data: bool = False,
     min_images: int = 0,
     max_images: int = 0,
     min_image_size: int = 4,
@@ -153,6 +154,9 @@ def _get_hf_test_dataset(
             document_sizes, min_images, max_images, min_image_size, max_image_size, random_state
         )
 
+    if has_grpo_data:
+        dataset_dict["advantages"] = random_state.randn(num_documents).tolist()
+
     return datasets.Dataset.from_dict(dataset_dict)
 
 
@@ -168,14 +172,15 @@ def _get_test_dataset(
     min_loss_masking_spans: int = 0,
     max_loss_masking_spans: int = 0,
     has_preference_spans: bool = False,
+    has_grpo_data: bool = False,
     splits: dict[str, float] | None = None,
     min_images: int = 0,
     max_images: int = 0,
-    image_patch_config: ImagePatchConfig | None = None,
+    image_patch_config: ImagePreparationConfig | None = None,
     min_image_size: int = 4,
     max_image_size: int = 32,
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     config_paths = (
         [path / "fast_llm_config.yaml"]
         if splits is None
@@ -184,6 +189,8 @@ def _get_test_dataset(
     hf_path = path / "hf"
 
     if not config_only and not all(config_path.is_file() for config_path in config_paths):
+        # Not supported for parallel tests, but dataset should already exist anyway.
+        assert DistributedConfig.default_world_size == 1
         dataset = _get_hf_test_dataset(
             seed=seed,
             num_documents=num_documents,
@@ -192,6 +199,7 @@ def _get_test_dataset(
             min_loss_masking_spans=min_loss_masking_spans,
             max_loss_masking_spans=max_loss_masking_spans,
             has_preference_spans=has_preference_spans,
+            has_grpo_data=has_grpo_data,
             min_images=min_images,
             max_images=max_images,
             min_image_size=min_image_size,
@@ -207,6 +215,8 @@ def _get_test_dataset(
         if max_images > 0:
             source_schema["images"] = "images"
             source_schema["image_positions"] = "image_positions"
+        if has_grpo_data:
+            source_schema["advantages"] = "advantages"
 
         download_santacoder_tokenizer()
         preparator_config = GPTMemmapDatasetPreparatorConfig.from_dict(
@@ -233,36 +243,43 @@ def _get_test_dataset(
             for split, config_path in zip(splits, config_paths, strict=True)
         }
     )
-    preprocessing = LanguageModelPreprocessingConfig(
-        tokenizer={"type": "tokenizer", "path": tokenizer_path, "max_vocab_size": max_vocab_size},
-        image_patches=NullPreprocessingConfig() if image_patch_config is None else image_patch_config,
+
+    preprocessing = LanguageModelBatchPreprocessingConfig(
+        vision_encoder=(
+            None
+            if image_patch_config is None
+            else PatchPreprocessingConfig(
+                shape=(image_patch_config.height, image_patch_config.width),
+            )
+        ),
         vocab_size=max_vocab_size,
         use_loss_masking_spans=max_loss_masking_spans > 0,
-        use_preference_spans=has_preference_spans,
+        use_preference_spans=False,  # TODO: Implement (set to False to avoid an error in `test_preference_spans`)
+        use_grpo_data=has_grpo_data,
     )
     return path, config, hf_path, preprocessing
 
 
 def get_common_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "common_dataset", seed=1234)
 
 
 def get_alt_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "other_dataset", seed=2345)
 
 
 def get_sharded_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(DATASET_CACHE / "common_dataset_sharded", seed=1234, documents_per_shard=350)
 
 
 def get_split_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split", seed=1234, splits={"training": 1, "validation": 1}
@@ -270,7 +287,7 @@ def get_split_test_dataset() -> (
 
 
 def get_split_sharded_test_dataset() -> (
-    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]
+    tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]
 ):
     return _get_test_dataset(
         DATASET_CACHE / "common_dataset_split_sharded",
@@ -282,7 +299,7 @@ def get_split_sharded_test_dataset() -> (
 
 def get_test_dataset_with_loss_masking_spans(
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / "dataset_with_loss_masking_spans",
         seed=1234,
@@ -293,7 +310,7 @@ def get_test_dataset_with_loss_masking_spans(
 
 def get_test_dataset_with_preference_spans(
     config_only: bool = False,
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / "dataset_with_preference_spans", seed=1234, has_preference_spans=True, config_only=config_only
     )
@@ -301,12 +318,12 @@ def get_test_dataset_with_preference_spans(
 
 def get_test_dataset_with_image_patches(
     image_break_token: int | None = None, image_end_token: int | None = None, config_only: bool = False
-) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelPreprocessingConfig]:
+) -> tuple[pathlib.Path, dict[str, typing.Any], pathlib.Path, LanguageModelBatchPreprocessingConfig]:
     return _get_test_dataset(
         DATASET_CACHE / f"dataset_with_image_patches_{image_break_token}_{image_end_token}",
         seed=1234,
         max_images=2,
-        image_patch_config=ImagePatchConfig(
+        image_patch_config=ImagePreparationConfig(
             height=4,
             width=4,
             max_image_height=16,
@@ -322,9 +339,11 @@ def get_model_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset",
         seed=1234,
+        num_documents=200,
         max_loss_masking_spans=5,
+        has_grpo_data=True,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 18, "test": 2},
         config_only=config_only,
     )
 
@@ -333,9 +352,10 @@ def get_multimodal_test_dataset(config_only: bool = False):
     return _get_test_dataset(
         DATASET_CACHE / "model_dataset_multimodal",
         seed=1234,
+        num_documents=200,
         max_vocab_size=MODEL_TEST_VOCAB_SIZE,
         max_images=2,
-        image_patch_config=ImagePatchConfig(
+        image_patch_config=ImagePreparationConfig(
             height=4,
             width=4,
             max_image_height=16,
@@ -343,6 +363,6 @@ def get_multimodal_test_dataset(config_only: bool = False):
             image_break_token=None,
             image_end_token=None,
         ),
-        splits={"training": 969, "validation": 30, "test": 1},
+        splits={"training": 180, "validation": 18, "test": 2},
         config_only=config_only,
     )

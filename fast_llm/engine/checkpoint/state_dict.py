@@ -15,6 +15,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
     CheckpointSaveMetadataConfig,
+    CheckpointStateSaveConfigBase,
     FastLLMCheckpointFormat,
     export_safetensors_metadata,
 )
@@ -70,6 +71,31 @@ class StateDictCheckpointHandler(CheckpointHandler):
         index = saver.finalize()
         if self._model.config.distributed.rank == 0:
             self._save_serialized_metadata(config, serialized_metadata, index)
+
+    def iter_tensors(
+        self, config: CheckpointStateSaveConfigBase, metadata: "CheckpointMetadata"
+    ) -> typing.Iterator[tuple[str, str, torch.Tensor]]:
+        # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
+        #   `state_dict` that are ready for conversion,
+        #   and return a dict containing the converted tensors(s).
+        #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
+        #   it will remain in `state_dict` until that tensor is available.
+        state_dict = {}
+        for parameter_name, shard_name, tensor in self._model.get_state_tensor_iterator(
+            self.get_shard_names(config), config.data_type
+        ):
+            if shard_name not in state_dict:
+                state_dict[shard_name] = {}
+            shard_state_dict = state_dict[shard_name]
+            assert parameter_name not in shard_state_dict
+            shard_state_dict[parameter_name] = tensor
+            for exported_name, exported_tensor in self._convert_state_dict(shard_state_dict, True).items():
+                yield shard_name, self._get_key(exported_name, shard_name), exported_tensor
+
+        for shard_name, shard_state_dict in state_dict.items():
+            assert (
+                not shard_state_dict
+            ), f"Un-handled entries after conversion: {({k: list(v) for k, v in state_dict.items()})}"
 
     @classmethod
     @abc.abstractmethod
@@ -128,7 +154,7 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         path = config.path / f"metadata.yaml"
         logger.warning(f"Loading metadata from {path}")
-        return CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
+        return CheckpointMetadata.from_dict(yaml.safe_load(path.read_text()))
 
     @classmethod
     def _save_serialized_metadata(
@@ -140,7 +166,7 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
         if "metadata" not in serialized_metadata:
             serialized_metadata["metadata"] = {}
         serialized_metadata["metadata"]["state_index"] = index
-        yaml.safe_dump(serialized_metadata, path.open("w"))
+        path.write_text(yaml.safe_dump(serialized_metadata))
 
     @classmethod
     def _get_key(cls, parameter_name: str, shard_name: str) -> str:
@@ -233,15 +259,15 @@ class StateDictSaver:
         if self._do_save and self._distributed_config.pipeline_parallel != 1:
             # Combine the indexes from all pipeline ranks.
             logger.info(f"Merging pipeline-parallel indexes.")
-            yaml.dump(
-                self._index, (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").open("w")
+            (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").write_text(
+                yaml.dump(self._index)
             )
             safe_barrier(self._distributed.pipeline_group, "save state dict", timeout=self._config.timeout)
             self._index = {}
             if self._distributed_config.pipeline_rank == 0:
                 for rank in range(self._distributed_config.pipeline_parallel):
                     file_name = self._config.path / f"index_{rank}.yaml"
-                    local_index = yaml.safe_load(file_name.open("r"))
+                    local_index = yaml.safe_load(file_name.read_text())
                     for key, value in local_index.items():
                         assert key not in self._index, key
                         self._index[key] = value

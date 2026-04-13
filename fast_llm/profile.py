@@ -15,7 +15,7 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ProfileType(str, enum.Enum):
+class ProfileType(enum.StrEnum):
     cpu = "cpu"
     cuda = "cuda"
 

@@ -146,10 +146,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         *,
         iteration: int = 1,
         return_metrics: bool = False,
-        preprocessed: bool = False,
     ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
         assert self._is_setup
-        assert schedule._schedule_config is self._config  # Noqa
+        assert schedule._config is self._config  # Noqa
         if schedule.phase.is_training:
             assert self._support_training
 
@@ -161,11 +160,11 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
-        context.data_iterator = self._preprocess_data(context, data_iterator, preprocessed)
+        context.data_iterator = self._preprocess_data(context, data_iterator)
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
-                lambda: log_memory_usage(f"Beginning of {context.phase.value} iteration {iteration}", str)
+                lambda: log_memory_usage(f"Beginning of {context.phase} iteration {iteration}", str)
             )
         self._multi_stage.train(context.is_training)
         self._distributed.set_step(iteration, schedule.phase)
@@ -279,32 +278,18 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
-                lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
+                lambda: log_memory_usage(f"End of {context.phase} iteration {iteration}", str)
             )
 
         return self._reduce_losses(context), update_successful, metrics
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
-        reduced_losses = {}
-        num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
-        for name, losses in context.losses.items():
-            if losses or self._distributed.pipeline_group:
-                if losses:
-                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_definitions[name].count
-                    if self._distributed.data_group:
-                        all_reduce(reduced_loss, group=self._distributed.data_group)
-                else:
-                    reduced_loss = torch.zeros(
-                        [1], dtype=self._loss_definitions[name].dtype.torch, device=self._distributed.device
-                    )
-                if self._distributed.pipeline_group:
-                    all_reduce(reduced_loss, group=self._distributed.pipeline_group)
-            else:
-                reduced_loss = 0.0
-            reduced_losses[name] = reduced_loss
+        reduced_losses = {
+            name: self._loss_definitions[name].reduce(losses, self._distributed)
+            for name, losses in context.losses.items()
+        }
         return {
-            name: reduced_loss.item() if isinstance(reduced_loss, torch.Tensor) else reduced_loss
-            for name, reduced_loss in reduced_losses.items()
+            name: 0.0 if reduced_loss is None else reduced_loss.item() for name, reduced_loss in reduced_losses.items()
         }
 
     def _train_step(self, context: BatchContext, step: Step) -> None:
@@ -324,31 +309,37 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._reduce(context, step)
 
     def _preprocess_data(
-        self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
+        self, context: BatchContext, data_iterator: typing.Iterator
     ) -> typing.Generator[None, None, None]:
-        batch_config = context.schedule.batch_config
+        # We multiply by the data-parallel size to improve numerical stability (reduce numerical underflow).
+        # This factor is canceled in the averaging during gradient reduction.
         grad_output = (
-            self._optimizer.grad_scale / batch_config.num_inputs if context.schedule.phase.is_training else None
+            self._optimizer.grad_scale * self._distributed_config.data_parallel
+            if context.schedule.phase.is_training
+            else None
         )
-        for micro_batch in range(batch_config.sequential_micro_batches):
-            micro_batch_data = next(data_iterator)
-            if not preprocessed:
-                micro_batch_data = self._multi_stage.base_model.preprocess_batch(
-                    micro_batch_data,
-                    context.schedule.preprocessed_meta,
+        model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
+        model_inputs[0][0].share_batch_data(
+            [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
+        )
+
+        for micro_batch, model_inputs_ in enumerate(model_inputs):
+            Assert.eq(len(model_inputs_), self._config.micro_batch_splits)
+            for micro_batch_split, model_input in enumerate(model_inputs_):
+                input_, kwargs = self._multi_stage.base_model.preprocess_batch(
+                    model_input,
                     phase=context.phase,
                     iteration=context.iteration,
                     metrics=context.metrics,
+                    extra_kwargs={
+                        "grad_output": grad_output,
+                        "micro_batch": micro_batch,
+                        "num_micro_batches": self._config.sequential_micro_batches,
+                        "micro_batch_splits": self._config.micro_batch_splits,
+                    },
                 )
-            for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
-                kwargs.update(
-                    grad_output=grad_output,
-                    micro_batch=micro_batch,
-                    micro_batch_split=micro_batch_split,
-                    num_micro_batches=batch_config.sequential_micro_batches,
-                    micro_batch_splits=batch_config.micro_batch_splits,
-                )
-                data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
+                kwargs.update(micro_batch_split=micro_batch_split)
+                data_index = micro_batch * self._config.micro_batch_splits + micro_batch_split
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_
                 if context.is_training and self._stages_owned[-1]:
@@ -404,10 +395,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             step.recv_event.wait()
             self._record_event(context, EventType.compute_wait_pipe, step)
 
-    def _forward(self, context: BatchContext, step: Step) -> None:
+    def _forward(self, context: BatchContext, step: Step) -> torch.Tensor | None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
-            context.batch[step.data_index],
+            context.batch[step.index],
             losses=context.losses,
             metrics=context.metrics,
         )
@@ -425,10 +416,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return input_grad
 
     def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
-        if step.data_index not in context.batch:
+        if step.index not in context.batch:
             start_time = time.perf_counter()
 
-            while step.data_index not in context.batch:
+            while step.index not in context.batch:
                 next(context.data_iterator)
 
             data_time = (time.perf_counter() - start_time) * 1000
@@ -496,12 +487,12 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     def _save_events(self, events, context: BatchContext) -> None:
         out = {
             "iteration": context.iteration,
-            "phase": context.phase.value,
+            "phase": context.phase,
             "rank": self._distributed_config.rank,
             "events": [
                 {
-                    "event_type": type_.value,
-                    "stream": stream.value,
+                    "event_type": type_,
+                    "stream": stream,
                     "gpu_time": gpu_time,
                     "cpu_time": cpu_time,
                     **(
@@ -509,7 +500,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         if step is None
                         else {
                             "step_idx": step.global_index,
-                            "step_type": step.type_.value,
+                            "step_type": step.type_,
                             "step_stage": step.stage,
                             "step_depth_first_micro_batch": step.depth_first_micro_batch,
                             "step_breadth_first_micro_batch": step.breadth_first_micro_batch,
@@ -523,7 +514,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         yaml.safe_dump(
             out,
             get_run().open_artifact(
-                f"schedule_profile_rank_{self._distributed_config.rank}_{context.phase.value}_step_{context.iteration}"
+                f"schedule_profile_rank_{self._distributed_config.rank}_{context.phase}_step_{context.iteration}"
             ),
         )
 

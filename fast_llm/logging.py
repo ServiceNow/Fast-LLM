@@ -35,8 +35,8 @@ _MEMORY_METRIC_FORMAT = (
 )
 
 _VALIDATION_METRIC_FORMAT_KEYS = _MEMORY_METRIC_FORMAT_KEYS | {
-    "iteration",
-    "train_iters",
+    "completed_steps",
+    "total_steps",
     "consumed_samples",
     "consumed_tokens",
     "step_time_ms",
@@ -47,8 +47,7 @@ _VALIDATION_METRIC_FORMAT_KEYS = _MEMORY_METRIC_FORMAT_KEYS | {
 }
 
 _VALIDATION_METRIC_FORMATS = (
-    "{phase}{dataset_name} @ iteration {iteration:6.0f}/{train_iters:6.0f}"
-    " | consumed samples: {consumed_samples:12,.0f}"
+    "{phase}{dataset_name} @ step {completed_steps:6.0f}/{total_steps:6.0f}"
     " | consumed tokens: {consumed_tokens:16,.0f}"
     " | batch size: {batch_size:3.0f}"
     " | step time: {step_time_ms:.2f} ms"
@@ -92,13 +91,11 @@ _METRIC_FORMATS_KEYS = {
     PhaseType.training: _TRAINING_METRIC_FORMAT_KEYS,
     PhaseType.validation: _VALIDATION_METRIC_FORMAT_KEYS,
     PhaseType.inference: _VALIDATION_METRIC_FORMAT_KEYS,
-    PhaseType.test: _VALIDATION_METRIC_FORMAT_KEYS,
 }
 _METRIC_FORMATS = {
     PhaseType.training: _TRAINING_METRIC_FORMATS,
     PhaseType.validation: _VALIDATION_METRIC_FORMATS,
     PhaseType.inference: _VALIDATION_METRIC_FORMATS,
-    PhaseType.test: _VALIDATION_METRIC_FORMATS,
 }
 
 
@@ -115,7 +112,7 @@ def format_metrics(
             **{key: metrics.pop(key, _NAN) for key in _METRIC_FORMATS_KEYS[phase]},
         )
     ]
-    outputs.extend([f"{loss_def.formatted_name}: {metrics.pop(loss_def.name, _NAN):.5f}" for loss_def in loss_defs])
+    outputs.extend([f"{loss_def.name}: {metrics.pop(loss_def.name, _NAN):.5f}" for loss_def in loss_defs])
     if metrics:
         outputs.extend([f"{key}: {value}" for key, value in metrics.items()])
 
@@ -123,9 +120,7 @@ def format_metrics(
 
 
 @torch._dynamo.disable  # noqa
-def log_tensor[
-    T
-](
+def log_tensor[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -133,7 +128,7 @@ def log_tensor[
     level: int = 2,
     storage: bool = False,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
-) -> (T | None):
+) -> T | None:
     if level < 1:
         return
     tensor = tensor.detach()
@@ -167,6 +162,8 @@ def log_tensor[
                 min=v_float.min().item(),
                 max=v_float.max().item(),
             )
+            if TensorLogs.config.full_tensors:
+                stats["tensor"] = tensor.clone()
         txt.extend(
             [
                 ("mu", format_number(stats["mu"] * scale), 10),
@@ -214,14 +211,14 @@ def log_tensor[
         prefix = "" if prefix is None else f" {prefix}="
         len_ += col_len + len(prefix) + 1
         out = f"{f'{out}{prefix}{str(val)}':{len_}s}"
+        if TensorLogs.config.full_tensors:
+            out = f"{out}\nTensor:\n{tensor}"
     if TensorLogs.config.show and log_fn is not None:
         return log(out, log_fn=log_fn)
 
 
 @torch._dynamo.disable  # noqa
-def log_grad[
-    T
-](
+def log_grad[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -244,9 +241,7 @@ def log_grad[
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_tensor[
-    T
-](
+def log_distributed_tensor[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -257,7 +252,7 @@ def log_distributed_tensor[
     global_: bool = True,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-) -> (T | None):
+) -> T | None:
     if level <= 0:
         return
     if global_:
@@ -278,9 +273,7 @@ def log_distributed_tensor[
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_grad[
-    T
-](
+def log_distributed_grad[T](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -292,7 +285,7 @@ def log_distributed_grad[
     global_: bool = True,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-) -> (T | None):
+) -> T | None:
     if level <= 0:
         return
     tensor.register_hook(
@@ -311,9 +304,7 @@ def log_distributed_grad[
 
 
 @torch._dynamo.disable  # noqa
-def log_generator[
-    T
-](
+def log_generator[T](
     name,
     generator: torch.Tensor | torch.Generator | None = None,
     log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
@@ -328,9 +319,7 @@ _global_max_allocated = 0
 _global_max_reserved = 0
 
 
-def log_memory_usage[
-    T
-](
+def log_memory_usage[T](
     header: str | None = None,
     log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
     reset_stats: bool = True,

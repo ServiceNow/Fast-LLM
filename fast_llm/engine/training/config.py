@@ -1,4 +1,5 @@
 import abc
+import functools
 import os
 import pathlib
 import shlex
@@ -7,74 +8,38 @@ import typing
 
 from fast_llm.config import (
     Config,
+    Configurable,
     Field,
     FieldHint,
-    FieldUpdate,
+    FieldOverride,
     NoAutoValidate,
     check_field,
     config_class,
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.config import RedisConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointStateSaveConfigBase,
     DistributedCheckpointFormat,
 )
+from fast_llm.engine.config_utils.interval import IntervalConfig
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase
+from fast_llm.engine.distributed.config import DistributedBackend
+from fast_llm.engine.evaluation.config import EvaluatorConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
-from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
+from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.training.trainer import Trainer, TrainingEvaluator
-
-
-@config_class()
-class IntervalConfig(Config):
-    # Intervals are a common pattern, so we standardize them with this base class.
-    interval: int | None = Field(
-        default=None,
-        desc="The number of training iterations between each interval. Setting to None will disable.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
-    )
-    offset: int = Field(
-        default=0,
-        desc="Offset for the first interval.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-
-    def _validate(self) -> None:
-        if self.interval:
-            with self._set_implicit_default(None):
-                self.offset %= self.interval
-        super()._validate()
-
-    def enabled(self, iteration: int | None = None) -> bool:
-        return self.interval and (iteration is None or (iteration - self.offset) % self.interval == 0)
-
-    def is_sub_interval(self, other: "IntervalConfig") -> bool:
-        if not self.enabled():
-            return True
-        elif not other.enabled():
-            return False
-        return self.interval % other.interval == 0 and (other.offset % other.interval) == (
-            self.offset % other.interval
-        )
-
-    def assert_sub_interval(self, other: "IntervalConfig") -> None:
-        assert self.is_sub_interval(other), f"{self} is not a sub-interval of {other}"
-
-    def get_count(self, iteration) -> int:
-        # Number of times this interval was enabled after a given iteration.
-        return (iteration - self.offset) // self.interval + 1 if self.enabled() else 0
+    from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+    from fast_llm.engine.training.streaming import StreamingTrainerCallback
+    from fast_llm.engine.training.trainer import Trainer
 
 
 def _validate_script(value: str | list[str]) -> list[str]:
@@ -86,6 +51,8 @@ def _validate_script(value: str | list[str]) -> list[str]:
 
 @config_class()
 class CallbackConfig(Config):
+    """Configuration for an optional shell script callback invoked after a checkpoint, export, or shutdown event."""
+
     script: list[str] | None = Field(
         default=None,
         desc="Shell script to run.",
@@ -107,12 +74,14 @@ class CallbackConfig(Config):
 
 @config_class()
 class WandbAlertConfig(IntervalConfig):
-    interval = FieldUpdate(
+    """Configuration for periodic Weights & Biases status alerts during training."""
+
+    interval = FieldOverride(
         desc="The number of training iterations between each Wandb status post (alert)."
         " Setting to None will disable iteration-based wandb alerts."
         " Must be a sub-interval of the logging interval."
     )
-    offset = FieldUpdate(
+    offset = FieldOverride(
         desc="Offset for the first Wandb status post (alert)." " Must be compatible with the logging offset.",
     )
     status_updates: bool | None = Field(
@@ -121,26 +90,28 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
-    post_alerts: bool = Field(init=False)
 
-    def _validate(self) -> None:
-        if self.status_updates is None:
-            self.post_alerts = self.enabled()
-        super()._validate()
+    @functools.cached_property
+    def post_alerts(self) -> bool:
+        return self.status_updates if self.status_updates is not None else self.enabled()
 
 
 @config_class()
 class MetricsLogsConfig(IntervalConfig):
-    interval = FieldUpdate(
+    """Configuration for training metric logging interval (loss, throughput, etc.)."""
+
+    interval = FieldOverride(
         default=100,
         desc="The number of training iterations between each metric logs."
         " Setting to None will disable metric logging.",
     )
-    offset = FieldUpdate(desc="Offset for the first metric logs.")
+    offset = FieldOverride(desc="Offset for the first metric logs.")
 
 
 @config_class()
 class WandbConfig(Config):
+    """Configuration for Weights & Biases experiment tracking (project, entity, alerts)."""
+
     alert: WandbAlertConfig = Field(
         desc="Configuration for Wandb alerts."
         " The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
@@ -152,27 +123,9 @@ class WandbConfig(Config):
 
 
 @config_class()
-class TrainingEvaluatorConfig(EvaluatorConfigBase, IntervalConfig):
-    evaluator: EvaluatorConfig = Field(desc="Evaluator to run")
-
-    def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
-        # Number of completed evaluation runs
-        return (self.get_count(training_iterations) + extra_evaluations) if self.enabled() else 0
-
-    def get_evaluator(
-        self,
-        name: str,
-        batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
-    ) -> "TrainingEvaluator":
-        from fast_llm.engine.training.trainer import TrainingEvaluator
-
-        return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
-
-
-@config_class()
 class TrainingCheckpointBaseConfig(IntervalConfig):
+    """Abstract base configuration for periodic saving operations (checkpoints and exports)."""
+
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
@@ -213,14 +166,16 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 
 @config_class()
 class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
+    """Configuration for saving full training checkpoints (weights + optimizer state) at a fixed interval."""
+
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each checkpoint. Setting to None will disable checkpoints."
     )
-    offset = FieldUpdate(desc="Offset for the first checkpoint.")
-    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
-    keep: int | None = FieldUpdate(default=5)
+    offset = FieldOverride(desc="Offset for the first checkpoint.")
+    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after checkpoint.")
+    keep: int | None = FieldOverride(default=5)
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "checkpoint"
@@ -246,13 +201,15 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
 
 @config_class()
 class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
+    """Configuration for exporting model weights to an external format (e.g. HuggingFace) at a fixed interval."""
+
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
-    interval = FieldUpdate(
+    interval = FieldOverride(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
-    offset = FieldUpdate(desc="Offset for the first export.")
-    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
+    offset = FieldOverride(desc="Offset for the first export.")
+    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after export.")
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
@@ -263,19 +220,23 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
 
 @config_class()
 class ShutdownConfig(IntervalConfig):
-    interval = FieldUpdate(
+    """Configuration for automatic training shutdown after a checkpoint, useful for preemptible jobs."""
+
+    interval = FieldOverride(
         desc="The number of training iterations between each automated shutdown."
         " Setting to None will disable automated shutdowns."
         " Must be a sub-interval of the checkpoint interval."
     )
-    offset = FieldUpdate(
+    offset = FieldOverride(
         desc="Offset for the first automated shutdown." " Must be compatible with the checkpoint offset."
     )
 
 
 @config_class()
 class TrainingConfig(Config):
-    evaluators: dict[str, TrainingEvaluatorConfig] = Field(
+    """Configuration for training phases: iterations, checkpoints, exports, logging, evaluators, and W&B."""
+
+    evaluators: dict[str, EvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
@@ -287,12 +248,6 @@ class TrainingConfig(Config):
     wandb: WandbConfig = Field(desc="Configuration for Wandb.", hint=FieldHint.core)
     train_iters: int = Field(
         default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
-    )
-    test_iters: int = Field(
-        default=0,
-        desc="Number of iterations for the test phase at the end of training. Setting to 0 will disable the test phase.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
     )
     num_workers: int = Field(
         default=2,
@@ -321,16 +276,75 @@ class TrainingConfig(Config):
         self.wandb.alert.assert_sub_interval(self.logs)
 
 
+@config_class(registry=True)
+class TrainerCallbackConfig(Config):
+    """Abstract base configuration for trainer callbacks that hook into training events."""
+
+    def get_callback(self, model: "FastLLMModel") -> "TrainerCallback":
+        raise NotImplementedError()
+
+    def setup(self, config: "TrainerConfig") -> None:
+        pass
+
+
+@config_class()
+class WeightsBroadcastConfig(Config):
+    """Configuration for broadcasting model weights to an external process via NCCL (used in online RL pipelines)."""
+
+    # TODO: Have the external model send these instead?
+    host: str = Field(
+        default="localhost",
+        desc="Master address for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+    port: int = Field(
+        default=23456,
+        desc="Master port for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+    external_world_size: int = Field(
+        default=1,
+        desc="World size of the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+    backend: DistributedBackend = Field(
+        default=DistributedBackend.nccl,
+        desc="Backend for the external NCCL process group.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class(dynamic_type={TrainerCallbackConfig: "streaming"})
+class StreamingTrainerCallbackConfig(TrainerCallbackConfig, RedisConfig):
+    """Trainer callback for online RL: exports and broadcasts model weights via Redis after each update."""
+
+    broadcast: WeightsBroadcastConfig = Field(
+        desc="Configuration for signaling weight-ready events via Redis.",
+        hint=FieldHint.core,
+    )
+
+    export: CheckpointStateSaveConfigBase = Field(
+        desc="Configuration for exporting checkpoints before broadcasting them.",
+        hint=FieldHint.core,
+    )
+
+    def get_callback(self, model: "FastLLMModel") -> "StreamingTrainerCallback":
+        from fast_llm.engine.training.streaming import StreamingTrainerCallback
+
+        return StreamingTrainerCallback(self, model)
+
+    def setup(self, config: "TrainerConfig") -> None:
+        self.export.setup(config.model)
+
+
 @config_class(registry=True, dynamic_type={RunnableConfig: "train"})
 class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
+    """Abstract base configuration for a training run: model, data, schedule, optimizer, callbacks, and checkpointing."""
+
     _abstract = True
     # TODO: Generalize data, schedule, logging, etc.
     training: TrainingConfig = Field(
         desc="Configuration for the training phases and global properties.",
-        hint=FieldHint.core,
-    )
-    batch: BatchConfig = Field(
-        desc="Configuration for the training, validation and test batches.",
         hint=FieldHint.core,
     )
     schedule: ScheduleConfig = Field(desc="Configuration for the scheduling of each iteration.", hint=FieldHint.core)
@@ -352,10 +366,19 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         hint=FieldHint.feature,
     )
 
+    callbacks: dict[str, TrainerCallbackConfig] = Field(
+        default_factory=dict,
+        desc="Configuration for training callbacks.",
+        hint=FieldHint.feature,
+    )
+
     def _validate(self) -> None:
         self.training.export.setup(self.model)
         for reference_model in self.reference_models.values():
             self._add_reference_distributed_to_pretrained(reference_model)
+        for callback in self.callbacks.values():
+            # We don't know anything about the callbacks, so we forward `self` and let them handle their own setup.
+            callback.setup(self)
         super()._validate()
         if self.reference_models:
             # TODO: Add support.
@@ -366,10 +389,6 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             assert not self.training.checkpoint.enabled()
         for reference_model in self.reference_models.values():
             assert reference_model.model.distributed.reference_config is self.model.distributed
-
-    def _setup(self):
-        super()._setup()
-        self.batch.setup(self.model.distributed)
 
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
@@ -390,6 +409,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         return runnable
 
     def _add_reference_distributed_to_pretrained(self, pretrained: PretrainedFastLLMModelConfig):
+        # TODO: ====== Convert to simple method? ======
         old_setup = pretrained._setup
 
         def new_setup():
@@ -403,3 +423,21 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             old_setup()
 
         object.__setattr__(pretrained, "_setup", new_setup)
+
+
+class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType]):
+    # TODO: Make a more exhaustive set of events and arguments.
+    def run_begin(self, step: int):
+        pass
+
+    def step_end(
+        self,
+        step: int,
+        reduced_losses: dict[str, float | int],
+        update_successful: bool,
+        train_metrics: dict[str, typing.Any] | None,
+    ):
+        pass
+
+    def train_end(self, step: int):
+        pass

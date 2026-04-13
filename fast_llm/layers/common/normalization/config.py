@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.common.normalization.normalization import Normalization
 
 
-class NormalizationImplementation(str, enum.Enum):
+class NormalizationImplementation(enum.StrEnum):
     """
     An enum for the available implementations of layer norm.
     """
@@ -28,6 +28,8 @@ class NormalizationImplementation(str, enum.Enum):
 
 @config_class(registry=True)
 class NormalizationConfig(ModuleConfig):
+    """Abstract base configuration for normalization layers. Use `type: layer_norm`, `rms_norm`, `gated_rms_norm`, or `none`."""
+
     lr_scale: float | None = Field(
         default=None,
         desc="Scaling factor for the layer learning rate."
@@ -62,6 +64,8 @@ class NormalizationConfig(ModuleConfig):
 
 @config_class(dynamic_type={NormalizationConfig: "none"})
 class NoNormalizationConfig(NormalizationConfig):
+    """Disables normalization entirely (identity pass-through)."""
+
     _abstract = False
 
     @property
@@ -106,6 +110,8 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
 
 @config_class(dynamic_type={NormalizationConfig: "layer_norm"})
 class LayerNormalizationConfig(LayerNormalizationBaseConfig):
+    """Configuration for standard layer normalization (mean and variance, with learnable weight and bias)."""
+
     bias: ParameterConfig = Field(
         desc="Configuration for the weight.",
         hint=FieldHint.architecture,
@@ -121,6 +127,8 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
 
 @config_class(dynamic_type={NormalizationConfig: "rms_norm"})
 class RMSNormalizationConfig(LayerNormalizationBaseConfig):
+    """Configuration for RMS normalization (variance only, no mean subtraction, no bias)."""
+
     _abstract = False
 
     @property
@@ -132,6 +140,8 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
 
 @config_class(dynamic_type={NormalizationConfig: "gated_rms_norm"})
 class GatedRMSNormalizationConfig(RMSNormalizationConfig):
+    """Configuration for gated RMS normalization, which applies a learned activation gate alongside the norm weight."""
+
     _abstract = False
 
     activation: ActivationType = Field(

@@ -3034,7 +3034,9 @@ class Apriel2VisionEncoder(nn.Module):
             for block_config in blocks_config.values():
                 yield block_config
 
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, pixel_values: torch.Tensor, output_hidden_states: bool = False
+    ) -> tuple[torch.Tensor, Optional[tuple]]:
         """Process images through vision encoder using Pixtral-style concatenation.
 
         All image patches are concatenated into ONE sequence. Vision encoder computes:
@@ -3066,15 +3068,15 @@ class Apriel2VisionEncoder(nn.Module):
             patch_embeds_list.append(embed.squeeze(0))
 
         # Concatenate all patches into one sequence: [1, total_patches, hidden]
-        hidden_states = torch.cat(patch_embeds_list, dim=0).unsqueeze(0)
+        patch_embeds = torch.cat(patch_embeds_list, dim=0).unsqueeze(0)
 
         # Compute position_ids for 2D rotary: position_id = row * max_patches_per_side + col
         # Vision encoder owns 2D position encoding - attention just uses position_ids
         positions = []
         for _ in range(batch_size):
             mesh = torch.meshgrid(
-                torch.arange(height_patches, device=hidden_states.device),
-                torch.arange(width_patches, device=hidden_states.device),
+                torch.arange(height_patches, device=patch_embeds.device),
+                torch.arange(width_patches, device=patch_embeds.device),
                 indexing="ij",
             )
             h_grid, w_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
@@ -3086,14 +3088,14 @@ class Apriel2VisionEncoder(nn.Module):
         sequence_lengths = [num_patches_per_image] * batch_size
 
         # Forward through vision encoder block sequence
-        hidden_states, _, _ = self.encoder(
-            hidden_states,
+        hidden_states, all_hidden_states, _ = self.encoder(
+            patch_embeds,
             attention_mask=None,  # Attention computes masks from sequence_lengths if needed
             position_ids=position_ids,
             sequence_lengths=sequence_lengths,
             past_key_values=None,
             output_attentions=False,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             use_cache=False,
             cache_position=None,
         )
@@ -3103,8 +3105,7 @@ class Apriel2VisionEncoder(nn.Module):
 
         # Reshape back to [batch, num_patches, text_hidden]
         image_features = image_features.squeeze(0).view(batch_size, num_patches_per_image, -1)
-
-        return image_features
+        return image_features, (*all_hidden_states, hidden_states, image_features) if output_hidden_states else None
 
 
 class SimpleMLP(nn.Module):
@@ -3184,7 +3185,7 @@ class Apriel2Model(Apriel2TextModel):
         # Re-run post_init to handle any vision encoder initialization
         self.post_init()
 
-    def get_image_features(self, pixel_values, image_sizes=None):
+    def get_image_features(self, pixel_values, image_sizes=None, output_hidden_states: bool = False):
         """Extract and project image features.
 
         Args:
@@ -3199,7 +3200,8 @@ class Apriel2Model(Apriel2TextModel):
 
         if image_sizes is None:
             # No cropping needed - process as batch
-            return self.vision_encoder(pixel_values)
+            features, hidden_states = self.vision_encoder(pixel_values, output_hidden_states)
+            return features, hidden_states
 
         # Get patch size from embeddings layer to determine minimum valid image size
         patch_height = self.vision_encoder.embeddings.patch_embeddings.kernel_size[0]
@@ -3207,6 +3209,7 @@ class Apriel2Model(Apriel2TextModel):
 
         # Process each image individually with its actual size
         all_features = []
+        all_hidden_states = []
         for i, (image, (height, width)) in enumerate(zip(pixel_values, image_sizes)):
             height, width = int(height), int(width)
             # Skip images that are too small to produce any patches
@@ -3215,16 +3218,25 @@ class Apriel2Model(Apriel2TextModel):
             # Crop to actual image size
             cropped = image[:, :height, :width]
             # Process single image - add batch dim
-            features = self.vision_encoder(cropped.unsqueeze(0))
+            features, hidden_states = self.vision_encoder(cropped.unsqueeze(0), output_hidden_states)
             # Remove batch dim and add to list
             all_features.append(features.squeeze(0))
+            all_hidden_states.append(hidden_states)
+
+        if all_hidden_states:
+            all_hidden_states = tuple(
+                torch.cat([all_hidden_states[j][i] for j in range(len(all_hidden_states))], dim=1)
+                for i in range(len(all_hidden_states[0]))
+            )
+        else:
+            all_hidden_states = None
 
         if not all_features:
             # No valid images - return empty tensor
             return torch.zeros(0, 0, self.config.hidden_size, device=pixel_values.device)
 
         # Concatenate all features along patch dimension
-        return torch.cat(all_features, dim=0).unsqueeze(0)  # [1, total_patches, hidden]
+        return torch.cat(all_features, dim=0).unsqueeze(0), all_hidden_states  # [1, total_patches, hidden]
 
     def forward(
         self,
@@ -3240,12 +3252,15 @@ class Apriel2Model(Apriel2TextModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        output_vision_hidden_states: Optional[bool] = None,
         **kwargs,
     ) -> Union[tuple, BaseModelOutputWithPast]:
         # If pixel_values provided, we need to merge vision and text embeddings
         if pixel_values is not None and input_ids is not None:
             # Encode and project images (with optional cropping based on image_sizes)
-            image_features = self.get_image_features(pixel_values, image_sizes)
+            image_features, vision_hidden_states = self.get_image_features(
+                pixel_values, image_sizes, output_hidden_states=output_vision_hidden_states
+            )
 
             # Get text embeddings (use inherited embed_tokens)
             inputs_embeds = self.embed_tokens(input_ids)
@@ -3278,9 +3293,11 @@ class Apriel2Model(Apriel2TextModel):
 
             # Clear input_ids since we're using inputs_embeds
             input_ids = None
+        else:
+            vision_hidden_states = None
 
         # Forward through inherited text model components
-        return super().forward(
+        output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -3293,6 +3310,9 @@ class Apriel2Model(Apriel2TextModel):
             cache_position=cache_position,
             **kwargs,
         )
+        if vision_hidden_states:
+            output.hidden_states = vision_hidden_states + output.hidden_states
+        return output
 
 
 class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
@@ -3330,9 +3350,13 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def get_image_features(self, pixel_values):
+    def get_image_features(self, pixel_values, image_sizes=None, output_hidden_states: bool = False):
         """Extract and project image features."""
-        return self.model.get_image_features(pixel_values)
+        return self.model.get_image_features(pixel_values, image_sizes, output_hidden_states)
+
+    @property
+    def vision_encoder(self):
+        return self.model.vision_encoder
 
     def forward(
         self,
@@ -3350,6 +3374,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
+        output_vision_hidden_states: Optional[bool] = None,
         **kwargs,
     ) -> Union[tuple, CausalLMOutputWithPast]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
@@ -3368,6 +3393,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            output_vision_hidden_states=output_vision_hidden_states,
             **kwargs,
         )
 

@@ -12,7 +12,7 @@ from fast_llm.functional.triton.sparse_linear import (
     output_sparse_matmul,
 )
 from fast_llm.utils import Assert
-from tests.utils.utils import requires_cuda
+from tests.utils.utils import requires_triton
 
 
 @dataclasses.dataclass
@@ -46,12 +46,11 @@ class _SparseTestData:
     def num_experts(self) -> int:
         return len(self.expert_begins)
 
-    @functools.cached_property
-    def sparse_map(self) -> SparseMap:
+    def get_sparse_map(self, device: torch.device) -> SparseMap:
         return SparseMap(
             num_experts=self.num_experts,
-            expert_ends=torch.tensor(self.expert_ends, device="cuda"),
-            expert_pad_begins=torch.tensor(self.expert_pad_begins, device="cuda"),
+            expert_ends=torch.tensor(self.expert_ends, device=device),
+            expert_pad_begins=torch.tensor(self.expert_pad_begins, device=device),
             num_rows=self.expert_ends[-1],
             # Not needed
             sparse_rows=None,
@@ -60,8 +59,8 @@ class _SparseTestData:
             num_experts_per_token=None,
         )
 
-    def normal(self, dim_0: int, dim_1: int) -> torch.Tensor:
-        return torch.normal(0, self.std, (dim_0, dim_1), device="cuda")
+    def normal(self, dim_0: int, dim_1: int, device: torch.device) -> torch.Tensor:
+        return torch.normal(0, self.std, (dim_0, dim_1), device=device)
 
 
 _SPARSE_TEST_DATAS = (
@@ -80,28 +79,28 @@ _SPARSE_TEST_DATAS = (
 )
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.slow
 @pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
-def test_dense_matmul(sparse_test_data):
-    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim)
-    rhs = sparse_test_data.normal(sparse_test_data.dense_dim, sparse_test_data.sparse_dim)
+def test_dense_matmul(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.dense_dim, sparse_test_data.sparse_dim, testing_device)
 
     output = dense_matmul(lhs, rhs)
     output_ref = torch.matmul(lhs, rhs)
     Assert.rms_close(output, output_ref, 1e-3)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.slow
 @pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
-def test_output_sparse_matmul(sparse_test_data):
-    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim)
-    rhs = sparse_test_data.normal(sparse_test_data.dense_dim, sparse_test_data.sparse_dim_expanded)
+def test_output_sparse_matmul(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.dense_dim, sparse_test_data.sparse_dim_expanded, testing_device)
 
     # Randomly initialize the output to ensure padded values have no effect.
-    out = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim)
-    output = output_sparse_matmul(lhs, rhs, sparse_test_data.sparse_map, out)
+    out = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim, testing_device)
+    output = output_sparse_matmul(lhs, rhs, sparse_test_data.get_sparse_map(testing_device), out)
 
     output_ref = torch.zeros_like(output)
     for i in range(sparse_test_data.num_experts):
@@ -114,14 +113,14 @@ def test_output_sparse_matmul(sparse_test_data):
     Assert.rms_close(output, output_ref, 1e-3)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.slow
 @pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
-def test_input_inner_sparse_matmul(sparse_test_data):
-    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim)
-    rhs = sparse_test_data.normal(sparse_test_data.sparse_dim_expanded, sparse_test_data.dense_dim)
+def test_input_inner_sparse_matmul(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.sparse_dim_expanded, sparse_test_data.dense_dim, testing_device)
 
-    output = input_inner_sparse_matmul(lhs, rhs, sparse_test_data.sparse_map)
+    output = input_inner_sparse_matmul(lhs, rhs, sparse_test_data.get_sparse_map(testing_device))
 
     output_ref = torch.zeros_like(output)
     for i in range(sparse_test_data.num_experts):
@@ -134,14 +133,14 @@ def test_input_inner_sparse_matmul(sparse_test_data):
     Assert.rms_close(output, output_ref, 1e-3)
 
 
-@requires_cuda
+@requires_triton
 @pytest.mark.slow
 @pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
-def test_input_row_sparse_matmul(sparse_test_data):
-    lhs = sparse_test_data.normal(sparse_test_data.sparse_dim, sparse_test_data.token_dim)
-    rhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim)
+def test_input_row_sparse_matmul(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.sparse_dim, sparse_test_data.token_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim, testing_device)
 
-    output = input_row_sparse_matmul(lhs, rhs, sparse_test_data.sparse_map)
+    output = input_row_sparse_matmul(lhs, rhs, sparse_test_data.get_sparse_map(testing_device))
 
     output_ref = torch.zeros_like(output)
     for i in range(sparse_test_data.num_experts):

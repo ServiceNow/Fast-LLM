@@ -1,7 +1,8 @@
 import functools
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.data.document.config import ImageNormalizationConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockSequenceConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
@@ -15,46 +16,8 @@ if typing.TYPE_CHECKING:
 
 
 class VisionKwargs(BlockKwargs):
+    patches = "patches"
     patch_positions = "patch_positions"
-
-
-@config_class()
-class ImageNormalizationConfig(Config):
-    mean_r: float = Field(
-        default=0.48145466,
-        desc="Mean value for the red channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    mean_g: float = Field(
-        default=0.4578275,
-        desc="Mean value for the green channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    mean_b: float = Field(
-        default=0.40821073,
-        desc="Mean value for the blue channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    std_r: float = Field(
-        default=0.26862954,
-        desc="Standard deviation value for the red channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    std_g: float = Field(
-        default=0.26130258,
-        desc="Standard deviation value for the green channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    std_b: float = Field(
-        default=0.27577711,
-        desc="Standard deviation value for the blue channel in the image normalization process.",
-        hint=FieldHint.optional,
-    )
-    rescale_factor: float = Field(
-        default=255.0,
-        desc="Rescale factor for the image normalization process.",
-        hint=FieldHint.optional,
-    )
 
 
 @config_class()
@@ -111,6 +74,10 @@ class VisionEncoderConfig(BlockConfig):
     adapter: MLPBaseConfig = Field(
         desc="Configuration for the adapter layer.",
         hint=FieldHint.architecture,
+    )
+    normalization: ImageNormalizationConfig = Field(
+        desc="Configuration for image normalization during preprocessing.",
+        hint=FieldHint.feature,
     )
     hidden_size: int = Field(
         default=1024,

@@ -25,7 +25,7 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        config["attention_bias"] = True
+        config["attention_bias"] = False
         out = super().import_config(config)
         out["query_layer"] = {"bias": {"enabled": True}}
         out["key_layer"] = {"bias": {"enabled": True}}

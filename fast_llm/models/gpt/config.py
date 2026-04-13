@@ -1,14 +1,12 @@
-import functools
 import logging
 import typing
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
+from fast_llm.config import Field, FieldHint, FieldOverride, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
@@ -25,7 +23,7 @@ from fast_llm.models.gpt.conversion.config import (
     Qwen2CheckpointFormat,
 )
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
@@ -33,47 +31,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.trainer import GPTTrainer
 
 logger = logging.getLogger(__name__)
-
-
-@config_class()
-class GPTBatchConfig(BatchConfig):
-    sequence_length: int = Field(
-        default=2048,
-        desc="Number of tokens in a sample.",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    micro_sequence_length: int = Field(
-        default=None,
-        desc="Number of tokens in a micro-sequence (must divide the sequence length).",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0),
-    )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read loss masking spans from the dataset.",
-        hint=FieldHint.feature,
-    )
-    truncate_documents: bool | None = Field(
-        default=True,
-        desc=(
-            "If enabled, documents may be truncated while being packed to fit the sequence length."
-            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
-            " (and documents exceeding the sequence length will be skipped altogether)."
-        ),
-        hint=FieldHint.feature,
-    )
-
-    def _validate(self) -> None:
-        if self.micro_sequence_length is None:
-            with self._set_implicit_default():
-                self.micro_sequence_length = self.sequence_length
-        super()._validate()
-
-    @functools.cached_property
-    def micro_batch_splits(self) -> int:
-        assert self._validated
-        return div(self.sequence_length, self.micro_sequence_length)
 
 
 @config_class()
@@ -99,9 +56,11 @@ class GPTBaseModelConfig(LanguageModelConfig, BaseModelConfig):
 
 @config_class(dynamic_type={FastLLMModelConfig: "gpt"})
 class GPTModelConfig(FastLLMModelConfig):
+    """Configuration for the GPT model, including distributed, multi-stage, and HuggingFace checkpoint formats."""
+
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
-    base_model: GPTBaseModelConfig = FieldUpdate()
+    base_model: GPTBaseModelConfig = FieldOverride()
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         AutoGPTHuggingfaceCheckpointFormat,
         LlamaCheckpointFormat,
@@ -136,35 +95,35 @@ class GPTModelConfig(FastLLMModelConfig):
 
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
+    """Configuration for a GPT model together with an optional pretrained checkpoint to load."""
+
     _abstract = False
-    model: GPTModelConfig = FieldUpdate()
+    model: GPTModelConfig = FieldOverride()
 
 
 @config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
-    data: GPTDataConfig = FieldUpdate()
-    batch: GPTBatchConfig = FieldUpdate()
+    """Top-level configuration for training a GPT model. Entry point for `fast-llm train gpt`."""
+
+    data: GPTDataConfig = FieldOverride()
     # TODO: Use dynamic model type?
-    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldOverride()
 
     def _validate(self) -> None:
-        if self.batch.sequence_length is None:
-            # TODO: Drop this.
-            self.batch.sequence_length = self.model.base_model.embeddings.num_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
         if self.model.base_model.embeddings.position_embeddings.enabled:
-            Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.batch.sequence_length)
+            Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.data.maximum_document_length)
 
         # TODO: Avoid digging inside the model.
         Assert.eq(self.reference_models.keys(), self.model.base_model.get_reference_models())
 
         for reference_model in self.reference_models.values():
             Assert.geq(
-                reference_model.model.base_model.head.max_prediction_distance,
-                self.model.base_model.head.max_prediction_distance,
+                reference_model.model.base_model.head.prediction_heads,
+                self.model.base_model.head.prediction_heads,
             )
             Assert.empty(reference_model.model.base_model.get_reference_models())
             Assert.eq(

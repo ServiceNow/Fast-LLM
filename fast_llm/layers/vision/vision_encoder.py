@@ -10,6 +10,7 @@ from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.language_model import LanguageModel
 from fast_llm.layers.vision.config import VisionEncoderConfig, VisionMultiModalModelConfig
+from fast_llm.utils import safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -53,18 +54,27 @@ class VisionEncoder[ConfigType: VisionEncoderConfig](BlockBase[ConfigType]):
     def get_layers(self) -> list["Layer"]:
         return self.embeddings.get_layers() + self.encoder.get_layers() + self.adapter.get_layers()
 
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
+        return safe_merge_dicts(
+            {"normalization": self._config.normalization},
+            self.embeddings.get_preprocessing_config(),
+            self.encoder.get_preprocessing_config(),
+            self.adapter.get_preprocessing_config(),
+        )
+
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
         self.embeddings.preprocess(kwargs)
         self.encoder.preprocess(kwargs)
         self.adapter.preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
+    def get_loss_definitions(self) -> list[LossDef]:
         # Needed because the base class uses `get_layers` which may bypass the decoder. TODO: Avoidable?
         return (
-            self.embeddings.get_loss_definitions(count)
-            + self.encoder.get_loss_definitions(count)
-            + self.adapter.get_loss_definitions(count)
+            self.embeddings.get_loss_definitions()
+            + self.encoder.get_loss_definitions()
+            + self.adapter.get_loss_definitions()
         )
 
 
@@ -98,12 +108,23 @@ class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageMod
     def get_layers(self) -> list[Layer]:
         return self._vision_encoder_with_namespace.get_layers() + super().get_layers()
 
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return safe_merge_dicts(
+            {
+                "vision_encoder": safe_merge_dicts(
+                    self._vision_encoder_with_namespace.get_preprocessing_config(),
+                    {"distributed": self._distributed_config, "namespace": self._vision_encoder_namespace},
+                )
+            },
+            super().get_preprocessing_config(),
+        )
+
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._vision_encoder_with_namespace.preprocess(kwargs)
         super().preprocess(kwargs)
 
-    def get_loss_definitions(self, count: int = 1) -> list[LossDef]:
-        return self.vision_encoder.get_loss_definitions(count) + super().get_loss_definitions(count)
+    def get_loss_definitions(self) -> list[LossDef]:
+        return self.vision_encoder.get_loss_definitions() + super().get_loss_definitions()
 
     @functools.cached_property
     def _vision_encoder_namespace(self) -> str:

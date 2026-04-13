@@ -11,7 +11,7 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
@@ -56,7 +56,6 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         out = super().import_config(config)
         out["rotary"]["type"] = "default_2d"
         out["causal"] = False
-        out["cross_document_attention"] = False
         return out
 
     @classmethod
@@ -66,7 +65,6 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
         Assert.is_(type(config.rotary), Rotary2DConfig)
         assert not config.add_linear_biases
         assert not config.causal
-        assert not config.cross_document_attention
         Assert.eq(config.head_groups, config.heads)
         return {
             "num_attention_heads": config.heads,
@@ -256,18 +254,17 @@ class LlavaHeadConverter(MistralHeadConverter):
     @classmethod
     def get_converters(
         cls,
-        config: LanguageModelHeadConfig,
+        config: LanguageModelConfig,
         exported_config: dict,
-        fast_llm_prefix: str,
     ) -> list[WeightConverter]:
         return [
             *cls.normalization_converter_class.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.final_norm",
+                config.head.normalization,
+                f"head.final_norm",
                 f"language_model.model.norm",
             ),
             get_parameter_converter(
-                f"{fast_llm_prefix}.output_weights",
+                f"head.output_weights",
                 "language_model.lm_head.weight",
                 drop_on_import=exported_config["tie_word_embeddings"],
             ),
@@ -282,7 +279,7 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
     vision_model_converter_class: typing.ClassVar[type[LlavaVisionModelConverter]] = LlavaVisionModelConverter
     # TODO: Make it flexible?
     language_model_converter_class: typing.ClassVar[type[LlavaLanguageModelConverter]] = LlavaLanguageModelConverter
-    # TODO: ====== Is tie_word_embeddings supported? ======
+    # TODO: Is tie_word_embeddings supported?
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -320,7 +317,7 @@ class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
                 config.decoder, "decoder", "language_model.model.layers"
             ),
             *cls.language_model_converter_class.head_converter_class.get_converters(
-                config.head, {"tie_word_embeddings": False}, "head"
+                config, {"tie_word_embeddings": False}
             ),
         ]
 

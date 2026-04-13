@@ -4,6 +4,7 @@ import pathlib
 import typing
 
 import pytest
+import torch
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat, DistributedCheckpointFormat, FastLLMCheckpointFormat
 from tests.utils.model_configs import ModelTestingConfig
@@ -16,6 +17,10 @@ class DistributedSaveLoadConfig:
     save_path: pathlib.Path | str
     distributed: dict[str, typing.Any]
     num_gpus: int = 2
+
+    def __post_init__(self):
+        self.distributed["use_cuda"] = torch.cuda.is_available()
+        self.distributed["backend"] = "nccl" if torch.cuda.device_count() >= self.num_gpus else "gloo"
 
     def resolve(self, base_path: pathlib.Path, model_testing_config: ModelTestingConfig) -> typing.Self:
         if model_testing_config.checkpoint_format is None:

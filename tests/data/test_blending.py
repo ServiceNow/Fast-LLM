@@ -4,12 +4,12 @@ import numpy as np
 import pytest
 
 from fast_llm.data.dataset.config import BlendedDatasetConfig
-from fast_llm.data.sample.language_model import LanguageModelSample
+from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_data,
+    get_sampling_config,
     get_test_data_and_compare_samples,
 )
 from tests.utils.dataset import get_alt_test_dataset, get_common_test_dataset
@@ -31,25 +31,25 @@ def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray,
 
 
 GPT_BLENDED_SAMPLES = [
-    [49152, 46, 10, 819, 19, 45],
-    [45, 69, 17, 86, 38826, 15],
-    [49152, 83, 80, 20452, 45, 93],
-    [15, 25, 51, 31, 32348, 64],
-    [64, 17, 93, 78, 40, 1793],
-    [1793, 1, 1746, 38, 27, 58],
-    [93, 90, 39, 6, 75, 9],
-    [58, 22885, 93, 37, 92, 76],
+    [50256, 46, 10, 721, 19, 45],
+    [45, 69, 17, 86, 92, 0],
+    [50256, 83, 80, 29, 2, 45],
+    [0, 15, 25, 51, 31, 27],
+    [27, 0, 64, 17, 93, 78],
+    [78, 3955, 43, 1, 1395, 38],
+    [45, 93, 90, 39, 6, 75],
+    [38, 27, 58, 40692, 93, 37],
 ]
 
 GPT_BLENDED_MIXED_SAMPLES = [
-    [49152, 46, 10, 819, 19, 45],
+    [50256, 46, 10, 721, 19, 45],
     [25492, 15877, 37874, 8570, 31649, 15521],
-    [45, 69, 17, 86, 38826, 15],
+    [45, 69, 17, 86, 92, 0],
     [3359, 20945, 33437, 32454, 42084, 45942],
-    [15, 25, 51, 31, 32348, 64],
-    [64, 17, 93, 78, 40, 1793],
+    [0, 15, 25, 51, 31, 27],
+    [27, 0, 64, 17, 93, 78],
     [15112, 36731, 47864, 35586, 33356, 37537],
-    [1793, 1, 1746, 38, 27, 58],
+    [78, 3955, 43, 1, 1395, 38],
 ]
 
 
@@ -79,12 +79,14 @@ def test_blending(probs):
     num_samples = 100
     from fast_llm.data.dataset.blended import BlendedDataset
 
+    sampling, _, _ = get_sampling_config(num_samples)
     dataset = BlendedDataset(
         "dataset",
         # Use a list of integers as a mock dataset, encoding both indexes in the sample.
         [list(range(i * num_samples, (i + 1) * num_samples)) for i, _ in enumerate(probs)],  # noqa
         probs,
-        get_sampling_data(num_samples),
+        sampling,
+        num_samples,
     )
     probs = normalize_probabilities(probs)
     samples = np.array([dataset[i] for i in range(num_samples)])
@@ -104,7 +106,7 @@ def test_blending(probs):
     Assert.all_equal(samples, samples_alt)
 
 
-def test_gpt_blended():
+def test_gpt_blended(data_result_path):
     # Make sure dataset blending works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     _, alt_config, _, _ = get_alt_test_dataset()
@@ -114,8 +116,8 @@ def test_gpt_blended():
             "datasets": [config, alt_config],
             "weights": [0.75, 0.25],
         },
-        BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+        BlendedDatasetConfig[LanguageModelDocument],
+    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
     # Test in data.
@@ -125,10 +127,11 @@ def test_gpt_blended():
         sequence_length=5,
         expected_samples=GPT_BLENDED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "blended",
     )
 
 
-def test_gpt_blended_mixed():
+def test_gpt_blended_mixed(data_result_path):
     # Make sure dataset blending works and check for unintended changes in behavior.
     _, config, _, preprocessing = get_common_test_dataset()
     # Random dataset needs an explicit vocab size.
@@ -142,8 +145,8 @@ def test_gpt_blended_mixed():
             ],
             "weights": [0.6, 0.4],
         },
-        BlendedDatasetConfig[LanguageModelSample],
-    ).build_and_sample(get_sampling_data(8, sequence_length=5, preprocessing=preprocessing))
+        BlendedDatasetConfig[LanguageModelDocument],
+    ).build_and_sample(*get_sampling_config(8, sequence_length=5, preprocessing=preprocessing))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
     # Test in data.
@@ -153,4 +156,5 @@ def test_gpt_blended_mixed():
         sequence_length=5,
         expected_samples=GPT_BLENDED_MIXED_SAMPLES,
         preprocessing=preprocessing,
+        cache_directory=data_result_path / "blended_mixed",
     )

@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.data.dataset.config import SamplingConfig
+from fast_llm.data.dataset.config import SamplingConfigBase
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
@@ -60,7 +60,7 @@ def test_validate_example_config():
     GPTTrainerConfig.from_dict(fast_llm_config_dict)
 
 
-@pytest.mark.parametrize("cls", (SamplingConfig, GPTModelConfig))
+@pytest.mark.parametrize("cls", (SamplingConfigBase, GPTModelConfig))
 def test_serialize_default_config_updates(cls):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
@@ -70,7 +70,7 @@ def test_serialize_default_config_updates(cls):
 
 @pytest.mark.parametrize("load_config", tuple(ModelConfigType))
 def test_pretrained_config(load_config: ModelConfigType, result_path):
-    config_path = result_path / "pretrained_config"
+    config_path = result_path / "pretrained_config" / load_config
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {

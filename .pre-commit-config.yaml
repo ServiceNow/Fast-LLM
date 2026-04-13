@@ -11,7 +11,7 @@ repos:
         - --unsafe
     -   id: check-added-large-files
 -   repo: https://github.com/asottile/pyupgrade
-    rev: v3.19.1
+    rev: v3.21.2
     hooks:
     -   id: pyupgrade
         args:
@@ -31,7 +31,7 @@ repos:
         - app/scripts/utility/shell.py
         - --remove-duplicate-keys
 -   repo: https://github.com/pycqa/isort
-    rev: 5.13.2
+    rev: 7.0.0
     hooks:
     -   id: isort
         name: isort (python)
@@ -42,14 +42,14 @@ repos:
         name: isort (pyi)
         types: [pyi]
 -   repo: https://github.com/psf/black
-    rev: 24.10.0
+    rev: 26.1.0
     hooks:
     -   id: black
         args:
             - "--config"
             - "./pyproject.toml"
 -   repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.16.0
+    rev: v0.20.0
     hooks:
     -   id: markdownlint-cli2
         name: markdownlint

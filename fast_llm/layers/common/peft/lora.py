@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.functional.autograd import wrap_forward_backward
+from fast_llm.functional.utils import wrap_forward_backward
 from fast_llm.layers.common.linear.linear import Linear, LinearBase
 from fast_llm.tensor import ParameterMeta
 
@@ -61,8 +61,9 @@ def lora_linear(
         input_ = input_.detach().requires_grad_()
         with torch.enable_grad():
             output = old_forward(input_)
+            layer_out = output
             if isinstance(output, tuple):
-                layer_out, tp_bias = output[0]
+                layer_out, tp_bias = output
                 assert tp_bias is None
             lora_out = (alpha / rank) * module.lora_1(
                 module.lora_0(torch.dropout(input_, dropout, module.training) if dropout > 0.0 else input_)
