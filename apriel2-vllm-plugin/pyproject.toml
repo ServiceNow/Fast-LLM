@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apriel2-vllm-plugin"
+version = "0.1.0"
+description = "Standalone vLLM plugin for Apriel2 models (extracted from Fast-LLM)"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "transformers",
+    "einops",
+]
+
+[project.entry-points."vllm.general_plugins"]
+apriel2 = "fast_llm_external_models.apriel2.vllm.config_convertor:register"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = [
+    "fast_llm_external_models",
+    "fast_llm_external_models.apriel2",
+    "fast_llm_external_models.apriel2.vllm",
+]
+
+[tool.setuptools.package-dir]
+"" = ".."
