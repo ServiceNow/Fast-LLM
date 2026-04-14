@@ -1,8 +1,11 @@
+import logging
 import typing
 
 import numpy as np
 import torch
 from transformers import WhisperFeatureExtractor
+
+logger = logging.getLogger(__name__)
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.layers.attention.config import AttentionKwargs, MixerKwargs
@@ -93,7 +96,16 @@ class AudioPreprocessor:
 
         if AudioEncoderKwargs.audio in kwargs:
             audio_raw = kwargs[AudioEncoderKwargs.audio]
-            flattened_audio = [audio_arr for sequence in audio_raw for audio_arr in sequence]
+            logger.debug(
+                "AudioPreprocessor: audio_raw type=%s len=%d, first element type=%s shape=%s",
+                type(audio_raw),
+                len(audio_raw),
+                type(audio_raw[0]) if len(audio_raw) > 0 else "N/A",
+                getattr(audio_raw[0], "shape", "N/A") if len(audio_raw) > 0 else "N/A",
+            )
+            # audio_raw is a flat list[torch.Tensor] — one 1-D waveform per clip.
+            # (AudioBatch.to_kwargs returns samples already flattened across documents.)
+            flattened_audio = list(audio_raw)
 
             # Compute actual LLM token count from raw audio lengths (before padding)
             for aud in flattened_audio:
