@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class MultiModalBaseModelConfig(VisionMultiModalModelConfig, AudioMultiModalModelConfig, GPTBaseModelConfig):
+    def _validate(self) -> None:
+        super()._validate()
+        if self.vision_encoder is None and not self.audio_encoder.enabled:
+            raise ValueError(
+                "MultiModalBaseModelConfig requires at least one encoder to be enabled. "
+                "Set model.base_model.vision_encoder or model.base_model.audio_encoder.encoder_type."
+            )
+
     @property
     def base_model_class(self) -> type["MultiModalBaseModel"]:
         from fast_llm.models.multimodal.model import MultiModalBaseModel

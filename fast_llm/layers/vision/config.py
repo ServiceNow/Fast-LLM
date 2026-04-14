@@ -110,9 +110,10 @@ class VisionEncoderConfig(BlockConfig):
 
 @config_class()
 class VisionMultiModalModelConfig(LanguageModelConfig):
-    vision_encoder: VisionEncoderConfig = Field(
+    vision_encoder: VisionEncoderConfig | None = Field(
+        default=None,
         hint=FieldHint.architecture,
-        desc="Configuration for the vision encoder.",
+        desc="Configuration for the vision encoder. None = disabled.",
     )
     image_token_index: int | None = Field(
         default=None,
