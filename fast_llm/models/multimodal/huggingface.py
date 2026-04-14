@@ -26,6 +26,10 @@ class HuggingfaceMultiModalModelConfig(HuggingfaceGPTModelConfig):
 
 
 class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
+    # TODO: Extend to support audio-only and audio+vision inference.
+    #   Currently only handles image tokens (pixel_values). For audio inputs,
+    #   inner_forward and _get_batch need waveform/spectrogram args, and the
+    #   audio encoder preprocessing pipeline needs to be wired in here.
     config_class = HuggingfaceMultiModalModelConfig
     config: HuggingfaceMultiModalModelConfig
     runner_class: typing.ClassVar[type[MultiModalInferenceRunner]] = MultiModalInferenceRunner
@@ -39,14 +43,20 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
         **kwargs,
     ):
         super().__init__(fast_llm_model, config, runner, **kwargs)
-        embedding_config = self.config.fast_llm_config.base_model.vision_encoder.embeddings
-        self._patch_config = ImagePreparationConfig(
-            height=embedding_config.patch_height,
-            width=embedding_config.patch_width,
-            do_resize=False,
-        )
-        self._image_token_index = self.config.fast_llm_config.base_model.image_token_index
-        assert self._image_token_index is not None
+        vision_encoder_config = self.config.fast_llm_config.base_model.vision_encoder
+        if vision_encoder_config is not None:
+            embedding_config = vision_encoder_config.embeddings
+            self._patch_config = ImagePreparationConfig(
+                height=embedding_config.patch_height,
+                width=embedding_config.patch_width,
+                do_resize=False,
+            )
+            self._image_token_index = self.config.fast_llm_config.base_model.image_token_index
+            assert self._image_token_index is not None
+        else:
+            # Vision encoder disabled; image inference not supported for this model.
+            self._patch_config = None
+            self._image_token_index = None
 
     def inner_forward(
         self,
@@ -92,6 +102,8 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
             # We need to remove padding before further processing.
             images = [image[:, :height, :width] for image, (height, width) in zip(pixel_values, image_sizes)]
 
+        if self._patch_config is None:
+            raise RuntimeError("Vision encoder is disabled; image inference is not supported for this model.")
         # Convert to patches. TODO: Creating token map and image token ids unnecessarily.
         image_patches, image_position_ids, _, _, patch_counts = self._patch_config.get_patches_from_images(images)
 
@@ -122,14 +134,16 @@ class HuggingfaceMultiModalModelForCausalLM(HuggingfaceGPTModelForCausalLM):
     ) -> LanguageModelInput:
         model_input = super()._get_input(batch, past_key_values, use_cache, output_hidden_states)
         if output_hidden_states and isinstance(output_hidden_states, bool):
-            model_input.output_hidden_states.update(
-                re.compile(pattern)
-                for pattern in (
-                    self.fast_llm_base_model.vision_encoder.embeddings.module_name + "$",
-                    *(layer.module_name + "$" for layer in self.fast_llm_base_model.vision_encoder.encoder),
-                    self.fast_llm_base_model.vision_encoder.adapter.module_name + "$",
+            ve = self.fast_llm_base_model.vision_encoder
+            if ve is not None:
+                model_input.output_hidden_states.update(
+                    re.compile(pattern)
+                    for pattern in (
+                        ve.embeddings.module_name + "$",
+                        *(layer.module_name + "$" for layer in ve.encoder),
+                        ve.adapter.module_name + "$",
+                    )
                 )
-            )
         return model_input
 
     @functools.cached_property
