@@ -9,6 +9,9 @@ from fast_llm.layers.audio_encoder.encoder import AudioConv
 from fast_llm.layers.block.block import BlockBase
 from fast_llm.layers.common.peft.config import PeftConfig
 
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.distributed.distributed import Distributed
+
 
 class AudioEncoder[ConfigType: AudioEncoderConfig](BlockBase[ConfigType]):
     """
@@ -51,6 +54,16 @@ class AudioEncoder[ConfigType: AudioEncoderConfig](BlockBase[ConfigType]):
             output_dim=self._hidden_dim,
             distributed_config=distributed_config,
         )
+
+    def setup(self, distributed: "Distributed") -> None:
+        # AudioEncoder exposes its sub-layers (conv, encoder blocks, adapter) via
+        # get_layers(), so LayerBase.setup() on the parent model sets them up through
+        # the LayerWithNamespace traversal.  AudioEncoder itself is never in get_layers(),
+        # so we only record _distributed here (needed by preprocess()); sub-layer setup
+        # is intentionally left to the parent traversal.
+        distributed.check_config(self._distributed_config)
+        self._distributed = distributed
+        self._is_setup = True
 
     def get_layers(self) -> list[Layer]:
         return [self.conv] + self.encoder.get_layers() + [self.adapter]

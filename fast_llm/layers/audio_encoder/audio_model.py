@@ -16,6 +16,7 @@ from fast_llm.engine.base_model.base_model import Layer, LayerBaseWithNamespace
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.audio_encoder.config import AudioKwargs, AudioMultiModalModelConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs
@@ -63,6 +64,13 @@ class AudioMultiModalModel[ConfigType: AudioMultiModalModelConfig](LanguageModel
             )
         else:
             self.audio_encoder = None
+
+    def setup(self, distributed: Distributed) -> None:
+        if self.audio_encoder is not None:
+            # AudioEncoder is not in get_layers(), so LayerBase.setup() never visits it.
+            # Call its setup() explicitly so _distributed is available in preprocess().
+            self.audio_encoder.setup(distributed)
+        super().setup(distributed)
 
     def get_layers(self) -> list[Layer]:
         if self.audio_encoder is None:
