@@ -125,7 +125,7 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         )
 
         # LLM weights: HF prefix "llm."
-        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.text_handler_name)
+        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.text_handler_name)
         text_handler = text_handler_cls(self._model)
         exported_config = text_handler._exported_config
         for converter in text_handler._create_weight_converters():

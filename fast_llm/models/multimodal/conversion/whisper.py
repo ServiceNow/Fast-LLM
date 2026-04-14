@@ -188,12 +188,12 @@ class WhisperBlockConverter:
                 hf_prefix,
             ),
             *cls.normalization_converter_class.get_converters(
-                config.norm_1,
+                config.normalization,
                 f"{fast_llm_prefix}.norm_1",
                 f"{hf_prefix}.{cls.hf_norm_1_name}",
             ),
             *cls.normalization_converter_class.get_converters(
-                config.norm_2,
+                config.normalization,
                 f"{fast_llm_prefix}.norm_2",
                 f"{hf_prefix}.{cls.hf_norm_2_name}",
             ),
@@ -272,7 +272,7 @@ class WhisperAudioAdapterConverter:
             f"{fast_llm_prefix}.layer_1", f"{hf_projector_prefix}.linear1", config.adapter_bias
         )
         converters += get_weight_and_bias_converters(
-            f"{fast_llm_prefix}.layer_2", f"{hf_projector_prefix}.linear2", config.adapter_bias, MLPLayer2Converter
+            f"{fast_llm_prefix}.layer_2", f"{hf_projector_prefix}.linear2", config.adapter_bias
         )
         return converters
 
