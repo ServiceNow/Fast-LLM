@@ -49,6 +49,10 @@ class LanguageModelSourceConfig(Config):
         return False
 
     @functools.cached_property
+    def has_audio(self) -> bool:
+        return False
+
+    @functools.cached_property
     def has_grpo_data(self) -> bool:
         return False
 
@@ -95,6 +99,16 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
         desc="Field containing image positions in the text.",
         hint=FieldHint.optional,
     )
+    audio: str | None = Field(
+        default=None,
+        desc="Field containing audio clips (list of decoded HuggingFace Audio items per document).",
+        hint=FieldHint.optional,
+    )
+    audio_positions: str | None = Field(
+        default=None,
+        desc="Field containing character positions of audio clips in the document text.",
+        hint=FieldHint.optional,
+    )
     # TODO: Old log probabilities are made up (zeros) since we don't know the token count in advance.
     advantages: str | None = Field(
         default=None,
@@ -112,6 +126,8 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
             columns.extend([self.chosen_span, self.rejected_span])
         if self.has_images:
             columns.extend([self.images, self.image_positions])
+        if self.has_audio:
+            columns.extend([self.audio, self.audio_positions])
         return columns
 
     @functools.cached_property
@@ -127,6 +143,11 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
     def has_images(self) -> bool:
         Assert.eq(self.images is None, self.image_positions is None)
         return self.images is not None
+
+    @functools.cached_property
+    def has_audio(self) -> bool:
+        Assert.eq(self.audio is None, self.audio_positions is None)
+        return self.audio is not None
 
     @functools.cached_property
     def has_grpo_data(self) -> bool:

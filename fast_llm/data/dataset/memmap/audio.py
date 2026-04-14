@@ -85,7 +85,10 @@ class AudioWriter(MemmapWriter):
 
     def __enter__(self):
         super().__enter__()
-        self._samples: list[float] = []
+        # Store clips as float32 numpy arrays to avoid Python float-object overhead.
+        # list[np.ndarray] uses 4 bytes/sample vs list[float] at 24+ bytes/sample.
+        self._samples: list[np.ndarray] = []
+        self._num_samples: int = 0
         self._clip_lengths: list[int] = []
         self._clip_positions: list[int] = []
         self._clip_offsets: list[int] = [0]  # CSR: one entry per document
@@ -98,8 +101,10 @@ class AudioWriter(MemmapWriter):
             return
 
         for samples, position in zip(document.samples, document.positions.tolist()):
-            self._samples.extend(samples.tolist())
-            self._clip_lengths.append(len(samples))
+            arr = np.asarray(samples, dtype=np.float32)
+            self._samples.append(arr)
+            self._num_samples += len(arr)
+            self._clip_lengths.append(len(arr))
             self._clip_positions.append(int(position))
 
         self._clip_offsets.append(len(self._clip_lengths))
@@ -109,7 +114,7 @@ class AudioWriter(MemmapWriter):
 
         num_documents = len(self._clip_offsets) - 1
         num_clips = len(self._clip_lengths)
-        num_samples = len(self._samples)
+        num_samples = self._num_samples
 
         body_size = (
             num_samples * torch.float32.itemsize
@@ -136,7 +141,9 @@ class AudioWriter(MemmapWriter):
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             # Write body: parent already wrote header; parent __exit__ will write footer.
-            self._stream.write(np.array(self._samples, dtype=np.float32).tobytes())
+            # Write flat samples by iterating stored numpy arrays (avoids one large concatenation).
+            for arr in self._samples:
+                self._stream.write(arr.tobytes())
             self._stream.write(np.array(self._clip_lengths, dtype=np.int32).tobytes())
             self._stream.write(np.array(self._clip_positions, dtype=np.int32).tobytes())
             self._stream.write(np.array(self._clip_offsets, dtype=np.int32).tobytes())

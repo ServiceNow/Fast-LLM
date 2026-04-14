@@ -27,6 +27,7 @@ from fast_llm.data.dataset.config import (
 from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig, MemmapIndexDatasetReaderConfig
 from fast_llm.data.dataset.memmap.language_model import LanguageModelWriter
 from fast_llm.data.dataset.memmap.memmap import MemmapDataset
+from fast_llm.data.document.audio import AudioDocument
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.document.patch import PatchDocument
 from fast_llm.data.document.range import RangeDocument
@@ -51,6 +52,7 @@ class SpanType(enum.StrEnum):
     chosen = "chosen"
     rejected = "rejected"
     image = "image"
+    audio = "audio"
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
@@ -65,7 +67,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def _load_dataset(self) -> datasets.Dataset:
         if self._config.dataset.load_from_disk:
-            dataset = datasets.load_from_disk(self._config.dataset.path)[self._config.dataset.split]
+            loaded = datasets.load_from_disk(self._config.dataset.path)
+            if isinstance(loaded, datasets.DatasetDict):
+                dataset = loaded[self._config.dataset.split]
+            else:
+                dataset = loaded
         else:
             dataset = datasets.load_dataset(
                 path=self._config.dataset.path,
@@ -284,6 +290,25 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 # Add an empty "span" at each image position so we know where to insert them in the tokenized sequence.
                 all_spans.extend([(SpanType.image, (position, position)) for position in image_positions])
 
+            audio_clips: list[torch.Tensor] = []
+            if self._source_schema.has_audio:
+                raw_audio = sample.get(self._source_schema.audio) or []
+                raw_audio_positions = sample.get(self._source_schema.audio_positions) or []
+                if raw_audio:
+                    # Sort clips by character position so span ordering is consistent.
+                    pairs = sorted(zip(raw_audio, raw_audio_positions), key=lambda x: x[1])
+                    raw_audio, raw_audio_positions = zip(*pairs)
+                    # Decode each audio clip to a 1-D float32 torch tensor.
+                    # Clips may be dicts {'array': ndarray, ...} or AudioDecoder objects
+                    # (datasets._torchcodec.AudioDecoder) — both support ["array"] indexing.
+                    for clip in raw_audio:
+                        arr = clip["array"]
+                        audio_clips.append(torch.from_numpy(np.asarray(arr, dtype=np.float32)))
+                    # Add an empty span at each character position to capture the token position.
+                    all_spans.extend(
+                        [(SpanType.audio, (int(pos), int(pos))) for pos in raw_audio_positions]
+                    )
+
             # Sort the spans by location (begin), keeping track of their type.
             # Note: overlapping spans are not supported (explicit assertion in the tokenizer).
             span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
@@ -322,6 +347,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             advantages = torch.full_like(tokens, sample[self._source_schema.advantages], dtype=torch.float32)
             old_log_probabilities = torch.zeros_like(tokens, dtype=torch.float32)
 
+        audio_doc: AudioDocument | None = None
+        if self._source_schema.has_audio and audio_clips:
+            # token_spans_by_type[SpanType.audio] holds (begin, begin) pairs — extract the position.
+            audio_token_positions = [begin for begin, _ in token_spans_by_type[SpanType.audio]]
+            audio_doc = AudioDocument(
+                samples=audio_clips,
+                positions=torch.tensor(audio_token_positions, dtype=torch.int32),
+            )
+
         return LanguageModelDocument(
             tokens=tokens,
             loss_masking_spans=(
@@ -350,6 +384,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 if self._source_schema.has_images
                 else None
             ),
+            audio=audio_doc,
             advantages=TokenDataDocument(data=advantages) if self._source_schema.has_grpo_data else None,
             old_log_probabilities=(
                 TokenDataDocument(data=old_log_probabilities) if self._source_schema.has_grpo_data else None
