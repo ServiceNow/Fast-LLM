@@ -83,7 +83,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         if self._sequence_parallel:
             # TODO: Async
             torch.distributed.all_reduce(value, op=reduce_op, group=self._parallel_dim.group)
-        losses[name].append(value)
+        losses[name].append(value.detach())
 
     @property
     def name(self) -> str:

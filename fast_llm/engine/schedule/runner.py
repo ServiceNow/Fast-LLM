@@ -110,6 +110,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._distributed = distributed
         self._stages_on_device = [stage for stage in self._stages if stage.mode.on_device]
         self._stages_owned = [stage.mode.on_device and not stage.is_tied_weight_copy for stage in self._stages]
+        # Last stage index on this device, used to free batch data after last forward step.
+        self._last_stage_on_device = max(i for i, stage in enumerate(self._stages) if stage.mode.on_device)
 
         # Setup the streams
         self._compute_stream = self._get_current_stream()
@@ -199,8 +201,38 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"Beginning of the schedule steps", str))
 
         # Run the steps according to the schedule
-        for step in schedule:
+        _prev_mb = -1
+        _mb_start_alloc = 0.0
+        for i, step in enumerate(schedule):
+            if step.type_ == StepType.forward and step.index != _prev_mb:
+                if _prev_mb >= 0:
+                    mb_peak = torch.cuda.max_memory_allocated() / (1024**3)
+                    mb_end_alloc = torch.cuda.memory_allocated() / (1024**3)
+                    finished_mb = _prev_mb
+                    log_pipeline_parallel_main_rank(
+                        lambda: logger.info(
+                            f"MB {finished_mb} done: per_mb_peak={mb_peak:.2f} GiB  "
+                            f"end_alloc={mb_end_alloc:.2f} GiB  start_alloc={_mb_start_alloc:.2f} GiB"
+                        )
+                    )
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                _mb_start_alloc = torch.cuda.memory_allocated() / (1024**3)
+                _prev_mb = step.index
+
             self._train_step(context, step)
+
+        # Log final microbatch
+        if _prev_mb >= 0:
+            mb_peak = torch.cuda.max_memory_allocated() / (1024**3)
+            mb_end_alloc = torch.cuda.memory_allocated() / (1024**3)
+            finished_mb = _prev_mb
+            log_pipeline_parallel_main_rank(
+                lambda: logger.info(
+                    f"MB {finished_mb} done: per_mb_peak={mb_peak:.2f} GiB  "
+                    f"end_alloc={mb_end_alloc:.2f} GiB  start_alloc={_mb_start_alloc:.2f} GiB"
+                )
+            )
 
         # Make sure we used all the data. This also ensures the generator terminates and prevents a memory leak.
         try:
@@ -404,6 +436,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         )
         if step.backward_step is not None:
             context.contexts[step.backward_step.global_index] = grad_context
+        # Free batch data after last forward stage — no backward stage reads context.batch.
+        if step.stage == self._last_stage_on_device:
+            del context.batch[step.index]
         self._record_compute(context, step)
         return output
 
