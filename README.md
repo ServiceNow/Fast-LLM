@@ -8,7 +8,7 @@
 
 *Accelerating your LLM training to full speed*
 
-Made with ❤️ by [ServiceNow Research][servicenow-research]
+Made with ❤️ by [ServiceNow AI Research][servicenow-ai-research]
 
 </div>
 
@@ -159,7 +159,7 @@ For security issues, email [disclosure@servicenow.com](mailto:disclosure@service
 [docs]: https://servicenow.github.io/Fast-LLM
 [license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg
 [license]: LICENSE
-[servicenow-research]: https://www.servicenow.com/research/
+[servicenow-ai-research]: https://www.servicenow.com/research/
 [pytorch]: https://pytorch.org/
 [triton]: https://triton-lang.org
 [transformers]: https://huggingface.co/transformers
