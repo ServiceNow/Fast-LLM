@@ -1,5 +1,6 @@
 """Test fixtures for Apriel2 model tests."""
 
+import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
@@ -148,7 +149,7 @@ def small_pixtral_model() -> LlavaForConditionalGeneration:
 
 
 @pytest.fixture(params=["identity", "converted"])
-def model_pair(request, small_pixtral_model, tmp_path):
+def model_pair(request, small_pixtral_model):
     """Parameterized fixture providing source and target models for comparison.
 
     Parameters:
@@ -187,20 +188,22 @@ def model_pair(request, small_pixtral_model, tmp_path):
     else:
         # Target is converted Apriel2 model
         # Save source to checkpoint (save_pretrained applies key transformations)
-        source.save_pretrained(tmp_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            source.save_pretrained(tmp_path)
 
-        # Load config and fix missing fields
-        with open(tmp_path / "config.json") as f:
-            llava_config = json.load(f)
+            # Load config and fix missing fields
+            with open(tmp_path / "config.json") as f:
+                llava_config = json.load(f)
 
-        llava_config["text_config"]["bos_token_id"] = 1
-        llava_config["text_config"]["eos_token_id"] = 2
-        llava_config["text_config"]["pad_token_id"] = None
-        llava_config["text_config"]["tie_word_embeddings"] = False
+            llava_config["text_config"]["bos_token_id"] = 1
+            llava_config["text_config"]["eos_token_id"] = 2
+            llava_config["text_config"]["pad_token_id"] = None
+            llava_config["text_config"]["tie_word_embeddings"] = False
 
-        # Load weights from checkpoint
-        with safe_open(tmp_path / "model.safetensors", framework="pt") as f:
-            source_weights = {key: f.get_tensor(key) for key in f.keys()}
+            # Load weights from checkpoint
+            with safe_open(tmp_path / "model.safetensors", framework="pt") as f:
+                source_weights = {key: f.get_tensor(key) for key in f.keys()}
 
         # Convert
         apriel2_config_dict = convert_llava_config(llava_config)
@@ -240,7 +243,7 @@ def llava_pixtral_config() -> dict:
 
 
 @pytest.fixture
-def llava_pixtral_checkpoint(tmp_path: Path) -> Generator[Path, None, None]:
+def llava_pixtral_checkpoint() -> Generator[Path, None, None]:
     """Create a temporary Llava checkpoint for converter testing.
 
     Creates a small random-initialized Llava model using HF's save_pretrained(),
@@ -251,24 +254,26 @@ def llava_pixtral_checkpoint(tmp_path: Path) -> Generator[Path, None, None]:
     """
     import json
 
-    model = create_llava_pixtral_model()
-    model.save_pretrained(tmp_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        model = create_llava_pixtral_model()
+        model.save_pretrained(tmp_path)
 
-    # HF doesn't serialize these fields when they're defaults - add them explicitly
-    config_path = tmp_path / "config.json"
-    with open(config_path) as f:
-        config = json.load(f)
+        # HF doesn't serialize these fields when they're defaults - add them explicitly
+        config_path = tmp_path / "config.json"
+        with open(config_path) as f:
+            config = json.load(f)
 
-    # Add missing fields to text_config (matching Apriel 1.5 format)
-    config["text_config"]["bos_token_id"] = 1
-    config["text_config"]["eos_token_id"] = 2
-    config["text_config"]["pad_token_id"] = None
-    config["text_config"]["tie_word_embeddings"] = False
+        # Add missing fields to text_config (matching Apriel 1.5 format)
+        config["text_config"]["bos_token_id"] = 1
+        config["text_config"]["eos_token_id"] = 2
+        config["text_config"]["pad_token_id"] = None
+        config["text_config"]["tie_word_embeddings"] = False
 
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
 
-    yield tmp_path
+        yield tmp_path
 
 
 # =============================================================================
