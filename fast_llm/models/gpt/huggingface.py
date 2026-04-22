@@ -129,9 +129,6 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             for name, (meta, tensor) in model_input.hidden_states.items()
         }
 
-        # TODO: Handle MTP.
-
-        self.fast_llm_base_model.head.module_name
         logits = hidden_states.pop(f"{self.fast_llm_base_model.head.module_name}.logits")
         if return_all_prediction_heads:
             logits = torch.stack(

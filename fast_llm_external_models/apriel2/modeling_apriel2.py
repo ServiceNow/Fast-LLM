@@ -923,12 +923,13 @@ class Apriel2Attention(nn.Module):
                 head_dim=self.head_dim,
                 max_position_embeddings=self.config.embeddings["max_position_embeddings"],
                 sliding_window=self.window_size,
-                _attn_implementation=getattr(self.config, "_attn_implementation", "eager"),
+                _attn_implementation="eager",  # always build explicit float mask; v5 sdpa_mask returns None otherwise
             )
 
+            embeds_kwarg = "inputs_embeds" if not _TRANSFORMERS_V4 else "input_embeds"
             mask = mask_function(
                 config=mask_config,
-                input_embeds=hidden_states,
+                **{embeds_kwarg: hidden_states},
                 attention_mask=kwargs.get("attention_mask"),
                 cache_position=kwargs["cache_position"],
                 past_key_values=kwargs.get("past_key_values"),
@@ -2331,6 +2332,29 @@ class Apriel2PreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, MistralRMSNorm):
             module.weight.data.fill_(1.0)
+
+    def tie_weights(self, **kwargs):
+        super().tie_weights(**kwargs)
+        if not _TRANSFORMERS_V4:
+            # In transformers v5, from_pretrained uses meta device. Non-persistent buffers (like
+            # MistralRotaryEmbedding.inv_freq) are not saved in checkpoints and get materialized
+            # as zeros by _move_missing_keys_from_meta_to_device. Reinitialize them here since
+            # tie_weights() is called after the model is on the actual device.
+            from transformers.models.mistral.modeling_mistral import ROPE_INIT_FUNCTIONS, MistralRotaryEmbedding
+
+            for module in self.modules():
+                if isinstance(module, MistralRotaryEmbedding):
+                    device = module.inv_freq.device
+                    rope_type = module.rope_type
+                    rope_init_fn = (
+                        module.compute_default_rope_parameters
+                        if rope_type == "default"
+                        else ROPE_INIT_FUNCTIONS[rope_type]
+                    )
+                    inv_freq, attention_scaling = rope_init_fn(module.config, device)
+                    module.register_buffer("inv_freq", inv_freq, persistent=False)
+                    module.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
+                    module.attention_scaling = attention_scaling
 
 
 class Apriel2TextModel(Apriel2PreTrainedModel):

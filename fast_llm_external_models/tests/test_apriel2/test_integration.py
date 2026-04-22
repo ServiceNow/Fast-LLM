@@ -289,9 +289,15 @@ class TestNumericalEquivalence:
                 attention_mask=inputs.attention_mask.to(test_device),
             ).logits.cpu()
 
-        max_diff = (ref_logits - test_logits).abs().max().item()
+        # Compare only at real (non-padding) positions: padding positions with
+        # all-masked attention rows produce implementation-dependent softmax(all_masked)
+        # outputs that differ between SDPA (Qwen2) and eager-float-mask (Apriel2).
+        mask = inputs.attention_mask.bool()  # [batch, seq]
+        ref_real = ref_logits[mask]
+        test_real = test_logits[mask]
+        max_diff = (ref_real - test_real).abs().max().item()
         assert torch.allclose(
-            ref_logits, test_logits, rtol=1e-4, atol=1e-4
+            ref_real, test_real, rtol=1e-4, atol=1e-4
         ), f"{stage} logits mismatch: max diff = {max_diff:.6f}"
 
     @TEST_INPUTS
