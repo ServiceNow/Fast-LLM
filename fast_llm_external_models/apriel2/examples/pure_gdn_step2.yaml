@@ -1,0 +1,18 @@
+# Step 2: Unwrap stochastic -> pure GDN
+#
+# Converts stochastic mixer to non-stochastic GDN for all layers
+# Run after pure_gdn_step1.yaml
+#
+# Usage:
+#   python convert.py /tmp/apriel2-0.5b-dev /tmp/apriel2-0.5b-pure-gdn \
+#       -s examples/pure_gdn_step1.yaml \
+#       -s examples/pure_gdn_step2.yaml
+
+decoder:
+  blocks:
+    gdn_block:
+      mixer:
+        type: gdn
+        init: transfer
+        convolution_layer:
+          kernel_size: 4

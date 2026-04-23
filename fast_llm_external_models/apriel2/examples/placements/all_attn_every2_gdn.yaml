@@ -1,0 +1,21 @@
+# Placement config: all-attention and every-2-gdn
+#
+# Two placements for layer placement study:
+# 1. all-attention: All 24 layers use full attention
+# 2. every-2-gdn: Every second layer is GDN (layers 1,3,5,...), rest are attention
+#
+# Usage:
+#   python thin_supernet.py ~/.cache/huggingface/apriel2-0.5b-dev \
+#       ~/.cache/huggingface/apriel2-0.5b-thinned-all-attn-every2gdn \
+#       -p examples/placements/all_attn_every2_gdn.yaml
+
+placements:
+  # All attention (24 layers)
+  - [attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention,
+     attention, attention, attention, attention, attention, attention]
+  # Every 2nd layer is GDN: attn, gdn, attn, gdn, ...
+  - [attention, gdn, attention, gdn, attention, gdn, attention, gdn,
+     attention, gdn, attention, gdn, attention, gdn, attention, gdn,
+     attention, gdn, attention, gdn, attention, gdn, attention, gdn]
