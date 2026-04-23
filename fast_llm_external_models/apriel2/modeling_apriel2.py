@@ -838,6 +838,13 @@ class Apriel2Attention(nn.Module):
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+        if attention_mask is not None and attention_mask.ndim == 4:
+            # V5 SDPA expands broadcast dims internally and the resulting non-contiguous
+            # tensor fails the CUDA kernel's contiguity requirement. Expand first.
+            attention_mask = attention_mask.expand(
+                query_states.shape[0], query_states.shape[1], query_states.shape[2], key_states.shape[2]
+            ).contiguous()
+
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
@@ -923,7 +930,10 @@ class Apriel2Attention(nn.Module):
                 head_dim=self.head_dim,
                 max_position_embeddings=self.config.embeddings["max_position_embeddings"],
                 sliding_window=self.window_size,
-                _attn_implementation="eager",  # always build explicit float mask; v5 sdpa_mask returns None otherwise
+                # Use the model's actual attn implementation so that SDPA can skip the explicit mask for pure-causal
+                # cases (returning None and letting SDPA use is_causal=True), which matches Qwen2/LLaMA behaviour.
+                # Sliding-window attention always gets an explicit mask regardless because SDPA has no native support.
+                _attn_implementation=self.config._attn_implementation,
             )
 
             embeds_kwarg = "inputs_embeds" if not _TRANSFORMERS_V4 else "input_embeds"
@@ -939,7 +949,7 @@ class Apriel2Attention(nn.Module):
         # Return computed tensors
         return {
             "position_embeddings": position_embeddings,
-            "attention_mask": mask,
+            "attention_mask": mask.contiguous() if mask is not None else None,
             **flash_attn_kwargs,
         }
 

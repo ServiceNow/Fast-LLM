@@ -292,7 +292,7 @@ class TestNumericalEquivalence:
         # Compare only at real (non-padding) positions: padding positions with
         # all-masked attention rows produce implementation-dependent softmax(all_masked)
         # outputs that differ between SDPA (Qwen2) and eager-float-mask (Apriel2).
-        mask = inputs.attention_mask.bool()  # [batch, seq]
+        mask = inputs.attention_mask.cpu().bool()  # [batch, seq] — keep on cpu to match logits
         ref_real = ref_logits[mask]
         test_real = test_logits[mask]
         max_diff = (ref_real - test_real).abs().max().item()

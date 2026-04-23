@@ -794,15 +794,16 @@ class TestGDNEquivalence:
         Note: Phase 3 diverges because Qwen3Next has a bug where chunk mode
         always uses initial_state=None, ignoring cached recurrent state.
         """
+        from transformers.cache_utils import DynamicCache
         from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache, Qwen3NextGatedDeltaNet
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextGatedDeltaNet
 
         from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2Cache, Apriel2GatedDeltaNet
 
         value_heads, key_heads, key_head_dim, value_head_dim = gdn_config
         seq_len = prefill_len + decode_steps + prefill2_len
 
-        # Create config with layer_types (required by Qwen3NextDynamicCache)
+        # Create config with layer_types (required by DynamicCache for recurrent state tracking)
         qwen3_config = Qwen3NextConfig(
             hidden_size=hidden_size,
             linear_num_value_heads=value_heads,
@@ -848,7 +849,7 @@ class TestGDNEquivalence:
         hidden_states = torch.randn(batch_size, seq_len, hidden_size, device="cuda", dtype=test_dtype)
 
         # Create caches
-        qwen_cache = Qwen3NextDynamicCache(qwen3_config)
+        qwen_cache = DynamicCache(config=qwen3_config)
         apriel_cache = Apriel2Cache(make_apriel2_config(hidden_size, gdn_mixer_config))
 
         # ========== PHASE 1: Initial Prefill ==========
@@ -858,7 +859,6 @@ class TestGDNEquivalence:
             qwen_out1 = qwen_gdn(
                 prefill_input,
                 cache_params=qwen_cache,
-                cache_position=torch.arange(prefill_len, device="cuda"),
             )
             apriel_out1 = apriel_gdn(
                 prefill_input,
@@ -877,7 +877,7 @@ class TestGDNEquivalence:
         # Compare recurrent states
         assert_close(
             apriel_cache.recurrent_states[0],
-            qwen_cache.recurrent_states[0],
+            qwen_cache.layers[0].recurrent_states,
             rtol=rtol,
             atol=atol,
             msg="Phase 1: recurrent_state mismatch",
@@ -892,7 +892,6 @@ class TestGDNEquivalence:
                 qwen_out = qwen_gdn(
                     decode_input,
                     cache_params=qwen_cache,
-                    cache_position=torch.tensor([pos], device="cuda"),
                 )
                 apriel_out = apriel_gdn(
                     decode_input,
@@ -911,7 +910,7 @@ class TestGDNEquivalence:
         # Compare recurrent states after decode
         assert_close(
             apriel_cache.recurrent_states[0],
-            qwen_cache.recurrent_states[0],
+            qwen_cache.layers[0].recurrent_states,
             rtol=rtol,
             atol=atol,
             msg="Phase 2: recurrent_state mismatch",
@@ -926,7 +925,6 @@ class TestGDNEquivalence:
             qwen_out3 = qwen_gdn(
                 prefill2_input,
                 cache_params=qwen_cache,
-                cache_position=torch.arange(prefill2_start, prefill2_start + prefill2_len, device="cuda"),
             )
             apriel_out3 = apriel_gdn(
                 prefill2_input,
