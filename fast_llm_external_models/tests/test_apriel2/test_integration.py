@@ -13,6 +13,7 @@ Test Strategy:
 """
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -150,12 +151,14 @@ def roundtrip_converted(supernet_converted, qwen2_source):
             input=CheckpointLoadConfig(path=supernet_path, format=Apriel2TextCheckpointFormat),
             output=CheckpointSaveConfig(path=fastllm_path, format=FastLLMCheckpointFormat),
         ).run()
+        shutil.rmtree(supernet_path)
 
         ConvertConfig(
             model=GPTModelConfig,
             input=CheckpointLoadConfig(path=fastllm_path, format=FastLLMCheckpointFormat),
             output=CheckpointSaveConfig(path=roundtrip_path, format=Apriel2TextCheckpointFormat),
         ).run()
+        shutil.rmtree(fastllm_path)
 
         model = Apriel2ForCausalLM.from_pretrained(roundtrip_path)
         model.eval()
