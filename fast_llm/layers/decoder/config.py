@@ -159,6 +159,21 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.feature,
     )
 
+    predefined_layouts: list[list[str]] | None = Field(
+        default=None,
+        desc="List of predefined layouts to oversample. Each layout is a list of mixer names, one per layer. "
+        "Mixer names must match keys in the mixers dict.",
+        hint=FieldHint.feature,
+    )
+
+    predefined_layout_probability: float = Field(
+        default=0.0,
+        desc="Probability of sampling from predefined_layouts instead of using the sampling_strategy. "
+        "Must be in [0, 1]. Only used when predefined_layouts is provided.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.in_range_incl, 0.0, 1.0),
+    )
+
     seed_shift: int = Field(
         default=_BIG_PRIMES[11],
         desc="Seed shift for mixer sampling reproducibility.",
@@ -192,6 +207,23 @@ class StochasticMixerConfig(MixerConfig):
             # Normalize weights to sum to 1.0 (also validates non-negative and positive sum)
             normalized_values = normalize_probabilities(list(self.sampling_weights.values()))
             self.sampling_weights = dict(zip(self.sampling_weights.keys(), normalized_values))
+
+        # Validate predefined layouts
+        if self.predefined_layouts is not None:
+            if len(self.predefined_layouts) == 0:
+                raise ValueError("predefined_layouts must be non-empty if provided")
+            mixer_names = set(self.mixers.keys())
+            for i, layout in enumerate(self.predefined_layouts):
+                unknown = set(layout) - mixer_names
+                if unknown:
+                    raise ValueError(
+                        f"predefined_layouts[{i}] contains unknown mixer names: {unknown}. "
+                        f"Valid names: {mixer_names}"
+                    )
+            if self.predefined_layout_probability <= 0:
+                warnings.warn("predefined_layouts provided but predefined_layout_probability is 0")
+        elif self.predefined_layout_probability > 0:
+            raise ValueError("predefined_layout_probability > 0 but predefined_layouts is not provided")
 
     @property
     def layer_class(self) -> "type[StochasticMixer]":

@@ -16,7 +16,7 @@ from fast_llm.layers.decoder.config import (
 )
 from fast_llm.logging import get_model_debug_level
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import safe_merge_dicts
+from fast_llm.utils import Assert, safe_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,8 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         if not self.training:
             return self._config.main_mixer_name
 
-        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
+        # Layout-based selection (full_layout strategy or predefined layout override)
+        if StochasticMixerKwargs.layout in kwargs:
             layout = kwargs[StochasticMixerKwargs.layout]
             counter = kwargs[StochasticMixerKwargs.layout_counter]
             idx = counter[0]
@@ -190,6 +191,21 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         perm = torch.randperm(num_layers, generator=generator)
         return [layout[i] for i in perm.tolist()]
 
+    def _sample_predefined_layout(self, num_layers: int, generator: torch.Generator) -> list[str] | None:
+        """
+        With probability `predefined_layout_probability`, pick a predefined layout uniformly.
+        Returns None if we should use the normal sampling strategy instead.
+        """
+        if not self._config.predefined_layouts or self._config.predefined_layout_probability <= 0:
+            return None
+        coin = torch.rand(1, generator=generator).item()
+        if coin >= self._config.predefined_layout_probability:
+            return None
+        idx = torch.randint(len(self._config.predefined_layouts), (1,), generator=generator).item()
+        layout = list(self._config.predefined_layouts[idx])
+        Assert.eq(len(layout), num_layers)
+        return layout
+
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         from fast_llm.engine.distributed.config import MAX_SEED
         from fast_llm.layers.block.config import BlockKwargs
@@ -200,8 +216,14 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         generator.manual_seed(seed)
         kwargs[StochasticMixerKwargs.generator] = generator
 
-        if self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
-            num_layers = kwargs[BlockKwargs.num_blocks_in_sequence]
+        num_layers = kwargs[BlockKwargs.num_blocks_in_sequence]
+        predefined = self._sample_predefined_layout(num_layers, generator)
+
+        if predefined is not None:
+            # Use predefined layout (overrides any sampling strategy)
+            kwargs[StochasticMixerKwargs.layout] = predefined
+            kwargs[StochasticMixerKwargs.layout_counter] = [0]
+        elif self._config.sampling_strategy == StochasticMixerSamplingStrategy.full_layout:
             counts = self._sample_allocation(num_layers, generator)
             layout = self._sample_placement(counts, num_layers, generator)
             kwargs[StochasticMixerKwargs.layout] = layout
