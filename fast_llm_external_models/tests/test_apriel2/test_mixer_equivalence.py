@@ -144,7 +144,7 @@ def kda_mixer_config(kda_config):
         "heads": num_heads,
         "head_dim": head_dim,
         "convolution_layer": {"kernel_size": 4},
-        "normalization": {"epsilon": 1e-5},
+        "normalization": {"epsilon": 1e-5, "activation": "sigmoid"},
     }
 
 
@@ -1088,9 +1088,8 @@ class TestKDAEquivalence:
         fla_cache = FLACache()
         apriel_cache = Apriel2Cache(make_apriel2_config(kda_hidden_size, kda_mixer_config))
 
-        # Force chunk mode for prefill
-        fla_kda.mode = "chunk"
-        apriel_kda.mode = "chunk"
+        # Match Apriel2's mode selection: fused_recurrent for seq_len<=64 in eval
+        fla_kda.mode = "fused_recurrent"
 
         # ========== PHASE 1: Initial Prefill ==========
         prefill_input = hidden_states[:, :prefill_len, :]
@@ -1125,7 +1124,6 @@ class TestKDAEquivalence:
 
         # ========== PHASE 2: Decode (single tokens) ==========
         fla_kda.mode = "fused_recurrent"
-        apriel_kda.mode = "fused_recurrent"
 
         for i in range(decode_steps):
             pos = prefill_len + i
@@ -1160,9 +1158,7 @@ class TestKDAEquivalence:
         )
 
         # ========== PHASE 3: Prefill again (decode→prefill transition) ==========
-        # FLA KDA correctly uses initial_state in chunk mode, so this should match
-        fla_kda.mode = "chunk"
-        apriel_kda.mode = "chunk"
+        fla_kda.mode = "fused_recurrent"
 
         prefill2_start = prefill_len + decode_steps
         prefill2_input = hidden_states[:, prefill2_start : prefill2_start + prefill2_len, :]
