@@ -221,13 +221,23 @@ def mlp_forward(
     sparse_map: SparseMap | None = None,
     use_triton: bool | None = None,
 ) -> tuple[torch.Tensor, list[typing.Any] | None]:
+    # With a sparse map and sequence_parallel, STP communication wraps the entire MoE block:
+    # gather input/scores before the sparse copy, reduce-scatter output after sparse-to-dense.
+    # The linear layers use standard TP (no sequence scatter) since the input is already global.
+    sparse_sequence_parallel = sparse_map is not None and sequence_parallel
+    if sparse_sequence_parallel:
+        input_ = gather_op(input_, group, dim=0)
+        if scores is not None:
+            scores = gather_op(scores, group, dim=0)
+    linear_sequence_parallel = sequence_parallel and not sparse_sequence_parallel
+
     # Sparse copy
     input_shape = input_.shape
     intermediate_0 = input_ if sparse_map is None else copy_dense_to_sparse_forward(input_, sparse_map)[0]
 
     # Layer 1
     intermediate_1, _ = output_parallel_linear_forward(
-        intermediate_0, weight_1, bias_1, group, sequence_parallel, False, True, sparse_map
+        intermediate_0, weight_1, bias_1, group, linear_sequence_parallel, False, True, sparse_map
     )
 
     if recompute_level.recompute_sparse_input:
@@ -252,7 +262,7 @@ def mlp_forward(
         weight_2,
         bias_2,
         group,
-        sequence_parallel,
+        linear_sequence_parallel,
         transposed_layer_2_weight,
         True,
         sparse_map,
@@ -268,6 +278,11 @@ def mlp_forward(
         intermediate_3 = None
     else:
         output, _ = copy_sparse_to_dense_forward(intermediate_3, scores, sparse_map)
+
+    # STP split for sparse MoE: after the all-reduce in layer 2, output is already identical on all
+    # ranks, so we just slice — no collective needed.
+    if sparse_sequence_parallel:
+        output = output.chunk(group.size(), dim=0)[group.rank()]
 
     context = (
         [
@@ -319,6 +334,13 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
     ) = context
     context.clear()
 
+    sparse_sequence_parallel = sparse_map is not None and sequence_parallel
+    linear_sequence_parallel = sequence_parallel and not sparse_sequence_parallel
+
+    # STP handling for sparse MoE: gather grad_output before sparse-to-dense backward
+    if sparse_sequence_parallel:
+        grad_output = gather_op(grad_output, group, dim=0)
+
     # Sparse copy
     if sparse_map is None:
         grad_scores = None
@@ -326,7 +348,7 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
         grad_output, grad_scores = copy_sparse_to_dense_backward(grad_output, (sparse_map, intermediate_3, scores))
 
     # Gather sequence-parallel slices (non-overlapped; from input_parallel_backward)
-    if sequence_parallel:
+    if linear_sequence_parallel:
         grad_output = gather_op(grad_output, group, dim=0)
 
     # Layer 2 input grad
@@ -343,7 +365,7 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
     # Layer 1 recomputation
     if intermediate_1 is None:
         intermediate_1 = output_parallel_linear_forward(
-            intermediate_0, weight_1, bias_1, group, sequence_parallel, False, True, sparse_map
+            intermediate_0, weight_1, bias_1, group, linear_sequence_parallel, False, True, sparse_map
         )[0]
 
     # Activation recomputation and/or backward
@@ -376,12 +398,19 @@ def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[
     # Layer 1 backward
     grad_input = output_parallel_linear_backward(
         grad_intermediate_1,
-        (intermediate_0, weight_1, bias_1, group, sequence_parallel, False, True, sparse_map),
+        (intermediate_0, weight_1, bias_1, group, linear_sequence_parallel, False, True, sparse_map),
     )
 
     # Sparse copy
     if sparse_map is not None:
         grad_input = copy_dense_to_sparse_backward(grad_input, (sparse_map, input_shape))
+
+    # STP split for sparse MoE: after the all-reduce in layer 1 backward, grad_input is already
+    # identical on all ranks, so we just slice — no collective needed.
+    if sparse_sequence_parallel:
+        grad_input = grad_input.chunk(group.size(), dim=0)[group.rank()]
+        if grad_scores is not None:
+            grad_scores = grad_scores.chunk(group.size(), dim=0)[group.rank()]
 
     return grad_input, grad_scores
 
