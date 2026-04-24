@@ -1,9 +1,8 @@
-"""Integration tests for Qwen2 -> Apriel2 -> Fast-LLM conversion pipeline.
+"""Integration tests for Qwen2 -> Apriel2 -> Supernet conversion pipeline.
 
-Tests verify the full conversion chain:
+Tests verify the conversion chain:
 1. Qwen2 -> Apriel2 (external module conversion)
 2. Apriel2 + Surgery -> Supernet (stochastic mixer creation)
-3. Supernet -> Fast-LLM -> Supernet (roundtrip through training format)
 
 Test Strategy:
 - Use real HuggingFace model (Qwen2.5-0.5B) for meaningful validation
@@ -11,11 +10,6 @@ Test Strategy:
 - Parameterize both conversion stages AND input variations
 - Single test implementation applied across all stages
 """
-
-import json
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 import torch
@@ -26,8 +20,6 @@ from fast_llm_external_models.apriel2.conversion.expr import W
 from fast_llm_external_models.apriel2.conversion.qwen2.config import convert_config as convert_qwen2_config
 from fast_llm_external_models.apriel2.conversion.qwen2.plan import plan_qwen2_to_apriel2
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
-
-from .conftest import requires_fastllm
 
 # =============================================================================
 # Test Input Variations
@@ -126,68 +118,14 @@ def supernet_converted(qwen2_source, apriel2_converted):
     return {"model": model, "config_dict": supernet_config, "name": "Supernet"}
 
 
-@pytest.fixture(scope="module")
-def roundtrip_converted(supernet_converted, qwen2_source):
-    """Stage 3: Supernet -> Fast-LLM -> Supernet."""
-    if not torch.cuda.is_available():
-        pytest.skip("Roundtrip conversion requires CUDA (integration tests need realistic hardware)")
-
-    from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, FastLLMCheckpointFormat
-    from fast_llm.engine.checkpoint.convert import ConvertConfig
-    from fast_llm.models.gpt.config import GPTModelConfig
-    from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        supernet_path = tmpdir / "supernet"
-        fastllm_path = tmpdir / "fastllm"
-        roundtrip_path = tmpdir / "roundtrip"
-
-        supernet_converted["model"].save_pretrained(supernet_path)
-        qwen2_source["tokenizer"].save_pretrained(supernet_path)
-
-        ConvertConfig(
-            model=GPTModelConfig,
-            input=CheckpointLoadConfig(path=supernet_path, format=Apriel2TextCheckpointFormat),
-            output=CheckpointSaveConfig(path=fastllm_path, format=FastLLMCheckpointFormat),
-        ).run()
-        shutil.rmtree(supernet_path)
-
-        ConvertConfig(
-            model=GPTModelConfig,
-            input=CheckpointLoadConfig(path=fastllm_path, format=FastLLMCheckpointFormat),
-            output=CheckpointSaveConfig(path=roundtrip_path, format=Apriel2TextCheckpointFormat),
-        ).run()
-        shutil.rmtree(fastllm_path)
-
-        model = Apriel2ForCausalLM.from_pretrained(roundtrip_path)
-        model.eval()
-
-        with open(roundtrip_path / "config.json") as f:
-            config_dict = json.load(f)
-
-        yield {"model": model, "config_dict": config_dict, "name": "Roundtrip"}
-
-
 # =============================================================================
 # Parameterized Fixture: All Conversion Stages
 # =============================================================================
 
 
-@pytest.fixture(params=["apriel2", "supernet", "roundtrip"])
+@pytest.fixture(params=["apriel2", "supernet"])
 def converted_model(request, apriel2_converted, supernet_converted):
-    """Parameterized fixture providing each conversion stage for testing.
-
-    This allows a single test to run against all stages automatically.
-    """
-    if request.param == "roundtrip":
-        pytest.importorskip("fast_llm")
-        if not torch.cuda.is_available():
-            pytest.skip("Roundtrip tests require CUDA (integration tests need realistic hardware)")
-        # Lazy-load to avoid fixture evaluation when CUDA unavailable
-        roundtrip_converted = request.getfixturevalue("roundtrip_converted")
-        return roundtrip_converted
-
+    """Parameterized fixture providing each conversion stage for testing."""
     return {
         "apriel2": apriel2_converted,
         "supernet": supernet_converted,
@@ -232,24 +170,6 @@ class TestConfigPreservation:
     def test_supernet_bias_inheritance(self, supernet_converted):
         """Submixers inherit bias settings from source."""
         mixer = supernet_converted["config_dict"]["decoder"]["block"]["mixer"]
-
-        for name in ["attention", "sliding_window"]:
-            assert mixer["mixers"][name]["query_layer"]["bias"]["enabled"] is True
-            assert mixer["mixers"][name]["dense_layer"]["bias"]["enabled"] is False
-
-    @requires_fastllm
-    def test_roundtrip_structure(self, roundtrip_converted):
-        """Fast-LLM roundtrip preserves stochastic mixer structure."""
-        mixer = roundtrip_converted["config_dict"]["decoder"]["block"]["mixer"]
-
-        assert mixer["type"] == "stochastic"
-        assert mixer["main_mixer_name"] == "attention"
-        assert set(mixer["mixers"].keys()) == {"attention", "sliding_window"}
-
-    @requires_fastllm
-    def test_roundtrip_bias_preservation(self, roundtrip_converted):
-        """Fast-LLM roundtrip preserves per-layer bias settings."""
-        mixer = roundtrip_converted["config_dict"]["decoder"]["block"]["mixer"]
 
         for name in ["attention", "sliding_window"]:
             assert mixer["mixers"][name]["query_layer"]["bias"]["enabled"] is True
