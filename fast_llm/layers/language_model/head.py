@@ -230,7 +230,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             all_reduce(total_loss, op=ReduceOp.SUM, group=self._parallel_dim.group)
 
         if losses is not None:
-            losses[self._total_loss_name].append(total_loss)
+            losses[self._total_loss_name].append(total_loss.detach())
 
         return total_loss, input_grad
 
