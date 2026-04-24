@@ -39,7 +39,7 @@ COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
 COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment.
-RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,VISION,GENERATION,STREAMING,DEV]" triton==3.5.1
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,VISION,GENERATION,STREAMING,DEV]" triton==3.5.1 "transformers>=5.0.0,<6.0.0"
 
 # Copy the remaining source code with universal write permissions.
 COPY --chmod=777 ./Megatron-LM Megatron-LM

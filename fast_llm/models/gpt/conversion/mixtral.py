@@ -18,6 +18,7 @@ from fast_llm.utils import Assert, safe_merge_dicts
 class MixtralMLPConverter(LlamaMLPConverter):
     @classmethod
     def import_config(cls, config: dict) -> dict:
+        config["mlp_bias"] = False
         return safe_merge_dicts(
             super().import_config(config),
             {
@@ -31,8 +32,10 @@ class MixtralMLPConverter(LlamaMLPConverter):
     def export_config(cls, config: MoEMLPConfig) -> dict:
         Assert.custom(isinstance, config, MoEMLPConfig)
         assert not config.add_linear_biases
+        out = super().export_config(config)
+        del out["mlp_bias"]
         return safe_merge_dicts(
-            super().export_config(config),
+            out,
             {
                 "num_local_experts": config.experts,
                 "num_experts_per_tok": config.experts_per_token,

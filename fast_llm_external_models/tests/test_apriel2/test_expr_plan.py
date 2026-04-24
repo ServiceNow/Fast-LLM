@@ -1521,7 +1521,11 @@ class TestEndToEndConversion:
                             "heads": num_heads,
                             "head_groups": num_kv_heads,
                             "head_size": head_size,
-                            "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
+                            "rotary": {
+                                "type": "mistral_1d",
+                                "theta": text_config.get("rope_theta")
+                                or text_config.get("rope_parameters", {}).get("rope_theta", 10000.0),
+                            },
                         },
                         "mlp": {"type": "mlp", "intermediate_size": text_config["intermediate_size"], "gated": True},
                         "normalization": {"type": "rms_norm", "epsilon": text_config["rms_norm_eps"]},
@@ -1572,7 +1576,11 @@ class TestEndToEndConversion:
                                     "heads": num_heads,
                                     "head_groups": num_kv_heads,
                                     "head_size": head_size,
-                                    "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
+                                    "rotary": {
+                                        "type": "mistral_1d",
+                                        "theta": text_config.get("rope_theta")
+                                        or text_config.get("rope_parameters", {}).get("rope_theta", 10000.0),
+                                    },
                                 },
                                 "mamba": {
                                     "type": "mamba",
@@ -1605,7 +1613,11 @@ class TestEndToEndConversion:
                                     "head_groups": num_kv_heads,
                                     "head_size": head_size,
                                     "sliding_window": 512,
-                                    "rotary": {"type": "mistral_1d", "theta": text_config["rope_theta"]},
+                                    "rotary": {
+                                        "type": "mistral_1d",
+                                        "theta": text_config.get("rope_theta")
+                                        or text_config.get("rope_parameters", {}).get("rope_theta", 10000.0),
+                                    },
                                 },
                                 "gdn": {
                                     "type": "gdn",
@@ -1645,7 +1657,8 @@ class TestEndToEndConversion:
                             "causal": False,
                             "rotary": {
                                 "type": "pixtral_2d",
-                                "theta": llava_config["vision_config"]["rope_theta"],
+                                "theta": llava_config["vision_config"].get("rope_theta")
+                                or llava_config["vision_config"].get("rope_parameters", {}).get("rope_theta", 10000.0),
                                 "max_image_size": llava_config["vision_config"]["image_size"],
                                 "patch_size": llava_config["vision_config"]["patch_size"],
                             },
