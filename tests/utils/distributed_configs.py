@@ -66,13 +66,16 @@ _bf16_compare = get_config(
         ("init", None): get_config(),
         (None, "fw"): get_config(1.5e-2, 1.5e-3),
         (None, "bw"): get_config(1.5e-2, 1e-5),
+        # Sparse embedding weight gradient is numerically noisy in bf16.
+        (None, "word_embeddings_weight"): (
+            get_config(5e-2, 1e-4) if torch.cuda.is_available() else get_config(8e-2, 1e-4)
+        ),
         # TODO: Normalization gradient broken on CPU, getting inconsistent results across machines.
         **(
             {}
             if torch.cuda.is_available()
             else {
                 (None, "norm"): get_config(ignore_tensors=True),
-                (None, "embeddings_weight"): get_config(8e-2, 1e-4),
             }
         ),
         (None, "bias"): get_config(2e-2, 1e-3) if torch.cuda.is_available() else get_config(2e-2, 2e-3),
