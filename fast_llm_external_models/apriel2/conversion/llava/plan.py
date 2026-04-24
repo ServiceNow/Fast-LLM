@@ -1,7 +1,6 @@
 """Llava to Apriel2 weight conversion plan."""
 
 from fast_llm_external_models.apriel2.conversion.expr import Expr, ExprPlan, Ref, W
-from fast_llm_external_models.apriel2.modeling_apriel2 import _TRANSFORMERS_V4
 
 
 def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
@@ -15,18 +14,12 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
     num_text_layers = llava_config.get("text_config", {}).get("num_hidden_layers", 0)
     num_vision_layers = llava_config.get("vision_config", {}).get("num_hidden_layers", 0)
 
-    # In transformers 5.x, LlavaForConditionalGeneration adds a "model." prefix to most submodules.
-    # 4.x: language_model.model.*, vision_tower.*, multi_modal_projector.*
-    # 5.x: model.language_model.model.*, model.vision_tower.*, model.multi_modal_projector.*
-    # lm_head stays as language_model.lm_head.weight in both versions.
-    if _TRANSFORMERS_V4:
-        text_model_prefix = ("language_model", "model")
-        vision_tower_prefix = ("vision_tower",)
-        projector_prefix = ("multi_modal_projector",)
-    else:
-        text_model_prefix = ("model", "language_model", "model")
-        vision_tower_prefix = ("model", "vision_tower")
-        projector_prefix = ("model", "multi_modal_projector")
+    # Checkpoint key structure (same for both transformers 4.x and 5.x):
+    # save_pretrained() always serializes with the 4.x naming convention,
+    # regardless of the in-memory attribute layout used in 5.x.
+    text_model_prefix = ("language_model", "model")
+    vision_tower_prefix = ("vision_tower",)
+    projector_prefix = ("multi_modal_projector",)
 
     # Static mappings
     static_mappings = [
