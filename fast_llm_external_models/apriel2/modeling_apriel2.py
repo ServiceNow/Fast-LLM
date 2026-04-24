@@ -2330,18 +2330,20 @@ class Apriel2PreTrainedModel(PreTrainedModel):
             return
         model_kwargs["past_key_values"] = Apriel2Cache(config=self.config)
 
-    def _init_weights(self, module):
-        std = self.config.initializer_range if hasattr(self.config, "initializer_range") else 0.02
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, MistralRMSNorm):
-            module.weight.data.fill_(1.0)
+    if _TRANSFORMERS_V4:
+
+        def _init_weights(self, module):
+            std = self.config.initializer_range if hasattr(self.config, "initializer_range") else 0.02
+            if isinstance(module, nn.Linear):
+                module.weight.data.normal_(mean=0.0, std=std)
+                if module.bias is not None:
+                    module.bias.data.zero_()
+            elif isinstance(module, nn.Embedding):
+                module.weight.data.normal_(mean=0.0, std=std)
+                if module.padding_idx is not None:
+                    module.weight.data[module.padding_idx].zero_()
+            elif isinstance(module, MistralRMSNorm):
+                module.weight.data.fill_(1.0)
 
     def tie_weights(self, **kwargs):
         super().tie_weights(**kwargs)
