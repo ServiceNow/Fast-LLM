@@ -110,6 +110,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._distributed = distributed
         self._stages_on_device = [stage for stage in self._stages if stage.mode.on_device]
         self._stages_owned = [stage.mode.on_device and not stage.is_tied_weight_copy for stage in self._stages]
+        # Last stage index on this device, used to free batch data after last forward step.
+        self._last_stage_on_device = max(i for i, stage in enumerate(self._stages) if stage.mode.on_device)
 
         # Setup the streams
         self._compute_stream = self._get_current_stream()
@@ -404,6 +406,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         )
         if step.backward_step is not None:
             context.contexts[step.backward_step.global_index] = grad_context
+        # Free batch data after last forward stage — no backward stage reads context.batch.
+        if step.stage == self._last_stage_on_device:
+            del context.batch[step.index]
         self._record_compute(context, step)
         return output
 
