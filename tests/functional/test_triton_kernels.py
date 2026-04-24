@@ -244,7 +244,7 @@ def test_triton_adam(testing_device):
 @requires_cuda
 @pytest.mark.parametrize(
     ("num_rows_dense", "num_experts", "num_experts_per_token"),
-    [(2048, 8, 2), (2048, 6, 2), (2048, 8, 8), (256, 8, 2), (5627, 8, 2)],
+    [(2048, 8, 2), (2048, 6, 2), (2048, 8, 8), (256, 8, 2), (5627, 8, 2), (2048, 64, 2)],
 )
 def test_triton_sparse_map(num_rows_dense, num_experts, num_experts_per_token, testing_device):
     logits = torch.randn((num_rows_dense, num_experts), device=testing_device)

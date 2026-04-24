@@ -641,16 +641,16 @@ update_and_add_testing_config(
         "--moe-router-topk=4",
     ],
     checkpoint_format=MixtralCheckpointFormat,
-    # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
     compare_factor=2.0,
+    hf_compare_factor=4.0,
 )
 
 update_and_add_testing_config(

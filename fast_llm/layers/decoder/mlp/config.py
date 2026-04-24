@@ -13,6 +13,12 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.decoder.mlp.mlp import MLP
 
 
+class MoEImplementation(enum.StrEnum):
+    auto = "auto"
+    dropless = "dropless"
+    looped = "looped"
+
+
 class MLPLossNames:
     load_balancing_loss = "load_balancing_loss"
     router_z_loss = "router_z_loss"
@@ -131,8 +137,10 @@ class MoEMLPConfig(MLPConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    dropless: bool = Field(
-        default=True, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
+    implementation: MoEImplementation = Field(
+        default=MoEImplementation.auto,
+        desc="MoE forward implementation. `auto` selects dropless when Triton is available, looped otherwise.",
+        hint=FieldHint.expert,
     )
     dropless_dynamic_shape: bool = Field(
         default=False,

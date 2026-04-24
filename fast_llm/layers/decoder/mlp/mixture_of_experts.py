@@ -5,16 +5,18 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
+from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
 from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.functional.utils import AuxiliaryLoss
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
+from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEImplementation, MoEMLPConfig, RoutingType
 from fast_llm.layers.decoder.mlp.mlp import MLPBase
 from fast_llm.layers.language_model.loss.z_loss import z_loss
 from fast_llm.tensor import TensorMeta
@@ -68,13 +70,15 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        dropless_moe = self._config.dropless
-        if dropless_moe and self._sequence_parallel:
-            warnings.warn(
-                "Dropless MoE not supported for sequence-tensor-parallel, falling back to looped implementation."
-            )
-            dropless_moe = False
-        self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
+        implementation = self._config.implementation
+        if implementation == MoEImplementation.auto:
+            implementation = MoEImplementation.dropless if triton_available else MoEImplementation.looped
+        if implementation == MoEImplementation.dropless and not triton_available:
+            warnings.warn("Dropless MoE not available without Triton, falling back to looped implementation.")
+            implementation = MoEImplementation.looped
+        self._mlp_forward = (
+            self._forward_dropless if implementation == MoEImplementation.dropless else self._forward_looped
+        )
 
         self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
 
@@ -132,9 +136,14 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     def _forward_dropless(
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> torch.Tensor:
-        # Compute token counts and the sparse mapping (dense_row, top_index) -> sparse_row.
+        # With STP the hidden states are sequence-parallel (local slice per rank). The sparse map
+        # must be built from the global top_experts so the expert buffers span the full sequence.
+        if self._sequence_parallel:
+            top_experts_for_map = gather_op(top_experts, self._parallel_dim.group, dim=0)
+        else:
+            top_experts_for_map = top_experts
         sparse_map = get_sparse_map(
-            top_experts, self._config.experts, dynamic_shape=self._config.dropless_dynamic_shape
+            top_experts_for_map, self._config.experts, dynamic_shape=self._config.dropless_dynamic_shape
         )
 
         # Sparse MLP
