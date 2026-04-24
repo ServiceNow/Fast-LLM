@@ -201,38 +201,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"Beginning of the schedule steps", str))
 
         # Run the steps according to the schedule
-        _prev_mb = -1
-        _mb_start_alloc = 0.0
-        for i, step in enumerate(schedule):
-            if step.type_ == StepType.forward and step.index != _prev_mb:
-                if _prev_mb >= 0:
-                    mb_peak = torch.cuda.max_memory_allocated() / (1024**3)
-                    mb_end_alloc = torch.cuda.memory_allocated() / (1024**3)
-                    finished_mb = _prev_mb
-                    log_pipeline_parallel_main_rank(
-                        lambda: logger.info(
-                            f"MB {finished_mb} done: per_mb_peak={mb_peak:.2f} GiB  "
-                            f"end_alloc={mb_end_alloc:.2f} GiB  start_alloc={_mb_start_alloc:.2f} GiB"
-                        )
-                    )
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()
-                _mb_start_alloc = torch.cuda.memory_allocated() / (1024**3)
-                _prev_mb = step.index
-
+        for step in schedule:
             self._train_step(context, step)
-
-        # Log final microbatch
-        if _prev_mb >= 0:
-            mb_peak = torch.cuda.max_memory_allocated() / (1024**3)
-            mb_end_alloc = torch.cuda.memory_allocated() / (1024**3)
-            finished_mb = _prev_mb
-            log_pipeline_parallel_main_rank(
-                lambda: logger.info(
-                    f"MB {finished_mb} done: per_mb_peak={mb_peak:.2f} GiB  "
-                    f"end_alloc={mb_end_alloc:.2f} GiB  start_alloc={_mb_start_alloc:.2f} GiB"
-                )
-            )
 
         # Make sure we used all the data. This also ensures the generator terminates and prevents a memory leak.
         try:
