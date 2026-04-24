@@ -7,6 +7,7 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.functional.utils import reduce_losses
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
@@ -45,6 +46,8 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             divisor=self._get_label_count(kwargs),
         )
 
+        if new_logprobs_mean is not None:
+            new_logprobs_mean = new_logprobs_mean / kwargs[LanguageModelKwargs.num_documents_in_batch]
         self._register_loss(
             self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
         )
@@ -56,7 +59,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
     def get_preprocessing_config(
         self,
     ) -> dict[str, typing.Any]:
-        return {"use_grpo_data": True, "return_label_counts": True}
+        return {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
 
     @functools.cached_property
     def _logprob_metric_name(self) -> str:

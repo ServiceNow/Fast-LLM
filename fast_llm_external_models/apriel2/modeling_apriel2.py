@@ -1,5 +1,6 @@
 """Apriel2 HuggingFace model implementation."""
 
+import dataclasses
 import math
 import random
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from typing import Any, Optional, TypedDict, Union
 
 import torch
 import torch.nn.functional as F
+import transformers
 from einops import rearrange, repeat
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel
@@ -47,6 +49,10 @@ except ImportError:
     chunk_kda = None
     fused_recurrent_kda = None
     fused_kda_gate = None
+
+_gdn_fla_available = chunk_gated_delta_rule is not None and rms_norm_gated is not None
+_kda_fla_available = chunk_kda is not None
+_TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 
 try:
@@ -289,7 +295,7 @@ class Apriel2Cache(Cache):
         For SSM/linear layers:
             kv_offset = 0, kv_length = query_length (no KV cache to attend to)
         """
-        query_length = cache_position.shape[0]
+        query_length = cache_position if isinstance(cache_position, int) else cache_position.shape[0]
         layer = self.layers[layer_idx]
 
         # Handle stochastic layers by getting the active mixer's cache
@@ -781,6 +787,7 @@ class Apriel2Attention(nn.Module):
                 rope_theta=rope_theta,
                 image_size=rotary_config_dict["max_image_size"],
                 patch_size=rotary_config_dict["patch_size"],
+                rope_parameters={"rope_theta": rope_theta, "rope_type": "default"},
             )
             return nn.ModuleDict({"rotary_emb": PixtralRotaryEmbedding(config=rotary_config)})
 
@@ -794,6 +801,7 @@ class Apriel2Attention(nn.Module):
                 hidden_size=hidden_size,
                 num_attention_heads=num_heads,
                 partial_rotary_factor=1.0,
+                rope_parameters={"rope_theta": rope_theta, "rope_type": "default"},
             )
             return nn.ModuleDict({"rotary_emb": MistralRotaryEmbedding(config=rotary_config)})
 
@@ -829,6 +837,13 @@ class Apriel2Attention(nn.Module):
         attention_interface = eager_attention_forward
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        if attention_mask is not None and attention_mask.ndim == 4:
+            # V5 SDPA expands broadcast dims internally and the resulting non-contiguous
+            # tensor fails the CUDA kernel's contiguity requirement. Expand first.
+            attention_mask = attention_mask.expand(
+                query_states.shape[0], query_states.shape[1], query_states.shape[2], key_states.shape[2]
+            ).contiguous()
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -915,12 +930,16 @@ class Apriel2Attention(nn.Module):
                 head_dim=self.head_dim,
                 max_position_embeddings=self.config.embeddings["max_position_embeddings"],
                 sliding_window=self.window_size,
-                _attn_implementation=getattr(self.config, "_attn_implementation", "eager"),
+                # Use the model's actual attn implementation so that SDPA can skip the explicit mask for pure-causal
+                # cases (returning None and letting SDPA use is_causal=True), which matches Qwen2/LLaMA behaviour.
+                # Sliding-window attention always gets an explicit mask regardless because SDPA has no native support.
+                _attn_implementation=self.config._attn_implementation,
             )
 
+            embeds_kwarg = "inputs_embeds" if not _TRANSFORMERS_V4 else "input_embeds"
             mask = mask_function(
                 config=mask_config,
-                input_embeds=hidden_states,
+                **{embeds_kwarg: hidden_states},
                 attention_mask=kwargs.get("attention_mask"),
                 cache_position=kwargs["cache_position"],
                 past_key_values=kwargs.get("past_key_values"),
@@ -930,7 +949,7 @@ class Apriel2Attention(nn.Module):
         # Return computed tensors
         return {
             "position_embeddings": position_embeddings,
-            "attention_mask": mask,
+            "attention_mask": mask.contiguous() if mask is not None else None,
             **flash_attn_kwargs,
         }
 
@@ -2324,6 +2343,29 @@ class Apriel2PreTrainedModel(PreTrainedModel):
         elif isinstance(module, MistralRMSNorm):
             module.weight.data.fill_(1.0)
 
+    def tie_weights(self, **kwargs):
+        super().tie_weights(**kwargs)
+        if not _TRANSFORMERS_V4:
+            # In transformers v5, from_pretrained uses meta device. Non-persistent buffers (like
+            # MistralRotaryEmbedding.inv_freq) are not saved in checkpoints and get materialized
+            # as zeros by _move_missing_keys_from_meta_to_device. Reinitialize them here since
+            # tie_weights() is called after the model is on the actual device.
+            from transformers.models.mistral.modeling_mistral import ROPE_INIT_FUNCTIONS, MistralRotaryEmbedding
+
+            for module in self.modules():
+                if isinstance(module, MistralRotaryEmbedding):
+                    device = module.inv_freq.device
+                    rope_type = module.rope_type
+                    rope_init_fn = (
+                        module.compute_default_rope_parameters
+                        if rope_type == "default"
+                        else ROPE_INIT_FUNCTIONS[rope_type]
+                    )
+                    inv_freq, attention_scaling = rope_init_fn(module.config, device)
+                    module.register_buffer("inv_freq", inv_freq, persistent=False)
+                    module.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
+                    module.attention_scaling = attention_scaling
+
 
 class Apriel2TextModel(Apriel2PreTrainedModel):
     """Apriel2 text-only base model (without LM head)."""
@@ -2435,7 +2477,7 @@ class Apriel2TextModel(Apriel2PreTrainedModel):
 class Apriel2ForCausalLM(Apriel2PreTrainedModel, GenerationMixin):
     """Apriel2 model with a language modeling head (text-only)."""
 
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = ["lm_head.weight"] if _TRANSFORMERS_V4 else {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config: Apriel2TextConfig):
         super().__init__(config)
@@ -3058,7 +3100,7 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
     """
 
     config_class = Apriel2Config
-    _tied_weights_keys = []  # No weight tying by default, but can be configured
+    _tied_weights_keys = [] if _TRANSFORMERS_V4 else {}  # No weight tying by default, but can be configured
 
     def __init__(self, config: Apriel2Config):
         super().__init__(config)
@@ -3068,7 +3110,9 @@ class Apriel2ForConditionalGeneration(Apriel2PreTrainedModel, GenerationMixin):
 
         # Handle weight tying if configured
         if config.tie_word_embeddings:
-            self._tied_weights_keys = ["lm_head.weight"]
+            self._tied_weights_keys = (
+                ["lm_head.weight"] if _TRANSFORMERS_V4 else {"lm_head.weight": "model.embed_tokens.weight"}
+            )
 
         self.post_init()
 

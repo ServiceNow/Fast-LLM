@@ -94,7 +94,12 @@ def create_inputs(model: LlavaForConditionalGeneration, config: InputConfig, see
         dummy_pixel = torch.randn(1, 3, h, w)
         with torch.no_grad():
             features = model.get_image_features(dummy_pixel)
-        num_patches = features[0].shape[0] if isinstance(features, list) else features.shape[1]
+        if isinstance(features, list):
+            num_patches = features[0].shape[0]
+        elif hasattr(features, "pooler_output") and features.pooler_output is not None:
+            num_patches = features.pooler_output[0].shape[0]
+        else:
+            num_patches = features.shape[1]
     else:
         num_patches = 0
 
@@ -164,7 +169,10 @@ def get_pixtral_vision_features(source: LlavaForConditionalGeneration, pixel_val
     """Get vision features from Pixtral, flattened to [total_patches, hidden]."""
     features = source.get_image_features(pixel_values)
     if isinstance(features, list):
-        features = torch.cat(features, dim=0)
+        return torch.cat(features, dim=0)
+    # 5.x: BaseModelOutput with pooler_output = list of projected feature tensors
+    if hasattr(features, "pooler_output") and features.pooler_output is not None:
+        return torch.cat(features.pooler_output, dim=0)
     return features
 
 

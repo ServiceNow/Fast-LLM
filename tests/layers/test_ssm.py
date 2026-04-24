@@ -20,12 +20,16 @@ try:
         Apriel2GatedDeltaNet,
         Apriel2Mamba,
         KimiDeltaAttention,
+        _gdn_fla_available,
+        _kda_fla_available,
         is_fast_path_available,
     )
 except ImportError:
     Apriel2GatedDeltaNet = None
     Apriel2Mamba = None
     KimiDeltaAttention = None
+    _gdn_fla_available = False
+    _kda_fla_available = False
     is_fast_path_available = False
 
 HIDDEN_SIZE = 16
@@ -104,7 +108,7 @@ def _compare_mixers(
     "use_backup",
     [
         pytest.param(False, marks=pytest.mark.skipif(not _fast_gdn_available, reason="FLA not available")),
-        True,
+        pytest.param(True, marks=pytest.mark.skipif(not _gdn_fla_available, reason="GDN fla kernels not available")),
     ],
     ids=["fast", "backup"],
 )
@@ -146,7 +150,7 @@ def test_gdn(testing_device, use_backup, monkeypatch):
     "use_backup",
     [
         pytest.param(False, marks=pytest.mark.skipif(not _kda_available, reason="KDA fused kernels not available")),
-        pytest.param(True, marks=pytest.mark.skipif(not _kda_available, reason="KDA fla package not available")),
+        pytest.param(True, marks=pytest.mark.skipif(not _kda_fla_available, reason="KDA fla kernels not available")),
     ],
     ids=["fast", "backup"],
 )
