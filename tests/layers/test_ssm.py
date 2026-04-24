@@ -146,6 +146,7 @@ def test_gdn(testing_device, use_backup, monkeypatch):
 
 @pytest.mark.slow
 @pytest.mark.skipif(KimiDeltaAttention is None, reason="KDA external model not available")
+@pytest.mark.skipif(not is_fast_path_available, reason="KDA deps missing")
 @pytest.mark.parametrize(
     "use_backup",
     [
