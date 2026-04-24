@@ -147,6 +147,7 @@ class LMHeadTestConfig:
                 torch.full(input_.shape[:-1], float((labels_ >= 0).sum()), dtype=torch.float32, device=device)
                 for labels_ in kwargs[LanguageModelKwargs.labels]
             ]
+            kwargs[LanguageModelKwargs.num_documents_in_batch] = 1
         return input_, kwargs
 
     def get_reference_outputs(
