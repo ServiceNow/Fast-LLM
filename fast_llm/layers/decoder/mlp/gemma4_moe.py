@@ -218,22 +218,21 @@ class Gemma4MoEMLP[ConfigType: Gemma4MoEMLPConfig](MLP[ConfigType]):
 
     def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
         token_dim, hidden_dim = input_.dims
-        moe_token_dim = TensorDim(
-            f"moe_{token_dim.name}", token_dim.global_size * self._config.experts_per_token, token_dim.parallel_dim
+        token_count = token_dim.global_size if config.global_ else token_dim.size
+        hidden_size = hidden_dim.global_size if config.global_ else hidden_dim.size
+        expert_intermediate_size = (
+            self._expert_intermediate_2_dim.global_size if config.global_ else self._expert_intermediate_2_dim.size
         )
-        moe_input = TensorMeta.from_dims(
-            (moe_token_dim, hidden_dim), tensor_name=f"moe_{input_.tensor_name}", dtype=input_.dtype
+        routed_token_count = token_count * self._config.experts_per_token
+        expert_layer_1_output_size = expert_intermediate_size * (2 if self._config.gated else 1)
+        linear_compute_factor = 2 * (config.forward + 2 * config.backward)
+        expert_layer_1_compute = (
+            linear_compute_factor * routed_token_count * hidden_size * expert_layer_1_output_size
         )
+        expert_layer_2_compute = linear_compute_factor * routed_token_count * expert_intermediate_size * hidden_size
         return (
             super().get_compute_usage(input_, kwargs, config)
-            + self.expert_layer_1.get_compute_usage(moe_input, config)
-            + self.expert_layer_2.get_compute_usage(
-                TensorMeta.from_dims(
-                    (moe_token_dim, self._expert_intermediate_2_dim),
-                    tensor_name="expert_intermediate",
-                    dtype=self._distributed_config.compute_dtype.torch,
-                ),
-                config,
-            )
+            + expert_layer_1_compute
+            + expert_layer_2_compute
             + self.router.get_compute_usage(input_, config)
         )
