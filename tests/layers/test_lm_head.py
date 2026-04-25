@@ -28,6 +28,7 @@ class LMHeadTestConfig:
     z_loss: bool | float = False
     grpo_loss: bool | float = False
     logits_scale_factor: float = 1.0
+    softcap: float | None = None
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
     loss_masking: bool = False
@@ -53,6 +54,8 @@ class LMHeadTestConfig:
             "cross_entropy_splits": self.num_splits,
             "prediction_heads": self.prediction_heads,
         }
+        if self.softcap is not None:
+            head_config["final_logit_softcap"] = self.softcap
         losses = {}
         if self.label_loss is not False:
             losses["label"] = {"type": "label"}
@@ -170,6 +173,9 @@ class LMHeadTestConfig:
         if self.logits_scale_factor is not None:
             logits = logits * self.logits_scale_factor
 
+        if self.softcap is not None:
+            logits = torch.tanh(logits / self.softcap) * self.softcap
+
         names_losses_weights = []
 
         loss_mask = (
@@ -257,6 +263,7 @@ _add_configs("grpo_loss", grpo_loss=True)
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
+_add_configs("logit_softcap", softcap=30.0)
 
 
 @pytest.mark.slow

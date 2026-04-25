@@ -218,6 +218,16 @@ class DecoderBlockConfig(BlockConfig):
         desc="Configuration for the block normalization layers.",
         hint=FieldHint.architecture,
     )
+    post_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the mixer output before the residual add (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
+    post_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the MLP output before the residual add (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
     # TODO: Review names
     dropout: float = Field(
         default=0.0,

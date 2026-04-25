@@ -13,6 +13,7 @@ from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
+    ProportionalRotaryConfig,
     Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
@@ -302,3 +303,41 @@ class Rotary2D[ConfigType: Rotary2DConfig](RotaryBase[ConfigType]):
             torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
         ).contiguous()
         kwargs[AttentionKwargs.rotary_freq] = frequencies
+
+
+class ProportionalRotary[ConfigType: ProportionalRotaryConfig](DefaultRotary[ConfigType]):
+    """
+    Rotary embeddings applied only to the first `rotary_dims` head dimensions.
+    The remaining dimensions pass through unchanged.
+    """
+
+    def __init__(self, config: ConfigType, head_size_dim: TensorDim) -> None:
+        super().__init__(config, head_size_dim)
+        self._rotary_dims = int(self._head_size * self._config.partial_rotary_factor)
+        Assert.gt(self._rotary_dims, 0)
+        Assert.multiple(self._rotary_dims, 2)
+
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
+        return super()._get_frequencies(sequence_length, self._rotary_dims, device)
+
+    def _forward(
+        self,
+        query: torch.Tensor | None,
+        key_value: torch.Tensor | None,
+        frequencies: torch.Tensor,
+        backward: bool = False,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        rotary_fn = triton_rotary_ if TritonConfig.enabled(frequencies.device) else rotary_embeddings_real
+        rotary_dims = self._rotary_dims
+
+        if query is not None:
+            query_rot = rotary_fn(query[..., :rotary_dims].contiguous(), frequencies, backward=backward)
+            query = torch.cat([query_rot, query[..., rotary_dims:]], dim=-1)
+
+        if key_value is not None:
+            k, v = key_value.chunk(2, dim=-2)
+            k_rot = rotary_fn(k[..., :rotary_dims].contiguous(), frequencies, backward=backward)
+            k = torch.cat([k_rot, k[..., rotary_dims:]], dim=-1)
+            key_value = torch.cat([k, v], dim=-2)
+
+        return query, key_value

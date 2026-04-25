@@ -249,6 +249,8 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
+        if (cap := self._config.final_logit_softcap) is not None:
+            logits = torch.tanh(logits / cap) * cap
         self._debug(
             logits,
             f"logits{"" if self._config.cross_entropy_splits == 1 else f"_{split_index}"}",
@@ -272,6 +274,10 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             )
             if loss_value is not None:
                 losses_.append(loss_value.detach())
+
+        if self.training and grad is not None and cap is not None:
+            # Chain rule through tanh softcap: d(tanh(x/cap)*cap)/dx = 1 - tanh(x/cap)^2 = 1 - (logits/cap)^2
+            grad = grad * (1.0 - (logits / cap) ** 2)
 
         return sum(losses_) if losses_ else None, (
             output_parallel_linear_backward(grad, context) if self.training else None

@@ -6,6 +6,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
@@ -121,6 +122,28 @@ class AttentionConfig(MixerConfig):
         default=AttentionImplementation.auto,
         desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
         hint=FieldHint.feature,
+    )
+    query_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to query projections per head, before RoPE (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
+    key_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to key projections per head, before RoPE (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
+    value_norm: bool = Field(
+        default=False,
+        desc="Apply fixed-scale RMS norm to value projections per head before attention (used by Gemma-family models)."
+        " No learnable weight; uses functional rms_norm with value_norm_eps.",
+        hint=FieldHint.architecture,
+    )
+    value_norm_eps: float = Field(
+        default=1e-5,
+        desc="Epsilon for value_norm.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
 
     def _validate(self) -> None:

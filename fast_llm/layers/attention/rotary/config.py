@@ -2,7 +2,7 @@ import abc
 import math
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import ModuleConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.utils import Assert
@@ -12,6 +12,7 @@ if typing.TYPE_CHECKING:
         DefaultRotary,
         Llama3Rotary,
         NoRotary,
+        ProportionalRotary,
         Rotary,
         Rotary2D,
         YarnRotary,
@@ -139,3 +140,29 @@ class Rotary2DConfig(DefaultRotaryConfig):
         from fast_llm.layers.attention.rotary.rotary import Rotary2D
 
         return Rotary2D
+
+
+@config_class(dynamic_type={RotaryConfig: "proportional"})
+class ProportionalRotaryConfig(DefaultRotaryConfig):
+    """
+    Rotary embeddings applied only to a leading fraction of the head dimensions.
+    The remaining dimensions pass through unchanged.
+    Used by Gemma4 full-attention layers (partial_rotary_factor=0.25).
+    """
+
+    _abstract = False
+    partial_rotary_factor: float = Field(
+        default=1.0,
+        desc="Fraction of head dimensions to apply rotary embeddings to. Must be in (0, 1].",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.leq(self.partial_rotary_factor, 1.0)
+
+    def _get_configurable_class(self) -> "type[ProportionalRotary]":
+        from fast_llm.layers.attention.rotary.rotary import ProportionalRotary
+
+        return ProportionalRotary
