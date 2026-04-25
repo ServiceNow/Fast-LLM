@@ -79,6 +79,12 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
         " Affects RNG for initialization and dropout.",
         hint=FieldHint.performance,
     )
+    embedding_scale: float = Field(
+        default=1.0,
+        desc="Multiplicative scale applied to word embeddings after lookup.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
 
     @property
     def layer_class(self) -> "type[LanguageModelEmbedding]":
@@ -118,6 +124,12 @@ class LanguageModelHeadConfig(BlockConfig):
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
+    )
+    final_logit_softcap: float | None = Field(
+        default=None,
+        desc="Soft-cap applied to logits before loss: logits = tanh(logits / cap) * cap.",
+        hint=FieldHint.architecture,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
     prediction_heads: int = Field(
         default=1,

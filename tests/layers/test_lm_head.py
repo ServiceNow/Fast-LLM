@@ -28,6 +28,7 @@ class LMHeadTestConfig:
     z_loss: bool | float = False
     grpo_loss: bool | float = False
     logits_scale_factor: float = 1.0
+    final_logit_softcap: float | None = None
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
     loss_masking: bool = False
@@ -53,6 +54,8 @@ class LMHeadTestConfig:
             "cross_entropy_splits": self.num_splits,
             "prediction_heads": self.prediction_heads,
         }
+        if self.final_logit_softcap is not None:
+            head_config["final_logit_softcap"] = self.final_logit_softcap
         losses = {}
         if self.label_loss is not False:
             losses["label"] = {"type": "label"}
@@ -167,6 +170,10 @@ class LMHeadTestConfig:
         hidden = torch.rms_norm(input_.to(normalization_weight.dtype), input_.shape[-1:], normalization_weight, 1e-5)
         logits = torch.nn.functional.linear(hidden, logit_weight).float()
 
+        if self.final_logit_softcap is not None:
+            cap = self.final_logit_softcap
+            logits = torch.tanh(logits / cap) * cap
+
         if self.logits_scale_factor is not None:
             logits = logits * self.logits_scale_factor
 
@@ -248,6 +255,7 @@ _add_configs("default")
 _add_configs("bfloat16", compute_dtype=DataType.bfloat16)
 _add_configs("full_precision_residual", full_precision_residual=True)
 _add_configs("logit_scaling", logits_scale_factor=5.0)
+_add_configs("final_logit_softcap", final_logit_softcap=2.0)
 _add_configs("tied_embedding_weight", tied_embedding_weight=True)
 _add_configs("multi_token_prediction", prediction_heads=2)
 _add_configs("label_loss", label_loss=True)
