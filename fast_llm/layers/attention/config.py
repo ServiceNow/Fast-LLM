@@ -145,6 +145,11 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    attention_k_eq_v: bool = Field(
+        default=False,
+        desc="Use one shared key/value projection. The projected key tensor is reused as value before separate K/V norms.",
+        hint=FieldHint.architecture,
+    )
 
     def _validate(self) -> None:
         super()._validate()

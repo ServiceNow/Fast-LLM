@@ -318,26 +318,23 @@ class ProportionalRotary[ConfigType: ProportionalRotaryConfig](DefaultRotary[Con
         Assert.multiple(self._rotary_dims, 2)
 
     def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
-        return super()._get_frequencies(sequence_length, self._rotary_dims, device)
-
-    def _forward(
-        self,
-        query: torch.Tensor | None,
-        key_value: torch.Tensor | None,
-        frequencies: torch.Tensor,
-        backward: bool = False,
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        rotary_fn = triton_rotary_ if TritonConfig.enabled(frequencies.device) else rotary_embeddings_real
-        rotary_dims = self._rotary_dims
-
-        if query is not None:
-            query_rot = rotary_fn(query[..., :rotary_dims].contiguous(), frequencies, backward=backward)
-            query = torch.cat([query_rot, query[..., rotary_dims:]], dim=-1)
-
-        if key_value is not None:
-            k, v = key_value.chunk(2, dim=-2)
-            k_rot = rotary_fn(k[..., :rotary_dims].contiguous(), frequencies, backward=backward)
-            k = torch.cat([k_rot, k[..., rotary_dims:]], dim=-1)
-            key_value = torch.cat([k, v], dim=-2)
-
-        return query, key_value
+        positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
+        rotated_angle_scales = self._config.theta ** -torch.arange(
+            0, self._rotary_dims, 2, device=device, dtype=torch.float64
+        ).div(self._head_size)
+        nope_angles = (self._head_size - self._rotary_dims) // 2
+        angle_scales = (
+            torch.cat(
+                [
+                    rotated_angle_scales,
+                    torch.zeros(nope_angles, device=device, dtype=torch.float64),
+                ]
+            )
+            if nope_angles > 0
+            else rotated_angle_scales
+        )
+        angles = torch.outer(positions, angle_scales)
+        frequencies = torch.polar(torch.ones_like(angles), angles)[:, None, :].to(torch.complex64)
+        return convert_rotary_complex_to_real(
+            torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
+        ).contiguous()

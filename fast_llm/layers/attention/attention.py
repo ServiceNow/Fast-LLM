@@ -104,12 +104,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         head_size_dim = TensorDim("head_size", self._config.head_size)
         query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, head_size_dim))
-        key_value_dim = ConcatenatedTensorDim(
-            "key_value",
-            (
-                CompositeTensorDim("key", (head_group_dim, head_size_dim)),
-                CompositeTensorDim("value", (head_group_dim, head_size_dim)),
-            ),
+        key_dim = CompositeTensorDim("key", (head_group_dim, head_size_dim))
+        key_value_dim = (
+            key_dim
+            if self._config.attention_k_eq_v
+            else ConcatenatedTensorDim(
+                "key_value",
+                (
+                    key_dim,
+                    CompositeTensorDim("value", (head_group_dim, head_size_dim)),
+                ),
+            )
         )
         self._dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, head_size_dim))
 
@@ -136,7 +141,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=None if self._config.key_layer.apply_peft is None else self._peft,
         )
-        if self._peft is not None and self._config.key_layer.apply_peft is None:
+        if self._peft is not None and self._config.key_layer.apply_peft is None and not self._config.attention_k_eq_v:
             # Default: Apply to value only.
             # TODO: Avoid this hack.
             self.key_value = self._peft.apply_linear(
@@ -265,7 +270,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             handle.wait()
 
         query = query.unflatten(1, (self._local_heads, self._config.head_size))
-        key_value = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
+        if self._config.attention_k_eq_v:
+            key_value = key_value.unflatten(1, (self._local_head_groups, self._config.head_size))
+            key_value = torch.cat([key_value, key_value], dim=1)
+        else:
+            key_value = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
 
         # QK norms: applied after projection/unflatten, before RoPE.
         # wrap_forward_backward disables autograd inside forward_only, so we re-enable it
@@ -283,7 +292,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             with torch.enable_grad():
                 query_normed = self.q_norm(query_pre)
             norm_context["q_norm"] = (query_pre, query_normed)
-            query = query_normed.detach()
+            # Triton rotary is in-place. Clone to keep the q-norm mini-graph output
+            # intact for the manual backward call below.
+            query = query_normed.detach().clone()
         if self.k_norm is not None or self._config.value_norm:
             k, v = key_value.chunk(2, dim=1)
             if self.k_norm is not None:
@@ -354,7 +365,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 v_grad = v_pre.grad
             key_value_grad = torch.cat([k_grad, v_grad], dim=1)
 
-        key_value_grad = key_value_grad.flatten(1)
+        if self._config.attention_k_eq_v:
+            k_grad, v_grad = key_value_grad.chunk(2, dim=1)
+            key_value_grad = (k_grad + v_grad).flatten(1)
+        else:
+            key_value_grad = key_value_grad.flatten(1)
 
         if self._config.head_groups == 1 and (group := self._parallel_dim.group):
             if self._sequence_parallel:

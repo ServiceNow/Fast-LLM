@@ -9,6 +9,7 @@ from fast_llm.models.gpt.conversion.config import (
     AprielHybridSSMCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
+    Gemma4CheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -17,6 +18,7 @@ from fast_llm.models.gpt.conversion.config import (
 )
 from fast_llm.models.gpt.conversion.diffusion_dream import DiffusionDreamHuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.diffusion_llama import DiffusionLlamaHuggingfaceCheckpointHandler
+from fast_llm.models.gpt.conversion.gemma4 import Gemma4HuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.llama import LlamaHuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.mistral import MistralHuggingfaceCheckpointHandler
 from fast_llm.models.gpt.conversion.mixtral import MixtralHuggingfaceCheckpointHandler
@@ -33,6 +35,8 @@ class AutoGPTHuggingfaceCheckpointHandler(
         Qwen2CheckpointFormat.name: Qwen2HuggingfaceCheckpointHandler,
         MistralCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
+        Gemma4CheckpointFormat.name: Gemma4HuggingfaceCheckpointHandler,
+        Gemma4HuggingfaceCheckpointHandler.get_huggingface_model_type(): Gemma4HuggingfaceCheckpointHandler,
         MTPLlamaCheckpointFormat.name: MTPLlamaHuggingfaceCheckpointHandler,
         DiffusionDreamCheckpointFormat.name: DiffusionDreamHuggingfaceCheckpointHandler,
         DiffusionLlamaCheckpointFormat.name: DiffusionLlamaHuggingfaceCheckpointHandler,

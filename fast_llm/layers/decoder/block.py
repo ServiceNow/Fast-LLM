@@ -164,9 +164,13 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         self._debug(input_, "mixer_residual", hidden_dims, kwargs)
+        kwargs[BlockKwargs.pre_mlp_residual] = input_
         hidden_states = self.norm_2(input_)
         self._debug(hidden_states, "norm_2", hidden_dims, kwargs)
-        hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        try:
+            hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        finally:
+            kwargs.pop(BlockKwargs.pre_mlp_residual, None)
 
         if self.post_mlp_normalization is not None:
             if bias is not None:

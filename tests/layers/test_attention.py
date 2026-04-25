@@ -7,7 +7,8 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.attention import Attention, _flash_available
-from fast_llm.layers.attention.config import AttentionConfig
+from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
+from fast_llm.layers.attention.rotary.rotary import rotary_embeddings_real
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
 
@@ -144,6 +145,115 @@ def test_qk_norm_gradients(norm_flags):
             v_ref = torch.rms_norm(v_ref, [head_size], None, rms_eps)
         kv_ref = torch.cat([k_ref, v_ref], dim=1)
 
+    (query_ref.sum() + kv_ref.sum()).backward()
+
+    Assert.rms_close_relative(input_.grad, input_ref.grad, threshold=1e-5, min_threshold=1e-6)
+
+
+@pytest.mark.slow
+def test_q_norm_rotary_gradients():
+    """
+    q_norm backward must see the unrotated q_norm output. Triton rotary is
+    in-place, so this catches storage aliasing between q_norm and RoPE.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    heads, head_groups, head_size, num_tokens = 4, 2, 8, 6
+    hidden_size = heads * head_size
+    rms_eps = 1e-5
+
+    distributed_config = DistributedConfig(compute_dtype="float32", use_cuda=torch.cuda.is_available())
+    hidden_dim = TensorDim("hidden_size", hidden_size)
+    attention: Attention = AttentionConfig(
+        head_size=head_size,
+        heads=heads,
+        head_groups=head_groups,
+        rotary={"type": "default"},
+        query_norm={"type": "rms_norm"},
+        value_norm=True,
+        value_norm_eps=rms_eps,
+    ).get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None)
+
+    distributed = Distributed(distributed_config)
+    get_stage([attention], distributed)
+
+    (model_input,) = LanguageModelBatch(
+        tokens=torch.empty(num_tokens, dtype=torch.int64, device=device),
+        lengths=[num_tokens],
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            return_document_index=True,
+        )
+    )
+    kwargs = model_input.to_kwargs()
+    attention.preprocess(kwargs)
+
+    input_ = torch.randn(num_tokens, hidden_size, dtype=torch.float32, device=device, requires_grad=True)
+    query, key_value = attention._query_key_value(input_, kwargs)
+    query_grad = torch.randn_like(query)
+    query_grad_ref = query_grad.clone()
+    torch.autograd.backward((query, key_value), (query_grad, torch.zeros_like(key_value)))
+
+    q_w = attention.query.weight.detach()
+    q_norm_w = attention.q_norm.weight.detach()
+    input_ref = input_.detach().requires_grad_(True)
+    q_norm_w_ref = q_norm_w.detach().clone().requires_grad_(True)
+    query_ref = torch.nn.functional.linear(input_ref, q_w).unflatten(1, (heads, head_size))
+    query_ref = torch.rms_norm(query_ref, [head_size], q_norm_w_ref, rms_eps)
+    query_ref = rotary_embeddings_real(query_ref, kwargs[AttentionKwargs.rotary_freq])
+    query_ref.backward(query_grad_ref)
+
+    Assert.rms_close_relative(input_.grad, input_ref.grad, threshold=1e-5, min_threshold=1e-6)
+    Assert.rms_close_relative(attention.q_norm.weight.grad_buffer, q_norm_w_ref.grad, threshold=1e-5, min_threshold=1e-6)
+
+
+@pytest.mark.slow
+def test_attention_k_eq_v_gradients():
+    """
+    Verify Gemma4-style full attention uses one shared K=V projection and that
+    gradients from the K and V branches are accumulated into that projection.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    heads, head_groups, head_size, num_tokens = 4, 2, 8, 6
+    hidden_size = heads * head_size
+
+    distributed_config = DistributedConfig(compute_dtype="float32", use_cuda=torch.cuda.is_available())
+    hidden_dim = TensorDim("hidden_size", hidden_size)
+
+    attention: Attention = AttentionConfig(
+        head_size=head_size,
+        heads=heads,
+        head_groups=head_groups,
+        rotary={"type": "none"},
+        query_norm={"type": "rms_norm"},
+        key_norm={"type": "rms_norm"},
+        value_norm=True,
+        attention_k_eq_v=True,
+    ).get_layer(distributed_config, hidden_dim, lr_scale=None, peft=None)
+
+    distributed = Distributed(distributed_config)
+    get_stage([attention], distributed)
+    attention.to(device)
+
+    input_ = torch.randn(num_tokens, hidden_size, dtype=torch.float32, device=device, requires_grad=True)
+    query, key_value = attention._query_key_value(input_, {})
+    assert key_value.shape == (num_tokens, 2 * head_groups, head_size)
+    assert attention.key_value.weight.shape == (head_groups * head_size, hidden_size)
+    (query.sum() + key_value.sum()).backward()
+
+    q_w = attention.query.weight.detach()
+    kv_w = attention.key_value.weight.detach()
+    q_norm_w = attention.q_norm.weight.detach()
+    k_norm_w = attention.k_norm.weight.detach()
+
+    input_ref = input_.detach().requires_grad_(True)
+    query_ref = torch.nn.functional.linear(input_ref, q_w).unflatten(1, (heads, head_size))
+    kv_raw_ref = torch.nn.functional.linear(input_ref, kv_w).unflatten(1, (head_groups, head_size))
+    query_ref = torch.rms_norm(query_ref, [head_size], q_norm_w, 1e-5)
+    k_ref = torch.rms_norm(kv_raw_ref, [head_size], k_norm_w, 1e-5)
+    v_ref = torch.rms_norm(kv_raw_ref, [head_size], None, 1e-5)
+    kv_ref = torch.cat([k_ref, v_ref], dim=1)
     (query_ref.sum() + kv_ref.sum()).backward()
 
     Assert.rms_close_relative(input_.grad, input_ref.grad, threshold=1e-5, min_threshold=1e-6)
