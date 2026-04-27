@@ -148,6 +148,18 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         # Rotary embeddings.
         self._rotary = self._config.rotary.get_layer(head_size_dim)
 
+        # QK norms (applied before RoPE, per head).
+        self.query_norm = (
+            self._config.query_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=None)
+            if self._config.query_norm is not None
+            else None
+        )
+        self.key_norm = (
+            self._config.key_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=None)
+            if self._config.key_norm is not None
+            else None
+        )
+
         # Output.
         self.dense = self._config.dense_layer.get_layer(
             self._dense_dim,
@@ -252,11 +264,34 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # TODO: This is probably unnecessary.
             handle.wait()
 
-        query, key_value, rotary_context = self._rotary.forward_only(
-            query.unflatten(1, (self._local_heads, self._config.head_size)),
-            key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size)),
-            kwargs,
-        )
+        query_unflat = query.unflatten(1, (self._local_heads, self._config.head_size))
+        kv_unflat = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
+
+        query_norm_ctx = None
+        if self._config.query_norm is not None:
+            if self.training:
+                with torch.enable_grad():
+                    query_leaf = query_unflat.detach().requires_grad_()
+                    query_normed = self.query_norm(query_leaf)
+                query_norm_ctx = (query_leaf, query_normed)
+                query_unflat = query_normed.detach()
+            else:
+                query_unflat = self.query_norm(query_unflat)
+
+        key_norm_ctx = None
+        if self._config.key_norm is not None:
+            # .contiguous() is required because RMSNormalization uses .view() internally.
+            key_unflat = kv_unflat[:, : self._local_head_groups, :].contiguous()
+            if self.training:
+                with torch.enable_grad():
+                    key_leaf = key_unflat.detach().requires_grad_()
+                    key_normed = self.key_norm(key_leaf)
+                key_norm_ctx = (key_leaf, key_normed)
+                kv_unflat = torch.cat([key_normed.detach(), kv_unflat[:, self._local_head_groups :, :]], dim=1)
+            else:
+                kv_unflat = torch.cat([self.key_norm(key_unflat), kv_unflat[:, self._local_head_groups :, :]], dim=1)
+
+        query, key_value, rotary_context = self._rotary.forward_only(query_unflat, kv_unflat, kwargs)
 
         if self._sequence_data_parallel_dim.group:
             # sequence dim may not be zero, but this needs to be handled after `handle.wait()`
@@ -266,7 +301,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         if handle:
             handle.wait()
 
-        context = {"query": query_context, "key_value": key_value_context, "rotary": rotary_context}
+        context = {
+            "query": query_context,
+            "key_value": key_value_context,
+            "rotary": rotary_context,
+            "query_norm": query_norm_ctx,
+            "key_norm": key_norm_ctx,
+        }
         return query, key_value, context
 
     def _query_key_value_backward(
@@ -283,6 +324,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         rotary_context = context.pop("rotary")
         query_grad, _ = self._rotary.backward(query_grad, None, rotary_context)
 
+        if (query_norm_ctx := context.pop("query_norm")) is not None:
+            query_leaf, query_normed = query_norm_ctx
+            query_normed.backward(query_grad)
+            query_grad = query_leaf.grad
+
         # TODO: Overlap with both.
         input_grad = self.query.backward(query_grad.flatten(1), context.pop("query"))
 
@@ -290,6 +336,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             handle.wait()
 
         _, key_value_grad = self._rotary.backward(None, key_value_grad, rotary_context)
+
+        if (key_norm_ctx := context.pop("key_norm")) is not None:
+            key_leaf, key_normed = key_norm_ctx
+            key_grad = key_value_grad[:, : self._local_head_groups, :].contiguous()
+            key_normed.backward(key_grad)
+            key_value_grad = torch.cat([key_leaf.grad, key_value_grad[:, self._local_head_groups :, :]], dim=1)
+
         key_value_grad = key_value_grad.flatten(1)
 
         if self._config.head_groups == 1 and (group := self._parallel_dim.group):
