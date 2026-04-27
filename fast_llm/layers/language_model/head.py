@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
+@torch.compile
+def _apply_logit_softcap(logits: torch.Tensor, cap: float) -> torch.Tensor:
+    return torch.tanh(logits / cap) * cap
+
+
+@torch.compile
+def _apply_logit_softcap_backward(grad: torch.Tensor, logits: torch.Tensor, cap: float) -> torch.Tensor:
+    return grad * (1.0 - (logits / cap) ** 2)
+
+
 class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
@@ -250,7 +260,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
         )
         if (cap := self._config.final_logit_softcap) is not None:
-            logits = torch.tanh(logits / cap) * cap
+            logits = _apply_logit_softcap(logits, cap)
         self._debug(
             logits,
             f"logits{"" if self._config.cross_entropy_splits == 1 else f"_{split_index}"}",
@@ -277,7 +287,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
 
         if self.training and grad is not None and cap is not None:
             # Chain rule through tanh softcap: d(tanh(x/cap)*cap)/dx = 1 - tanh(x/cap)^2 = 1 - (logits/cap)^2
-            grad = grad * (1.0 - (logits / cap) ** 2)
+            grad = _apply_logit_softcap_backward(grad, logits, cap)
 
         return sum(losses_) if losses_ else None, (
             output_parallel_linear_backward(grad, context) if self.training else None

@@ -121,7 +121,11 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], split_index)
 
     def _get_label_count(self, kwargs: dict[str, typing.Any]):
-        return kwargs[LanguageModelKwargs.num_labels_in_batch][self._prediction_distance - 1]
+        # Fully masked chunks can legitimately contain zero trainable labels
+        # (for example, prompt-only spans before an assistant response begins).
+        # The loss kernels expect a positive normalization divisor; with zero valid
+        # labels, the masked losses/grads are already zero, so clamp the divisor.
+        return max(kwargs[LanguageModelKwargs.num_labels_in_batch][self._prediction_distance - 1], 1)
 
     def _get_loss_mask(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)

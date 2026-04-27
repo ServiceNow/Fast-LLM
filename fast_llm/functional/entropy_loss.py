@@ -295,6 +295,7 @@ def fused_entropy_loss_forward_backward(
     """
     if divisor is None:
         divisor = logits.shape[:-1].numel()
+    divisor = max(divisor, 1)
     grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     if target_format == TargetFormat.labels:
         assert entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl)

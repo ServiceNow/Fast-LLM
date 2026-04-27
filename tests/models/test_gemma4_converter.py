@@ -8,7 +8,6 @@ from fast_llm.models.gpt.conversion.gemma4 import (
     Gemma4ExpertLayer1Converter,
     Gemma4ExpertLayer2Converter,
     Gemma4HuggingfaceCheckpointHandler,
-    Gemma4LayerScalarConverter,
 )
 
 
@@ -69,6 +68,9 @@ def test_gemma4_config_import_builds_pattern_decoder():
     assert base.decoder.blocks["full"].mixer.rotary.theta == 1_000_000.0
     assert base.decoder.blocks["full"].mixer.rotary.partial_rotary_factor == 0.25
     assert base.decoder.blocks["full"].mlp.moe_intermediate_size == 8
+    assert base.decoder.blocks["full"].mlp.recompute_level == "full"
+    assert base.decoder.blocks["sliding"].mlp.recompute_level == "full"
+    assert base.decoder.blocks["full"].layer_scalar.enabled
 
 
 @pytest.mark.parametrize(
@@ -126,14 +128,6 @@ def test_gemma4_weight_converter_keys_follow_sliding_and_full_attention():
     assert "model.layers.5.experts.down_proj" in export_names
     assert "model.layers.5.layer_scalar" in export_names
     assert exported_config["rope_parameters"] == _gemma4_config()["rope_parameters"]
-
-
-def test_gemma4_layer_scalar_import_requires_one():
-    converter = Gemma4LayerScalarConverter((), "model.layers.0.layer_scalar")
-
-    assert converter.import_weight((torch.ones(1),)) == ()
-    with pytest.raises(AssertionError):
-        converter.import_weight((torch.zeros(1),))
 
 
 def test_gemma4_registered_with_gpt_auto_handler():

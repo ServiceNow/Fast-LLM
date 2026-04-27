@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import IgnoreImportWeightConverter, SplitWeightConverter, WeightConverter
+from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, ProportionalRotaryConfig
@@ -219,16 +219,6 @@ class Gemma4ExpertLayer2Converter(WeightConverter):
         return (down_proj[:].transpose(-1, -2).flatten(0, 1).contiguous(),)
 
 
-class Gemma4LayerScalarConverter(IgnoreImportWeightConverter):
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        (layer_scalar,) = weight
-        layer_scalar = layer_scalar[:]
-        assert torch.equal(layer_scalar, torch.ones_like(layer_scalar))
-        return ()
-
-
 class Gemma4MLPConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -242,6 +232,7 @@ class Gemma4MLPConverter:
             "activation": ActivationType.from_hf_name(config.get("hidden_activation", config.get("hidden_act"))),
             "gated": True,
             "router_norm_eps": config["rms_norm_eps"],
+            "recompute_level": "full",
             "post_feedforward_norm_1": Gemma4NormalizationConverter.import_config(config),
             "pre_feedforward_norm_2": Gemma4NormalizationConverter.import_config(config),
             "post_feedforward_norm_2": Gemma4NormalizationConverter.import_config(config),
@@ -344,6 +335,7 @@ class Gemma4BlockConverter:
             "normalization": Gemma4NormalizationConverter.import_config(config),
             "post_mixer_normalization": Gemma4NormalizationConverter.import_config(config),
             "post_mlp_normalization": Gemma4NormalizationConverter.import_config(config),
+            "layer_scalar": {"enabled": True},
         }
 
     @classmethod
@@ -400,7 +392,11 @@ class Gemma4BlockConverter:
                 f"{hf_prefix}.post_feedforward_layernorm",
                 drop_on_export,
             ),
-            Gemma4LayerScalarConverter((), f"{hf_prefix}.layer_scalar"),
+            get_parameter_converter(
+                f"{fast_llm_prefix}.layer_scalar",
+                f"{hf_prefix}.layer_scalar",
+                drop_on_export=drop_on_export,
+            ),
         ]
 
 
