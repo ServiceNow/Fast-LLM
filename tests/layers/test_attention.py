@@ -2,6 +2,7 @@ import dataclasses
 
 import pytest
 import torch
+import torch.nn.functional
 
 from fast_llm.data.document.config import LanguageModelBatchPreprocessingConfig
 from fast_llm.data.document.language_model import LanguageModelBatch
@@ -18,6 +19,7 @@ _HIDDEN_SIZE = 64
 _HEADS = 4
 _KV_HEADS = 2
 _HEAD_SIZE = 16
+_HEADS_PER_GROUP = _HEADS // _KV_HEADS
 
 
 @dataclasses.dataclass
@@ -45,6 +47,58 @@ class AttentionTestConfig:
             config["key_norm"] = {"type": "rms_norm"}
         return AttentionConfig.from_dict(config)
 
+    def expected_output(
+        self,
+        input_: torch.Tensor,
+        attention: Attention,
+        lengths: list[int],
+    ) -> torch.Tensor:
+        """
+        Independent reference: plain F.linear + torch.rms_norm + per-document einsum attention.
+        No calls to Fast-LLM attention or norm internals.
+        """
+        with torch.no_grad():
+            q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(1, (_HEADS, _HEAD_SIZE))
+            kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
+                1, (2 * _KV_HEADS, _HEAD_SIZE)
+            )
+
+            if self.query_norm:
+                q = torch.rms_norm(q, (_HEAD_SIZE,), attention.query_norm.weight.detach(), 1e-5)
+            if self.key_norm:
+                key_normed = torch.rms_norm(
+                    kv[:, :_KV_HEADS, :], (_HEAD_SIZE,), attention.key_norm.weight.detach(), 1e-5
+                )
+                kv = torch.cat([key_normed, kv[:, _KV_HEADS:, :]], dim=1)
+
+            k, v = kv[:, :_KV_HEADS, :], kv[:, _KV_HEADS:, :]
+            scale = _HEAD_SIZE**-0.5
+
+            attn_out = torch.empty_like(q)
+            offset = 0
+            for length in lengths:
+                q_doc = q[offset : offset + length]
+                k_doc = k[offset : offset + length]
+                v_doc = v[offset : offset + length]
+
+                head_outputs = []
+                for head_index in range(_HEADS):
+                    group = head_index // _HEADS_PER_GROUP
+                    scores = (q_doc[:, head_index, :].float() @ k_doc[:, group, :].float().T) * scale
+                    if self.causal:
+                        positions = torch.arange(length, device=input_.device)
+                        # mask[i, j] = True if j <= i (query i can attend to key j)
+                        mask = positions.unsqueeze(1) >= positions.unsqueeze(0)
+                        if self.window_size is not None:
+                            mask = mask & (positions.unsqueeze(1) - positions.unsqueeze(0) < self.window_size)
+                        scores = scores.masked_fill(~mask, float("-inf"))
+                    head_outputs.append((torch.softmax(scores, dim=-1) @ v_doc[:, group, :].float()).to(q.dtype))
+
+                attn_out[offset : offset + length] = torch.stack(head_outputs, dim=1)
+                offset += length
+
+            return torch.nn.functional.linear(attn_out.flatten(1), attention.dense.weight.detach())
+
 
 _base_attention_cases = [
     ("causal", {"causal": True}),
@@ -69,6 +123,7 @@ _attention_lengths = [
     [15],
     [6, 9],
     [4, 1, 10],
+    [20, 32, 10, 11, 9, 18],
 ]
 
 
@@ -102,7 +157,7 @@ def _run_per_seq_reference(
 def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     num_tokens = sum(lengths)
 
-    # Backup packing test in float32 for precise gradient comparison.
+    # Float32 for precise comparison throughout.
     distributed_config = DistributedConfig(use_cuda=torch.cuda.is_available())
     distributed = Distributed(distributed_config)
     device = distributed.device
@@ -113,15 +168,36 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     )
     stage = get_stage([attention], distributed)
 
+    # Independent reference check: compare the full forward pass to a plain-PyTorch reference
+    # that uses F.linear, torch.rms_norm, and an explicit per-document attention loop.
+    attention.eval()
+    input_for_ref = torch.randn(num_tokens, _HIDDEN_SIZE, device=device)
+    (model_input_ref,) = LanguageModelBatch(
+        tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **attention.get_preprocessing_config(),
+        )
+    )
+    kwargs_ref = model_input_ref.to_kwargs()
+    attention.preprocess(kwargs_ref)
+    with torch.no_grad():
+        out_fastllm = attention(input_for_ref, kwargs_ref)
+    torch.testing.assert_close(
+        out_fastllm, config.expected_output(input_for_ref, attention, lengths), rtol=1e-4, atol=1e-5
+    )
+    attention.train()
+
+    # Packing equivalence check: packed backup must match per-sequence backup, forward and backward.
     hidden_states = torch.randn(num_tokens, _HIDDEN_SIZE, device=device, requires_grad=True)
 
     out_ref = _run_per_seq_reference(attention, stage, distributed_config, hidden_states, lengths, device)
-
     names, params = zip(*list(attention.named_parameters()))
     grads_ref = [param.grad_buffer.clone() for param in params]
     stage.reset_gradients()
 
-    # Packed backup: packing must produce the same outputs and weight gradients as per-sequence.
     (model_input_packed,) = LanguageModelBatch(
         tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
     ).get_model_inputs(
@@ -141,12 +217,11 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         Assert.rms_close_relative(param.grad_buffer, grad_ref, 1e-5, 1e-7, msg=name)
     stage.reset_gradients()
 
-    # Flash equivalence test in bfloat16 (if CUDA flash attention is available).
+    # Flash equivalence check: packed flash output must match per-sequence bfloat16 backup reference.
     if _flash_available:
         distributed_config_bf16 = DistributedConfig(compute_dtype=DataType.bfloat16, use_cuda=True)
         distributed_bf16 = Distributed(distributed_config_bf16)
 
-        # Per-sequence bfloat16 backup as flash reference.
         attention_backup_bf16: Attention = config.get_attention_config("backup").get_layer(
             distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
         )
@@ -160,7 +235,6 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         )
         stage_backup_bf16.reset_gradients()
 
-        # Flash packed run.
         attention_flash: Attention = config.get_attention_config("flash").get_layer(
             distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
         )
