@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.base_model.config import LossDef
+from fast_llm.engine.base_model.config import LossDef, ReductionType
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.functional.utils import reduce_losses
@@ -51,10 +51,92 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self._register_loss(
             self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
         )
+
+        if losses is not None and (self._config.compute_extra_metrics or self._config.compute_entropy_metric):
+            self._register_pg_metrics(logits, kwargs, losses, split_index)
+
         return loss, grad
 
+    def _register_pg_metrics(
+        self,
+        logits: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict,
+        split_index: int,
+    ) -> None:
+        from fast_llm.layers.language_model.loss.pg_metrics import compute_policy_gradient_metrics
+
+        metrics = compute_policy_gradient_metrics(
+            logits,
+            self._get_labels(kwargs, split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            self._config.epsilon_low,
+            self._config.epsilon_high,
+            self._logits_scale_factor,
+            vocab_parallel_group=self._parallel_dim.group if self._vocab_parallel else None,
+            compute_entropy=self._config.compute_entropy_metric,
+            entropy_chunk_size=self._config.entropy_chunk_size,
+        )
+
+        num_docs = kwargs[LanguageModelKwargs.num_documents_in_batch]
+        name = self._name
+
+        # Per-token mean metrics: divide by num_docs to match new_logprobs_mean normalization.
+        for attr, suffix in (
+            ("old_logprobs", "old_logprobs"),
+            ("ratio", "ratio"),
+            ("kl_new_old", "kl_new_old"),
+            ("clamp_frac", "clamp_frac"),
+            ("advantage", "advantage"),
+        ):
+            self._register_loss(f"{name}_{suffix}", getattr(metrics, attr) / num_docs, losses)
+
+        # Raw sum metrics (no per-doc normalization).
+        for attr, suffix in (
+            ("ratio_sum", "ratio_sum"),
+            ("ratio_sq_sum", "ratio_sq_sum"),
+            ("num_tokens", "num_tokens"),
+        ):
+            self._register_loss(f"{name}_{suffix}", getattr(metrics, attr), losses)
+
+        # MAX/MIN metrics: pass correct reduce_op for sequence-parallel mode.
+        self._register_loss(
+            f"{name}_max_advantage",
+            metrics.max_advantage,
+            losses,
+            reduce_op=torch.distributed.ReduceOp.MAX,
+        )
+        self._register_loss(
+            f"{name}_min_advantage",
+            metrics.min_advantage,
+            losses,
+            reduce_op=torch.distributed.ReduceOp.MIN,
+        )
+
+        if metrics.entropy is not None:
+            self._register_loss(f"{name}_entropy", metrics.entropy / num_docs, losses)
+
     def get_loss_definitions(self) -> list[LossDef]:
-        return super().get_loss_definitions() + [LossDef(self._logprob_metric_name)]
+        defs = super().get_loss_definitions() + [LossDef(self._logprob_metric_name)]
+        if self._config.compute_extra_metrics or self._config.compute_entropy_metric:
+            name = self._name
+            defs += [
+                LossDef(f"{name}_old_logprobs"),
+                LossDef(f"{name}_ratio"),
+                LossDef(f"{name}_ratio_sum"),
+                LossDef(f"{name}_ratio_sq_sum"),
+                LossDef(f"{name}_kl_new_old"),
+                LossDef(f"{name}_clamp_frac"),
+                LossDef(f"{name}_advantage"),
+                LossDef(f"{name}_max_advantage", reduction=ReductionType.maximum),
+                LossDef(f"{name}_min_advantage", reduction=ReductionType.minimum),
+                LossDef(f"{name}_num_tokens"),
+            ]
+            if self._config.compute_entropy_metric:
+                defs.append(LossDef(f"{name}_entropy"))
+        return defs
 
     def get_preprocessing_config(
         self,

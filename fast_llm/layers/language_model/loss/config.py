@@ -205,6 +205,21 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         desc="Enable triton implementation. Default: use if available.",
         hint=FieldHint.expert,
     )
+    compute_extra_metrics: bool = Field(
+        default=False,
+        desc="Log additional GRPO metrics: old_logprobs, ratio, KL(new||old), advantage stats, clamp fraction, token count.",
+        hint=FieldHint.feature,
+    )
+    compute_entropy_metric: bool = Field(
+        default=False,
+        desc="Also log per-token entropy (-Σ p log p). Requires a second pass over logits (~10-20%% overhead). Implies compute_extra_metrics.",
+        hint=FieldHint.feature,
+    )
+    entropy_chunk_size: int = Field(
+        default=4096,
+        desc="Batch chunk size for chunked entropy computation. Memory per chunk ∝ chunk_size × vocab_local.",
+        hint=FieldHint.expert,
+    )
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":
