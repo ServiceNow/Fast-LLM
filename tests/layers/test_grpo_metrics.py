@@ -53,11 +53,11 @@ def _manual_metrics(logits, target, old_log_probs, advantages, label_counts, eps
 
     return dict(
         old_logprobs=old_lp,
-        ratio=ratio_mean,
-        ratio_sum=ratio_sum,
-        ratio_sq_sum=ratio_sq_sum,
+        ratio_new_old=ratio_mean,
+        ratio_new_old_sum=ratio_sum,
+        ratio_new_old_squared_sum=ratio_sq_sum,
         kl_new_old=kl_mean,
-        clamp_frac=clamp_mean,
+        clamp_log_ratio_new_old_indicator=clamp_mean,
         advantage=adv_mean,
         max_advantage=max_adv,
         min_advantage=min_adv,
@@ -206,7 +206,12 @@ def test_clamp_fraction_known():
     got = _run_metrics(logits, target, old_log_probs, advantages, label_counts, eps_lo=0.1, eps_hi=0.1)
 
     expected_clamp_frac = 3.0 / seq_len  # 3 out of 5 tokens clipped
-    _assert_close(got.clamp_frac, torch.tensor(expected_clamp_frac), msg="clamp_frac", atol=1e-5)
+    _assert_close(
+        got.clamp_log_ratio_new_old_indicator,
+        torch.tensor(expected_clamp_frac),
+        msg="clamp_log_ratio_new_old_indicator",
+        atol=1e-5,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +266,11 @@ def test_mock_sdp_split():
     # SUM metrics accumulate across both halves
     for attr in (
         "old_logprobs",
-        "ratio",
-        "ratio_sum",
-        "ratio_sq_sum",
+        "ratio_new_old",
+        "ratio_new_old_sum",
+        "ratio_new_old_squared_sum",
         "kl_new_old",
-        "clamp_frac",
+        "clamp_log_ratio_new_old_indicator",
         "advantage",
         "num_tokens",
     ):
@@ -373,5 +378,5 @@ def test_old_logprobs_normalization_matches_new_logprobs_pattern():
     _assert_close(got.old_logprobs, expected_new_lp_mean, msg="old_logprobs_vs_new_logprobs_mean")
 
     # ratio should be ~1 everywhere, kl should be ~0
-    _assert_close(got.ratio, torch.tensor(1.0) * (mask / denom).sum(), msg="ratio_at_1", atol=1e-4)
+    _assert_close(got.ratio_new_old, torch.tensor(1.0) * (mask / denom).sum(), msg="ratio_new_old_at_1", atol=1e-4)
     _assert_close(got.kl_new_old, torch.zeros(()), msg="kl_at_zero", atol=1e-4)

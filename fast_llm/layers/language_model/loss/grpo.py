@@ -84,22 +84,22 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         name = self._name
 
         # Per-token mean metrics: divide by num_docs to match new_logprobs_mean normalization.
-        for attr, suffix in (
-            ("old_logprobs", "old_logprobs"),
-            ("ratio", "ratio"),
-            ("kl_new_old", "kl_new_old"),
-            ("clamp_frac", "clamp_frac"),
-            ("advantage", "advantage"),
+        for attr in (
+            "old_logprobs",
+            "ratio_new_old",
+            "kl_new_old",
+            "clamp_log_ratio_new_old_indicator",
+            "advantage",
         ):
-            self._register_loss(f"{name}_{suffix}", getattr(metrics, attr) / num_docs, losses)
+            self._register_loss(f"{name}_{attr}", getattr(metrics, attr) / num_docs, losses)
 
         # Raw sum metrics (no per-doc normalization).
-        for attr, suffix in (
-            ("ratio_sum", "ratio_sum"),
-            ("ratio_sq_sum", "ratio_sq_sum"),
-            ("num_tokens", "num_tokens"),
+        for attr in (
+            "ratio_new_old_sum",
+            "ratio_new_old_squared_sum",
+            "num_tokens",
         ):
-            self._register_loss(f"{name}_{suffix}", getattr(metrics, attr), losses)
+            self._register_loss(f"{name}_{attr}", getattr(metrics, attr), losses)
 
         # MAX/MIN metrics: pass correct reduce_op for sequence-parallel mode.
         self._register_loss(
@@ -124,11 +124,11 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             name = self._name
             defs += [
                 LossDef(f"{name}_old_logprobs"),
-                LossDef(f"{name}_ratio"),
-                LossDef(f"{name}_ratio_sum"),
-                LossDef(f"{name}_ratio_sq_sum"),
+                LossDef(f"{name}_ratio_new_old"),
+                LossDef(f"{name}_ratio_new_old_sum"),
+                LossDef(f"{name}_ratio_new_old_squared_sum"),
                 LossDef(f"{name}_kl_new_old"),
-                LossDef(f"{name}_clamp_frac"),
+                LossDef(f"{name}_clamp_log_ratio_new_old_indicator"),
                 LossDef(f"{name}_advantage"),
                 LossDef(f"{name}_max_advantage", reduction=ReductionType.maximum),
                 LossDef(f"{name}_min_advantage", reduction=ReductionType.minimum),

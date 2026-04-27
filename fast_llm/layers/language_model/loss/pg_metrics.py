@@ -15,18 +15,18 @@ class PolicyGradientMetrics:
       sum(value * mask / label_counts.clamp(1))
     The caller must then divide by num_documents_in_batch for the final logged value.
 
-    ratio_sum / ratio_sq_sum are raw masked sums (no label_counts division) for ESS.
+    ratio_new_old_sum / ratio_new_old_squared_sum are raw masked sums (no label_counts division) for ESS.
 
     max_advantage / min_advantage are raw per-local-batch extrema; the caller must
     all_reduce them with ReduceOp.MAX / ReduceOp.MIN across SDP ranks.
     """
 
     old_logprobs: torch.Tensor  # per-token mean (label_counts normalised)
-    ratio: torch.Tensor  # per-token mean IS ratio
-    ratio_sum: torch.Tensor  # raw masked sum (ESS numerator)
-    ratio_sq_sum: torch.Tensor  # raw masked sum (ESS denominator)
+    ratio_new_old: torch.Tensor  # per-token mean IS ratio
+    ratio_new_old_sum: torch.Tensor  # raw masked sum (ESS numerator)
+    ratio_new_old_squared_sum: torch.Tensor  # raw masked sum (ESS denominator)
     kl_new_old: torch.Tensor  # per-token mean Schulman KL approx
-    clamp_frac: torch.Tensor  # per-token mean clipping indicator
+    clamp_log_ratio_new_old_indicator: torch.Tensor  # per-token mean clipping indicator
     advantage: torch.Tensor  # per-token mean
     max_advantage: torch.Tensor  # max over masked tokens (caller does MAX all-reduce)
     min_advantage: torch.Tensor  # min over masked tokens (caller does MIN all-reduce)
@@ -74,11 +74,11 @@ def _compute_pg_base_metrics(
     kl = ratio - log_ratio - 1.0
 
     old_lp = (old_log_probabilities * mask / denom).sum()
-    ratio_mean = (ratio * mask / denom).sum()
-    ratio_sum = (ratio * mask).sum()
-    ratio_sq_sum = (ratio * ratio * mask).sum()
+    ratio_new_old_mean = (ratio * mask / denom).sum()
+    ratio_new_old_sum = (ratio * mask).sum()
+    ratio_new_old_squared_sum = (ratio * ratio * mask).sum()
     kl_mean = (kl * mask / denom).sum()
-    clamp_mean = (clipped.float() * mask / denom).sum()
+    clamp_indicator_mean = (clipped.float() * mask / denom).sum()
     adv_mean = (advantages * mask / denom).sum()
     num_tokens = mask.sum()
 
@@ -88,7 +88,18 @@ def _compute_pg_base_metrics(
     max_adv = torch.where(loss_mask, advantages, neg_inf).max()
     min_adv = torch.where(loss_mask, advantages, pos_inf).min()
 
-    return old_lp, ratio_mean, ratio_sum, ratio_sq_sum, kl_mean, clamp_mean, adv_mean, max_adv, min_adv, num_tokens
+    return (
+        old_lp,
+        ratio_new_old_mean,
+        ratio_new_old_sum,
+        ratio_new_old_squared_sum,
+        kl_mean,
+        clamp_indicator_mean,
+        adv_mean,
+        max_adv,
+        min_adv,
+        num_tokens,
+    )
 
 
 def compute_chunked_entropy(
@@ -163,11 +174,11 @@ def compute_policy_gradient_metrics(
 ) -> PolicyGradientMetrics:
     (
         old_lp,
-        ratio_mean,
-        ratio_sum,
-        ratio_sq_sum,
+        ratio_new_old_mean,
+        ratio_new_old_sum,
+        ratio_new_old_squared_sum,
         kl_mean,
-        clamp_mean,
+        clamp_indicator_mean,
         adv_mean,
         max_adv,
         min_adv,
@@ -197,11 +208,11 @@ def compute_policy_gradient_metrics(
 
     return PolicyGradientMetrics(
         old_logprobs=old_lp,
-        ratio=ratio_mean,
-        ratio_sum=ratio_sum,
-        ratio_sq_sum=ratio_sq_sum,
+        ratio_new_old=ratio_new_old_mean,
+        ratio_new_old_sum=ratio_new_old_sum,
+        ratio_new_old_squared_sum=ratio_new_old_squared_sum,
         kl_new_old=kl_mean,
-        clamp_frac=clamp_mean,
+        clamp_log_ratio_new_old_indicator=clamp_indicator_mean,
         advantage=adv_mean,
         max_advantage=max_adv,
         min_advantage=min_adv,
