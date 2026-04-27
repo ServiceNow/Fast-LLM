@@ -13,6 +13,7 @@ from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
+    ProportionalRotaryConfig,
     Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
@@ -302,3 +303,38 @@ class Rotary2D[ConfigType: Rotary2DConfig](RotaryBase[ConfigType]):
             torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
         ).contiguous()
         kwargs[AttentionKwargs.rotary_freq] = frequencies
+
+
+class ProportionalRotary[ConfigType: ProportionalRotaryConfig](DefaultRotary[ConfigType]):
+    """
+    Rotary embeddings applied only to the first `rotary_dims` head dimensions.
+    The remaining dimensions pass through unchanged.
+    """
+
+    def __init__(self, config: ConfigType, head_size_dim: TensorDim) -> None:
+        super().__init__(config, head_size_dim)
+        self._rotary_dims = int(self._head_size * self._config.partial_rotary_factor)
+        Assert.gt(self._rotary_dims, 0)
+        Assert.multiple(self._rotary_dims, 2)
+
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
+        positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
+        rotated_angle_scales = self._config.theta ** -torch.arange(
+            0, self._rotary_dims, 2, device=device, dtype=torch.float64
+        ).div(self._head_size)
+        nope_angles = (self._head_size - self._rotary_dims) // 2
+        angle_scales = (
+            torch.cat(
+                [
+                    rotated_angle_scales,
+                    torch.zeros(nope_angles, device=device, dtype=torch.float64),
+                ]
+            )
+            if nope_angles > 0
+            else rotated_angle_scales
+        )
+        angles = torch.outer(positions, angle_scales)
+        frequencies = torch.polar(torch.ones_like(angles), angles)[:, None, :].to(torch.complex64)
+        return convert_rotary_complex_to_real(
+            torch.view_as_real(frequencies).flatten(-2), self._head_size, 2
+        ).contiguous()

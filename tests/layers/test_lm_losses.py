@@ -304,6 +304,36 @@ def _test_grpo_loss(
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
+@pytest.mark.parametrize(
+    "loss_impl",
+    [
+        fused_entropy_loss_forward_backward,
+        pytest.param(
+            triton_entropy_loss_forward_backward,
+            marks=pytest.mark.skipif(not triton_available, reason="triton not available"),
+        ),
+    ],
+)
+def test_entropy_loss_zero_divisor_all_masked_labels(loss_impl):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logits = torch.randn((8, 32), dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32, device=device)
+    target = torch.full((8,), -100, dtype=torch.int64, device=device)
+
+    loss, grad = loss_impl(
+        logits=logits,
+        target=target,
+        loss_mask=None,
+        grad_output=1.0,
+        logits_scale_factor=1.0,
+        target_format=TargetFormat.labels,
+        entropy_loss_type=EntropyLossType.cross_entropy,
+        divisor=0,
+    )
+
+    Assert.all_equal(loss, torch.zeros_like(loss))
+    Assert.all_equal(grad, torch.zeros_like(grad))
+
+
 def _test_z_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
 ):

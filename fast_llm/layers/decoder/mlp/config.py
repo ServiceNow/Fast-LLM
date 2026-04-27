@@ -3,12 +3,15 @@ import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.layers.decoder.mlp.gemma4_moe import Gemma4MoEMLP
     from fast_llm.layers.decoder.mlp.mixture_of_experts import MixtureOfExpertMLP
     from fast_llm.layers.decoder.mlp.mlp import MLP
 
@@ -163,3 +166,64 @@ class MoEMLPConfig(MLPConfig):
         super()._validate()
         Assert.leq(self.shared_experts, self.experts)
         Assert.leq(self.shared_experts + self.experts_per_token, self.experts)
+
+
+@config_class(dynamic_type={MLPBaseConfig: "gemma4_moe"})
+class Gemma4MoEMLPConfig(MoEMLPConfig):
+    """Gemma4 dense-plus-routed feedforward layer.
+
+    `layer_1` and `layer_2` are the always-on dense branch. `expert_layer_1`
+    and `expert_layer_2` are the routed expert branch.
+    """
+
+    moe_intermediate_size: int = Field(
+        default=704,
+        desc="Hidden dimension of each routed Gemma4 expert.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    post_feedforward_norm_1: NormalizationConfig = Field(
+        desc="Dense branch post-feedforward normalization.",
+        hint=FieldHint.architecture,
+    )
+    pre_feedforward_norm_2: NormalizationConfig = Field(
+        desc="Sparse branch pre-feedforward normalization.",
+        hint=FieldHint.architecture,
+    )
+    post_feedforward_norm_2: NormalizationConfig = Field(
+        desc="Sparse branch post-feedforward normalization.",
+        hint=FieldHint.architecture,
+    )
+    router_scale: ParameterConfig = Field(
+        desc="Trainable hidden-size scale applied after router RMS norm.",
+        hint=FieldHint.architecture,
+    )
+    per_expert_scale: ParameterConfig = Field(
+        desc="Trainable per-expert scale applied to selected router probabilities.",
+        hint=FieldHint.architecture,
+    )
+    router_norm_eps: float = Field(
+        default=1e-6,
+        desc="Epsilon for Gemma4's fixed no-scale router RMS norm.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    expert_layer_1: AffineLinearConfig = Field(
+        desc="Configuration for the routed experts' first MLP layer.",
+        hint=FieldHint.architecture,
+    )
+    expert_layer_2: AffineLinearConfig = Field(
+        desc="Configuration for the routed experts' second MLP layer.",
+        hint=FieldHint.architecture,
+    )
+
+    @property
+    def layer_class(self) -> "type[Gemma4MoEMLP]":
+        from fast_llm.layers.decoder.mlp.gemma4_moe import Gemma4MoEMLP
+
+        return Gemma4MoEMLP
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.eq(self.shared_experts, 0)
+        Assert.eq(self.routing, RoutingType.topk)

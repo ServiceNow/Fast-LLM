@@ -49,6 +49,7 @@ class BlockKwargs:
     output_hidden_states = "output_hidden_states"
     activation_mask = "activation_mask"
     num_blocks_in_sequence = "num_blocks_in_sequence"
+    pre_mlp_residual = "pre_mlp_residual"
 
 
 @config_class(registry=True)

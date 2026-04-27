@@ -67,6 +67,11 @@ class LanguageModelEmbeddingsConfig(BlockConfig):
         desc="Store the residuals for the model in full precision (`optimization_dtype`).",
         hint=FieldHint.stability,
     )
+    scale_by_sqrt_hidden_size: bool = Field(
+        default=False,
+        desc="Scale embeddings by sqrt(hidden_size) after lookup (used by Gemma-family models).",
+        hint=FieldHint.feature,
+    )
 
     # Tensor-parallel word embeddings
     # (Default init std is different, dropout won't match, needs seq_first = False.)
@@ -130,6 +135,12 @@ class LanguageModelHeadConfig(BlockConfig):
         desc="Loss coefficient for each prediction head.",
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
+    )
+    final_logit_softcap: float | None = Field(
+        default=None,
+        desc="Softcap applied to output logits: logits = tanh(logits / cap) * cap (used by Gemma-family models).",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
     def get_layer(

@@ -716,6 +716,7 @@ def triton_entropy_loss_forward_backward(
     n_cols = logits.size(-1)
     if divisor is None:
         divisor = n_rows
+    divisor = max(divisor, 1)
     if block_size is None:
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:

@@ -104,12 +104,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         head_size_dim = TensorDim("head_size", self._config.head_size)
         query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, head_size_dim))
-        key_value_dim = ConcatenatedTensorDim(
-            "key_value",
-            (
-                CompositeTensorDim("key", (head_group_dim, head_size_dim)),
-                CompositeTensorDim("value", (head_group_dim, head_size_dim)),
-            ),
+        key_dim = CompositeTensorDim("key", (head_group_dim, head_size_dim))
+        key_value_dim = (
+            key_dim
+            if self._config.attention_k_eq_v
+            else ConcatenatedTensorDim(
+                "key_value",
+                (
+                    key_dim,
+                    CompositeTensorDim("value", (head_group_dim, head_size_dim)),
+                ),
+            )
         )
         self._dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, head_size_dim))
 
@@ -136,7 +141,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=None if self._config.key_layer.apply_peft is None else self._peft,
         )
-        if self._peft is not None and self._config.key_layer.apply_peft is None:
+        if self._peft is not None and self._config.key_layer.apply_peft is None and not self._config.attention_k_eq_v:
             # Default: Apply to value only.
             # TODO: Avoid this hack.
             self.key_value = self._peft.apply_linear(
@@ -147,6 +152,18 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         # Rotary embeddings.
         self._rotary = self._config.rotary.get_layer(head_size_dim)
+
+        # Per-head QK norms (applied after projection, before RoPE).
+        self.q_norm = (
+            self._config.query_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.query_norm is not None
+            else None
+        )
+        self.k_norm = (
+            self._config.key_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.key_norm is not None
+            else None
+        )
 
         # Output.
         self.dense = self._config.dense_layer.get_layer(
@@ -252,11 +269,51 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # TODO: This is probably unnecessary.
             handle.wait()
 
-        query, key_value, rotary_context = self._rotary.forward_only(
-            query.unflatten(1, (self._local_heads, self._config.head_size)),
-            key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size)),
-            kwargs,
-        )
+        query = query.unflatten(1, (self._local_heads, self._config.head_size))
+        if self._config.attention_k_eq_v:
+            key_value = key_value.unflatten(1, (self._local_head_groups, self._config.head_size))
+            key_value = torch.cat([key_value, key_value], dim=1)
+        else:
+            key_value = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
+
+        # QK norms: applied after projection/unflatten, before RoPE.
+        # wrap_forward_backward disables autograd inside forward_only, so we re-enable it
+        # locally to build a mini-graph for each norm; the saved (pre, out) pair is used
+        # in _query_key_value_backward to call .backward() and accumulate weight grads.
+        norm_context = {}
+        if self.q_norm is not None:
+            # .contiguous() needed: unflatten returns a non-contiguous view and
+            # Normalization.forward uses .view() internally.
+            # .detach() before passing onward keeps the mini-graph alive only in
+            # context; without it, Function.forward returning query_normed causes
+            # PyTorch to replace its grad_fn with the outer Function node, which
+            # would re-enter _query_key_value_backward when we call .backward() here.
+            query_pre = query.contiguous().detach().requires_grad_(True)
+            with torch.enable_grad():
+                query_normed = self.q_norm(query_pre)
+            norm_context["q_norm"] = (query_pre, query_normed)
+            # Triton rotary is in-place. Clone to keep the q-norm mini-graph output
+            # intact for the manual backward call below.
+            query = query_normed.detach().clone()
+        if self.k_norm is not None or self._config.value_norm:
+            k, v = key_value.chunk(2, dim=1)
+            if self.k_norm is not None:
+                k_pre = k.contiguous().detach().requires_grad_(True)
+                with torch.enable_grad():
+                    k_normed = self.k_norm(k_pre)
+                norm_context["k_norm"] = (k_pre, k_normed)
+                k = k_normed.detach()
+            if self._config.value_norm:
+                v_pre = v.contiguous().detach().requires_grad_(True)
+                with torch.enable_grad():
+                    v_normed = torch.rms_norm(
+                        v_pre, (self._config.head_size,), None, self._config.value_norm_eps
+                    )
+                norm_context["v_norm"] = (v_pre, v_normed)
+                v = v_normed.detach()
+            key_value = torch.cat([k, v], dim=1)
+
+        query, key_value, rotary_context = self._rotary.forward_only(query, key_value, kwargs)
 
         if self._sequence_data_parallel_dim.group:
             # sequence dim may not be zero, but this needs to be handled after `handle.wait()`
@@ -266,7 +323,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         if handle:
             handle.wait()
 
-        context = {"query": query_context, "key_value": key_value_context, "rotary": rotary_context}
+        context = {"query": query_context, "key_value": key_value_context, "rotary": rotary_context, **norm_context}
         return query, key_value, context
 
     def _query_key_value_backward(
@@ -283,6 +340,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         rotary_context = context.pop("rotary")
         query_grad, _ = self._rotary.backward(query_grad, None, rotary_context)
 
+        if q_norm_ctx := context.pop("q_norm", None):
+            query_pre, query_normed = q_norm_ctx
+            query_normed.backward(query_grad)
+            query_grad = query_pre.grad
+
         # TODO: Overlap with both.
         input_grad = self.query.backward(query_grad.flatten(1), context.pop("query"))
 
@@ -290,7 +352,24 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             handle.wait()
 
         _, key_value_grad = self._rotary.backward(None, key_value_grad, rotary_context)
-        key_value_grad = key_value_grad.flatten(1)
+
+        if "k_norm" in context or "v_norm" in context:
+            k_grad, v_grad = key_value_grad.chunk(2, dim=1)
+            if k_norm_ctx := context.pop("k_norm", None):
+                k_pre, k_normed = k_norm_ctx
+                k_normed.backward(k_grad.contiguous())
+                k_grad = k_pre.grad
+            if v_norm_ctx := context.pop("v_norm", None):
+                v_pre, v_normed = v_norm_ctx
+                v_normed.backward(v_grad.contiguous())
+                v_grad = v_pre.grad
+            key_value_grad = torch.cat([k_grad, v_grad], dim=1)
+
+        if self._config.attention_k_eq_v:
+            k_grad, v_grad = key_value_grad.chunk(2, dim=1)
+            key_value_grad = (k_grad + v_grad).flatten(1)
+        else:
+            key_value_grad = key_value_grad.flatten(1)
 
         if self._config.head_groups == 1 and (group := self._parallel_dim.group):
             if self._sequence_parallel:

@@ -3,7 +3,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import _BIG_PRIMES, DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
@@ -216,6 +216,21 @@ class DecoderBlockConfig(BlockConfig):
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the block normalization layers.",
+        hint=FieldHint.architecture,
+    )
+    post_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the mixer output before the residual add (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
+    post_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the MLP output before the residual add (used by Gemma-family models).",
+        hint=FieldHint.architecture,
+    )
+    layer_scalar: OptionalParameterConfig = Field(
+        default_factory=lambda: {"enabled": False},
+        desc="Optional learnable scalar applied to the block output after the final residual add.",
         hint=FieldHint.architecture,
     )
     # TODO: Review names

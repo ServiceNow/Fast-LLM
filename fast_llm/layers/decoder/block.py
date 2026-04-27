@@ -6,7 +6,8 @@ import torch
 
 from fast_llm.core.distributed import ReduceOp, all_reduce, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.config_utils.initialization import init_ones_
+from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.utils import AuxiliaryLoss
@@ -88,6 +89,25 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self._return_input = return_input
         self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
         self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.post_mixer_normalization = (
+            self._config.post_mixer_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.post_mixer_normalization is not None
+            else None
+        )
+        self.post_mlp_normalization = (
+            self._config.post_mlp_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.post_mlp_normalization is not None
+            else None
+        )
+        self.layer_scalar = self._config.layer_scalar.get_parameter(
+            (scalar_dim,),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            weight_decay=False,
+            allow_sequence_tensor_parallel=False,
+            default_enabled=False,
+            peft=None,
+        )
 
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
@@ -145,14 +165,33 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 bias = None
             hidden_states = self._activation_distillation_loss(hidden_states, kwargs, losses, metrics)
 
+        if self.post_mixer_normalization is not None:
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
+            hidden_states = self.post_mixer_normalization(hidden_states)
+
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         self._debug(input_, "mixer_residual", hidden_dims, kwargs)
+        kwargs[BlockKwargs.pre_mlp_residual] = input_
         hidden_states = self.norm_2(input_)
         self._debug(hidden_states, "norm_2", hidden_dims, kwargs)
-        hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        try:
+            hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        finally:
+            kwargs.pop(BlockKwargs.pre_mlp_residual, None)
+
+        if self.post_mlp_normalization is not None:
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
+            hidden_states = self.post_mlp_normalization(hidden_states)
+
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
+        if self.layer_scalar is not None:
+            hidden_states = hidden_states * self.layer_scalar
         self._debug(hidden_states, None, hidden_dims, kwargs)
 
         if self._return_input:

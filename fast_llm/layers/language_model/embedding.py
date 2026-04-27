@@ -132,6 +132,9 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                         (embedding_map,), input_[: embedding_map.size(0)], accumulate=True
                     )
 
+        if self._config.scale_by_sqrt_hidden_size:
+            embeddings = embeddings * self._hidden_size**0.5
+
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         ):
