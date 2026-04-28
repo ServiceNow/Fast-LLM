@@ -108,5 +108,17 @@ class AudioAdapter(Layer):
         layer1_res_norm = self.norm_2(layer1_res_dropout)
         output = self.layer_2(layer1_res_norm)  # (N_clips, T/k, lm_hidden)
 
-        # Flatten to (N_clips * T/k, lm_hidden) for sequence-first LM injection.
+        # Trim each clip to its actual token count before flattening.
+        # When audio clips are shorter than the padded length (always true for "longest"
+        # padding with variable-length clips, and for "max_length" when clips are shorter
+        # than aud_padding_duration), the flat output contains extra padded tokens per clip.
+        # embedding.py injects via input_[:sum(actual_n_i)], which would take tokens from
+        # the wrong clips if we don't trim first.
+        audio_token_lens = kwargs.get(AudioKwargs.audio_token_lens)
+        if audio_token_lens is not None and audio_token_lens.sum().item() < batch_size * new_seq_len:
+            return torch.cat(
+                [output[i, :n] for i, n in enumerate(audio_token_lens.tolist())]
+            ).contiguous()
+
+        # All clips fill their full padded slot — no trimming needed.
         return output.reshape(batch_size * new_seq_len, -1).contiguous()
