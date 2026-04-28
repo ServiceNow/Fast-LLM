@@ -44,6 +44,8 @@ class AttentionTestConfig:
     head_size: int = _HEAD_SIZE
     causal: bool = True
     window_size: int | None = None
+    query_norm: bool = False
+    key_norm: bool = False
     rotary: bool = False
     rotary_theta: float = 10000.0
 
@@ -66,6 +68,10 @@ class AttentionTestConfig:
         }
         if self.window_size is not None:
             config["window_size"] = self.window_size
+        if self.query_norm:
+            config["query_norm"] = {"type": "rms_norm"}
+        if self.key_norm:
+            config["key_norm"] = {"type": "rms_norm"}
         if self.rotary:
             config["rotary"] = {"type": "default", "theta": self.rotary_theta}
         return AttentionConfig.from_dict(config)
@@ -77,8 +83,8 @@ class AttentionTestConfig:
         lengths: list[int],
     ) -> torch.Tensor:
         """
-        Independent reference: plain F.linear + rotary + per-document einsum attention.
-        No calls to Fast-LLM attention internals.
+        Independent reference: plain F.linear + torch.rms_norm + rotary + per-document einsum attention.
+        No calls to Fast-LLM attention or norm internals.
         """
         with torch.no_grad():
             q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(
@@ -88,11 +94,20 @@ class AttentionTestConfig:
                 1, (2 * self.kv_heads, self.head_size)
             )
 
+            if self.query_norm:
+                q = torch.rms_norm(q, (self.head_size,), attention.query_norm.weight.detach(), 1e-5)
+            if self.key_norm:
+                key_normed = torch.rms_norm(
+                    kv[:, : self.kv_heads, :], (self.head_size,), attention.key_norm.weight.detach(), 1e-5
+                )
+                kv = torch.cat([key_normed, kv[:, self.kv_heads :, :]], dim=1)
+
             if self.rotary:
                 freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, self.rotary_theta, input_.device)
                 q = _apply_rotary(q, freqs)
                 k_rotated = _apply_rotary(kv[:, : self.kv_heads, :], freqs)
                 kv = torch.cat([k_rotated, kv[:, self.kv_heads :, :]], dim=1)
+
 
             k, v = kv[:, : self.kv_heads, :], kv[:, self.kv_heads :, :]
             scale = self.head_size**-0.5
@@ -136,9 +151,17 @@ _attention_rotary_cases = [
     ("causal_rotary", {"causal": True, "rotary": True}),
 ]
 
+_attention_norm_variants = [
+    ("no_norm", {}),
+    ("query_norm", {"query_norm": True}),
+    ("key_norm", {"key_norm": True}),
+    ("both_norms", {"query_norm": True, "key_norm": True}),
+]
+
 _attention_test_configs = [
-    AttentionTestConfig(name=base_name, **base_kwargs)
+    AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
     for base_name, base_kwargs in _base_attention_cases + _attention_rotary_cases
+    for variant_name, variant_kwargs in _attention_norm_variants
 ]
 
 _attention_lengths = [
