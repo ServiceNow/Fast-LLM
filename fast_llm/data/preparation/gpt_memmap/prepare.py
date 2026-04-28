@@ -304,7 +304,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     for clip in raw_audio:
                         arr = clip["array"]
                         audio_clips.append(torch.from_numpy(np.asarray(arr, dtype=np.float32)))
-                    # Add an empty span at each character position to capture the token position.
+                    # Add a zero-width span at each character position to capture the token
+                    # insertion point after tokenization.
                     all_spans.extend(
                         [(SpanType.audio, (int(pos), int(pos))) for pos in raw_audio_positions]
                     )
@@ -318,14 +319,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             )
 
             # Gather token spans by type.
-            if self._source_schema.has_images:
-                # Insert the image token ids in the token sequence and shift the spans accordingly.
+            if self._source_schema.has_images or self._source_schema.has_audio:
                 tokens_shift = 0
                 image_index = 0
+                audio_index = 0
                 for span_type, (begin, end) in zip(span_types, token_spans, strict=True):
                     # Account for the tokens already inserted.
                     begin = begin + tokens_shift
                     end = end + tokens_shift
+                    
                     if span_type == SpanType.image:
                         # Shift the token map to the image location.
                         image_token_maps[
@@ -335,6 +337,32 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         tokens = torch.cat([tokens[:begin], image_token_ids[image_index], tokens[begin:]])
                         tokens_shift += len(image_token_ids[image_index])
                         image_index += 1
+                    elif span_type == SpanType.audio:
+                        base_n = self._config.audio.num_audio_encoder_tokens(len(audio_clips[audio_index]))
+                        insert_ids: list[int] = []
+                        if self._config.audio.audio_start_token is not None:
+                            insert_ids.append(self._config.audio.audio_start_token)
+                        audio_slot_begin = begin + len(insert_ids)
+                        insert_ids.extend([-100] * base_n)
+                        if self._config.audio.audio_end_token is not None:
+                            insert_ids.append(self._config.audio.audio_end_token)
+                        insert_tensor = tokens.new_tensor(insert_ids)
+                        tokens = torch.cat([tokens[:begin], insert_tensor, tokens[begin:]])
+                        token_spans_by_type[SpanType.audio].append((audio_slot_begin, audio_slot_begin + base_n))
+                        # `begin` (audio_position) marks the insertion point for the entire audio block
+                        # (start token + placeholders + end token), with no knowledge of
+                        # audio_start_token.  Any loss-masking span whose range contains `begin`
+                        # was stored before this insertion and its end boundary is now stale:
+                        # the inserted tokens push the original tail (e.g. <|end|>) past the old
+                        # span end.  Extend it by the full block size so it continues to cover
+                        # everything it was meant to mask.
+                        lm_spans = token_spans_by_type[SpanType.loss_masking]
+                        for i, (s, e) in enumerate(lm_spans):
+                            if s <= begin < e:
+                                lm_spans[i] = (s, e + len(insert_ids))
+                                break
+                        tokens_shift += len(insert_ids)
+                        audio_index += 1
                     else:
                         token_spans_by_type[span_type].append((begin, end))
             else:
@@ -349,7 +377,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         audio_doc: AudioDocument | None = None
         if self._source_schema.has_audio and audio_clips:
-            # token_spans_by_type[SpanType.audio] holds (begin, begin) pairs — extract the position.
             audio_token_positions = [begin for begin, _ in token_spans_by_type[SpanType.audio]]
             audio_doc = AudioDocument(
                 samples=audio_clips,
