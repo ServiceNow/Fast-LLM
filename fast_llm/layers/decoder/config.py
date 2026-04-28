@@ -218,6 +218,16 @@ class DecoderBlockConfig(BlockConfig):
         desc="Configuration for the block normalization layers.",
         hint=FieldHint.architecture,
     )
+    post_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the mixer output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    post_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
     # TODO: Review names
     dropout: float = Field(
         default=0.0,

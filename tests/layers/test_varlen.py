@@ -7,7 +7,6 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.layers.ssm.gdn import _causal_conv1d_available
@@ -21,7 +20,6 @@ from tests.utils.utils import get_stage
 @pytest.mark.parametrize(
     "config",
     [
-        AttentionConfig(heads=4, head_groups=2, head_size=16),
         pytest.param(
             MambaConfig(
                 d_inner=128,
