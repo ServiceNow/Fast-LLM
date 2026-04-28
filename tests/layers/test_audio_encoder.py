@@ -129,8 +129,8 @@ def test_audio_preprocessor_token_lens_reflect_actual_durations():
     preprocessor = _make_preprocessor(aud_padding_duration=30, audio_padding="max_length")
     audio_5s = np.zeros(5 * SR, dtype=np.float32)
     audio_10s = np.zeros(10 * SR, dtype=np.float32)
-    # Two samples, one audio clip each
-    kwargs = {AudioEncoderKwargs.audio: [[audio_5s], [audio_10s]]}
+    # Two clips, flat list (AudioBatch.to_kwargs already flattens across documents)
+    kwargs = {AudioEncoderKwargs.audio: [audio_5s, audio_10s]}
     preprocessor.preprocess(None, kwargs)
 
     assert AudioEncoderKwargs.audio_token_lens in kwargs, (
@@ -146,7 +146,7 @@ def test_audio_preprocessor_token_lens_longest_mode():
     preprocessor = _make_preprocessor(aud_padding_duration=30, audio_padding="longest")
     audio_3s = np.zeros(3 * SR, dtype=np.float32)
     audio_15s = np.zeros(15 * SR, dtype=np.float32)
-    kwargs = {AudioEncoderKwargs.audio: [[audio_3s], [audio_15s]]}
+    kwargs = {AudioEncoderKwargs.audio: [audio_3s, audio_15s]}
     preprocessor.preprocess(None, kwargs)
 
     lens = kwargs[AudioEncoderKwargs.audio_token_lens]
@@ -159,8 +159,8 @@ def test_audio_preprocessor_token_lens_multiple_audios_per_sample():
     preprocessor = _make_preprocessor(aud_padding_duration=30, audio_padding="max_length")
     audio_5s = np.zeros(5 * SR, dtype=np.float32)
     audio_8s = np.zeros(8 * SR, dtype=np.float32)
-    # One sample with two audio clips
-    kwargs = {AudioEncoderKwargs.audio: [[audio_5s, audio_8s]]}
+    # Two clips from one sample, flat list
+    kwargs = {AudioEncoderKwargs.audio: [audio_5s, audio_8s]}
     preprocessor.preprocess(None, kwargs)
 
     lens = kwargs[AudioEncoderKwargs.audio_token_lens]
@@ -193,7 +193,7 @@ def test_audio_preprocessor_mel_shape_respects_config_padding_duration():
     aud_padding_duration = 10  # 10s, NOT 30s
     preprocessor = _make_preprocessor(aud_padding_duration=aud_padding_duration, audio_padding="max_length")
     audio = np.zeros(5 * SR, dtype=np.float32)  # 5s < 10s padding
-    kwargs = {AudioEncoderKwargs.audio: [[audio]]}
+    kwargs = {AudioEncoderKwargs.audio: [audio]}
     preprocessor.preprocess(None, kwargs)
 
     mel = kwargs[AudioEncoderKwargs.audio_mel]
@@ -214,7 +214,7 @@ def test_audio_preprocessor_mel_shape_longest_pads_to_batch_max():
     preprocessor = _make_preprocessor(aud_padding_duration=30, audio_padding="longest")
     audio_5s = np.zeros(5 * SR, dtype=np.float32)
     audio_10s = np.zeros(10 * SR, dtype=np.float32)
-    kwargs = {AudioEncoderKwargs.audio: [[audio_5s], [audio_10s]]}
+    kwargs = {AudioEncoderKwargs.audio: [audio_5s, audio_10s]}
     preprocessor.preprocess(None, kwargs)
 
     mel = kwargs[AudioEncoderKwargs.audio_mel]
@@ -246,8 +246,8 @@ def test_audio_preprocessor_mel_batch_dim_equals_num_audio_clips():
     audio_a = np.zeros(3 * SR, dtype=np.float32)
     audio_b = np.zeros(7 * SR, dtype=np.float32)
     audio_c = np.zeros(5 * SR, dtype=np.float32)
-    # Three clips: sample 0 has 2 clips, sample 1 has 1 clip
-    kwargs = {AudioEncoderKwargs.audio: [[audio_a, audio_b], [audio_c]]}
+    # Three clips flat (two from sample 0, one from sample 1)
+    kwargs = {AudioEncoderKwargs.audio: [audio_a, audio_b, audio_c]}
     preprocessor.preprocess(None, kwargs)
 
     mel = kwargs[AudioEncoderKwargs.audio_mel]
@@ -351,4 +351,232 @@ def test_audio_conv_output_length_matches_input_duration(duration_s: int):
     # Output is (N_clips * T, hidden_size); for N_clips=1, shape[0] is T
     assert output.shape[0] == expected_time, (
         f"{duration_s}s audio: expected conv output T={expected_time}, got {output.shape[0]}"
+    )
+
+
+# ==================================================================
+# AudioAdapter — trimming behaviour (CUDA required)
+# ==================================================================
+
+
+def _materialize_audio_adapter_cuda(
+    config: AudioEncoderConfig,
+    audio_hidden_size: int,
+    lm_hidden_size: int,
+):
+    """
+    Construct an AudioAdapter with all ParameterMeta weights materialized on CUDA.
+
+    Mirrors _materialize_audio_conv_cuda but targets AudioAdapter.
+    audio_hidden_size must match config.hidden_size so that norm_1 gets the
+    correct dimension.
+    """
+    from fast_llm.engine.config_utils.tensor_dim import TensorDim
+    from fast_llm.engine.distributed.config import DistributedConfig
+    from fast_llm.engine.distributed.distributed import Distributed
+    from fast_llm.layers.audio_encoder.adapter import AudioAdapter
+
+    dc = DistributedConfig()
+    distributed = Distributed(dc)
+
+    audio_hidden_dim = TensorDim("audio_hidden", audio_hidden_size)
+    output_dim = TensorDim("lm_hidden", lm_hidden_size)
+
+    adapter = AudioAdapter(config, audio_hidden_dim, output_dim, distributed_config=dc)
+    adapter.setup(distributed)
+
+    for param_name, param in list(adapter.named_parameters()):
+        if param.device.type != "meta":
+            continue
+        param_data = param.new_empty(param.shape, device="cuda")
+        if hasattr(param, "init_parameter"):
+            param.init_parameter(param_data, distributed)
+        else:
+            torch.nn.init.normal_(param_data)
+        module_path, leaf_name = (
+            param_name.rsplit(".", 1) if "." in param_name else (None, param_name)
+        )
+        module = adapter
+        if module_path:
+            for part in module_path.split("."):
+                module = getattr(module, part)
+        module._parameters[leaf_name] = torch.nn.Parameter(
+            param_data, requires_grad=param.requires_grad
+        )
+
+    return adapter
+
+
+# Small dimensions keep the tests fast while covering all code paths.
+_HIDDEN = 64   # audio encoder hidden size (must be divisible by layer-norm internals)
+_LM_HIDDEN = 32  # LM embedding size (adapter output)
+_ADAPTER_SIZE = 128  # adapter intermediate size
+
+
+def _make_adapter_config(k: int) -> AudioEncoderConfig:
+    return AudioEncoderConfig(
+        encoder_type=AudioEncoderType.whisper,
+        aud_downsampling_k=k,
+        hidden_size=_HIDDEN,
+        adapter_size=_ADAPTER_SIZE,
+        aud_sampling_rate=SR,
+    )
+
+
+@requires_cuda
+def test_audio_adapter_output_shape_no_trim_needed():
+    """
+    When seq_len is already a multiple of k, output shape is
+    (N_clips * T/k, lm_hidden) via the flat reshape path.
+    """
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    k = 4
+    N_clips, T = 2, 8  # T=8 is a multiple of k=4
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {AudioKwargs.audio_num_clips: N_clips}
+    output = adapter(input_, kwargs)
+
+    expected_tokens = N_clips * (T // k)  # 2 * 2 = 4
+    assert output.shape == (expected_tokens, _LM_HIDDEN), (
+        f"Expected ({expected_tokens}, {_LM_HIDDEN}), got {tuple(output.shape)}"
+    )
+
+
+@requires_cuda
+def test_audio_adapter_trims_seq_len_to_multiple_of_k():
+    """
+    When seq_len % k != 0 the adapter discards the trailing frames so that
+    the remaining length is a multiple of k.
+
+    T=9 with k=4 → trim to 8 → new_seq_len=2 → output (N_clips*2, lm_hidden).
+    """
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    k = 4
+    N_clips, T = 1, 9  # 9 is NOT a multiple of 4; must trim to 8
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {AudioKwargs.audio_num_clips: N_clips}
+    output = adapter(input_, kwargs)
+
+    # trimmed T=8, new_seq_len=2, total tokens = 1*2 = 2
+    assert output.shape == (2, _LM_HIDDEN), (
+        f"Expected (2, {_LM_HIDDEN}) after trimming T=9→8 with k=4, got {tuple(output.shape)}"
+    )
+
+
+@requires_cuda
+@pytest.mark.parametrize(
+    "T,k,expected_new_seq_len",
+    [
+        (7, 3, 2),   # 7 → trim to 6, 6//3 = 2
+        (11, 4, 2),  # 11 → trim to 8, 8//4 = 2
+        (5, 2, 2),   # 5 → trim to 4, 4//2 = 2
+        (6, 3, 2),   # 6 is already a multiple of 3, 6//3 = 2 (no actual trim)
+    ],
+)
+def test_audio_adapter_trim_parametrized(T: int, k: int, expected_new_seq_len: int):
+    """Adapter output length equals floor(T/k) for various (T, k) combinations."""
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    N_clips = 1
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {AudioKwargs.audio_num_clips: N_clips}
+    output = adapter(input_, kwargs)
+
+    assert output.shape == (N_clips * expected_new_seq_len, _LM_HIDDEN), (
+        f"T={T}, k={k}: expected ({N_clips * expected_new_seq_len}, {_LM_HIDDEN}), "
+        f"got {tuple(output.shape)}"
+    )
+
+
+@requires_cuda
+def test_audio_adapter_per_clip_trim_when_audio_token_lens_shorter():
+    """
+    When audio_token_lens total < N_clips * new_seq_len, the adapter trims
+    each clip to its actual token count and concatenates the results.
+
+    N_clips=3, T=10 (k=2 → new_seq_len=5).
+    audio_token_lens=[3, 4, 2], total=9 < 3*5=15 → per-clip trim path.
+    Expected output shape: (9, lm_hidden).
+    """
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    k = 2
+    N_clips, T = 3, 10  # new_seq_len = 5
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    audio_token_lens = torch.tensor([3, 4, 2], dtype=torch.int32, device="cuda")
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {
+        AudioKwargs.audio_num_clips: N_clips,
+        AudioKwargs.audio_token_lens: audio_token_lens,
+    }
+    output = adapter(input_, kwargs)
+
+    total_tokens = audio_token_lens.sum().item()  # 9
+    assert output.shape == (total_tokens, _LM_HIDDEN), (
+        f"Expected ({total_tokens}, {_LM_HIDDEN}), got {tuple(output.shape)}"
+    )
+
+
+@requires_cuda
+def test_audio_adapter_no_per_clip_trim_when_all_clips_full():
+    """
+    When audio_token_lens total == N_clips * new_seq_len (all clips exactly fill
+    their padded slot), the adapter uses the flat reshape path.
+
+    N_clips=2, T=6, k=2 → new_seq_len=3.  audio_token_lens=[3, 3], total=6=2*3.
+    Expected output shape: (6, lm_hidden).
+    """
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    k = 2
+    N_clips, T = 2, 6  # new_seq_len = 3
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    audio_token_lens = torch.tensor([3, 3], dtype=torch.int32, device="cuda")
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {
+        AudioKwargs.audio_num_clips: N_clips,
+        AudioKwargs.audio_token_lens: audio_token_lens,
+    }
+    output = adapter(input_, kwargs)
+
+    # sum(lens) == N_clips * new_seq_len → no per-clip trim
+    assert output.shape == (N_clips * (T // k), _LM_HIDDEN), (
+        f"Expected ({N_clips * (T // k)}, {_LM_HIDDEN}), got {tuple(output.shape)}"
+    )
+
+
+@requires_cuda
+def test_audio_adapter_no_audio_token_lens_uses_flat_reshape():
+    """
+    When audio_token_lens is absent from kwargs the adapter always uses the
+    flat reshape path regardless of clip lengths.
+    """
+    from fast_llm.layers.audio_encoder.config import AudioKwargs
+
+    k = 2
+    N_clips, T = 2, 4  # new_seq_len = 2
+    config = _make_adapter_config(k)
+    adapter = _materialize_audio_adapter_cuda(config, _HIDDEN, _LM_HIDDEN)
+
+    input_ = torch.randn(N_clips * T, _HIDDEN, device="cuda")
+    kwargs = {AudioKwargs.audio_num_clips: N_clips}  # no audio_token_lens key
+    output = adapter(input_, kwargs)
+
+    assert output.shape == (N_clips * (T // k), _LM_HIDDEN), (
+        f"Expected ({N_clips * (T // k)}, {_LM_HIDDEN}), got {tuple(output.shape)}"
     )
