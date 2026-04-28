@@ -21,30 +21,52 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        if TritonConfig.enabled(logits.device, self._config.use_triton):
-            from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-
-            fn = triton_grpo_loss_forward_backward
+        if self._config.policy_loss == "gspo":
+            loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
+                logits,
+                self._get_labels(kwargs, split_index),
+                self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+                self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+                self._prepare_target(kwargs[LanguageModelKwargs.document_index], split_index),
+                grad_logits=grad_logits,
+                grad_output=self._get_grad_output(kwargs),
+                group=self._parallel_dim.group if self._vocab_parallel else None,
+                epsilon_low=self._config.epsilon_low,
+                epsilon_high=self._config.epsilon_high,
+                logits_scale_factor=self._logits_scale_factor,
+                num_labels_in_seq=(
+                    None
+                    if losses is None
+                    else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+                ),
+                divisor=self._get_label_count(kwargs),
+                sdp_group=self._sdp_dim.group if self._sdp_active else None,
+            )
         else:
-            fn = fused_grpo_loss_forward_backward
-        loss, grad, new_logprobs_mean = fn(
-            logits,
-            self._get_labels(kwargs, split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
-            grad_logits=grad_logits,
-            grad_output=self._get_grad_output(kwargs),
-            group=self._parallel_dim.group if self._vocab_parallel else None,
-            epsilon_low=self._config.epsilon_low,
-            epsilon_high=self._config.epsilon_high,
-            logits_scale_factor=self._logits_scale_factor,
-            num_labels_in_seq=(
-                None
-                if losses is None
-                else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-            ),
-            divisor=self._get_label_count(kwargs),
-        )
+            if TritonConfig.enabled(logits.device, self._config.use_triton):
+                from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
+
+                fn = triton_grpo_loss_forward_backward
+            else:
+                fn = fused_grpo_loss_forward_backward
+            loss, grad, new_logprobs_mean = fn(
+                logits,
+                self._get_labels(kwargs, split_index),
+                self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+                self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+                grad_logits=grad_logits,
+                grad_output=self._get_grad_output(kwargs),
+                group=self._parallel_dim.group if self._vocab_parallel else None,
+                epsilon_low=self._config.epsilon_low,
+                epsilon_high=self._config.epsilon_high,
+                logits_scale_factor=self._logits_scale_factor,
+                num_labels_in_seq=(
+                    None
+                    if losses is None
+                    else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+                ),
+                divisor=self._get_label_count(kwargs),
+            )
 
         if new_logprobs_mean is not None:
             new_logprobs_mean = new_logprobs_mean / kwargs[LanguageModelKwargs.num_documents_in_batch]
@@ -141,7 +163,10 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
     def get_preprocessing_config(
         self,
     ) -> dict[str, typing.Any]:
-        return {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
+        config = {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
+        if self._config.policy_loss == "gspo":
+            config["return_document_index"] = True
+        return config
 
     @functools.cached_property
     def _logprob_metric_name(self) -> str:
@@ -210,6 +235,119 @@ def fused_grpo_loss_forward_backward(
         # (Sign absorbed in probability_ratio_grad)
         predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze_(-1)
         grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
+            -1,
+            target_masked.unsqueeze(-1),
+            -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
+        )
+        grad = grad.to(logits.dtype)
+
+        if grad_logits is None:
+            grad_logits = grad
+        else:
+            grad_logits.add_(grad)
+
+    return loss, grad_logits, new_logprobs_mean
+
+
+def fused_gspo_loss_forward_backward(
+    logits: torch.Tensor,  # (n_tokens, vocab_local)
+    target: torch.Tensor,  # (n_tokens,)
+    advantages: torch.Tensor,  # (n_tokens,)
+    old_log_probabilities: torch.Tensor,  # (n_tokens,)
+    document_index: torch.Tensor,  # (n_tokens,) int64 — segment ID per token
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
+    group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+    num_labels_in_seq: torch.Tensor | None = None,  # for new_logprobs_mean metric
+    divisor: float | None = None,
+    sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """GSPO loss: sequence-level geometric-mean IS ratio clipping.
+
+    Each segment s gets ratio R_s = exp(mean_t(log(p_new_t/p_old_t))), clipped as a unit.
+    Loss = -sum_s tok_count_s * min(R_s*A_s, clip(R_s)*A_s) / divisor.
+    Gradient: tok_count_s cancels, so each token in segment s gets the same gradient factor R_s.
+
+    SDP correctness: scatter_add sums are all-reduced across sdp_group before computing R_s and A_s,
+    ensuring correct segment-level ratios when tokens are split across ranks.
+    """
+    if divisor is None:
+        divisor = float(logits.shape[0]) if logits.shape[0] > 0 else 1.0
+    grad_output_scaled = None if grad_output is None else grad_output / divisor * logits_scale_factor
+
+    loss_mask = target >= 0
+    mask_float = loss_mask.float()
+
+    # Step 1: Softmax + log probs (same as GRPO)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, target_masked, target_mask = fused_predicted_logits_from_labels(
+        logits_norm, target, loss_mask, group
+    )
+    new_log_probs = predicted_logits - sum_exp_logits.log()
+    log_ratio = (new_log_probs - old_log_probabilities).float()
+
+    # new_logprobs_mean: local partial sum (aggregated across SDP via LossDef.reduce, same as GRPO)
+    new_logprobs_mean = (
+        None if num_labels_in_seq is None else (new_log_probs * mask_float / num_labels_in_seq.clamp(min=1)).sum()
+    )
+
+    # Step 2: Determine global n_segs (max doc index + 1, all-reduced across SDP)
+    n_segs_local = int(document_index.max().item()) + 1 if document_index.numel() > 0 else 0
+    if sdp_group is not None:
+        n_segs_t = torch.tensor(n_segs_local, device=logits.device, dtype=torch.int64)
+        torch.distributed.all_reduce(n_segs_t, op=torch.distributed.ReduceOp.MAX, group=sdp_group)
+        n_segs = int(n_segs_t.item())
+    else:
+        n_segs = n_segs_local
+
+    # Step 3: Per-segment scatter_add (local contributions only)
+    lrn_sum = log_ratio.new_zeros(n_segs)  # sum of log-ratios per segment
+    adv_sum = advantages.new_zeros(n_segs).float()  # sum of advantages per segment
+    tok_sum = log_ratio.new_zeros(n_segs)  # token count per segment
+
+    if loss_mask.any() and n_segs > 0:
+        masked_doc_ids = document_index[loss_mask].long()
+        lrn_sum.index_add_(0, masked_doc_ids, log_ratio[loss_mask])
+        adv_sum.index_add_(0, masked_doc_ids, advantages[loss_mask].float())
+        tok_sum.index_add_(0, masked_doc_ids, torch.ones(masked_doc_ids.numel(), device=logits.device))
+
+    # Step 4: SDP all-reduce so every rank has global per-segment sums
+    if sdp_group is not None and n_segs > 0:
+        torch.distributed.all_reduce(lrn_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
+        torch.distributed.all_reduce(adv_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
+        torch.distributed.all_reduce(tok_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
+
+    # Step 5: Segment-level ratio R_s and advantage A_s
+    valid = tok_sum > 0
+    seg_denom = tok_sum.clamp(min=1e-6)
+    R = (lrn_sum / seg_denom).exp()  # geometric mean IS ratio per segment
+    A = (adv_sum / seg_denom).detach()  # mean advantage per segment (no gradient through A)
+
+    # Step 6: GSPO loss — length-proportional weight tok_sum cancels with 1/N in gradient
+    surr1 = R * A
+    surr2 = R.clamp(1.0 - epsilon_low, 1.0 + epsilon_high) * A
+    loss_per_seg = -torch.minimum(surr1, surr2) * tok_sum * valid.float()
+    loss = loss_per_seg.sum() / divisor
+
+    # Step 7: Gradient — broadcast segment-level factors to token level
+    if grad_output_scaled is not None and n_segs > 0:
+        # d(loss)/d(log_ratio_t) = -R_s * clip_factor_s / divisor (tok_sum cancels)
+        # clip_factor_s = clamp_min(A_s,0)*(R_s <= 1+eps_h) + clamp_max(A_s,0)*(R_s >= 1-eps_l)
+        clip_up = (R <= 1.0 + epsilon_high).float()
+        clip_dn = (R >= 1.0 - epsilon_low).float()
+        seg_grad = R * (A.clamp(min=0) * clip_up + A.clamp(max=0) * clip_dn) * valid.float()
+
+        # Broadcast: each token gets its segment's gradient factor
+        token_grad = seg_grad[document_index]  # (n_tokens,)
+
+        # d(new_log_prob)/d(logits_k) = delta(k==target) - softmax_k  (same chain rule as GRPO)
+        probability_ratio_grad = grad_output_scaled * token_grad * mask_float
+
+        predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
+        grad = probability_ratio_grad.unsqueeze(-1) * predicted_probabilities.scatter_add(
             -1,
             target_masked.unsqueeze(-1),
             -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),

@@ -35,6 +35,7 @@ class LanguageModelTargetInput(ModelInput):
     advantages: torch.Tensor | None = None
     old_log_probabilities: torch.Tensor | None = None
     label_counts: torch.Tensor | None = None
+    document_index: torch.Tensor | None = None
     num_labels: int | None = None
     num_labels_in_batch: int | None = None
 
@@ -84,6 +85,7 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
             LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
             LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
+            LanguageModelKwargs.document_index: [target.document_index for target in self.targets],
             LanguageModelKwargs.num_labels_in_batch: [target.num_labels_in_batch for target in self.targets],
         }
         if self.image_patches is not None:
@@ -177,7 +179,11 @@ class LanguageModelBatch(TokenBatch):
                 document_begin += length
 
             mask = labels >= 0
-            label_counts = self._get_label_counts(mask) if config.return_label_counts else None
+            label_counts, document_index = (
+                self._get_label_counts(mask)
+                if config.return_label_counts or config.return_document_index
+                else (None, None)
+            )
 
             for input_index, model_input in enumerate(model_inputs):
                 label_end = model_input.sequence_k_dim.size + prediction_distance
@@ -188,6 +194,7 @@ class LanguageModelBatch(TokenBatch):
                     tokens=labels[label_begin:label_end].clone(),
                     mask=mask[label_begin:label_end] if config.return_prediction_mask else None,
                     label_counts=label_counts[label_begin:label_end] if config.return_label_counts else None,
+                    document_index=document_index[label_begin:label_end] if config.return_document_index else None,
                     # Set value for the first input only so `share_batch_data` generated the correct sum.
                     # TODO: ====== Make optional?
                     num_labels=(
@@ -202,7 +209,7 @@ class LanguageModelBatch(TokenBatch):
 
                 model_input.targets.append(target_input)
 
-    def _get_label_counts(self, mask: torch.Tensor):
+    def _get_label_counts(self, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Count the number of non-masked labels in each document through cumulative sums.
         mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
         length_cumsum = torch.tensor([0] + self.lengths, device=self.device).cumsum(0)
@@ -214,4 +221,4 @@ class LanguageModelBatch(TokenBatch):
         document_index = torch.searchsorted(
             length_cumsum[1:], torch.arange(len(mask), device=self.device), side="right"
         )
-        return labels_per_document[document_index]
+        return labels_per_document[document_index], document_index

@@ -198,6 +198,11 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
     _abstract: typing.ClassVar[bool] = False
 
+    policy_loss: str = Field(
+        default="grpo",
+        desc="Policy loss algorithm: 'grpo' (per-token IS ratio clipping) or 'gspo' (sequence-level geometric-mean clipping).",
+        valid=check_field(Assert.incl, ["grpo", "gspo"]),
+    )
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
     use_triton: bool | None = Field(
