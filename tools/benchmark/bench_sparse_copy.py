@@ -63,6 +63,18 @@ def _make_combine_inputs(tokens: int, top_k: int, num_experts: int, hidden: int,
     }
 
 
+def _zero_phantom_rows(tensor: torch.Tensor, sparse_map: SparseMap) -> torch.Tensor:
+    for e in range(sparse_map.num_experts):
+        pad_begin = int(sparse_map.expert_pad_begins[e])
+        pad_end = int(sparse_map.expert_ends[e])
+        if pad_end > pad_begin:
+            tensor[pad_begin:pad_end] = 0
+    tail_begin = int(sparse_map.expert_ends[-1])
+    if tensor.shape[0] > tail_begin:
+        tensor[tail_begin:] = 0
+    return tensor
+
+
 # --------------------------------------------------------------------------- dispatch
 
 
@@ -79,23 +91,27 @@ _dispatch_compiled_max = torch.compile(_dispatch_pytorch, mode="max-autotune-no-
 
 
 def _run_dispatch_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["dense_input"], inp["sparse_map"])}
+    return {"output": _zero_phantom_rows(fn(inp["dense_input"], inp["sparse_map"]), inp["sparse_map"])}
 
 
 def _run_dispatch_fwd_bwd(inp: dict, fn) -> dict:
     output = fn(inp["dense_input"], inp["sparse_map"])
     output.backward(torch.ones_like(output))
-    return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
+    return {"output": _zero_phantom_rows(output.detach(), inp["sparse_map"]), "grad_dense": inp["dense_input"].grad}
 
 
 def _run_dispatch_fwd_triton(inp: dict) -> dict:
-    return {"output": copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])}
+    return {
+        "output": _zero_phantom_rows(
+            copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"]), inp["sparse_map"]
+        )
+    }
 
 
 def _run_dispatch_fwd_bwd_triton(inp: dict) -> dict:
     output = copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])
     output.backward(torch.ones_like(output))
-    return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
+    return {"output": _zero_phantom_rows(output.detach(), inp["sparse_map"]), "grad_dense": inp["dense_input"].grad}
 
 
 def _dispatch_variants() -> list[Variant]:
@@ -152,7 +168,7 @@ def _run_combine_fwd_bwd(inp: dict, fn) -> dict:
     output.backward(torch.ones_like(output))
     return {
         "output": output.detach(),
-        "grad_sparse": inp["sparse_input"].grad,
+        "grad_sparse": _zero_phantom_rows(inp["sparse_input"].grad, inp["sparse_map"]),
         "grad_scores": inp["scores"].grad,
     }
 
@@ -166,7 +182,7 @@ def _run_combine_fwd_bwd_triton(inp: dict) -> dict:
     output.backward(torch.ones_like(output))
     return {
         "output": output.detach(),
-        "grad_sparse": inp["sparse_input"].grad,
+        "grad_sparse": _zero_phantom_rows(inp["sparse_input"].grad, inp["sparse_map"]),
         "grad_scores": inp["scores"].grad,
     }
 
