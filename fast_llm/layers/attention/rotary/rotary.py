@@ -109,7 +109,11 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
 
     @abc.abstractmethod
     def forward_only(
-        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+        self,
+        query: torch.Tensor | None,
+        key_value: torch.Tensor | None,
+        kwargs: dict[str, typing.Any],
+        inplace_query: bool = True,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, typing.Any]:
         pass
 
@@ -130,7 +134,11 @@ class NoRotary[ConfigType: NoRotaryConfig](Rotary[ConfigType]):
         return query, key_value
 
     def forward_only(
-        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+        self,
+        query: torch.Tensor | None,
+        key_value: torch.Tensor | None,
+        kwargs: dict[str, typing.Any],
+        inplace_query: bool = True,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, typing.Any]:
         return query, key_value, None
 
@@ -148,19 +156,35 @@ class RotaryBase[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
         key_value: torch.Tensor | None,
         frequencies: torch.Tensor,
         backward: bool = False,
+        inplace_query: bool = True,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        rotary_fn = triton_rotary_ if TritonConfig.enabled(frequencies.device) else rotary_embeddings_real
-        query = None if query is None else rotary_fn(query, frequencies, backward=backward)
-        key_value = (
-            None if key_value is None else rotary_fn(key_value, frequencies, is_key_value=True, backward=backward)
-        )
+        if TritonConfig.enabled(frequencies.device):
+            query = (
+                None if query is None else triton_rotary_(query, frequencies, backward=backward, inplace=inplace_query)
+            )
+            key_value = (
+                None
+                if key_value is None
+                else triton_rotary_(key_value, frequencies, is_key_value=True, backward=backward)
+            )
+        else:
+            query = None if query is None else rotary_embeddings_real(query, frequencies, backward=backward)
+            key_value = (
+                None
+                if key_value is None
+                else rotary_embeddings_real(key_value, frequencies, is_key_value=True, backward=backward)
+            )
         return query, key_value
 
     def forward_only(
-        self, query: torch.Tensor | None, key_value: torch.Tensor | None, kwargs: dict[str, typing.Any]
+        self,
+        query: torch.Tensor | None,
+        key_value: torch.Tensor | None,
+        kwargs: dict[str, typing.Any],
+        inplace_query: bool = True,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor]:
         frequencies: torch.Tensor = kwargs[AttentionKwargs.rotary_freq]
-        query, key_value = self._forward(query, key_value, frequencies, backward=False)
+        query, key_value = self._forward(query, key_value, frequencies, backward=False, inplace_query=inplace_query)
         return query, key_value, frequencies
 
     def backward(

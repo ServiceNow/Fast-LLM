@@ -9,6 +9,7 @@ from fast_llm.utils import div
 @triton_jit()
 def triton_rotary_kernel(
     input_ptr,
+    output_ptr,
     frequencies_ptr,
     stride_0,
     stride_1,
@@ -30,6 +31,8 @@ def triton_rotary_kernel(
     input_offsets = stride_0 * (pid_0 // seq_len) + stride_1 * position_id + stride_2 * head_offsets + offsets[None, :]
     input_re_ptr = input_ptr + input_offsets
     input_im_ptr = input_re_ptr + rotary_dim
+    output_re_ptr = output_ptr + input_offsets
+    output_im_ptr = output_re_ptr + rotary_dim
 
     if rotary_block_size % rotary_dim == 0 and num_heads % head_block_size == 0:
         input_re = tl.load(input_re_ptr).to(tl.float32)
@@ -54,11 +57,11 @@ def triton_rotary_kernel(
         out_im = input_im * frequencies_re + input_re * frequencies_im
 
     if rotary_block_size % rotary_dim == 0 and num_heads % head_block_size == 0:
-        tl.store(input_re_ptr, out_re)
-        tl.store(input_im_ptr, out_im)
+        tl.store(output_re_ptr, out_re)
+        tl.store(output_im_ptr, out_im)
     else:
-        tl.store(input_re_ptr, out_re, mask=mask)  # noqa
-        tl.store(input_im_ptr, out_im, mask=mask)
+        tl.store(output_re_ptr, out_re, mask=mask)  # noqa
+        tl.store(output_im_ptr, out_im, mask=mask)
 
 
 def triton_rotary_(
@@ -66,19 +69,27 @@ def triton_rotary_(
     frequencies: torch.Tensor,
     is_key_value: bool = False,
     backward: bool = False,
+    inplace: bool = True,
 ) -> torch.Tensor:
     # TODO: Improve assumptions.
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     # TODO: Improve block size heuristics.
     out = input_
+    write = input_
     if input_.stride(-1) != 1:
         # TODO: Make a transposed version to avoid contiguous call in key backward.
         input_ = input_.contiguous()
+        write = input_
+    if not inplace:
+        out = torch.empty_like(input_)
+        write = out
     if input_.ndim == 3:
         input_ = input_.unsqueeze(0)
+        write = write.unsqueeze(0)
         frequencies = frequencies.unsqueeze(0)
     if is_key_value:
         input_ = input_.chunk(2, dim=-2)[0]
+        write = write.chunk(2, dim=-2)[0]
     batch_size, seq_len, num_heads, head_size = input_.shape
     rotary_dim = div(head_size, 2)
     rotary_block_size = triton.next_power_of_2(rotary_dim)
@@ -89,6 +100,7 @@ def triton_rotary_(
     # Folded the large y dim into the x dim as gridDim.x is 32 bit while gridDim.y and gridDim.z are 16 bit registers
     triton_rotary_kernel[(batch_size * seq_len, triton.cdiv(num_heads, head_block_size))](
         input_,
+        write,
         frequencies,
         input_.stride(0),
         input_.stride(1),

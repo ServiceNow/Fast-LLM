@@ -281,19 +281,19 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         else:
             kv_unflat = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
 
-        query_norm_ctx = None
+        query_norm_context = None
         if self._config.query_norm is not None:
             if self.training:
                 with torch.enable_grad():
                     query_leaf = query_unflat.contiguous().detach().requires_grad_()
                     query_normed = self.query_norm(query_leaf)
-                query_norm_ctx = (query_leaf, query_normed)
+                query_norm_context = (query_leaf, query_normed)
                 query_unflat = query_normed.detach()
             else:
                 query_unflat = self.query_norm(query_unflat)
 
-        key_norm_ctx = None
-        value_norm_ctx = None
+        key_norm_context = None
+        value_norm_context = None
         if self._config.key_norm is not None or self._config.value_norm is not None:
             key_unflat, value_unflat = kv_unflat.chunk(2, dim=1)
             if self._config.key_norm is not None:
@@ -303,7 +303,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     with torch.enable_grad():
                         key_leaf = key_unflat.detach().requires_grad_()
                         key_normed = self.key_norm(key_leaf)
-                    key_norm_ctx = (key_leaf, key_normed)
+                    key_norm_context = (key_leaf, key_normed)
                     key_unflat = key_normed.detach()
                 else:
                     key_unflat = self.key_norm(key_unflat)
@@ -313,13 +313,15 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                     with torch.enable_grad():
                         value_leaf = value_unflat.detach().requires_grad_()
                         value_normed = self.value_norm(value_leaf)
-                    value_norm_ctx = (value_leaf, value_normed)
+                    value_norm_context = (value_leaf, value_normed)
                     value_unflat = value_normed.detach()
                 else:
                     value_unflat = self.value_norm(value_unflat)
             kv_unflat = torch.cat([key_unflat, value_unflat], dim=1)
 
-        query, key_value, rotary_context = self._rotary.forward_only(query_unflat, kv_unflat, kwargs)
+        query, key_value, rotary_context = self._rotary.forward_only(
+            query_unflat, kv_unflat, kwargs, inplace_query=query_norm_context is None
+        )
 
         if self._sequence_data_parallel_dim.group:
             # sequence dim may not be zero, but this needs to be handled after `handle.wait()`
@@ -333,9 +335,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             "query": query_context,
             "key_value": key_value_context,
             "rotary": rotary_context,
-            "query_norm": query_norm_ctx,
-            "key_norm": key_norm_ctx,
-            "value_norm": value_norm_ctx,
+            "query_norm": query_norm_context,
+            "key_norm": key_norm_context,
+            "value_norm": value_norm_context,
         }
         return query, key_value, context
 
@@ -353,8 +355,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         rotary_context = context.pop("rotary")
         query_grad, _ = self._rotary.backward(query_grad, None, rotary_context)
 
-        if (query_norm_ctx := context.pop("query_norm")) is not None:
-            query_leaf, query_normed = query_norm_ctx
+        if (query_norm_context := context.pop("query_norm")) is not None:
+            query_leaf, query_normed = query_norm_context
             query_normed.backward(query_grad)
             query_grad = query_leaf.grad
 
@@ -366,16 +368,16 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         _, key_value_grad = self._rotary.backward(None, key_value_grad, rotary_context)
 
-        key_norm_ctx = context.pop("key_norm")
-        value_norm_ctx = context.pop("value_norm")
-        if key_norm_ctx is not None or value_norm_ctx is not None:
+        key_norm_context = context.pop("key_norm")
+        value_norm_context = context.pop("value_norm")
+        if key_norm_context is not None or value_norm_context is not None:
             key_grad, value_grad = key_value_grad.chunk(2, dim=1)
-            if key_norm_ctx is not None:
-                key_leaf, key_normed = key_norm_ctx
+            if key_norm_context is not None:
+                key_leaf, key_normed = key_norm_context
                 key_normed.backward(key_grad.contiguous())
                 key_grad = key_leaf.grad
-            if value_norm_ctx is not None:
-                value_leaf, value_normed = value_norm_ctx
+            if value_norm_context is not None:
+                value_leaf, value_normed = value_norm_context
                 value_normed.backward(value_grad.contiguous())
                 value_grad = value_leaf.grad
             key_value_grad = torch.cat([key_grad, value_grad], dim=1)
