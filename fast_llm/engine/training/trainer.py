@@ -115,10 +115,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             preprocessing_config = self._multi_stage.get_preprocessing_config(
                 PhaseType.training, self._config.schedule.micro_batch_splits
             )
+            self._preprocessing_config = preprocessing_config
+            self._single_mb_meta = preprocessing_config.get_input_meta(self._data.config.micro_batch_size)
+            self._schedule_cache: dict[int, Schedule] = {}
             self._schedule = Schedule(
                 config=self._config.schedule,
                 multi_stage=self._multi_stage,
-                batch_meta=preprocessing_config.get_input_meta(self._data.config.micro_batch_size),
+                batch_meta=self._single_mb_meta,
                 distributed_config=self._config.model.distributed,
                 phase=PhaseType.training,
             )
@@ -139,6 +142,41 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         safe_barrier(distributed.world_group, "data_preparation", self._config.training.timeout)
 
         self._is_setup = True
+
+    def _get_or_build_schedule(self, n_microbatches: int) -> Schedule:
+        if n_microbatches not in self._schedule_cache:
+            bfmb = self._config.schedule.breadth_first_micro_batches
+            depth_first = n_microbatches // bfmb
+            self._schedule_cache[n_microbatches] = Schedule(
+                config=self._config.schedule,
+                multi_stage=self._multi_stage,
+                batch_meta=self._single_mb_meta,
+                distributed_config=self._config.model.distributed,
+                phase=PhaseType.training,
+                _depth_first_override=depth_first,
+            )
+        return self._schedule_cache[n_microbatches]
+
+    def _prefetch_to_doc_target(self, data_iterator) -> list:
+        target = self._config.schedule.docs_per_step
+        bfmb = self._config.schedule.breadth_first_micro_batches
+        buffer = []
+        total_docs = 0
+        while total_docs < target:
+            mb = next(data_iterator)
+            mb[0].share_batch_data(mb, self._distributed)
+            total_docs += mb[0].num_documents_in_batch
+            buffer.append(mb)
+        Assert.eq(
+            len(buffer) % bfmb,
+            0,
+            msg=f"Fetched {len(buffer)} microbatches not divisible by breadth_first_micro_batches={bfmb}",
+        )
+        # Reset num_documents_in_batch to the step total on all microbatches
+        for mb in buffer:
+            for mi in mb:
+                mi.num_documents_in_batch = total_docs
+        return buffer
 
     @abc.abstractmethod
     def _get_data(self) -> Data:
@@ -220,12 +258,22 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
-                reduced_losses, update_successful, train_metrics = self._runner.run_step(
-                    train_iterator,
-                    self._schedule,
-                    iteration=self._completed_steps,
-                    return_metrics=is_logging,
-                )
+                if self._config.schedule.docs_per_step > 0:
+                    buffer = self._prefetch_to_doc_target(train_iterator)
+                    step_schedule = self._get_or_build_schedule(len(buffer))
+                    reduced_losses, update_successful, train_metrics = self._runner.run_step(
+                        iter(buffer),
+                        step_schedule,
+                        iteration=self._completed_steps,
+                        return_metrics=is_logging,
+                    )
+                else:
+                    reduced_losses, update_successful, train_metrics = self._runner.run_step(
+                        train_iterator,
+                        self._schedule,
+                        iteration=self._completed_steps,
+                        return_metrics=is_logging,
+                    )
 
                 # Advanced, skipped, and Nan iterations.
                 if update_successful:

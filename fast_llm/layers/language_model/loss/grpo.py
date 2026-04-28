@@ -21,6 +21,11 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        divisor = (
+            kwargs[LanguageModelKwargs.num_documents_in_batch]
+            if self._config.normalize_by_documents
+            else self._get_label_count(kwargs)
+        )
         if self._config.policy_loss == "gspo":
             loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
                 logits,
@@ -39,7 +44,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                     if losses is None
                     else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
                 ),
-                divisor=self._get_label_count(kwargs),
+                divisor=divisor,
                 sdp_group=self._sdp_dim.group if self._sdp_active else None,
             )
         else:
@@ -65,7 +70,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                     if losses is None
                     else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
                 ),
-                divisor=self._get_label_count(kwargs),
+                divisor=divisor,
             )
 
         if new_logprobs_mean is not None:

@@ -21,12 +21,13 @@ class ScheduleConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    rollouts_per_step: int = Field(
+    docs_per_step: int = Field(
         default=0,
-        desc="When >0, automatically sets depth_first_micro_batches = rollouts_per_step // "
-        "(batch_data_parallel × breadth_first_micro_batches). "
-        "Matches DeepSpeed's gradient_accumulation_passes semantics for RL training "
-        "where each microbatch contains one rollout. 0 = use depth_first_micro_batches as-is.",
+        desc="Target number of documents (rollouts) per optimizer step, globally across all data-parallel ranks. "
+        "When >0, each training step dynamically accumulates microbatches until the globally all-reduced "
+        "document count reaches this value, then triggers the optimizer step. "
+        "depth_first_micro_batches is ignored when this is set. "
+        "0 = use depth_first_micro_batches as-is (fixed microbatch count per step).",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
