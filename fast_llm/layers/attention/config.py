@@ -133,6 +133,16 @@ class AttentionConfig(MixerConfig):
         desc="Normalization applied to key vectors before RoPE, per attention head. Set to `{type: rms_norm}` to enable.",
         hint=FieldHint.architecture,
     )
+    value_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to value projections per head before attention. Use `{type: fixed_rms_norm}` for a no-weight RMS norm.",
+        hint=FieldHint.architecture,
+    )
+    shared_key_value: bool = Field(
+        default=False,
+        desc="Use one shared key/value projection. The projected key is reused as value before separate K/V norms.",
+        hint=FieldHint.architecture,
+    )
 
     def _validate(self) -> None:
         super()._validate()

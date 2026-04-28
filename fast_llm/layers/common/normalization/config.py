@@ -138,6 +138,25 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
         return RMSNormalization
 
 
+@config_class(dynamic_type={NormalizationConfig: "fixed_rms_norm"})
+class FixedRMSNormConfig(NormalizationConfig):
+    """RMS normalization without a learnable weight (fixed unit scale). Used for value norms in Gemma-family models."""
+
+    _abstract = False
+    epsilon: float = Field(
+        default=1e-5,
+        desc="Regularizer for the division.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+
+    @property
+    def module_class(self) -> type["Normalization"]:
+        from fast_llm.layers.common.normalization.normalization import FixedRMSNormalization
+
+        return FixedRMSNormalization
+
+
 @config_class(dynamic_type={NormalizationConfig: "gated_rms_norm"})
 class GatedRMSNormalizationConfig(RMSNormalizationConfig):
     """Configuration for gated RMS normalization, which applies a learned activation gate alongside the norm weight."""
