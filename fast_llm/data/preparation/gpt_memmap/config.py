@@ -5,6 +5,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.preparation.config import DatasetPreparatorConfig
+from fast_llm.data.preparation.audio import AudioPreparationConfig
 from fast_llm.data.preparation.image_patch import ImagePreparationConfig
 from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
@@ -327,6 +328,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     image_patches: ImagePreparationConfig = Field(
         desc="Configuration for the image patches, if enabled.",
+        hint=FieldHint.feature,
+    )
+    audio: AudioPreparationConfig = Field(
+        desc="Configuration for audio placeholder insertion, if enabled.",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(
