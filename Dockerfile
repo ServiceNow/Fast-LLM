@@ -9,20 +9,15 @@ RUN apt-get update \
 
 # Set the working directory.
 WORKDIR /app
-# Set the permission to 777 for all files and directories in `/app`, `/home` and python install directories:
-#   1. Create directories explicitly because docker use the wrong permission for explicit creation.
-#   2. For the rest, set the default ACL to 777 for all users.
+# Make /app and /home world-rwx so the cluster's dynamically-assigned UIDs can write to them.
+# Subdirs are created explicitly because Docker uses the wrong permissions for implicit creation;
+# the default ACL then propagates to files copied or created under each path. Our primary cluster
+# mounts /home from the outside, but other deployments may run the image as-is with the
+# in-image /home, so we keep it permissive here. /usr/local/lib/python3.12 deliberately stays at
+# default perms so a compromised process can't tamper with installed Python packages or system
+# binaries.
 RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/tools \
-    && setfacl -m d:u::rwx,d:g::rwx,d:o::rwx,u::rwx,g::rwx,o::rwx \
-      /app \
-      /home \
-      /usr \
-      /usr/local \
-      /usr/local/bin \
-      /usr/local/lib \
-      /usr/local/lib/python3.12 \
-      /usr/local/lib/python3.12/dist-packages \
-      /usr/local/lib/python3.12/dist-packages/__pycache__
+    && setfacl -m d:u::rwx,d:g::rwx,d:o::rwx,u::rwx,g::rwx,o::rwx /app /home
 
 # The base image enforces versions for things like pytest for no good reason.
 ENV PIP_CONSTRAINT=""
