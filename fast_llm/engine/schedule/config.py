@@ -21,6 +21,15 @@ class ScheduleConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    rollouts_per_step: int = Field(
+        default=0,
+        desc="When >0, automatically sets depth_first_micro_batches = rollouts_per_step // "
+        "(batch_data_parallel × breadth_first_micro_batches). "
+        "Matches DeepSpeed's gradient_accumulation_passes semantics for RL training "
+        "where each microbatch contains one rollout. 0 = use depth_first_micro_batches as-is.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
     breadth_first_micro_batches: int = Field(
         default=1,
         desc="Number of micro-batches processed breadth-first, i.e., interleaved across model stages.",

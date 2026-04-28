@@ -372,6 +372,21 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         hint=FieldHint.feature,
     )
 
+    @classmethod
+    def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
+        # Derive depth_first_micro_batches from rollouts_per_step before sub-configs are created.
+        schedule = default.get("schedule", {})
+        rollouts = schedule.get("rollouts_per_step", 0)
+        if rollouts > 0:
+            distributed = default.get("model", {}).get("distributed", {})
+            dp = distributed.get("data_parallel", 1)
+            sdp = max(distributed.get("sequence_data_parallel", 1), 1)
+            batch_dp = max(dp // sdp, 1)
+            bfmb = schedule.get("breadth_first_micro_batches", 1)
+            depth_first = rollouts // (batch_dp * bfmb)
+            default = {**default, "schedule": {**schedule, "depth_first_micro_batches": depth_first}}
+        return super()._from_dict(default, strict)
+
     def _validate(self) -> None:
         self.training.export.setup(self.model)
         for reference_model in self.reference_models.values():
