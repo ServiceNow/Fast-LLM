@@ -83,6 +83,11 @@ class DataType(enum.StrEnum):
             _set_triton_dtype_map()
         return _TRITON_DTYPE_MAP[self]
 
+    @property
+    def short(self) -> str:
+        """Abbreviated name (bf16, fp32, ...) when one is defined, else the full name."""
+        return _DTYPE_SHORT_NAME_MAP.get(self, self.value)
+
 
 _KNOWN_DATA_TYPE_PREFIXES = {"DataType", "numpy", "np", "torch", "triton.language", "tl"}
 
@@ -92,6 +97,7 @@ _DTYPE_ALT_NAME_MAP_INV = {
     "fp16": DataType.float16,
     "bf16": DataType.bfloat16,
 }
+_DTYPE_SHORT_NAME_MAP = {v: k for k, v in _DTYPE_ALT_NAME_MAP_INV.items()}
 
 _TORCH_DTYPE_MAP: dict[DataType, "torch.dtype"] = {}
 _TORCH_DTYPE_MAP_INV: dict["torch.dtype", DataType] = {}
