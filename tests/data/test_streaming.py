@@ -204,13 +204,14 @@ def _run_test_data_streaming(
 def check_data_streaming_results(path: pathlib.Path, distributed_config: DistributedConfig):
     sample_indexes = set()
     for batch_data_rank in range(distributed_config.batch_data_parallel):
-        batches_tokens = torch.load(path / f"rank_{batch_data_rank}_0.pt")
+        batches_tokens = torch.load(path / f"rank_{batch_data_rank}_0.pt", weights_only=True)
         Assert.eq(batches_tokens.shape, (_NUM_BATCHES, _SEQUENCE_LENGTH))
         for model_and_sequence_data_rank in range(
             1, distributed_config.get_distributed_dim(DistributedDimNames.model_and_sequence_data).size
         ):
             Assert.all_equal(
-                torch.load(path / f"rank_{batch_data_rank}_{model_and_sequence_data_rank}.pt"), batches_tokens
+                torch.load(path / f"rank_{batch_data_rank}_{model_and_sequence_data_rank}.pt", weights_only=True),
+                batches_tokens,
             )
         sample_indexes.update(batches_tokens.flatten().tolist())
     Assert.eq(len(sample_indexes), distributed_config.batch_data_parallel * _NUM_BATCHES)

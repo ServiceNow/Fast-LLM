@@ -95,8 +95,10 @@ class PushConfig(RunnableConfig):
 
     def _setup(self) -> hf_hub.HfApi:
         self.to_logs()
-        os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
-        hf_api = hf_hub.HfApi()
+        # Pass the token through `HfApi(token=...)` rather than `os.environ`, so it isn't inherited
+        # by the `git pull` subprocess we spawn below.
+        self._token = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).read_text().strip()
+        hf_api = hf_hub.HfApi(token=self._token)
         self._git_add_safe_directory(self.tmp_checkpoint_dir)
         hf_api.create_repo(self.repo_name, private=True, exist_ok=True)
         return hf_api
@@ -109,7 +111,12 @@ class PushConfig(RunnableConfig):
 
         # Get list of checkpoints in the repo
         logger.info(f"Cloning repo into {self.tmp_checkpoint_dir}...")
-        hf_repo = hf_hub.Repository(local_dir=self.tmp_checkpoint_dir, clone_from=self.repo_name, skip_lfs_files=True)
+        hf_repo = hf_hub.Repository(
+            local_dir=self.tmp_checkpoint_dir,
+            clone_from=self.repo_name,
+            skip_lfs_files=True,
+            token=self._token,
+        )
 
         # Pull latest changes
         env = os.environ.copy()

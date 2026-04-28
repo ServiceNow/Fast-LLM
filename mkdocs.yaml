@@ -339,7 +339,6 @@ nav:
         - reference/configuration/engine/schedule/ScheduleConfig.md
       - Training:
         - reference/configuration/engine/training/index.md
-        - reference/configuration/engine/training/CallbackConfig.md
         - reference/configuration/engine/training/MetricsLogsConfig.md
         - reference/configuration/engine/training/ShutdownConfig.md
         - reference/configuration/engine/training/StreamingTrainerCallbackConfig.md

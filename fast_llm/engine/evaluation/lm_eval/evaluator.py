@@ -26,13 +26,19 @@ class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
         run_count: int,
     ) -> None:
         if "HUGGINGFACE_API_KEY_PATH" in os.environ:
-            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).read_text().strip()
-        else:
-            if not "HF_TOKEN" in os.environ:
-                logger.warning(
-                    "No `HF_TOKEN` or `HUGGINGFACE_API_KEY_PATH` environment variable provided. "
-                    "Assuming the user has already logged in to the Hugging Face Hub."
-                )
+            import huggingface_hub
+
+            # Log in via the SDK so the token is cached for downstream HF calls without leaking
+            # it into `os.environ` (and from there into any subprocess we spawn).
+            huggingface_hub.login(
+                token=pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).read_text().strip(),
+                add_to_git_credential=False,
+            )
+        elif "HF_TOKEN" not in os.environ:
+            logger.warning(
+                "No `HF_TOKEN` or `HUGGINGFACE_API_KEY_PATH` environment variable provided. "
+                "Assuming the user has already logged in to the Hugging Face Hub."
+            )
 
         from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
 
