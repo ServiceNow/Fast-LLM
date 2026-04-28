@@ -13,6 +13,7 @@ from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
+    ProportionalRotaryConfig,
     Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
@@ -267,6 +268,27 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
             * math.log(self._config.original_context_length / (beta * 2 * math.pi))
             / (2 * math.log(self._config.theta))
         )
+
+
+class ProportionalRotary[ConfigType: ProportionalRotaryConfig](DefaultRotary[ConfigType]):
+    """
+    Rotary embeddings applied only to the first rotary_dims head dimensions.
+    The remaining NoPE dimensions pass through unchanged (zero angle → identity rotation).
+    """
+
+    def __init__(self, config: ConfigType, head_size_dim: TensorDim) -> None:
+        super().__init__(config, head_size_dim)
+        self._rotary_dims = round(self._head_size * self._config.partial_rotary_factor)
+        Assert.gt(self._rotary_dims, 0)
+        Assert.multiple(self._rotary_dims, 2)
+
+    def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
+        rotary_pairs = self._rotary_dims // 2
+        nope_pairs = head_size // 2 - rotary_pairs
+        scales = super()._get_angle_scales(head_size, device)
+        if nope_pairs == 0:
+            return scales
+        return torch.cat([scales[:rotary_pairs], scales.new_zeros(nope_pairs)])
 
 
 class Rotary2D[ConfigType: Rotary2DConfig](RotaryBase[ConfigType]):
