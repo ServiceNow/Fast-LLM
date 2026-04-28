@@ -105,13 +105,16 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         return cls._model_class.from_dict({"base_model": base_model_dict})
 
     @classmethod
-    def _export_config(cls, config: MultiModalBaseModelConfig) -> dict:
+    def _export_config(cls, config: FastLLMModelConfig) -> dict[str, typing.Any]:
         # Export not fully implemented.
         return {}
 
+    @classmethod
+    def _save_config(cls, directory, config: dict) -> None:
+        pass
+
     def _create_weight_converters(self) -> list[WeightConverter]:
         from fast_llm.models.gpt.conversion.auto import AutoGPTHuggingfaceCheckpointHandler
-        from fast_llm.models.gpt.conversion.llama import LlamaBaseModelConverter
 
         base_config = self._model.config.base_model
         audio_encoder_config = base_config.audio_encoder
@@ -127,7 +130,6 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         # LLM weights: HF prefix "llm."
         text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.text_handler_name)
         text_handler = text_handler_cls(self._model)
-        exported_config = text_handler._exported_config
         for converter in text_handler._create_weight_converters():
             # Re-prefix HF names from "" to "llm."
             new_export_names = tuple(
@@ -137,3 +139,4 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             converters.append(converter)
 
         return converters
+
