@@ -78,6 +78,14 @@ class GPTDatasetFromFileConfig[DocumentType: LanguageModelDocument](SamplableDat
                 self._convert_paths(value)
             if "path" in config:
                 assert isinstance(config["path"], (str, pathlib.Path))
+                # Reject absolute paths and `..` segments so a malicious dataset config can't pull
+                # in arbitrary files outside its containing directory.
+                inner_path = pathlib.PurePosixPath(str(config["path"]))
+                if inner_path.is_absolute() or ".." in inner_path.parts:
+                    raise ValueError(
+                        f"Dataset config path {config['path']!r} must be relative and stay within "
+                        f"{self.path.parent}."
+                    )
                 config["path"] = self.path.parent / config["path"]
         elif isinstance(config, list):
             for value in config:

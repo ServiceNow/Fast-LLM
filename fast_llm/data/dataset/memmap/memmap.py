@@ -29,13 +29,15 @@ class MemmapDataset[DocumentType: Document](IndexedDataset[DocumentType]):
         self._path = path
 
         path = pathlib.Path(path) if isinstance(path, str) else path
+        file_size = path.stat().st_size
         with path.open("rb") as stream:
-            # Verify file type.
-            assert stream.read(len(FILE_HEADER)) == FILE_HEADER
-            # Go to reader configs.
-            stream.seek(int.from_bytes(stream.read(8), signed=False))
-            # Read the reader config.
-            config_bytes = stream.read(int.from_bytes(stream.read(4), signed=False))
+            assert stream.read(len(FILE_HEADER)) == FILE_HEADER, f"Invalid file header in {path}."
+            config_offset = int.from_bytes(stream.read(8), signed=False)
+            assert config_offset + 4 <= file_size, f"Config offset {config_offset} out of range for {path}."
+            stream.seek(config_offset)
+            config_size = int.from_bytes(stream.read(4), signed=False)
+            assert config_offset + 4 + config_size <= file_size, f"Config size {config_size} out of range for {path}."
+            config_bytes = stream.read(config_size)
             reader_config = MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
 
         self._memmap = np.memmap(self._path, mode="c")

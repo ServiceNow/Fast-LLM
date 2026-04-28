@@ -415,8 +415,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 except OSError as e:
                     logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
 
-            config.callback.run()
-
     def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int) -> None:
         checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")

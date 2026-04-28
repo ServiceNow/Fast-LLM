@@ -278,6 +278,8 @@ Save the following as `./fast-llm-tutorial/prepare-config.yaml``:
     1. Processing speed scales linearly with the number of CPUs.
     2.  99% train, 1% validation. These settings need to be adjusted based on the size of your dataset.
 
+Some HuggingFace datasets ship custom Python loaders that run on download. The `trust_remote_code: true` field above only takes effect when you also pass `--trust-remote-code` on the `fast-llm prepare` command line; the field alone is intentionally a no-op so that opening someone else's config can never trigger remote-code execution. Both opt-ins are required (`--trust-remote-code` is the master switch and `trust_remote_code: true` enables it for that specific call). If you would rather opt in once for every call in the run, pass `--trust-all-remote-code` instead.
+
 Fast-LLM ships with a `prepare` command that will download and preprocess the dataset for you.
 
 === "Prebuilt Docker"
@@ -285,7 +287,7 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
     Run data preparation with the following command:
 
     ```bash
-    fast-llm prepare gpt_memmap --config fast-llm-tutorial/prepare-config.yaml
+    fast-llm prepare gpt_memmap --trust-remote-code --config fast-llm-tutorial/prepare-config.yaml
     ```
 
 === "Custom Installation"
@@ -293,7 +295,7 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
     Run data preparation with the following command:
 
     ```bash
-    fast-llm prepare gpt_memmap --config fast-llm-tutorial/prepare-config.yaml
+    fast-llm prepare gpt_memmap --trust-remote-code --config fast-llm-tutorial/prepare-config.yaml
     ```
 
 === "Slurm"
@@ -331,6 +333,7 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                      --rdzv_conf=timeout=3600 \
                      --no_python \
                      fast-llm prepare gpt_memmap \
+                     --trust-remote-code \
                      --config fast-llm-tutorial/prepare-config.yaml"
     EOF
     ```
@@ -390,6 +393,7 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                                --rdzv_conf=timeout=3600 \
                                --no_python \
                                fast-llm prepare gpt_memmap \
+                               --trust-remote-code \
                                --config fast-llm-tutorial/prepare-config.yaml
                   env:
                     - name: PYTHONHASHSEED
@@ -445,6 +449,7 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                                --rdzv_conf=timeout=3600 \
                                --no_python \
                                fast-llm prepare gpt_memmap \
+                               --trust-remote-code \
                                --config fast-llm-tutorial/prepare-config.yaml
                   env:
                     - name: PYTHONHASHSEED

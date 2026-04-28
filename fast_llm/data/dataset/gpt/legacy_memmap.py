@@ -62,6 +62,13 @@ class LegacyMemmapDataset[DocumentType: LanguageModelDocument](IndexedDataset[Do
 
         self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
+        buffer_size = self._index_bin_buffer_mmap.size
+
+        # Reject header counts that don't fit the buffer before they flow into `np.frombuffer`,
+        # otherwise a corrupt or malicious file can trigger a multi-GB allocation here.
+        assert (
+            0 <= self._num_documents <= buffer_size
+        ), f"Invalid num_documents {self._num_documents} for index file of size {buffer_size}."
 
         # read document sizes
         self._document_sizes = np.frombuffer(
@@ -85,8 +92,17 @@ class LegacyMemmapDataset[DocumentType: LanguageModelDocument](IndexedDataset[Do
                 count=self._num_documents,
                 offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
             )
+            assert (self._num_spans >= 0).all(), "Negative span count in index file."
             span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
             self._num_spans_cumsum = np.r_[0, np.cumsum(self._num_spans[:-1], dtype=np.int64)]
+            total_span_bytes = (
+                (int(self._num_spans_cumsum[-1]) + int(self._num_spans[-1] if self._num_documents else 0))
+                * 2
+                * np.dtype(np.int32).itemsize
+            )
+            assert (
+                span_offset + total_span_bytes <= buffer_size
+            ), f"Span data extends past index file (need {span_offset + total_span_bytes}, have {buffer_size})."
             for idx in range(self._num_documents):
                 self._spans.append(
                     np.frombuffer(
@@ -102,6 +118,10 @@ class LegacyMemmapDataset[DocumentType: LanguageModelDocument](IndexedDataset[Do
             self._chosen_spans = []
             self._rejected_spans = []
             chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
+            preference_span_bytes = self._num_documents * 2 * np.dtype(np.int32).itemsize
+            assert (
+                chosen_span_offset + 2 * preference_span_bytes <= buffer_size
+            ), f"Preference spans extend past index file (need {chosen_span_offset + 2 * preference_span_bytes}, have {buffer_size})."
             for idx in range(self._num_documents):
                 self._chosen_spans.append(
                     np.frombuffer(
@@ -112,9 +132,7 @@ class LegacyMemmapDataset[DocumentType: LanguageModelDocument](IndexedDataset[Do
                     )
                 )
 
-            rejected_span_offset = (
-                offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
-            )
+            rejected_span_offset = chosen_span_offset + preference_span_bytes
             for idx in range(self._num_documents):
                 self._rejected_spans.append(
                     np.frombuffer(

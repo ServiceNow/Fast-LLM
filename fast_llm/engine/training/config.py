@@ -1,9 +1,6 @@
 import abc
 import functools
-import os
 import pathlib
-import shlex
-import subprocess
 import typing
 
 from fast_llm.config import (
@@ -40,36 +37,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
     from fast_llm.engine.training.streaming import StreamingTrainerCallback
     from fast_llm.engine.training.trainer import Trainer
-
-
-def _validate_script(value: str | list[str]) -> list[str]:
-    if isinstance(value, str):
-        value = shlex.split(value)
-    Assert.geq(len(value), 1)
-    return value
-
-
-@config_class()
-class CallbackConfig(Config):
-    """Configuration for an optional shell script callback invoked after a checkpoint, export, or shutdown event."""
-
-    script: list[str] | None = Field(
-        default=None,
-        desc="Shell script to run.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(_validate_script),
-    )
-    environment: dict[str, str] = Field(
-        default_factory=dict,
-        desc="Environment variables to add to the script.",
-        hint=FieldHint.feature,
-    )
-
-    def run(self) -> None:
-        if self.script is not None:
-            environment = os.environ.copy()
-            environment.update(self.environment)
-            subprocess.Popen(self.script, env=environment)
 
 
 @config_class()
@@ -128,10 +95,6 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
-    callback: CallbackConfig = Field(
-        desc="Callback (shell script).",
-        hint=FieldHint.core,
-    )
     keep: int | None = Field(
         default=None,
         desc="The maximum number of saves to keep. When exceeding this value, checkpoints are deleted starting from the older ones.",
@@ -174,7 +137,6 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
         desc="The number of training iterations between each checkpoint. Setting to None will disable checkpoints."
     )
     offset = FieldOverride(desc="Offset for the first checkpoint.")
-    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after checkpoint.")
     keep: int | None = FieldOverride(default=5)
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
@@ -209,7 +171,6 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
     offset = FieldOverride(desc="Offset for the first export.")
-    callback: CallbackConfig = FieldOverride(desc="Callback (shell script) to run after export.")
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
