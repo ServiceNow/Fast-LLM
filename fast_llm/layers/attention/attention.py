@@ -104,12 +104,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         head_size_dim = TensorDim("head_size", self._config.head_size)
         query_dim = CompositeTensorDim("query", (head_group_dim, group_heads_dim, head_size_dim))
-        key_value_dim = ConcatenatedTensorDim(
-            "key_value",
-            (
-                CompositeTensorDim("key", (head_group_dim, head_size_dim)),
-                CompositeTensorDim("value", (head_group_dim, head_size_dim)),
-            ),
+        key_dim = CompositeTensorDim("key", (head_group_dim, head_size_dim))
+        key_value_dim = (
+            key_dim
+            if self._config.shared_key_value
+            else ConcatenatedTensorDim(
+                "key_value",
+                (
+                    key_dim,
+                    CompositeTensorDim("value", (head_group_dim, head_size_dim)),
+                ),
+            )
         )
         self._dense_dim = CompositeTensorDim("dense", (head_group_dim, group_heads_dim, head_size_dim))
 
@@ -136,7 +141,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             lr_scale=self._lr_scale,
             peft=None if self._config.key_layer.apply_peft is None else self._peft,
         )
-        if self._peft is not None and self._config.key_layer.apply_peft is None:
+        if self._peft is not None and self._config.key_layer.apply_peft is None and not self._config.shared_key_value:
             # Default: Apply to value only.
             # TODO: Avoid this hack.
             self.key_value = self._peft.apply_linear(
@@ -148,7 +153,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         # Rotary embeddings.
         self._rotary = self._config.rotary.get_layer(head_size_dim)
 
-        # QK norms (applied before RoPE, per head).
+        # QKV norms (applied after projection, before RoPE).
         self.query_norm = (
             self._config.query_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=None)
             if self._config.query_norm is not None
@@ -157,6 +162,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         self.key_norm = (
             self._config.key_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=None)
             if self._config.key_norm is not None
+            else None
+        )
+        self.value_norm = (
+            self._config.value_norm.get_layer(head_size_dim, lr_scale=self._lr_scale, peft=None)
+            if self._config.value_norm is not None
             else None
         )
 
@@ -265,13 +275,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             handle.wait()
 
         query_unflat = query.unflatten(1, (self._local_heads, self._config.head_size))
-        kv_unflat = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
+        if self._config.shared_key_value:
+            kv_unflat = key_value.unflatten(1, (self._local_head_groups, self._config.head_size))
+            kv_unflat = torch.cat([kv_unflat, kv_unflat], dim=1)
+        else:
+            kv_unflat = key_value.unflatten(1, (2 * self._local_head_groups, self._config.head_size))
 
         query_norm_ctx = None
         if self._config.query_norm is not None:
             if self.training:
                 with torch.enable_grad():
-                    query_leaf = query_unflat.detach().requires_grad_()
+                    query_leaf = query_unflat.contiguous().detach().requires_grad_()
                     query_normed = self.query_norm(query_leaf)
                 query_norm_ctx = (query_leaf, query_normed)
                 query_unflat = query_normed.detach()
@@ -279,17 +293,31 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 query_unflat = self.query_norm(query_unflat)
 
         key_norm_ctx = None
-        if self._config.key_norm is not None:
-            # .contiguous() is required because RMSNormalization uses .view() internally.
-            key_unflat = kv_unflat[:, : self._local_head_groups, :].contiguous()
-            if self.training:
-                with torch.enable_grad():
-                    key_leaf = key_unflat.detach().requires_grad_()
-                    key_normed = self.key_norm(key_leaf)
-                key_norm_ctx = (key_leaf, key_normed)
-                kv_unflat = torch.cat([key_normed.detach(), kv_unflat[:, self._local_head_groups :, :]], dim=1)
-            else:
-                kv_unflat = torch.cat([self.key_norm(key_unflat), kv_unflat[:, self._local_head_groups :, :]], dim=1)
+        value_norm_ctx = None
+        if self._config.key_norm is not None or self._config.value_norm is not None:
+            key_unflat, value_unflat = kv_unflat.chunk(2, dim=1)
+            if self._config.key_norm is not None:
+                # .contiguous() is required because RMSNormalization uses .view() internally.
+                key_unflat = key_unflat.contiguous()
+                if self.training:
+                    with torch.enable_grad():
+                        key_leaf = key_unflat.detach().requires_grad_()
+                        key_normed = self.key_norm(key_leaf)
+                    key_norm_ctx = (key_leaf, key_normed)
+                    key_unflat = key_normed.detach()
+                else:
+                    key_unflat = self.key_norm(key_unflat)
+            if self._config.value_norm is not None:
+                value_unflat = value_unflat.contiguous()
+                if self.training:
+                    with torch.enable_grad():
+                        value_leaf = value_unflat.detach().requires_grad_()
+                        value_normed = self.value_norm(value_leaf)
+                    value_norm_ctx = (value_leaf, value_normed)
+                    value_unflat = value_normed.detach()
+                else:
+                    value_unflat = self.value_norm(value_unflat)
+            kv_unflat = torch.cat([key_unflat, value_unflat], dim=1)
 
         query, key_value, rotary_context = self._rotary.forward_only(query_unflat, kv_unflat, kwargs)
 
@@ -307,6 +335,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             "rotary": rotary_context,
             "query_norm": query_norm_ctx,
             "key_norm": key_norm_ctx,
+            "value_norm": value_norm_ctx,
         }
         return query, key_value, context
 
@@ -337,13 +366,25 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         _, key_value_grad = self._rotary.backward(None, key_value_grad, rotary_context)
 
-        if (key_norm_ctx := context.pop("key_norm")) is not None:
-            key_leaf, key_normed = key_norm_ctx
-            key_grad = key_value_grad[:, : self._local_head_groups, :].contiguous()
-            key_normed.backward(key_grad)
-            key_value_grad = torch.cat([key_leaf.grad, key_value_grad[:, self._local_head_groups :, :]], dim=1)
+        key_norm_ctx = context.pop("key_norm")
+        value_norm_ctx = context.pop("value_norm")
+        if key_norm_ctx is not None or value_norm_ctx is not None:
+            key_grad, value_grad = key_value_grad.chunk(2, dim=1)
+            if key_norm_ctx is not None:
+                key_leaf, key_normed = key_norm_ctx
+                key_normed.backward(key_grad.contiguous())
+                key_grad = key_leaf.grad
+            if value_norm_ctx is not None:
+                value_leaf, value_normed = value_norm_ctx
+                value_normed.backward(value_grad.contiguous())
+                value_grad = value_leaf.grad
+            key_value_grad = torch.cat([key_grad, value_grad], dim=1)
 
-        key_value_grad = key_value_grad.flatten(1)
+        if self._config.shared_key_value:
+            key_grad, value_grad = key_value_grad.chunk(2, dim=1)
+            key_value_grad = (key_grad + value_grad).flatten(1)
+        else:
+            key_value_grad = key_value_grad.flatten(1)
 
         if self._config.head_groups == 1 and (group := self._parallel_dim.group):
             if self._sequence_parallel:

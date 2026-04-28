@@ -46,6 +46,8 @@ class AttentionTestConfig:
     window_size: int | None = None
     query_norm: bool = False
     key_norm: bool = False
+    value_norm: bool = False
+    shared_key_value: bool = False
     rotary: bool = False
 
     @property
@@ -71,6 +73,10 @@ class AttentionTestConfig:
             config["query_norm"] = {"type": "rms_norm"}
         if self.key_norm:
             config["key_norm"] = {"type": "rms_norm"}
+        if self.value_norm:
+            config["value_norm"] = {"type": "fixed_rms_norm"}
+        if self.shared_key_value:
+            config["shared_key_value"] = True
         if self.rotary:
             config["rotary"] = {"type": "default"}
         return AttentionConfig.from_dict(config)
@@ -89,9 +95,15 @@ class AttentionTestConfig:
             q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(
                 1, (self.heads, self.head_size)
             )
-            kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
-                1, (2 * self.kv_heads, self.head_size)
-            )
+            if self.shared_key_value:
+                key_projected = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
+                    1, (self.kv_heads, self.head_size)
+                )
+                kv = torch.cat([key_projected, key_projected], dim=1)
+            else:
+                kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
+                    1, (2 * self.kv_heads, self.head_size)
+                )
 
             if self.query_norm:
                 q = torch.rms_norm(q, (self.head_size,), attention.query_norm.weight.detach(), 1e-5)
@@ -100,6 +112,9 @@ class AttentionTestConfig:
                     kv[:, : self.kv_heads, :], (self.head_size,), attention.key_norm.weight.detach(), 1e-5
                 )
                 kv = torch.cat([key_normed, kv[:, self.kv_heads :, :]], dim=1)
+            if self.value_norm:
+                value_normed = torch.rms_norm(kv[:, self.kv_heads :, :], (self.head_size,), None, 1e-5)
+                kv = torch.cat([kv[:, : self.kv_heads, :], value_normed], dim=1)
 
             if self.rotary:
                 freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, 10000.0, input_.device)
@@ -155,18 +170,39 @@ _attention_norm_variants = [
     ("no_norm", {}),
     ("query_norm", {"query_norm": True}),
     ("key_norm", {"key_norm": True}),
+    ("value_norm", {"value_norm": True}),
     ("both_norms", {"query_norm": True, "key_norm": True}),
+    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
 ]
 
-_attention_test_configs = [
-    AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-    for base_name, base_kwargs in _base_attention_cases
-    for variant_name, variant_kwargs in _attention_norm_variants
-] + [
-    AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-    for base_name, base_kwargs in _attention_rotary_cases
-    for variant_name, variant_kwargs in _attention_norm_variants
+_attention_shared_key_value_cases = [
+    ("shared_key_value", {"shared_key_value": True}),
 ]
+
+_attention_shared_key_value_norm_variants = [
+    ("no_norm", {}),
+    ("key_norm", {"key_norm": True}),
+    ("value_norm", {"value_norm": True}),
+    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+]
+
+_attention_test_configs = (
+    [
+        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+        for base_name, base_kwargs in _base_attention_cases
+        for variant_name, variant_kwargs in _attention_norm_variants
+    ]
+    + [
+        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+        for base_name, base_kwargs in _attention_rotary_cases
+        for variant_name, variant_kwargs in _attention_norm_variants
+    ]
+    + [
+        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+        for base_name, base_kwargs in _attention_shared_key_value_cases
+        for variant_name, variant_kwargs in _attention_shared_key_value_norm_variants
+    ]
+)
 
 _attention_lengths = [
     [15],
