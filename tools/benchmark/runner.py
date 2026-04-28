@@ -63,6 +63,11 @@ class Variant:
     # The fp32 reference variant. Exactly one per benchmark; its outputs are
     # the ground truth for RMS-error comparison.
     is_reference: bool = False
+    # Applied to the output dict during the correctness check only — never during
+    # timing. Receives {name: tensor} and the full inputs dict; returns the
+    # (possibly modified) dict. Use this to mask out don't-care regions so they
+    # don't inflate RMS errors (e.g. uninitialized phantom rows in sparse buffers).
+    output_postprocess: Callable[[dict[str, torch.Tensor], Inputs], dict[str, torch.Tensor]] | None = None
 
 
 @dataclasses.dataclass
@@ -283,6 +288,8 @@ def _run_one_variant(
                 ref_fwd = reference_outputs.get("fwd")
                 if ref_fwd is not None:
                     cand = _as_output_dict(fwd_output)
+                    if variant.output_postprocess is not None:
+                        cand = variant.output_postprocess(cand, inputs)
                     rms = {name: rms_relative_error(cand[name], ref_fwd[name]) for name in ref_fwd if name in cand}
                     result.rms_errors = (result.rms_errors or {}) | {f"fwd.{k}": v for k, v in rms.items()}
             del fwd_output
@@ -311,6 +318,8 @@ def _run_one_variant(
                 ref_fb = reference_outputs.get("fwd_bwd")
                 if ref_fb is not None:
                     cand = _as_output_dict(fwd_bwd_output)
+                    if variant.output_postprocess is not None:
+                        cand = variant.output_postprocess(cand, inputs)
                     rms = {name: rms_relative_error(cand[name], ref_fb[name]) for name in ref_fb if name in cand}
                     result.rms_errors = (result.rms_errors or {}) | {f"fb.{k}": v for k, v in rms.items()}
             del fwd_bwd_output
