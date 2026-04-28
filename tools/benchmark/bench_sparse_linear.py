@@ -60,7 +60,9 @@ def _make_output_sparse_inputs(
     sparse_map = _make_sparse_map(tokens, top_k, num_experts)
     lhs_data = _zero_padded_rows(torch.randn(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map)
     rhs_data = torch.randn(hidden, ffn_per_expert * num_experts, dtype=dtype, device=device())
-    backward_grad = torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
+    backward_grad = _zero_padded_rows(
+        torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
+    )
     # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
     if TritonConfig.enabled():
         _w_lhs = lhs_data.detach().requires_grad_(True)
@@ -85,7 +87,9 @@ def _make_input_inner_sparse_inputs(
         torch.randn(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
     )
     rhs_data = torch.randn(ffn_per_expert * num_experts, hidden, dtype=dtype, device=device())
-    backward_grad = torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device())
+    backward_grad = _zero_padded_rows(
+        torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map
+    )
     # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
     if TritonConfig.enabled():
         _w_lhs = lhs_data.detach().requires_grad_(True)
