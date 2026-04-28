@@ -60,18 +60,20 @@ def _make_output_sparse_inputs(
     sparse_map = _make_sparse_map(tokens, top_k, num_experts)
     lhs_data = _zero_padded_rows(torch.randn(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map)
     rhs_data = torch.randn(hidden, ffn_per_expert * num_experts, dtype=dtype, device=device())
+    backward_grad = torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
     # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
     if TritonConfig.enabled():
         _w_lhs = lhs_data.detach().requires_grad_(True)
         _w_rhs = rhs_data.detach().requires_grad_(True)
         _w_out = OutputSparseLinear.apply(_w_lhs, _w_rhs, sparse_map)
-        _w_out.backward(torch.ones_like(_w_out))
+        _w_out.backward(backward_grad)
         del _w_lhs, _w_rhs, _w_out
     return {
         "lhs": lhs_data.requires_grad_(True),
         "rhs": rhs_data.requires_grad_(True),
         "sparse_map": sparse_map,
         "ffn_per_expert": ffn_per_expert,
+        "backward_grad": backward_grad,
     }
 
 
@@ -83,18 +85,20 @@ def _make_input_inner_sparse_inputs(
         torch.randn(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
     )
     rhs_data = torch.randn(ffn_per_expert * num_experts, hidden, dtype=dtype, device=device())
+    backward_grad = torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device())
     # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
     if TritonConfig.enabled():
         _w_lhs = lhs_data.detach().requires_grad_(True)
         _w_rhs = rhs_data.detach().requires_grad_(True)
         _w_out = InputSparseLinear.apply(_w_lhs, _w_rhs, sparse_map)
-        _w_out.backward(torch.ones_like(_w_out))
+        _w_out.backward(backward_grad)
         del _w_lhs, _w_rhs, _w_out
     return {
         "lhs": lhs_data.requires_grad_(True),
         "rhs": rhs_data.requires_grad_(True),
         "sparse_map": sparse_map,
         "ffn_per_expert": ffn_per_expert,
+        "backward_grad": backward_grad,
     }
 
 
@@ -122,7 +126,7 @@ def _run_output_sparse_fwd(inp: dict, fn) -> dict:
 
 def _run_output_sparse_fwd_bwd(inp: dict, fn) -> dict:
     output = fn(inp["lhs"], inp["rhs"], inp["sparse_map"])
-    output.backward(_zero_padded_rows(torch.ones_like(output), inp["sparse_map"]))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 
@@ -132,7 +136,7 @@ def _run_output_sparse_fwd_triton(inp: dict) -> dict:
 
 def _run_output_sparse_fwd_bwd_triton(inp: dict) -> dict:
     output = OutputSparseLinear.apply(inp["lhs"], inp["rhs"], inp["sparse_map"])
-    output.backward(_zero_padded_rows(torch.ones_like(output), inp["sparse_map"]))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 
@@ -185,7 +189,7 @@ def _run_input_inner_sparse_fwd(inp: dict, fn) -> dict:
 
 def _run_input_inner_sparse_fwd_bwd(inp: dict, fn) -> dict:
     output = fn(inp["lhs"], inp["rhs"], inp["sparse_map"])
-    output.backward(_zero_padded_rows(torch.ones_like(output), inp["sparse_map"]))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 
@@ -195,7 +199,7 @@ def _run_input_inner_sparse_fwd_triton(inp: dict) -> dict:
 
 def _run_input_inner_sparse_fwd_bwd_triton(inp: dict) -> dict:
     output = InputSparseLinear.apply(inp["lhs"], inp["rhs"], inp["sparse_map"])
-    output.backward(_zero_padded_rows(torch.ones_like(output), inp["sparse_map"]))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 

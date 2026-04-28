@@ -68,6 +68,7 @@ def _make_dispatch_inputs(tokens: int, top_k: int, num_experts: int, hidden: int
         "dense_input": torch.randn(tokens, hidden, dtype=dtype, device=device(), requires_grad=True),
         "sparse_map": sparse_map,
         "phantom_mask": _make_phantom_mask(sparse_map),
+        "backward_grad": torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device()),
     }
 
 
@@ -78,6 +79,7 @@ def _make_combine_inputs(tokens: int, top_k: int, num_experts: int, hidden: int,
         "scores": torch.softmax(torch.randn(tokens, top_k, dtype=dtype, device=device()), dim=-1).requires_grad_(True),
         "sparse_map": sparse_map,
         "phantom_mask": _make_phantom_mask(sparse_map),
+        "backward_grad": torch.ones(tokens, hidden, dtype=dtype, device=device()),
     }
 
 
@@ -102,7 +104,7 @@ def _run_dispatch_fwd(inp: dict, fn) -> dict:
 
 def _run_dispatch_fwd_bwd(inp: dict, fn) -> dict:
     output = fn(inp["dense_input"], inp["sparse_map"])
-    output.backward(torch.ones_like(output))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
 
 
@@ -112,7 +114,7 @@ def _run_dispatch_fwd_triton(inp: dict) -> dict:
 
 def _run_dispatch_fwd_bwd_triton(inp: dict) -> dict:
     output = copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])
-    output.backward(torch.ones_like(output))
+    output.backward(inp["backward_grad"])
     return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
 
 
@@ -173,7 +175,7 @@ def _run_combine_fwd(inp: dict, fn) -> dict:
 
 def _run_combine_fwd_bwd(inp: dict, fn) -> dict:
     output = fn(inp["sparse_input"], inp["scores"], inp["sparse_map"])
-    output.backward(torch.ones_like(output))
+    output.backward(inp["backward_grad"])
     return {
         "output": output.detach(),
         "grad_sparse": inp["sparse_input"].grad,
@@ -187,7 +189,7 @@ def _run_combine_fwd_triton(inp: dict) -> dict:
 
 def _run_combine_fwd_bwd_triton(inp: dict) -> dict:
     output = copy_sparse_to_dense_autograd(inp["sparse_input"], inp["scores"], inp["sparse_map"])
-    output.backward(torch.ones_like(output))
+    output.backward(inp["backward_grad"])
     return {
         "output": output.detach(),
         "grad_sparse": inp["sparse_input"].grad,
