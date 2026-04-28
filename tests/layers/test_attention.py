@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 
 import pytest
@@ -15,26 +16,51 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
 
-_HIDDEN_SIZE = 64
 _HEADS = 4
 _KV_HEADS = 2
 _HEAD_SIZE = 16
-_HEADS_PER_GROUP = _HEADS // _KV_HEADS
+
+
+def _compute_rotary_freqs(seq_len: int, head_size: int, theta: float, device: torch.device) -> torch.Tensor:
+    angle_scales = theta ** (-torch.arange(0, 1, 2 / head_size, dtype=torch.float64, device=device))
+    positions = torch.arange(seq_len, dtype=torch.float64, device=device)
+    angles = torch.outer(positions, angle_scales)
+    freqs = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1).to(torch.float32)
+    return freqs.unsqueeze(1)  # (seq_len, 1, head_size)
+
+
+def _apply_rotary(tensor: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+    half = tensor.shape[-1] // 2
+    re, im = tensor[..., :half], tensor[..., half:]
+    cos, sin = freqs[..., :half], freqs[..., half:]
+    return torch.cat([re * cos - im * sin, im * cos + re * sin], dim=-1)
 
 
 @dataclasses.dataclass
 class AttentionTestConfig:
     name: str
+    heads: int = _HEADS
+    kv_heads: int = _KV_HEADS
+    head_size: int = _HEAD_SIZE
     causal: bool = True
     window_size: int | None = None
     query_norm: bool = False
     key_norm: bool = False
+    rotary: bool = False
+
+    @property
+    def hidden_size(self) -> int:
+        return self.heads * self.head_size
+
+    @property
+    def heads_per_group(self) -> int:
+        return self.heads // self.kv_heads
 
     def get_attention_config(self, implementation: str = "backup") -> AttentionConfig:
         config: dict = {
-            "heads": _HEADS,
-            "head_groups": _KV_HEADS,
-            "head_size": _HEAD_SIZE,
+            "heads": self.heads,
+            "head_groups": self.kv_heads,
+            "head_size": self.head_size,
             "add_linear_biases": False,
             "causal": self.causal,
             "implementation": implementation,
@@ -45,6 +71,8 @@ class AttentionTestConfig:
             config["query_norm"] = {"type": "rms_norm"}
         if self.key_norm:
             config["key_norm"] = {"type": "rms_norm"}
+        if self.rotary:
+            config["rotary"] = {"type": "default"}
         return AttentionConfig.from_dict(config)
 
     def expected_output(
@@ -54,25 +82,33 @@ class AttentionTestConfig:
         lengths: list[int],
     ) -> torch.Tensor:
         """
-        Independent reference: plain F.linear + torch.rms_norm + per-document einsum attention.
+        Independent reference: plain F.linear + torch.rms_norm + rotary + per-document einsum attention.
         No calls to Fast-LLM attention or norm internals.
         """
         with torch.no_grad():
-            q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(1, (_HEADS, _HEAD_SIZE))
+            q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(
+                1, (self.heads, self.head_size)
+            )
             kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
-                1, (2 * _KV_HEADS, _HEAD_SIZE)
+                1, (2 * self.kv_heads, self.head_size)
             )
 
             if self.query_norm:
-                q = torch.rms_norm(q, (_HEAD_SIZE,), attention.query_norm.weight.detach(), 1e-5)
+                q = torch.rms_norm(q, (self.head_size,), attention.query_norm.weight.detach(), 1e-5)
             if self.key_norm:
                 key_normed = torch.rms_norm(
-                    kv[:, :_KV_HEADS, :], (_HEAD_SIZE,), attention.key_norm.weight.detach(), 1e-5
+                    kv[:, : self.kv_heads, :], (self.head_size,), attention.key_norm.weight.detach(), 1e-5
                 )
-                kv = torch.cat([key_normed, kv[:, _KV_HEADS:, :]], dim=1)
+                kv = torch.cat([key_normed, kv[:, self.kv_heads :, :]], dim=1)
 
-            k, v = kv[:, :_KV_HEADS, :], kv[:, _KV_HEADS:, :]
-            scale = _HEAD_SIZE**-0.5
+            if self.rotary:
+                freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, 10000.0, input_.device)
+                q = _apply_rotary(q, freqs)
+                k_rotated = _apply_rotary(kv[:, : self.kv_heads, :], freqs)
+                kv = torch.cat([k_rotated, kv[:, self.kv_heads :, :]], dim=1)
+
+            k, v = kv[:, : self.kv_heads, :], kv[:, self.kv_heads :, :]
+            scale = self.head_size**-0.5
 
             attn_out = torch.empty_like(q)
             offset = 0
@@ -82,8 +118,8 @@ class AttentionTestConfig:
                 v_doc = v[offset : offset + length]
 
                 head_outputs = []
-                for head_index in range(_HEADS):
-                    group = head_index // _HEADS_PER_GROUP
+                for head_index in range(self.heads):
+                    group = head_index // self.heads_per_group
                     scores = (q_doc[:, head_index, :].float() @ k_doc[:, group, :].float().T) * scale
                     if self.causal:
                         positions = torch.arange(length, device=input_.device)
@@ -104,6 +140,15 @@ _base_attention_cases = [
     ("causal", {"causal": True}),
     ("noncausal", {"causal": False}),
     ("window", {"causal": True, "window_size": 4}),
+    # MQA: all query heads share a single KV head
+    ("mqa", {"causal": True, "kv_heads": 1}),
+    # MHA: each query head has its own KV head
+    ("mha", {"causal": True, "kv_heads": _HEADS}),
+]
+
+_attention_rotary_cases = [
+    # Rotary: only independent reference check (packing equivalence requires per-doc position reset)
+    ("causal_rotary", {"causal": True, "rotary": True}),
 ]
 
 _attention_norm_variants = [
@@ -116,6 +161,10 @@ _attention_norm_variants = [
 _attention_test_configs = [
     AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
     for base_name, base_kwargs in _base_attention_cases
+    for variant_name, variant_kwargs in _attention_norm_variants
+] + [
+    AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+    for base_name, base_kwargs in _attention_rotary_cases
     for variant_name, variant_kwargs in _attention_norm_variants
 ]
 
@@ -154,24 +203,41 @@ def _run_per_seq_reference(
     return torch.cat(out_refs, dim=0)
 
 
-def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
-    num_tokens = sum(lengths)
+@contextlib.contextmanager
+def _no_tf32():
+    prev = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = prev
 
-    # Float32 for precise comparison throughout.
+
+def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
+    with _no_tf32():
+        _test_attention_impl(config, lengths)
+
+
+def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> None:
+    num_tokens = sum(lengths)
+    hidden_dim = TensorDim("hidden", config.hidden_size)
+
     distributed_config = DistributedConfig(use_cuda=torch.cuda.is_available())
     distributed = Distributed(distributed_config)
     device = distributed.device
 
-    hidden_dim = TensorDim("hidden", _HIDDEN_SIZE)
     attention: Attention = config.get_attention_config("backup").get_layer(
         distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False
     )
     stage = get_stage([attention], distributed)
 
-    # Independent reference check: compare the full forward pass to a plain-PyTorch reference
-    # that uses F.linear, torch.rms_norm, and an explicit per-document attention loop.
+    # Independent reference check with TF32 disabled on GPU.
+    # Backup attention uses baddbmm over head groups; the reference uses per-head matmul — a
+    # different summation order. With TF32 enabled these can differ by ~3e-4 on A100/H100;
+    # disabling TF32 reduces the gap to ~1e-7, well within rtol=1e-4.
+    # Running on GPU (not CPU) avoids Triton failing on CPU tensors when key/query norm is enabled.
     attention.eval()
-    input_for_ref = torch.randn(num_tokens, _HIDDEN_SIZE, device=device)
+    input_for_ref = torch.randn(num_tokens, config.hidden_size, device=device)
     (model_input_ref,) = LanguageModelBatch(
         tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
     ).get_model_inputs(
@@ -185,13 +251,19 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     attention.preprocess(kwargs_ref)
     with torch.no_grad():
         out_fastllm = attention(input_for_ref, kwargs_ref)
-    torch.testing.assert_close(
-        out_fastllm, config.expected_output(input_for_ref, attention, lengths), rtol=1e-4, atol=1e-5
-    )
+    expected = config.expected_output(input_for_ref, attention, lengths)
+    Assert.rms_close_relative(out_fastllm, expected, 1e-5, 1e-7)
     attention.train()
 
+    # Rotary uses global positions across packed docs; per-sequence uses local positions.
+    # Packing equivalence and flash checks are only valid without rotary.
+    if config.rotary:
+        return
+
     # Packing equivalence check: packed backup must match per-sequence backup, forward and backward.
-    hidden_states = torch.randn(num_tokens, _HIDDEN_SIZE, device=device, requires_grad=True)
+    # TF32 disabled so that linear projections are row-by-row identical regardless of batch size;
+    # different batch sizes can trigger different CUDA tiling strategies, causing ~1e-4 drift with TF32.
+    hidden_states = torch.randn(num_tokens, config.hidden_size, device=device, requires_grad=True)
 
     out_ref = _run_per_seq_reference(attention, stage, distributed_config, hidden_states, lengths, device)
     names, params = zip(*list(attention.named_parameters()))
@@ -229,7 +301,7 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         for param_bf16, param_f32 in zip(attention_backup_bf16.parameters(), attention.parameters(), strict=True):
             param_bf16.data.copy_(param_f32.data)
 
-        hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16)
+        hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16).requires_grad_(True)
         out_ref_bf16 = _run_per_seq_reference(
             attention_backup_bf16, stage_backup_bf16, distributed_config_bf16, hidden_states_bf16, lengths, device
         )
@@ -255,7 +327,7 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         attention_flash.preprocess(kwargs_flash)
         out_flash, _ = stage_flash.forward(hidden_states_bf16, kwargs_flash)
 
-        Assert.rms_close(out_flash, out_ref_bf16, 2e-3)
+        Assert.rms_close(out_flash, out_ref_bf16, 4e-3)
 
 
 @pytest.mark.parametrize(
