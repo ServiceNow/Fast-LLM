@@ -38,7 +38,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                 group=self._parallel_dim.group if self._vocab_parallel else None,
                 epsilon_low=self._config.epsilon_low,
                 epsilon_high=self._config.epsilon_high,
-                logits_scale_factor=self._logits_scale_factor,
+                logits_scale_factor=self._effective_logits_scale,
                 num_labels_in_seq=(
                     None
                     if losses is None
@@ -64,7 +64,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                 group=self._parallel_dim.group if self._vocab_parallel else None,
                 epsilon_low=self._config.epsilon_low,
                 epsilon_high=self._config.epsilon_high,
-                logits_scale_factor=self._logits_scale_factor,
+                logits_scale_factor=self._effective_logits_scale,
                 num_labels_in_seq=(
                     None
                     if losses is None
@@ -101,7 +101,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
             self._config.epsilon_low,
             self._config.epsilon_high,
-            self._logits_scale_factor,
+            self._effective_logits_scale,
             vocab_parallel_group=self._parallel_dim.group if self._vocab_parallel else None,
             compute_entropy=self._config.compute_entropy_metric,
             entropy_chunk_size=self._config.entropy_chunk_size,
@@ -172,6 +172,10 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         if self._config.policy_loss == "gspo":
             config["return_document_index"] = True
         return config
+
+    @functools.cached_property
+    def _effective_logits_scale(self) -> float:
+        return self._logits_scale_factor / self._config.temperature
 
     @functools.cached_property
     def _logprob_metric_name(self) -> str:

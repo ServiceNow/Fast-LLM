@@ -233,6 +233,13 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         "Set to True when using docs_per_step for full DS parity.",
         hint=FieldHint.feature,
     )
+    temperature: float = Field(
+        default=1.0,
+        desc="Temperature applied to logits before computing new log-probabilities. "
+        "Set to match the sampling temperature used by the actor (e.g. 0.7) so that "
+        "new and old log-probs are in the same scale and the IS ratio starts near 1.",
+        valid=check_field(Assert.gt, 0),
+    )
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":
