@@ -31,9 +31,13 @@ _DEFAULT_DTYPES = (torch.bfloat16,)
 
 def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> dict:
     rotary_dim = head_size // 2
+    frequencies = torch.randn(tokens, 2 * rotary_dim, dtype=torch.float32, device=device())
+    # Warm up Triton autotuning so the timed runs aren't dominated by JIT/autotune overhead.
+    if TritonConfig.enabled():
+        triton_rotary_(torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device()), frequencies)
     return {
         "input_": torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device()),
-        "frequencies": torch.randn(tokens, 2 * rotary_dim, dtype=torch.float32, device=device()),
+        "frequencies": frequencies,
     }
 
 
