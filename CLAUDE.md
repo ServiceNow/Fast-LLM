@@ -68,6 +68,10 @@ fast-llm train gpt --config config.yaml --validate
 fast-llm train gpt --config examples/mistral-4-node-benchmark.yaml
 ```
 
+## Design principles
+
+- **Generalize rather than special-case.** New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
+
 ## Architecture
 
 ### Configuration system (`fast_llm/config.py`)
@@ -173,3 +177,13 @@ Tests live in `tests/`. The following patterns work well in this codebase.
 - **Conditionals**: Avoid double negations — prefer `b if x else a` over `a if not x else b`.
 - **Paths**: Use `pathlib.Path`, not `os.path`.
 - **Python version**: 3.12+.
+
+## PR review focus
+
+When reviewing PRs (`/review` reads this section as part of its checklist):
+
+- **Consistency** with the rest of the codebase. New code should match neighbor patterns; flag arbitrary divergences from existing conventions.
+- **Necessity**: flag anything that doesn't pull its weight — dead code, unused parameters, abstractions that aren't reused, comments that restate obvious code.
+- **Simplification**: actively look for non-trivial simplifications and refactoring opportunities, not just style nitpicks.
+- **Correctness**: edge cases, off-by-ones, error handling, race conditions. Read the code; don't trust comments.
+- **Test coverage**: new code paths should have tests; modified behavior should have updated tests. Untested control flow is a flag.
