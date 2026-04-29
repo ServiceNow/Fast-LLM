@@ -68,6 +68,10 @@ class Variant:
     # (possibly modified) dict. Use this to mask out don't-care regions so they
     # don't inflate RMS errors (e.g. uninitialized phantom rows in sparse buffers).
     output_postprocess: Callable[[dict[str, torch.Tensor], Inputs], dict[str, torch.Tensor]] | None = None
+    # Called between timing reps (outside the timed region) to restore any
+    # input tensors the variant mutates in-place. Use this instead of cloning
+    # inside the timed callable so the mutation cost is not measured.
+    reset_inputs: Callable[[Inputs], None] | None = None
 
 
 @dataclasses.dataclass
@@ -138,6 +142,7 @@ def _make_cache_flusher(size_bytes: int = 256 * 1024 * 1024) -> Callable[[], Non
 
 def bench_fn(
     fn: Callable[[], Any],
+    reset: Callable[[], None] | None = None,
     warmup_ms: float = 25.0,
     rep_ms: float = 100.0,
     min_reps: int = 5,
@@ -189,6 +194,8 @@ def bench_fn(
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_reps)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_reps)]
     for i in range(n_reps):
+        if reset is not None:
+            reset()
         flush()
         start_events[i].record()
         fn()
@@ -295,7 +302,8 @@ def _run_one_variant(
             del fwd_output
 
             # Timing: reuse the same input tensors, fn closes over them.
-            result.fwd_timing = bench_fn(_guarded_fwd, warmup_ms=warmup_ms, rep_ms=rep_ms)
+            _reset_fwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
+            result.fwd_timing = bench_fn(_guarded_fwd, reset=_reset_fwd, warmup_ms=warmup_ms, rep_ms=rep_ms)
             del inputs
 
         # fwd+bwd mode
@@ -333,7 +341,10 @@ def _run_one_variant(
             del fresh_inputs
 
             # Timing.
-            result.fwd_bwd_timing = bench_fn(_guarded_fwd_bwd, warmup_ms=warmup_ms, rep_ms=rep_ms)
+            _reset_fwd_bwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
+            result.fwd_bwd_timing = bench_fn(
+                _guarded_fwd_bwd, reset=_reset_fwd_bwd, warmup_ms=warmup_ms, rep_ms=rep_ms
+            )
             del inputs
         elif variant.fwd is not None and result.memory is None:
             # No backward — measure fwd-mode memory.

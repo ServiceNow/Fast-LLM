@@ -31,8 +31,10 @@ _DEFAULT_DTYPES = (torch.bfloat16,)
 
 def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> dict:
     rotary_dim = head_size // 2
+    input_ = torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device())
     return {
-        "input_": torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device()),
+        "input_": input_,
+        "work": input_.clone(),  # pre-allocated work buffer for in-place variants
         "frequencies": torch.randn(tokens, 2 * rotary_dim, dtype=torch.float32, device=device()),
     }
 
@@ -84,11 +86,11 @@ def _rotary_variants() -> list[Variant]:
         ),
     ]
     if TritonConfig.enabled():
-        # triton_rotary_ is in-place; clone so the benchmark input stays intact.
         variants.append(
             Variant(
                 name="fast_llm_triton",
-                fwd=lambda inp: {"output": triton_rotary_(inp["input_"].clone(), inp["frequencies"])},
+                fwd=lambda inp: {"output": triton_rotary_(inp["work"], inp["frequencies"])},
+                reset_inputs=lambda inp: inp["work"].copy_(inp["input_"]),
             )
         )
     return variants
