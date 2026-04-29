@@ -31,6 +31,8 @@
 */
 
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 
@@ -50,12 +52,30 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
        where [..., 0] contains the index into `doc_idx` and [..., 1] is the
        starting offset in that document.*/
 
-    // Consistency checks.
-    assert(seq_length > 1);
-    assert(num_epochs > 0);
-    assert(tokens_per_epoch > 1);
+    // Use exceptions rather than `assert`, which compiles to a no-op under -DNDEBUG.
+    if (seq_length <= 1) throw std::invalid_argument("seq_length must be > 1");
+    if (num_epochs <= 0) throw std::invalid_argument("num_epochs must be > 0");
+    if (tokens_per_epoch <= 1) throw std::invalid_argument("tokens_per_epoch must be > 1");
+    if (sizes_.shape(0) <= 0) throw std::invalid_argument("sizes must be non-empty");
+    if (doc_idx_.shape(0) <= 0) throw std::invalid_argument("doc_idx must be non-empty");
 
-    // Remove bound checks.
+    // Bounds-check `doc_idx` once up front so the inner loops can use unchecked accesses.
+    // Without this the inner-loop `sizes[doc_idx[i]]` is an out-of-bounds heap read on a
+    // malformed `doc_idx`.
+    {
+        auto doc_idx_check = doc_idx_.unchecked<1>();
+        const int64_t sizes_len = sizes_.shape(0);
+        for (int64_t i = 0; i < doc_idx_.shape(0); ++i) {
+            const int32_t value = doc_idx_check[i];
+            if (value < 0 || value >= sizes_len) {
+                throw std::out_of_range(
+                    "doc_idx[" + std::to_string(i) + "] = " + std::to_string(value)
+                    + " out of range [0, " + std::to_string(sizes_len) + ")");
+            }
+        }
+    }
+
+    // Remove bound checks for the hot inner loops.
     auto sizes = sizes_.unchecked<1>();
     auto doc_idx = doc_idx_.unchecked<1>();
 
@@ -138,6 +158,10 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   Build token cumsums at regular intervals from document sizes with padding in mind.
   We inject 0 or more padding tokens at the end of every sequence to fill the sequence length.
   */
+  if (seq_length <= 0) throw std::invalid_argument("seq_length must be > 0");
+  // `samples % token_cumsum_rate == 0` would be undefined behavior at zero.
+  if (token_cumsum_rate <= 0) throw std::invalid_argument("token_cumsum_rate must be > 0");
+
   int32_t seq_size = 0;
   int64_t sizes_idx = 0;
   int32_t samples = 0;

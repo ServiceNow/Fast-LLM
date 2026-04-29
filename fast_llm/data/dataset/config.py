@@ -299,6 +299,10 @@ class RedisConfig(Config):
     def get_client(self):
         import redis
 
+        # TODO: Add `password` and `ssl` fields if we ever run Redis off-localhost. Streaming
+        # broadcasts tokenized training data, so an unauthenticated remote server lets anyone on
+        # the network read or poison the stream. Acceptable today only because the Redis server
+        # is colocated within a trusted cluster network.
         return redis.Redis(self.host, self.port)
 
 

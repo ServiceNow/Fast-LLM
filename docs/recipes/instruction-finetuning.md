@@ -105,6 +105,8 @@ splits:
   validation: 0.002
 ```
 
+Some HuggingFace datasets ship custom Python loaders that run on download. The `trust_remote_code: true` field above only takes effect when you also pass `--trust-remote-code` on the `fast-llm prepare` command line; the field alone is intentionally a no-op so that opening someone else's config can never trigger remote-code execution. Both opt-ins are required (`--trust-remote-code` is the master switch and `trust_remote_code: true` enables it for that specific call). If you would rather opt in once for every call in the run, pass `--trust-all-remote-code` instead.
+
 ## ⚙️ Step 4: Configure Fast-LLM
 
 It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with one additional option, namely `truncate_documents`, which is important for improving the task performance of instruction-tuned models.
