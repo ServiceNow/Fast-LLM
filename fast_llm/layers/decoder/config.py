@@ -215,7 +215,18 @@ class DecoderBlockConfig(BlockConfig):
     )
     # TODO: Review names
     normalization: NormalizationConfig = Field(
-        desc="Configuration for the block normalization layers.",
+        desc="Configuration for the block normalization layers. Used as default for `pre_mixer_normalization` and `pre_mlp_normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the mixer. Defaults to `normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the MLP. Defaults to `normalization` when not set."
+        " Set to `{type: none}` to disable independently of the pre-mixer norm.",
         hint=FieldHint.architecture,
     )
     post_mixer_normalization: NormalizationConfig | None = Field(

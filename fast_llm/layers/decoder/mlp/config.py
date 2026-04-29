@@ -5,11 +5,12 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.decoder.mlp.mixture_of_experts import MixtureOfExpertMLP
+    from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP, MixtureOfExpertMLP
     from fast_llm.layers.decoder.mlp.mlp import MLP
 
 
@@ -164,3 +165,49 @@ class MoEMLPConfig(MLPConfig):
         super()._validate()
         Assert.leq(self.shared_experts, self.experts)
         Assert.leq(self.shared_experts + self.experts_per_token, self.experts)
+
+
+@config_class(dynamic_type={MLPBaseConfig: "hybrid_moe"})
+class HybridMoEMLPConfig(MLPBaseConfig):
+    """Configuration for a MoE layer combining an always-active dense MLP with top-K routed experts."""
+
+    _abstract = False
+
+    dense: MLPConfig = Field(
+        desc="Configuration for the always-active dense MLP.",
+        hint=FieldHint.architecture,
+    )
+    routed: MoEMLPConfig = Field(
+        desc="Configuration for the top-K routed expert MLP.",
+        hint=FieldHint.architecture,
+    )
+    dense_pre_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the dense MLP input.",
+        hint=FieldHint.architecture,
+    )
+    dense_post_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the dense MLP output before summing.",
+        hint=FieldHint.architecture,
+    )
+    moe_pre_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the routed MLP input.",
+        hint=FieldHint.architecture,
+    )
+    moe_post_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the routed MLP output before summing.",
+        hint=FieldHint.architecture,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.eq(self.routed.shared_experts, 0)
+
+    @property
+    def layer_class(self) -> "type[HybridMoEMLP]":
+        from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP
+
+        return HybridMoEMLP

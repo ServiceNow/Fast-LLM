@@ -86,8 +86,16 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input = return_input
-        self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
-        self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.norm_1 = (
+            self._config.normalization
+            if self._config.pre_mixer_normalization is None
+            else self._config.pre_mixer_normalization
+        ).get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.norm_2 = (
+            self._config.normalization
+            if self._config.pre_mlp_normalization is None
+            else self._config.pre_mlp_normalization
+        ).get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
         self.post_mixer_norm = (
             self._config.post_mixer_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
             if self._config.post_mixer_normalization is not None
