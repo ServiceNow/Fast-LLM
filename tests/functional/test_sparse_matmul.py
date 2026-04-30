@@ -6,6 +6,8 @@ import torch
 
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.functional.triton.sparse_linear import (
+    InputSparseLinear,
+    OutputSparseLinear,
     dense_matmul,
     input_inner_sparse_matmul,
     input_row_sparse_matmul,
@@ -74,7 +76,21 @@ _SPARSE_TEST_DATAS = (
         dense_dim=256,
         sparse_dim=512,
         expert_ends=(128, 256, 256, 384),
-        tokens_per_expert=(52, 125, 0, 97),
+        tokens_per_expert=(52, 125, 0, 97),  # expert 2 has zero real tokens
+    ),
+    # Single expert — the simplest non-trivial case; also exercises the no-padding path.
+    _SparseTestData(
+        dense_dim=512,
+        sparse_dim=256,
+        expert_ends=(256,),
+        tokens_per_expert=(200,),
+    ),
+    # Four experts, fully packed (no padding rows) — exercises the pad_begin == expert_end path.
+    _SparseTestData(
+        dense_dim=384,
+        sparse_dim=128,
+        expert_ends=(64, 128, 192, 256),
+        tokens_per_expert=(64, 64, 64, 64),
     ),
 )
 
@@ -151,3 +167,74 @@ def test_input_row_sparse_matmul(sparse_test_data, testing_device):
         )
 
     Assert.rms_close(output, output_ref, 1e-3)
+
+
+# --------------------------------------------------------------------------- autograd wrappers
+
+
+def _output_sparse_linear_ref(lhs: torch.Tensor, rhs: torch.Tensor, data: _SparseTestData) -> torch.Tensor:
+    """OutputSparseLinear forward via Python loop (PyTorch-differentiable)."""
+    ffn = rhs.shape[1] // data.num_experts
+    out = lhs.new_zeros(data.token_dim, ffn)
+    for i in range(data.num_experts):
+        begin, end = data.expert_begins[i], data.expert_pad_begins[i]
+        if end > begin:
+            out[begin:end] = lhs[begin:end] @ rhs[:, i * ffn : (i + 1) * ffn]
+    return out
+
+
+def _input_sparse_linear_ref(lhs: torch.Tensor, rhs: torch.Tensor, data: _SparseTestData) -> torch.Tensor:
+    """InputSparseLinear forward via Python loop (PyTorch-differentiable)."""
+    ffn = rhs.shape[0] // data.num_experts
+    out = lhs.new_zeros(data.token_dim, rhs.shape[1])
+    for i in range(data.num_experts):
+        begin, end = data.expert_begins[i], data.expert_pad_begins[i]
+        if end > begin:
+            out[begin:end] = lhs[begin:end] @ rhs[i * ffn : (i + 1) * ffn]
+    return out
+
+
+@requires_triton
+@pytest.mark.slow
+@pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
+def test_output_sparse_linear_autograd(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.dense_dim, sparse_test_data.sparse_dim_expanded, testing_device)
+    grad_output = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim, testing_device)
+
+    lhs_ref = lhs.detach().requires_grad_(True)
+    rhs_ref = rhs.detach().requires_grad_(True)
+    out_ref = _output_sparse_linear_ref(lhs_ref, rhs_ref, sparse_test_data)
+    out_ref.backward(grad_output)
+
+    lhs_t = lhs.detach().requires_grad_(True)
+    rhs_t = rhs.detach().requires_grad_(True)
+    out_t = OutputSparseLinear.apply(lhs_t, rhs_t, sparse_test_data.get_sparse_map(testing_device))
+    out_t.backward(grad_output)
+
+    Assert.rms_close(out_t, out_ref, 1e-3)
+    Assert.rms_close(lhs_t.grad, lhs_ref.grad, 1e-3)
+    Assert.rms_close(rhs_t.grad, rhs_ref.grad, 1e-3)
+
+
+@requires_triton
+@pytest.mark.slow
+@pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
+def test_input_sparse_linear_autograd(sparse_test_data, testing_device):
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.sparse_dim, testing_device)
+    rhs = sparse_test_data.normal(sparse_test_data.sparse_dim_expanded, sparse_test_data.dense_dim, testing_device)
+    grad_output = sparse_test_data.normal(sparse_test_data.token_dim, sparse_test_data.dense_dim, testing_device)
+
+    lhs_ref = lhs.detach().requires_grad_(True)
+    rhs_ref = rhs.detach().requires_grad_(True)
+    out_ref = _input_sparse_linear_ref(lhs_ref, rhs_ref, sparse_test_data)
+    out_ref.backward(grad_output)
+
+    lhs_t = lhs.detach().requires_grad_(True)
+    rhs_t = rhs.detach().requires_grad_(True)
+    out_t = InputSparseLinear.apply(lhs_t, rhs_t, sparse_test_data.get_sparse_map(testing_device))
+    out_t.backward(grad_output)
+
+    Assert.rms_close(out_t, out_ref, 1e-3)
+    Assert.rms_close(lhs_t.grad, lhs_ref.grad, 1e-3)
+    Assert.rms_close(rhs_t.grad, rhs_ref.grad, 1e-3)
