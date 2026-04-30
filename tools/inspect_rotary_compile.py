@@ -9,14 +9,15 @@ This script also prints the path and first 200 lines of each .py file found.
 """
 
 import os
+from pathlib import Path
 
 import torch
 import torch._inductor.config as inductor_config
 
 # Route torch.compile output to a known directory.
-_OUT = "/tmp/torchinductor_rotary_inspect"
-os.makedirs(_OUT, exist_ok=True)
-os.environ["TORCHINDUCTOR_CACHE_DIR"] = _OUT
+_OUT = Path("/tmp/torchinductor_rotary_inspect")
+_OUT.mkdir(parents=True, exist_ok=True)
+os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(_OUT)
 
 
 inductor_config.debug = True  # writes generated Triton .py files alongside the cache
@@ -49,15 +50,11 @@ print(f"Output shape: {out.shape}, dtype: {out.dtype}")
 print(f"\nInductor cache / debug output dir: {_OUT}")
 
 # Find and print the generated Triton kernel files.
-for root, dirs, files in os.walk(_OUT):
-    for fname in sorted(files):
-        if fname.endswith(".py"):
-            path = os.path.join(root, fname)
-            print(f"\n{'='*80}")
-            print(f"FILE: {path}")
-            print("=" * 80)
-            with open(path) as f:
-                lines = f.readlines()
-            print("".join(lines[:300]))
-            if len(lines) > 300:
-                print(f"... ({len(lines) - 300} more lines)")
+for path in sorted(_OUT.rglob("*.py")):
+    print(f"\n{'='*80}")
+    print(f"FILE: {path}")
+    print("=" * 80)
+    lines = path.read_text().splitlines(keepends=True)
+    print("".join(lines[:300]))
+    if len(lines) > 300:
+        print(f"... ({len(lines) - 300} more lines)")
