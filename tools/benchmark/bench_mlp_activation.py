@@ -150,7 +150,7 @@ def _mlp_activation_bytes(tokens: int, ffn_dim: int, dtype: torch.dtype) -> int:
 
 
 def _mlp_activation_flops(tokens: int, ffn_dim: int) -> int:
-    # gated silu: fwd ≈ 6 FLOPs/element_size, bwd ≈ 8 FLOPs/element_size, total ≈ 14 per output element.
+    # gated silu: fwd ≈ 6 FLOPs/element, bwd ≈ 8 FLOPs/element, total ≈ 14 per output element.
     return 14 * tokens * ffn_dim
 
 

@@ -71,7 +71,7 @@ class Variant:
     # Called between timing reps (outside the timed region) to restore any
     # input tensors the variant mutates in-place. Use this instead of cloning
     # inside the timed callable so the mutation cost is not measured.
-    reset_inputs: Callable[[Inputs], None] | None = None
+    reset_inputs: Callable[[Inputs], Any] | None = None
 
 
 @dataclasses.dataclass
