@@ -187,3 +187,4 @@ When reviewing PRs (`/review` reads this section as part of its checklist):
 - **Simplification**: actively look for non-trivial simplifications and refactoring opportunities, not just style nitpicks.
 - **Correctness**: edge cases, off-by-ones, error handling, race conditions. Read the code; don't trust comments.
 - **Test coverage**: new code paths should have tests; modified behavior should have updated tests. Untested control flow is a flag.
+- **Diff discipline**: don't substitute commit messages or `git --stat` for reading the code. On a follow-up review after fixes, read `git diff <last-reviewed-sha>..HEAD` in full before claiming an item is "verified" or "fixed". Never put ✅ on items whose diff you haven't read.
