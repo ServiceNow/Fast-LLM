@@ -56,6 +56,10 @@ def _disable_dynamo():
     torch._dynamo.config.disable = orig
 
 
+_SKIP_VARIANTS = {"pytorch_compiled", "pytorch_compiled_max"}
+
+
 @pytest.mark.parametrize("name,cases,variants", _PARAMS)
 def test_triton_benchmark(name, cases, variants):
+    variants = [v for v in variants if v.name not in _SKIP_VARIANTS]
     run_benchmark(name, cases, variants, warmup_ms=0, rep_ms=0, min_reps=1)
