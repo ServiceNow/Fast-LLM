@@ -12,9 +12,9 @@ from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
 
-_NUM_TOKENS = 16
-_HIDDEN_SIZE = 64
-_INTERMEDIATE_SIZE = 32
+_NUM_TOKENS = 128
+_HIDDEN_SIZE = 128
+_INTERMEDIATE_SIZE = 128
 _EXPERTS = 4
 
 _NORM = {"type": "rms_norm"}
