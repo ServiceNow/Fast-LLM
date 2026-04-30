@@ -39,6 +39,38 @@ _SLIDING_ATTENTION = "sliding_attention"
 _FULL_ATTENTION = "full_attention"
 
 
+class Gemma4MoELayer1Converter(WeightConverter):
+    """Converts batched gate_up_proj [experts, 2*intermediate, hidden] ↔ Fast-LLM layer_1 [experts*2*intermediate, hidden]."""
+
+    _config: MoEMLPConfig
+
+    def export_weight(self, weight):
+        (layer_1,) = weight
+        w = layer_1[:]
+        return (w.reshape(self._config.experts, -1, w.shape[-1]),)
+
+    def import_weight(self, weight):
+        (gate_up_proj,) = weight
+        w = gate_up_proj[:]
+        return (w.reshape(-1, w.shape[-1]),)
+
+
+class Gemma4MoELayer2Converter(WeightConverter):
+    """Converts batched down_proj [experts, hidden, intermediate] ↔ Fast-LLM layer_2 [experts*intermediate, hidden]."""
+
+    _config: MoEMLPConfig
+
+    def export_weight(self, weight):
+        (layer_2,) = weight
+        w = layer_2[:]
+        return (w.reshape(self._config.experts, -1, w.shape[-1]).permute(0, 2, 1).contiguous(),)
+
+    def import_weight(self, weight):
+        (down_proj,) = weight
+        w = down_proj[:]
+        return (w.permute(0, 2, 1).reshape(-1, w.shape[1]).contiguous(),)
+
+
 class Gemma4AttentionConverter:
     @classmethod
     def import_config(cls, config: dict, is_sliding: bool) -> dict:
@@ -72,6 +104,8 @@ class Gemma4AttentionConverter:
             "key_norm": {"type": "rms_norm", "epsilon": eps},
             "value_norm": {"type": "fixed_rms_norm", "epsilon": eps},
         }
+        if not is_sliding and config.get("attention_k_eq_v", False):
+            out["shared_key_value"] = True
         if window_size is not None:
             out["window_size"] = window_size
         return out
@@ -100,6 +134,7 @@ class Gemma4AttentionConverter:
             "attention_dropout": sliding_config.dropout,
             "sliding_window": sliding_config.window_size,
             "rms_norm_eps": eps,
+            "attention_k_eq_v": full_config.shared_key_value,
             "rope_parameters": {
                 _SLIDING_ATTENTION: {
                     "rope_type": "default",
@@ -121,6 +156,23 @@ class Gemma4AttentionConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
+        if config.shared_key_value:
+            # K=V: single k_proj reused as value; no v_proj in HF
+            kv_converters = get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.key_value",
+                f"{hf_prefix}.k_proj",
+                False,
+                drop_on_export=drop_on_export,
+            )
+        else:
+            kv_converters = get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.key_value",
+                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
+                False,
+                KeyValueWeightConverter,
+                config,
+                drop_on_export=drop_on_export,
+            )
         converters = [
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.query",
@@ -130,14 +182,7 @@ class Gemma4AttentionConverter:
                 config,
                 drop_on_export=drop_on_export,
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.key_value",
-                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                False,
-                KeyValueWeightConverter,
-                config,
-                drop_on_export=drop_on_export,
-            ),
+            *kv_converters,
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.dense",
                 f"{hf_prefix}.o_proj",
@@ -248,16 +293,18 @@ class Gemma4MoEMLPConverter:
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # gate_up_proj shape [experts, 2*intermediate, hidden] matches Fast-LLM layer_1
             get_parameter_converter(
                 f"{fast_llm_prefix}.layer_1.weight",
                 f"{hf_prefix}.experts.gate_up_proj",
+                Gemma4MoELayer1Converter,
+                config,
                 drop_on_export=drop_on_export,
             ),
-            # down_proj shape [experts, hidden, intermediate] matches Fast-LLM layer_2
             get_parameter_converter(
                 f"{fast_llm_prefix}.layer_2.weight",
                 f"{hf_prefix}.experts.down_proj",
+                Gemma4MoELayer2Converter,
+                config,
                 drop_on_export=drop_on_export,
             ),
         ]
@@ -578,6 +625,9 @@ class Gemma4BaseModelConverter:
                 # explicitly zero to disable the feature in the exported model until Fast-LLM
                 # supports it natively.
                 "hidden_size_per_layer_input": 0,
+                # Fast-LLM is text-only; bidirectional attention (used for vision tokens in the
+                # multimodal model) is not implemented.
+                "use_bidirectional_attention": None,
             },
         )
 

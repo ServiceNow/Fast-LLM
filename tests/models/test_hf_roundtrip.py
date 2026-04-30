@@ -15,6 +15,8 @@ import pytest
 import torch
 from transformers import (
     AutoConfig,
+    Gemma4ForCausalLM,
+    Gemma4TextConfig,
     LlamaConfig,
     LlamaForCausalLM,
     MistralConfig,
@@ -37,6 +39,7 @@ from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import (
     Apriel2TextCheckpointFormat,
+    Gemma4CheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -99,6 +102,25 @@ class AprielRoundtripCase(HFRoundtripCase):
         if self.surgery_spec is not None:
             converted_config = compose_configs(converted_config, self.surgery_spec)
         return self.model_class(self.config_class(**converted_config))
+
+
+@dataclasses.dataclass(frozen=True)
+class Gemma4RoundtripCase(HFRoundtripCase):
+    """Gemma4: apply dim overrides directly without deriving head_dim from hidden_size."""
+
+    def make_model(self) -> PreTrainedModel:
+        config = self.config_class.from_pretrained(self.hf_model_name)
+        for key, value in self.dim_overrides.items():
+            setattr(config, key, value)
+        config.max_position_embeddings = self.max_position_embeddings
+        if getattr(config, "layer_types", None) is not None:
+            n = config.num_hidden_layers
+            lt = config.layer_types
+            config.layer_types = (lt * ((n // len(lt)) + 1))[:n]
+        for key in self.delete_config_keys:
+            if hasattr(config, key):
+                delattr(config, key)
+        return self.model_class(config)
 
 
 _TINY_DIMS = {
@@ -211,6 +233,33 @@ _HF_ROUNDTRIP_CASES = [
                 },
             },
         },
+    ),
+    Gemma4RoundtripCase(
+        name="gemma4",
+        hf_model_name="google/gemma-4-26B-A4B",
+        checkpoint_format=Gemma4CheckpointFormat,
+        model_class=Gemma4ForCausalLM,
+        config_class=Gemma4TextConfig,
+        dim_overrides={
+            "hidden_size": 256,
+            "num_hidden_layers": 6,  # 5 sliding + 1 full from real layer_types pattern
+            "num_attention_heads": 8,
+            "num_key_value_heads": 4,
+            "num_global_key_value_heads": 2,
+            "head_dim": 32,
+            "global_head_dim": 64,  # real model has 2:1 ratio (256:512)
+            "intermediate_size": 256,
+            "moe_intermediate_size": 128,
+            "num_experts": 4,
+            "top_k_experts": 2,
+            "vocab_size": 384,
+            "hidden_size_per_layer_input": 0,
+            # use_bidirectional_attention="vision" in the real model is for multimodal vision tokens;
+            # Fast-LLM is text-only so the converter exports None — reset source to match.
+            "use_bidirectional_attention": None,
+        },
+        max_position_embeddings=131072,  # Gemma4TextConfig default; converter does not export this
+        delete_config_keys=("dtype",),  # "bfloat16" in real config; metadata not preserved by converter
     ),
 ]
 
