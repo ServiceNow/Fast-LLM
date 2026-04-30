@@ -15,6 +15,8 @@ Comparisons:
 Shapes fix tokens=8192 and sweep ffn_dim across typical MLP widths.
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.config import ActivationType, TritonConfig
@@ -60,39 +62,39 @@ _pytorch_compiled_default = torch.compile(_pytorch_fwd, mode="default", dynamic=
 _pytorch_compiled_max = torch.compile(_pytorch_fwd, mode="max-autotune-no-cudagraphs", dynamic=False)
 
 
-def _run_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["input_"], inp["gated"], inp["activation_type"])}
+def _run_fwd(inputs: dict, fn) -> dict:
+    return {"output": fn(inputs["input_"], inputs["gated"], inputs["activation_type"])}
 
 
-def _run_fwd_fp32(inp: dict) -> dict:
-    return {"output": _pytorch_fwd(inp["input_"].float(), inp["gated"], inp["activation_type"])}
+def _run_fwd_fp32(inputs: dict) -> dict:
+    return {"output": _pytorch_fwd(inputs["input_"].float(), inputs["gated"], inputs["activation_type"])}
 
 
-def _run_fwd_triton(inp: dict) -> dict:
-    output, _ = triton_mlp_activation_forward(inp["input_"], inp["gated"], inp["activation_type"])
+def _run_fwd_triton(inputs: dict) -> dict:
+    output, _ = triton_mlp_activation_forward(inputs["input_"], inputs["gated"], inputs["activation_type"])
     return {"output": output}
 
 
 # --------------------------------------------------------------------------- fwd+bwd wrappers
 
 
-def _run_fwd_bwd(inp: dict, fn) -> dict:
-    output = fn(inp["input_"], inp["gated"], inp["activation_type"])
-    output.backward(inp["grad_output"])
-    return {"output": output.detach(), "grad_input": inp["input_"].grad}
+def _run_fwd_bwd(inputs: dict, fn) -> dict:
+    output = fn(inputs["input_"], inputs["gated"], inputs["activation_type"])
+    output.backward(inputs["grad_output"])
+    return {"output": output.detach(), "grad_input": inputs["input_"].grad}
 
 
-def _run_fwd_bwd_fp32(inp: dict) -> dict:
-    input_fp32 = inp["input_"].float().detach().requires_grad_(True)
-    output = _pytorch_fwd(input_fp32, inp["gated"], inp["activation_type"])
-    output.backward(inp["grad_output"].float())
+def _run_fwd_bwd_fp32(inputs: dict) -> dict:
+    input_fp32 = inputs["input_"].float().detach().requires_grad_(True)
+    output = _pytorch_fwd(input_fp32, inputs["gated"], inputs["activation_type"])
+    output.backward(inputs["grad_output"].float())
     return {"output": output.detach(), "grad_input": input_fp32.grad}
 
 
-def _run_fwd_bwd_triton(inp: dict) -> dict:
-    output = triton_mlp_activation_autograd(inp["input_"], inp["gated"], inp["activation_type"])
-    output.backward(inp["grad_output"])
-    return {"output": output.detach(), "grad_input": inp["input_"].grad}
+def _run_fwd_bwd_triton(inputs: dict) -> dict:
+    output = triton_mlp_activation_autograd(inputs["input_"], inputs["gated"], inputs["activation_type"])
+    output.backward(inputs["grad_output"])
+    return {"output": output.detach(), "grad_input": inputs["input_"].grad}
 
 
 # --------------------------------------------------------------------------- variants
@@ -108,18 +110,18 @@ def _mlp_activation_variants() -> list[Variant]:
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_fwd(inp, _pytorch_fwd),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _pytorch_fwd),
+            fwd=lambda inputs: _run_fwd(inputs, _pytorch_fwd),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _pytorch_fwd),
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_fwd(inp, _pytorch_compiled_default),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _pytorch_compiled_default),
+            fwd=lambda inputs: _run_fwd(inputs, _pytorch_compiled_default),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _pytorch_compiled_default),
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_fwd(inp, _pytorch_compiled_max),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _pytorch_compiled_max),
+            fwd=lambda inputs: _run_fwd(inputs, _pytorch_compiled_max),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _pytorch_compiled_max),
         ),
     ]
     if TritonConfig.enabled():
@@ -136,7 +138,7 @@ def _mlp_activation_variants() -> list[Variant]:
 # --------------------------------------------------------------------------- cases
 
 
-def _bytes_per_elem(dtype: torch.dtype) -> int:
+def _bytes_per_element(dtype: torch.dtype) -> int:
     return torch.tensor([], dtype=dtype).element_size()
 
 
@@ -144,11 +146,11 @@ def _mlp_activation_bytes(tokens: int, ffn_dim: int, dtype: torch.dtype) -> int:
     """fwd: read input (2*ffn_dim) + write output (ffn_dim).
     bwd: read grad_output (ffn_dim) + read input (2*ffn_dim) + write grad_input (2*ffn_dim).
     Total: 8 × tokens × ffn_dim × elem_size."""
-    return 8 * tokens * ffn_dim * _bytes_per_elem(dtype)
+    return 8 * tokens * ffn_dim * _bytes_per_element(dtype)
 
 
 def _mlp_activation_flops(tokens: int, ffn_dim: int) -> int:
-    # gated silu: fwd ≈ 6 FLOPs/elem, bwd ≈ 8 FLOPs/elem, total ≈ 14 per output element.
+    # gated silu: fwd ≈ 6 FLOPs/element_size, bwd ≈ 8 FLOPs/element_size, total ≈ 14 per output element.
     return 14 * tokens * ffn_dim
 
 
@@ -156,7 +158,7 @@ def _mlp_activation_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("mlp_activation", (tokens, ffn_dim), dtype),
-            make_inputs=(lambda t=tokens, f=ffn_dim, d=dtype: _make_mlp_inputs(t, f, d)),
+            make_inputs=partial(_make_mlp_inputs, tokens, ffn_dim, dtype),
             expected_bytes=_mlp_activation_bytes(tokens, ffn_dim, dtype),
             expected_flops=_mlp_activation_flops(tokens, ffn_dim),
             compute_dtype=dtype,

@@ -12,6 +12,8 @@ Shapes sweep (tokens, num_heads, head_size) across typical attention configs:
 - 8 heads × 128 → GQA key-value heads (Llama 3)
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
@@ -55,9 +57,9 @@ _rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagr
 
 
 def _rotary_bytes(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> int:
-    elem = torch.tensor([], dtype=dtype).element_size()
+    element_size = torch.tensor([], dtype=dtype).element_size()
     # Read + write input tensor; frequencies are float32.
-    return 2 * tokens * num_heads * head_size * elem + tokens * head_size * 4
+    return 2 * tokens * num_heads * head_size * element_size + tokens * head_size * 4
 
 
 def _rotary_flops(tokens: int, num_heads: int, head_size: int) -> int:
@@ -69,28 +71,28 @@ def _rotary_variants() -> list[Variant]:
     variants = [
         Variant(
             name="fp32_reference",
-            fwd=lambda inp: {"output": _rotary_eager(inp["input_"].float(), inp["frequencies"])},
+            fwd=lambda inputs: {"output": _rotary_eager(inputs["input_"].float(), inputs["frequencies"])},
             is_reference=True,
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: {"output": _rotary_eager(inp["input_"], inp["frequencies"])},
+            fwd=lambda inputs: {"output": _rotary_eager(inputs["input_"], inputs["frequencies"])},
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: {"output": _rotary_compiled_default(inp["input_"], inp["frequencies"])},
+            fwd=lambda inputs: {"output": _rotary_compiled_default(inputs["input_"], inputs["frequencies"])},
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: {"output": _rotary_compiled_max(inp["input_"], inp["frequencies"])},
+            fwd=lambda inputs: {"output": _rotary_compiled_max(inputs["input_"], inputs["frequencies"])},
         ),
     ]
     if TritonConfig.enabled():
         variants.append(
             Variant(
                 name="fast_llm_triton",
-                fwd=lambda inp: {"output": triton_rotary_(inp["work"], inp["frequencies"])},
-                reset_inputs=lambda inp: inp["work"].copy_(inp["input_"]),
+                fwd=lambda inputs: {"output": triton_rotary_(inputs["work"], inputs["frequencies"])},
+                reset_inputs=lambda inputs: inputs["work"].copy_(inputs["input_"]),
             )
         )
     return variants
@@ -100,7 +102,7 @@ def _rotary_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("rotary", (tokens, num_heads, head_size), dtype),
-            make_inputs=(lambda t=tokens, h=num_heads, s=head_size, d=dtype: _make_rotary_inputs(t, h, s, d)),
+            make_inputs=partial(_make_rotary_inputs, tokens, num_heads, head_size, dtype),
             expected_bytes=_rotary_bytes(tokens, num_heads, head_size, dtype),
             expected_flops=_rotary_flops(tokens, num_heads, head_size),
             compute_dtype=dtype,

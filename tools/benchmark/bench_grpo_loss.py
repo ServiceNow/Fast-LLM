@@ -18,6 +18,8 @@ Comparisons:
 Shapes match bench_entropy_loss: tokens=4096, vocab swept over 32K/64K/128K.
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
@@ -64,44 +66,44 @@ _grpo_compiled_default = torch.compile(_grpo_eager, mode="default", dynamic=Fals
 _grpo_compiled_max = torch.compile(_grpo_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
 
 
-def _run_fwd(inp: dict, fn) -> dict:
-    return {"loss": fn(inp["logits"], inp["labels"], inp["advantages"], inp["old_log_probs"])}
+def _run_fwd(inputs: dict, fn) -> dict:
+    return {"loss": fn(inputs["logits"], inputs["labels"], inputs["advantages"], inputs["old_log_probs"])}
 
 
-def _run_fwd_fp32(inp: dict) -> dict:
+def _run_fwd_fp32(inputs: dict) -> dict:
     return {
         "loss": _grpo_eager(
-            inp["logits"].float().detach().requires_grad_(),
-            inp["labels"],
-            inp["advantages"],
-            inp["old_log_probs"],
+            inputs["logits"].float().detach().requires_grad_(),
+            inputs["labels"],
+            inputs["advantages"],
+            inputs["old_log_probs"],
         )
     }
 
 
-def _reset_logits_grad(inp: dict) -> None:
-    inp["logits"].grad = None
+def _reset_logits_grad(inputs: dict) -> None:
+    inputs["logits"].grad = None
 
 
-def _run_fwd_bwd(inp: dict, fn) -> dict:
-    loss = fn(inp["logits"], inp["labels"], inp["advantages"], inp["old_log_probs"])
+def _run_fwd_bwd(inputs: dict, fn) -> dict:
+    loss = fn(inputs["logits"], inputs["labels"], inputs["advantages"], inputs["old_log_probs"])
     loss.backward()
-    return {"loss": loss.detach(), "grad_logits": inp["logits"].grad}
+    return {"loss": loss.detach(), "grad_logits": inputs["logits"].grad}
 
 
-def _run_fwd_bwd_fp32(inp: dict) -> dict:
-    logits_fp32 = inp["logits"].float().detach().requires_grad_()
-    loss = _grpo_eager(logits_fp32, inp["labels"], inp["advantages"], inp["old_log_probs"])
+def _run_fwd_bwd_fp32(inputs: dict) -> dict:
+    logits_fp32 = inputs["logits"].float().detach().requires_grad_()
+    loss = _grpo_eager(logits_fp32, inputs["labels"], inputs["advantages"], inputs["old_log_probs"])
     loss.backward()
     return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
 
 
-def _run_fwd_triton(inp: dict) -> dict:
+def _run_fwd_triton(inputs: dict) -> dict:
     loss, _, _ = triton_grpo_loss_forward_backward(
-        inp["logits"],
-        inp["labels"],
-        inp["advantages"],
-        inp["old_log_probs"],
+        inputs["logits"],
+        inputs["labels"],
+        inputs["advantages"],
+        inputs["old_log_probs"],
         grad_output=None,
         epsilon_low=_EPSILON_LOW,
         epsilon_high=_EPSILON_HIGH,
@@ -109,12 +111,12 @@ def _run_fwd_triton(inp: dict) -> dict:
     return {"loss": loss}
 
 
-def _run_fwd_bwd_triton(inp: dict) -> dict:
+def _run_fwd_bwd_triton(inputs: dict) -> dict:
     loss, grad_logits, _ = triton_grpo_loss_forward_backward(
-        inp["logits"],
-        inp["labels"],
-        inp["advantages"],
-        inp["old_log_probs"],
+        inputs["logits"],
+        inputs["labels"],
+        inputs["advantages"],
+        inputs["old_log_probs"],
         grad_output=1.0,
         epsilon_low=_EPSILON_LOW,
         epsilon_high=_EPSILON_HIGH,
@@ -132,20 +134,20 @@ def _grpo_variants() -> list[Variant]:
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_fwd(inp, _grpo_eager),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_eager),
+            fwd=lambda inputs: _run_fwd(inputs, _grpo_eager),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_eager),
             reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_fwd(inp, _grpo_compiled_default),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_compiled_default),
+            fwd=lambda inputs: _run_fwd(inputs, _grpo_compiled_default),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_compiled_default),
             reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_fwd(inp, _grpo_compiled_max),
-            fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_compiled_max),
+            fwd=lambda inputs: _run_fwd(inputs, _grpo_compiled_max),
+            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_compiled_max),
             reset_inputs=_reset_logits_grad,
         ),
     ]
@@ -160,14 +162,14 @@ def _grpo_variants() -> list[Variant]:
     return variants
 
 
-def _bytes_per_elem(dtype: torch.dtype) -> int:
+def _bytes_per_element(dtype: torch.dtype) -> int:
     return torch.tensor([], dtype=dtype).element_size()
 
 
 def _grpo_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
-    elem = _bytes_per_elem(dtype)
+    element_size = _bytes_per_element(dtype)
     # fwd: read logits + bwd: read logits + write grad_logits
-    logit_traffic = 3 * tokens * vocab * elem
+    logit_traffic = 3 * tokens * vocab * element_size
     # labels (int64), advantages (fp32), old_log_probs (fp32)
     scalar_traffic = tokens * (8 + 4 + 4)
     return logit_traffic + scalar_traffic
@@ -182,7 +184,7 @@ def _grpo_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("grpo_loss", (tokens, vocab), dtype),
-            make_inputs=lambda t=tokens, v=vocab, d=dtype: _make_grpo_inputs(t, v, d),
+            make_inputs=partial(_make_grpo_inputs, tokens, vocab, dtype),
             expected_bytes=_grpo_bytes(tokens, vocab, dtype),
             expected_flops=_grpo_flops(tokens, vocab),
             compute_dtype=dtype,

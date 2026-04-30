@@ -104,7 +104,7 @@ class TimingStats:
     min_ms: float
     max_ms: float
     std_ms: float
-    n_reps: int
+    num_reps: int
 
 
 @dataclasses.dataclass
@@ -175,8 +175,8 @@ def bench_fn(
     one_rep_ms = warmup_start.elapsed_time(warmup_end)
 
     # Additional warmup to stabilize (covers autotune misses on first call)
-    n_warmup = max(1, int(warmup_ms / max(one_rep_ms, 0.01)))
-    for _ in range(n_warmup):
+    num_warmup = max(1, int(warmup_ms / max(one_rep_ms, 0.01)))
+    for _ in range(num_warmup):
         fn()
     torch.cuda.synchronize()
 
@@ -189,11 +189,11 @@ def bench_fn(
     torch.cuda.synchronize()
     one_rep_ms = max(post_start.elapsed_time(post_end), 0.001)
 
-    n_reps = max(min_reps, min(max_reps, int(rep_ms / one_rep_ms)))
+    num_reps = max(min_reps, min(max_reps, int(rep_ms / one_rep_ms)))
 
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_reps)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_reps)]
-    for i in range(n_reps):
+    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
+    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
+    for i in range(num_reps):
         if reset is not None:
             reset()
         flush()
@@ -202,14 +202,14 @@ def bench_fn(
         end_events[i].record()
     torch.cuda.synchronize()
 
-    times = [start_events[i].elapsed_time(end_events[i]) for i in range(n_reps)]
+    times = [start_events[i].elapsed_time(end_events[i]) for i in range(num_reps)]
     return TimingStats(
         median_ms=statistics.median(times),
         mean_ms=statistics.fmean(times),
         min_ms=min(times),
         max_ms=max(times),
         std_ms=statistics.pstdev(times) if len(times) > 1 else 0.0,
-        n_reps=n_reps,
+        num_reps=num_reps,
     )
 
 
@@ -590,19 +590,19 @@ def _render_table(
         columns.pop()
 
     widths = [max(len(header), *(len(v) for v in values)) for header, values in columns]
-    sep = "  "
+    separator = "  "
 
     # First column (case name + variant names) is text — left-justify. All other
     # columns are numeric — right-justify so decimal points line up across rows.
     def _justify(text: str, width: int, column_index: int) -> str:
         return text.ljust(width) if column_index == 0 else text.rjust(width)
 
-    header_line = sep.join(_justify(h, w, i) for i, ((h, _), w) in enumerate(zip(columns, widths)))
-    divider = sep.join("-" * w for w in widths)
+    header_line = separator.join(_justify(h, w, i) for i, ((h, _), w) in enumerate(zip(columns, widths)))
+    divider = separator.join("-" * w for w in widths)
     body_lines = []
     for row in range(len(results)):
         body_lines.append(
-            sep.join(_justify(values[row], w, i) for i, ((_, values), w) in enumerate(zip(columns, widths)))
+            separator.join(_justify(values[row], w, i) for i, ((_, values), w) in enumerate(zip(columns, widths)))
         )
     return "\n".join([header_line, divider, *body_lines])
 

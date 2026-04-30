@@ -7,6 +7,8 @@ Triton kernels live in `fast_llm/functional/triton/pointwise.py` and are
 documented as being ~2x faster than the PyTorch equivalent on A100.
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
@@ -42,7 +44,7 @@ def _copy_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("copy", (numel,), dtype),
-            make_inputs=(lambda n=numel, d=dtype: _make_copy_inputs(n, d)),
+            make_inputs=partial(_make_copy_inputs, numel, dtype),
             # Read input + write output.
             expected_bytes=2 * numel * torch.tensor([], dtype=dtype).element_size(),
         )
@@ -54,7 +56,7 @@ def _copy_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
 _COPY_VARIANTS = standard_fwd_variants(
     eager_fn=_copy_eager,
     triton_fn=triton_copy,
-    unpack=lambda inp: (inp["input_"], inp["out"]),
+    unpack=lambda inputs: (inputs["input_"], inputs["out"]),
 )
 
 
@@ -73,7 +75,7 @@ def _fill_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("fill", (numel,), dtype),
-            make_inputs=(lambda n=numel, d=dtype: _make_fill_inputs(n, d)),
+            make_inputs=partial(_make_fill_inputs, numel, dtype),
             # Write only.
             expected_bytes=numel * torch.tensor([], dtype=dtype).element_size(),
         )
@@ -85,7 +87,7 @@ def _fill_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
 _FILL_VARIANTS = standard_fwd_variants(
     eager_fn=_fill_eager,
     triton_fn=triton_fill,
-    unpack=lambda inp: (inp["input_"], inp["value"]),
+    unpack=lambda inputs: (inputs["input_"], inputs["value"]),
 )
 
 
@@ -108,7 +110,7 @@ def _add_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("add", (numel,), dtype),
-            make_inputs=(lambda n=numel, d=dtype: _make_add_inputs(n, d)),
+            make_inputs=partial(_make_add_inputs, numel, dtype),
             # Read 2 inputs + write 1 output.
             expected_bytes=3 * numel * torch.tensor([], dtype=dtype).element_size(),
             # One fp add per element.
@@ -123,7 +125,7 @@ def _add_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
 _ADD_VARIANTS = standard_fwd_variants(
     eager_fn=_add_eager,
     triton_fn=triton_add,
-    unpack=lambda inp: (inp["input_"], inp["other"], inp["out"]),
+    unpack=lambda inputs: (inputs["input_"], inputs["other"], inputs["out"]),
 )
 
 

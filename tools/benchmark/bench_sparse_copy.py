@@ -20,6 +20,8 @@ Shapes: (tokens, top_k, num_experts, hidden_size) matching Mixtral-8x7B and fine
 The SparseMap is pre-computed once per case (routing structure, not data).
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
@@ -98,40 +100,40 @@ _dispatch_compiled_default = torch.compile(_dispatch_pytorch, mode="default", dy
 _dispatch_compiled_max = torch.compile(_dispatch_pytorch, mode="max-autotune-no-cudagraphs", dynamic=False)
 
 
-def _run_dispatch_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["dense_input"], inp["sparse_map"])}
+def _run_dispatch_fwd(inputs: dict, fn) -> dict:
+    return {"output": fn(inputs["dense_input"], inputs["sparse_map"])}
 
 
-def _run_dispatch_fwd_bwd(inp: dict, fn) -> dict:
-    output = fn(inp["dense_input"], inp["sparse_map"])
-    output.backward(inp["backward_grad"])
-    return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
+def _run_dispatch_fwd_bwd(inputs: dict, fn) -> dict:
+    output = fn(inputs["dense_input"], inputs["sparse_map"])
+    output.backward(inputs["backward_grad"])
+    return {"output": output.detach(), "grad_dense": inputs["dense_input"].grad}
 
 
-def _run_dispatch_fwd_fp32(inp: dict) -> dict:
-    dense_fp32 = inp["dense_input"].float().detach().requires_grad_(True)
-    return {"output": _dispatch_pytorch(dense_fp32, inp["sparse_map"])}
+def _run_dispatch_fwd_fp32(inputs: dict) -> dict:
+    dense_fp32 = inputs["dense_input"].float().detach().requires_grad_(True)
+    return {"output": _dispatch_pytorch(dense_fp32, inputs["sparse_map"])}
 
 
-def _run_dispatch_fwd_bwd_fp32(inp: dict) -> dict:
-    dense_fp32 = inp["dense_input"].float().detach().requires_grad_(True)
-    output = _dispatch_pytorch(dense_fp32, inp["sparse_map"])
-    output.backward(inp["backward_grad"].float())
+def _run_dispatch_fwd_bwd_fp32(inputs: dict) -> dict:
+    dense_fp32 = inputs["dense_input"].float().detach().requires_grad_(True)
+    output = _dispatch_pytorch(dense_fp32, inputs["sparse_map"])
+    output.backward(inputs["backward_grad"].float())
     return {"output": output.detach(), "grad_dense": dense_fp32.grad}
 
 
-def _run_dispatch_fwd_triton(inp: dict) -> dict:
-    return {"output": copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])}
+def _run_dispatch_fwd_triton(inputs: dict) -> dict:
+    return {"output": copy_dense_to_sparse_autograd(inputs["dense_input"], inputs["sparse_map"])}
 
 
-def _run_dispatch_fwd_bwd_triton(inp: dict) -> dict:
-    output = copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])
-    output.backward(inp["backward_grad"])
-    return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
+def _run_dispatch_fwd_bwd_triton(inputs: dict) -> dict:
+    output = copy_dense_to_sparse_autograd(inputs["dense_input"], inputs["sparse_map"])
+    output.backward(inputs["backward_grad"])
+    return {"output": output.detach(), "grad_dense": inputs["dense_input"].grad}
 
 
-def _dispatch_postprocess(out: dict[str, torch.Tensor], inp: dict) -> dict[str, torch.Tensor]:
-    out["output"].masked_fill_(inp["phantom_mask"], 0)
+def _dispatch_postprocess(out: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
+    out["output"].masked_fill_(inputs["phantom_mask"], 0)
     return out
 
 
@@ -145,18 +147,18 @@ def _dispatch_variants() -> list[Variant]:
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_dispatch_fwd(inp, _dispatch_pytorch),
-            fwd_bwd=lambda inp: _run_dispatch_fwd_bwd(inp, _dispatch_pytorch),
+            fwd=lambda inputs: _run_dispatch_fwd(inputs, _dispatch_pytorch),
+            fwd_bwd=lambda inputs: _run_dispatch_fwd_bwd(inputs, _dispatch_pytorch),
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_dispatch_fwd(inp, _dispatch_compiled_default),
-            fwd_bwd=lambda inp: _run_dispatch_fwd_bwd(inp, _dispatch_compiled_default),
+            fwd=lambda inputs: _run_dispatch_fwd(inputs, _dispatch_compiled_default),
+            fwd_bwd=lambda inputs: _run_dispatch_fwd_bwd(inputs, _dispatch_compiled_default),
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_dispatch_fwd(inp, _dispatch_compiled_max),
-            fwd_bwd=lambda inp: _run_dispatch_fwd_bwd(inp, _dispatch_compiled_max),
+            fwd=lambda inputs: _run_dispatch_fwd(inputs, _dispatch_compiled_max),
+            fwd_bwd=lambda inputs: _run_dispatch_fwd_bwd(inputs, _dispatch_compiled_max),
         ),
     ]
     if TritonConfig.enabled():
@@ -186,31 +188,31 @@ _combine_compiled_default = torch.compile(_combine_pytorch, mode="default", dyna
 _combine_compiled_max = torch.compile(_combine_pytorch, mode="max-autotune-no-cudagraphs", dynamic=False)
 
 
-def _run_combine_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["sparse_input"], inp["scores"], inp["sparse_map"])}
+def _run_combine_fwd(inputs: dict, fn) -> dict:
+    return {"output": fn(inputs["sparse_input"], inputs["scores"], inputs["sparse_map"])}
 
 
-def _run_combine_fwd_bwd(inp: dict, fn) -> dict:
-    output = fn(inp["sparse_input"], inp["scores"], inp["sparse_map"])
-    output.backward(inp["backward_grad"])
+def _run_combine_fwd_bwd(inputs: dict, fn) -> dict:
+    output = fn(inputs["sparse_input"], inputs["scores"], inputs["sparse_map"])
+    output.backward(inputs["backward_grad"])
     return {
         "output": output.detach(),
-        "grad_sparse": inp["sparse_input"].grad,
-        "grad_scores": inp["scores"].grad,
+        "grad_sparse": inputs["sparse_input"].grad,
+        "grad_scores": inputs["scores"].grad,
     }
 
 
-def _run_combine_fwd_fp32(inp: dict) -> dict:
-    sparse_fp32 = inp["sparse_input"].float().detach().requires_grad_(True)
-    scores_fp32 = inp["scores"].float().detach().requires_grad_(True)
-    return {"output": _combine_pytorch(sparse_fp32, scores_fp32, inp["sparse_map"])}
+def _run_combine_fwd_fp32(inputs: dict) -> dict:
+    sparse_fp32 = inputs["sparse_input"].float().detach().requires_grad_(True)
+    scores_fp32 = inputs["scores"].float().detach().requires_grad_(True)
+    return {"output": _combine_pytorch(sparse_fp32, scores_fp32, inputs["sparse_map"])}
 
 
-def _run_combine_fwd_bwd_fp32(inp: dict) -> dict:
-    sparse_fp32 = inp["sparse_input"].float().detach().requires_grad_(True)
-    scores_fp32 = inp["scores"].float().detach().requires_grad_(True)
-    output = _combine_pytorch(sparse_fp32, scores_fp32, inp["sparse_map"])
-    output.backward(inp["backward_grad"].float())
+def _run_combine_fwd_bwd_fp32(inputs: dict) -> dict:
+    sparse_fp32 = inputs["sparse_input"].float().detach().requires_grad_(True)
+    scores_fp32 = inputs["scores"].float().detach().requires_grad_(True)
+    output = _combine_pytorch(sparse_fp32, scores_fp32, inputs["sparse_map"])
+    output.backward(inputs["backward_grad"].float())
     return {
         "output": output.detach(),
         "grad_sparse": sparse_fp32.grad,
@@ -218,23 +220,23 @@ def _run_combine_fwd_bwd_fp32(inp: dict) -> dict:
     }
 
 
-def _run_combine_fwd_triton(inp: dict) -> dict:
-    return {"output": copy_sparse_to_dense_autograd(inp["sparse_input"], inp["scores"], inp["sparse_map"])}
+def _run_combine_fwd_triton(inputs: dict) -> dict:
+    return {"output": copy_sparse_to_dense_autograd(inputs["sparse_input"], inputs["scores"], inputs["sparse_map"])}
 
 
-def _run_combine_fwd_bwd_triton(inp: dict) -> dict:
-    output = copy_sparse_to_dense_autograd(inp["sparse_input"], inp["scores"], inp["sparse_map"])
-    output.backward(inp["backward_grad"])
+def _run_combine_fwd_bwd_triton(inputs: dict) -> dict:
+    output = copy_sparse_to_dense_autograd(inputs["sparse_input"], inputs["scores"], inputs["sparse_map"])
+    output.backward(inputs["backward_grad"])
     return {
         "output": output.detach(),
-        "grad_sparse": inp["sparse_input"].grad,
-        "grad_scores": inp["scores"].grad,
+        "grad_sparse": inputs["sparse_input"].grad,
+        "grad_scores": inputs["scores"].grad,
     }
 
 
-def _combine_postprocess(out: dict[str, torch.Tensor], inp: dict) -> dict[str, torch.Tensor]:
+def _combine_postprocess(out: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
     if "grad_sparse" in out:
-        out["grad_sparse"].masked_fill_(inp["phantom_mask"], 0)
+        out["grad_sparse"].masked_fill_(inputs["phantom_mask"], 0)
     return out
 
 
@@ -248,18 +250,18 @@ def _combine_variants() -> list[Variant]:
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_combine_fwd(inp, _combine_pytorch),
-            fwd_bwd=lambda inp: _run_combine_fwd_bwd(inp, _combine_pytorch),
+            fwd=lambda inputs: _run_combine_fwd(inputs, _combine_pytorch),
+            fwd_bwd=lambda inputs: _run_combine_fwd_bwd(inputs, _combine_pytorch),
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_combine_fwd(inp, _combine_compiled_default),
-            fwd_bwd=lambda inp: _run_combine_fwd_bwd(inp, _combine_compiled_default),
+            fwd=lambda inputs: _run_combine_fwd(inputs, _combine_compiled_default),
+            fwd_bwd=lambda inputs: _run_combine_fwd_bwd(inputs, _combine_compiled_default),
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_combine_fwd(inp, _combine_compiled_max),
-            fwd_bwd=lambda inp: _run_combine_fwd_bwd(inp, _combine_compiled_max),
+            fwd=lambda inputs: _run_combine_fwd(inputs, _combine_compiled_max),
+            fwd_bwd=lambda inputs: _run_combine_fwd_bwd(inputs, _combine_compiled_max),
         ),
     ]
     if TritonConfig.enabled():
@@ -277,32 +279,30 @@ def _combine_variants() -> list[Variant]:
 # --------------------------------------------------------------------------- cases / bytes
 
 
-def _bytes_per_elem(dtype: torch.dtype) -> int:
+def _bytes_per_element(dtype: torch.dtype) -> int:
     return torch.tensor([], dtype=dtype).element_size()
 
 
 def _dispatch_bytes(tokens: int, top_k: int, hidden: int, dtype: torch.dtype) -> int:
-    elem = _bytes_per_elem(dtype)
+    element_size = _bytes_per_element(dtype)
     # fwd: read dense (tokens×h) + write sparse (top_k×tokens×h)
     # bwd: read sparse grad + write dense grad  → same traffic reversed
-    return 2 * (1 + top_k) * tokens * hidden * elem
+    return 2 * (1 + top_k) * tokens * hidden * element_size
 
 
 def _combine_bytes(tokens: int, top_k: int, hidden: int, dtype: torch.dtype) -> int:
-    elem = _bytes_per_elem(dtype)
+    element_size = _bytes_per_element(dtype)
     sparse_rows = top_k * tokens
     # fwd: read sparse (sparse×h) + read scores (tokens×top_k) + write dense (tokens×h)
     # bwd: read dense grad + read scores + write sparse grad + write score grad
-    return 2 * (sparse_rows + tokens) * hidden * elem + 4 * tokens * top_k * elem
+    return 2 * (sparse_rows + tokens) * hidden * element_size + 4 * tokens * top_k * element_size
 
 
 def _dispatch_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("dispatch", (tokens, top_k, num_experts, hidden), dtype),
-            make_inputs=lambda t=tokens, k=top_k, n=num_experts, h=hidden, d=dtype: _make_dispatch_inputs(
-                t, k, n, h, d
-            ),
+            make_inputs=partial(_make_dispatch_inputs, tokens, top_k, num_experts, hidden, dtype),
             expected_bytes=_dispatch_bytes(tokens, top_k, hidden, dtype),
             expected_flops=0,
             compute_dtype=dtype,
@@ -316,9 +316,7 @@ def _combine_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("combine", (tokens, top_k, num_experts, hidden), dtype),
-            make_inputs=lambda t=tokens, k=top_k, n=num_experts, h=hidden, d=dtype: _make_combine_inputs(
-                t, k, n, h, d
-            ),
+            make_inputs=partial(_make_combine_inputs, tokens, top_k, num_experts, hidden, dtype),
             expected_bytes=_combine_bytes(tokens, top_k, hidden, dtype),
             expected_flops=0,
             compute_dtype=dtype,

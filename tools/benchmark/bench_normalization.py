@@ -15,6 +15,8 @@ Comparisons:
 - fast_llm_triton: triton_normalization_autograd
 """
 
+from functools import partial
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
@@ -80,20 +82,20 @@ def _make_rms_norm_inputs(rows: int, cols: int, dtype: torch.dtype) -> dict:
     }
 
 
-def _layer_norm_inputs_fp32(inp: dict) -> dict:
+def _layer_norm_inputs_fp32(inputs: dict) -> dict:
     return {
-        "input_": _to_fp32_input(inp["input_"]),
-        "weight": _to_fp32_param(inp["weight"]),
-        "bias": _to_fp32_param(inp["bias"]),
-        "grad_output": inp["grad_output"].float(),
+        "input_": _to_fp32_input(inputs["input_"]),
+        "weight": _to_fp32_param(inputs["weight"]),
+        "bias": _to_fp32_param(inputs["bias"]),
+        "grad_output": inputs["grad_output"].float(),
     }
 
 
-def _rms_norm_inputs_fp32(inp: dict) -> dict:
+def _rms_norm_inputs_fp32(inputs: dict) -> dict:
     return {
-        "input_": _to_fp32_input(inp["input_"]),
-        "weight": _to_fp32_param(inp["weight"]),
-        "grad_output": inp["grad_output"].float(),
+        "input_": _to_fp32_input(inputs["input_"]),
+        "weight": _to_fp32_param(inputs["weight"]),
+        "grad_output": inputs["grad_output"].float(),
     }
 
 
@@ -143,30 +145,30 @@ def _param_grad(param: torch.Tensor) -> torch.Tensor:
     return param.grad if param.grad is not None else param.grad_buffer
 
 
-def _run_layer_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["input_"], inp["weight"], inp["bias"])}
+def _run_layer_fwd(inputs: dict, fn) -> dict:
+    return {"output": fn(inputs["input_"], inputs["weight"], inputs["bias"])}
 
 
-def _run_layer_fwd_bwd(inp: dict, fn) -> dict:
-    output = fn(inp["input_"], inp["weight"], inp["bias"])
-    output.backward(inp["grad_output"])
+def _run_layer_fwd_bwd(inputs: dict, fn) -> dict:
+    output = fn(inputs["input_"], inputs["weight"], inputs["bias"])
+    output.backward(inputs["grad_output"])
     return {
-        "grad_input": inp["input_"].grad,
-        "grad_weight": _param_grad(inp["weight"]),
-        "grad_bias": _param_grad(inp["bias"]),
+        "grad_input": inputs["input_"].grad,
+        "grad_weight": _param_grad(inputs["weight"]),
+        "grad_bias": _param_grad(inputs["bias"]),
     }
 
 
-def _run_rms_fwd(inp: dict, fn) -> dict:
-    return {"output": fn(inp["input_"], inp["weight"])}
+def _run_rms_fwd(inputs: dict, fn) -> dict:
+    return {"output": fn(inputs["input_"], inputs["weight"])}
 
 
-def _run_rms_fwd_bwd(inp: dict, fn) -> dict:
-    output = fn(inp["input_"], inp["weight"])
-    output.backward(inp["grad_output"])
+def _run_rms_fwd_bwd(inputs: dict, fn) -> dict:
+    output = fn(inputs["input_"], inputs["weight"])
+    output.backward(inputs["grad_output"])
     return {
-        "grad_input": inp["input_"].grad,
-        "grad_weight": _param_grad(inp["weight"]),
+        "grad_input": inputs["input_"].grad,
+        "grad_weight": _param_grad(inputs["weight"]),
     }
 
 
@@ -177,32 +179,32 @@ def _layer_norm_variants() -> list[Variant]:
     variants = [
         Variant(
             name="fp32_reference",
-            fwd=lambda inp: _run_layer_fwd(_layer_norm_inputs_fp32(inp), _layer_norm_eager),
-            fwd_bwd=lambda inp: _run_layer_fwd_bwd(_layer_norm_inputs_fp32(inp), _layer_norm_eager),
+            fwd=lambda inputs: _run_layer_fwd(_layer_norm_inputs_fp32(inputs), _layer_norm_eager),
+            fwd_bwd=lambda inputs: _run_layer_fwd_bwd(_layer_norm_inputs_fp32(inputs), _layer_norm_eager),
             is_reference=True,
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_layer_fwd(inp, _layer_norm_eager),
-            fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_norm_eager),
+            fwd=lambda inputs: _run_layer_fwd(inputs, _layer_norm_eager),
+            fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_norm_eager),
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_layer_fwd(inp, _layer_compiled_default),
-            fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_compiled_default),
+            fwd=lambda inputs: _run_layer_fwd(inputs, _layer_compiled_default),
+            fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_compiled_default),
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_layer_fwd(inp, _layer_compiled_max),
-            fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_compiled_max),
+            fwd=lambda inputs: _run_layer_fwd(inputs, _layer_compiled_max),
+            fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_compiled_max),
         ),
     ]
     if fused_normalization_available:
         variants.append(
             Variant(
                 name="apex_fused",
-                fwd=lambda inp: _run_layer_fwd(inp, _layer_norm_apex_fused),
-                fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_norm_apex_fused),
+                fwd=lambda inputs: _run_layer_fwd(inputs, _layer_norm_apex_fused),
+                fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_norm_apex_fused),
             )
         )
     if fast_normalization_available:
@@ -210,16 +212,16 @@ def _layer_norm_variants() -> list[Variant]:
         variants.append(
             Variant(
                 name="apex_fast",
-                fwd=lambda inp: _run_layer_fwd(inp, _layer_norm_apex_fast),
-                fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_norm_apex_fast),
+                fwd=lambda inputs: _run_layer_fwd(inputs, _layer_norm_apex_fast),
+                fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_norm_apex_fast),
             )
         )
     if TritonConfig.enabled():
         variants.append(
             Variant(
                 name="fast_llm_triton",
-                fwd=lambda inp: _run_layer_fwd(inp, _layer_norm_triton),
-                fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_norm_triton),
+                fwd=lambda inputs: _run_layer_fwd(inputs, _layer_norm_triton),
+                fwd_bwd=lambda inputs: _run_layer_fwd_bwd(inputs, _layer_norm_triton),
             )
         )
     return variants
@@ -229,40 +231,40 @@ def _rms_norm_variants() -> list[Variant]:
     variants = [
         Variant(
             name="fp32_reference",
-            fwd=lambda inp: _run_rms_fwd(_rms_norm_inputs_fp32(inp), _rms_norm_eager),
-            fwd_bwd=lambda inp: _run_rms_fwd_bwd(_rms_norm_inputs_fp32(inp), _rms_norm_eager),
+            fwd=lambda inputs: _run_rms_fwd(_rms_norm_inputs_fp32(inputs), _rms_norm_eager),
+            fwd_bwd=lambda inputs: _run_rms_fwd_bwd(_rms_norm_inputs_fp32(inputs), _rms_norm_eager),
             is_reference=True,
         ),
         Variant(
             name="pytorch_eager",
-            fwd=lambda inp: _run_rms_fwd(inp, _rms_norm_eager),
-            fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_norm_eager),
+            fwd=lambda inputs: _run_rms_fwd(inputs, _rms_norm_eager),
+            fwd_bwd=lambda inputs: _run_rms_fwd_bwd(inputs, _rms_norm_eager),
         ),
         Variant(
             name="pytorch_compiled",
-            fwd=lambda inp: _run_rms_fwd(inp, _rms_compiled_default),
-            fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_compiled_default),
+            fwd=lambda inputs: _run_rms_fwd(inputs, _rms_compiled_default),
+            fwd_bwd=lambda inputs: _run_rms_fwd_bwd(inputs, _rms_compiled_default),
         ),
         Variant(
             name="pytorch_compiled_max",
-            fwd=lambda inp: _run_rms_fwd(inp, _rms_compiled_max),
-            fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_compiled_max),
+            fwd=lambda inputs: _run_rms_fwd(inputs, _rms_compiled_max),
+            fwd_bwd=lambda inputs: _run_rms_fwd_bwd(inputs, _rms_compiled_max),
         ),
     ]
     if fused_normalization_available:
         variants.append(
             Variant(
                 name="apex_fused",
-                fwd=lambda inp: _run_rms_fwd(inp, _rms_norm_apex_fused),
-                fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_norm_apex_fused),
+                fwd=lambda inputs: _run_rms_fwd(inputs, _rms_norm_apex_fused),
+                fwd_bwd=lambda inputs: _run_rms_fwd_bwd(inputs, _rms_norm_apex_fused),
             )
         )
     if TritonConfig.enabled():
         variants.append(
             Variant(
                 name="fast_llm_triton",
-                fwd=lambda inp: _run_rms_fwd(inp, _rms_norm_triton),
-                fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_norm_triton),
+                fwd=lambda inputs: _run_rms_fwd(inputs, _rms_norm_triton),
+                fwd_bwd=lambda inputs: _run_rms_fwd_bwd(inputs, _rms_norm_triton),
             )
         )
     return variants
@@ -271,7 +273,7 @@ def _rms_norm_variants() -> list[Variant]:
 # --------------------------------------------------------------------------- cases
 
 
-def _bytes_per_elem(dtype: torch.dtype) -> int:
+def _bytes_per_element(dtype: torch.dtype) -> int:
     return torch.tensor([], dtype=dtype).element_size()
 
 
@@ -280,16 +282,16 @@ def _layer_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
     fwd reads input + weight + bias and writes output (also stores inv_var).
     bwd reads grad_output, output, weight, bias, inv_var; writes grad_input,
     grad_weight, grad_bias. Activation tensors dominate."""
-    elem = _bytes_per_elem(dtype)
-    activations = 4 * rows * cols * elem  # fwd in/out + bwd grad_in/out
-    parameters = 6 * cols * elem  # weight, bias × (read + grad write) twice
+    element_size = _bytes_per_element(dtype)
+    activations = 4 * rows * cols * element_size  # fwd in/out + bwd grad_in/out
+    parameters = 6 * cols * element_size  # weight, bias × (read + grad write) twice
     return activations + parameters
 
 
 def _rms_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
-    elem = _bytes_per_elem(dtype)
-    activations = 4 * rows * cols * elem
-    parameters = 3 * cols * elem
+    element_size = _bytes_per_element(dtype)
+    activations = 4 * rows * cols * element_size
+    parameters = 3 * cols * element_size
     return activations + parameters
 
 
@@ -309,7 +311,7 @@ def _layer_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("layer_norm", shape, dtype),
-            make_inputs=(lambda s=shape, d=dtype: _make_layer_norm_inputs(s[0], s[1], d)),
+            make_inputs=partial(_make_layer_norm_inputs, shape[0], shape[1], dtype),
             expected_bytes=_layer_norm_bytes(shape[0], shape[1], dtype),
             expected_flops=_layer_norm_flops(shape[0], shape[1]),
             compute_dtype=dtype,
@@ -323,7 +325,7 @@ def _rms_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
     return [
         Case(
             name=case_name("rms_norm", shape, dtype),
-            make_inputs=(lambda s=shape, d=dtype: _make_rms_norm_inputs(s[0], s[1], d)),
+            make_inputs=partial(_make_rms_norm_inputs, shape[0], shape[1], dtype),
             expected_bytes=_rms_norm_bytes(shape[0], shape[1], dtype),
             expected_flops=_rms_norm_flops(shape[0], shape[1]),
             compute_dtype=dtype,
