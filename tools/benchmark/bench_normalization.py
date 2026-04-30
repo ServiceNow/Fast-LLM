@@ -340,16 +340,27 @@ def _rms_norm_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [
+        ("normalization: layer_norm", _layer_norm_cases(dtypes, shapes), _layer_norm_variants()),
+        ("normalization: rms_norm", _rms_norm_cases(dtypes, shapes), _rms_norm_variants()),
+    ]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark(
-        "normalization: layer_norm", _layer_norm_cases(dtypes, shapes), _layer_norm_variants(), verbose=verbose
-    )
-    run_benchmark("normalization: rms_norm", _rms_norm_cases(dtypes, shapes), _rms_norm_variants(), verbose=verbose)
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

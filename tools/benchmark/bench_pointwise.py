@@ -135,15 +135,28 @@ _ADD_VARIANTS = standard_fwd_variants(
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[int] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [
+        ("pointwise: copy", _copy_cases(dtypes, shapes), _COPY_VARIANTS),
+        ("pointwise: fill", _fill_cases(dtypes, shapes), _FILL_VARIANTS),
+        ("pointwise: add", _add_cases(dtypes, shapes), _ADD_VARIANTS),
+    ]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[int] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("pointwise: copy", _copy_cases(dtypes, shapes), _COPY_VARIANTS, verbose=verbose)
-    run_benchmark("pointwise: fill", _fill_cases(dtypes, shapes), _FILL_VARIANTS, verbose=verbose)
-    run_benchmark("pointwise: add", _add_cases(dtypes, shapes), _ADD_VARIANTS, verbose=verbose)
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

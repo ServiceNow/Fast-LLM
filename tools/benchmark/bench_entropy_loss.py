@@ -460,31 +460,41 @@ def _dist_cases(
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [
+        (
+            "entropy_loss: cross_entropy (labels)",
+            _label_cases("cross_entropy_labels", dtypes, shapes),
+            _ce_labels_variants(),
+        ),
+        (
+            "entropy_loss: cross_entropy (logits)",
+            _dist_cases("cross_entropy_logits", dtypes, shapes),
+            _ce_dist_variants(),
+        ),
+        (
+            "entropy_loss: reverse_kl (logits)",
+            _dist_cases("reverse_kl_logits", dtypes, shapes),
+            _reverse_kl_variants(),
+        ),
+        ("entropy_loss: z_loss", _label_cases("z_loss", dtypes, shapes), _z_loss_variants()),
+    ]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark(
-        "entropy_loss: cross_entropy (labels)",
-        _label_cases("cross_entropy_labels", dtypes, shapes),
-        _ce_labels_variants(),
-        verbose=verbose,
-    )
-    run_benchmark(
-        "entropy_loss: cross_entropy (logits)",
-        _dist_cases("cross_entropy_logits", dtypes, shapes),
-        _ce_dist_variants(),
-        verbose=verbose,
-    )
-    run_benchmark(
-        "entropy_loss: reverse_kl (logits)",
-        _dist_cases("reverse_kl_logits", dtypes, shapes),
-        _reverse_kl_variants(),
-        verbose=verbose,
-    )
-    run_benchmark("entropy_loss: z_loss", _label_cases("z_loss", dtypes, shapes), _z_loss_variants(), verbose=verbose)
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

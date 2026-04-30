@@ -195,13 +195,24 @@ def _grpo_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] |
     ]
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [("grpo_loss", _grpo_cases(dtypes, shapes), _grpo_variants())]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("grpo_loss", _grpo_cases(dtypes, shapes), _grpo_variants(), verbose=verbose)
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

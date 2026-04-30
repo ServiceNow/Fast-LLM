@@ -172,18 +172,24 @@ def _mlp_activation_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[in
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [("mlp_activation (gated silu)", _mlp_activation_cases(dtypes, shapes), _mlp_activation_variants())]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark(
-        "mlp_activation (gated silu)",
-        _mlp_activation_cases(dtypes, shapes),
-        _mlp_activation_variants(),
-        verbose=verbose,
-    )
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

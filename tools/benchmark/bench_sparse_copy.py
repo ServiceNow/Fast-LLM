@@ -335,14 +335,27 @@ def _combine_cases(
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int, int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [
+        ("sparse_copy: dispatch", _dispatch_cases(dtypes, shapes), _dispatch_variants()),
+        ("sparse_copy: combine", _combine_cases(dtypes, shapes), _combine_variants()),
+    ]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int, int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("sparse_copy: dispatch", _dispatch_cases(dtypes, shapes), _dispatch_variants(), verbose=verbose)
-    run_benchmark("sparse_copy: combine", _combine_cases(dtypes, shapes), _combine_variants(), verbose=verbose)
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":

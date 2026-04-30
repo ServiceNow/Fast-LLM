@@ -280,6 +280,7 @@ def _run_one_variant(
     reference_outputs: dict[str, dict[str, torch.Tensor]] | None,
     warmup_ms: float,
     rep_ms: float,
+    min_reps: int = 5,
 ) -> VariantResult:
     result = VariantResult(variant_name=variant.name)
     try:
@@ -313,7 +314,9 @@ def _run_one_variant(
 
             # Timing: reuse the same input tensors, fn closes over them.
             _reset_fwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
-            result.fwd_timing = bench_fn(_guarded_fwd, reset=_reset_fwd, warmup_ms=warmup_ms, rep_ms=rep_ms)
+            result.fwd_timing = bench_fn(
+                _guarded_fwd, reset=_reset_fwd, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
+            )
             del inputs
 
         # fwd+bwd mode
@@ -353,7 +356,7 @@ def _run_one_variant(
             # Timing.
             _reset_fwd_bwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
             result.fwd_bwd_timing = bench_fn(
-                _guarded_fwd_bwd, reset=_reset_fwd_bwd, warmup_ms=warmup_ms, rep_ms=rep_ms
+                _guarded_fwd_bwd, reset=_reset_fwd_bwd, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
             )
             del inputs
         elif variant.fwd is not None and result.memory is None:
@@ -627,6 +630,7 @@ def run_benchmark(
     *,
     warmup_ms: float = 25.0,
     rep_ms: float = 100.0,
+    min_reps: int = 5,
     verbose: bool = False,
     print_fn: Callable[[str], None] = print,
 ) -> list[tuple[Case, list[VariantResult]]]:
@@ -658,7 +662,7 @@ def run_benchmark(
         has_fwd_bwd = False
         rms_keys_seen: list[str] = []
         for variant in variants:
-            r = _run_one_variant(variant, case, ref_outputs, warmup_ms=warmup_ms, rep_ms=rep_ms)
+            r = _run_one_variant(variant, case, ref_outputs, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
             results.append(r)
             has_fwd = has_fwd or r.fwd_timing is not None
             has_fwd_bwd = has_fwd_bwd or r.fwd_bwd_timing is not None

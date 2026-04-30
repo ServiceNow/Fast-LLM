@@ -344,24 +344,35 @@ def _input_inner_sparse_cases(
 # --------------------------------------------------------------------------- entry point
 
 
+def benchmarks(
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int, int, int, int]] | None = None,
+) -> list[tuple[str, list, list]]:
+    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    return [
+        (
+            "sparse_linear: output_sparse (layer 1 / up-proj)",
+            _output_sparse_cases(dtypes, shapes),
+            _output_sparse_variants(),
+        ),
+        (
+            "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
+            _input_inner_sparse_cases(dtypes, shapes),
+            _input_inner_sparse_variants(),
+        ),
+    ]
+
+
 def run(
     verbose: bool = False,
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int, int, int, int]] | None = None,
+    warmup_ms: float = 25.0,
+    rep_ms: float = 100.0,
+    min_reps: int = 5,
 ) -> None:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark(
-        "sparse_linear: output_sparse (layer 1 / up-proj)",
-        _output_sparse_cases(dtypes, shapes),
-        _output_sparse_variants(),
-        verbose=verbose,
-    )
-    run_benchmark(
-        "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
-        _input_inner_sparse_cases(dtypes, shapes),
-        _input_inner_sparse_variants(),
-        verbose=verbose,
-    )
+    for name, cases, variants in benchmarks(dtypes, shapes):
+        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
 
 
 if __name__ == "__main__":
