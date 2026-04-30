@@ -10,6 +10,7 @@ rep count to one timed call per variant so the suite stays fast.
 import pytest
 import torch
 
+from fast_llm.functional.triton import triton_interpret
 from tools.benchmark import (
     bench_entropy_loss,
     bench_grpo_loss,
@@ -23,6 +24,15 @@ from tools.benchmark import (
 from tools.benchmark.runner import run_benchmark
 
 _DTYPES = (torch.float32,)
+
+# sparse_copy and sparse_linear use tl.histogram, which has unfixed bugs in the
+# Triton interpreter. Skip them in interpreter mode; they're covered on GPU.
+_INTERPRETER_SKIP = {
+    "sparse_copy: dispatch",
+    "sparse_copy: combine",
+    "sparse_linear: output_sparse (layer 1 / up-proj)",
+    "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
+}
 
 
 def _build_params() -> list:
@@ -61,5 +71,7 @@ _SKIP_VARIANTS = {"pytorch_compiled", "pytorch_compiled_max"}
 
 @pytest.mark.parametrize("name,cases,variants", _PARAMS)
 def test_triton_benchmark(name, cases, variants):
+    if triton_interpret and name in _INTERPRETER_SKIP:
+        pytest.skip("tl.histogram is broken in the Triton interpreter")
     variants = [v for v in variants if v.name not in _SKIP_VARIANTS]
     run_benchmark(name, cases, variants, warmup_ms=0, rep_ms=0, min_reps=1)
