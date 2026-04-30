@@ -443,7 +443,9 @@ def _unit_column(
     else:
         # All values are zero / None. Fall back to the canonical unit (scale=1.0)
         # so e.g. memory defaults to MiB rather than the middle of the table.
-        label, scale = next(((l, s) for (l, s) in units if s == 1.0), units[0])
+        label, scale = next(
+            ((unit_label, unit_scale) for (unit_label, unit_scale) in units if unit_scale == 1.0), units[0]
+        )
     scaled = [v * scale if v is not None else None for v in canonical_values]
     header = f"{prefix} {label}" if prefix else label
     return header, _format_aligned(scaled)

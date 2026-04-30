@@ -46,6 +46,8 @@ def _make_grpo_inputs(tokens: int, vocab: int, dtype: torch.dtype) -> dict:
 
 def _grpo_eager(logits: torch.Tensor, labels: torch.Tensor, advantages: torch.Tensor, old_log_probs: torch.Tensor):
     log_probs = logits.float().log_softmax(-1)
+    # clamp + labels>=0 guards mirror production code that handles ignore_index=-100;
+    # labels here are always non-negative (randint), so the masks are dead in this benchmark.
     new_log_probs = log_probs.gather(-1, labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)
     new_log_probs = torch.where(labels >= 0, new_log_probs, torch.zeros_like(new_log_probs))
     ratio = (new_log_probs - old_log_probs).exp()
