@@ -156,7 +156,11 @@ def bench_fn(
     """
     if not torch.cuda.is_available():
         # CPU / Triton interpret: single timed run with wall clock.
+        if reset is not None:
+            reset()
         fn()  # warmup
+        if reset is not None:
+            reset()
         start = time.perf_counter()
         fn()
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -168,6 +172,8 @@ def bench_fn(
     torch.cuda.synchronize()
     warmup_start = torch.cuda.Event(enable_timing=True)
     warmup_end = torch.cuda.Event(enable_timing=True)
+    if reset is not None:
+        reset()
     warmup_start.record()
     fn()
     warmup_end.record()
@@ -177,12 +183,16 @@ def bench_fn(
     # Additional warmup to stabilize (covers autotune misses on first call)
     num_warmup = max(1, int(warmup_ms / max(one_rep_ms, 0.01)))
     for _ in range(num_warmup):
+        if reset is not None:
+            reset()
         fn()
     torch.cuda.synchronize()
 
     # Re-estimate after warmup (autotune usually settles to a faster config).
     post_start = torch.cuda.Event(enable_timing=True)
     post_end = torch.cuda.Event(enable_timing=True)
+    if reset is not None:
+        reset()
     post_start.record()
     fn()
     post_end.record()
