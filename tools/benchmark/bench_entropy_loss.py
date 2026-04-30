@@ -71,6 +71,10 @@ def _run_ce_labels_fwd_fp32(inp: dict) -> dict:
     return {"loss": _ce_labels_eager(logits_fp32, inp["labels"])}
 
 
+def _reset_logits_grad(inp: dict) -> None:
+    inp["logits"].grad = None
+
+
 def _run_ce_labels_fwd_bwd(inp: dict, fn) -> dict:
     loss = fn(inp["logits"], inp["labels"])
     loss.backward()
@@ -108,16 +112,19 @@ def _ce_labels_variants() -> list[Variant]:
             name="pytorch_eager",
             fwd=lambda inp: _run_ce_labels_fwd(inp, _ce_labels_eager),
             fwd_bwd=lambda inp: _run_ce_labels_fwd_bwd(inp, _ce_labels_eager),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
             fwd=lambda inp: _run_ce_labels_fwd(inp, _ce_labels_compiled_default),
             fwd_bwd=lambda inp: _run_ce_labels_fwd_bwd(inp, _ce_labels_compiled_default),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
             fwd=lambda inp: _run_ce_labels_fwd(inp, _ce_labels_compiled_max),
             fwd_bwd=lambda inp: _run_ce_labels_fwd_bwd(inp, _ce_labels_compiled_max),
+            reset_inputs=_reset_logits_grad,
         ),
     ]
     if TritonConfig.enabled():
@@ -201,16 +208,19 @@ def _ce_dist_variants() -> list[Variant]:
             name="pytorch_eager",
             fwd=lambda inp: _run_dist_fwd(inp, _ce_dist_eager),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _ce_dist_eager),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
             fwd=lambda inp: _run_dist_fwd(inp, _ce_dist_compiled_default),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _ce_dist_compiled_default),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
             fwd=lambda inp: _run_dist_fwd(inp, _ce_dist_compiled_max),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _ce_dist_compiled_max),
+            reset_inputs=_reset_logits_grad,
         ),
     ]
     if TritonConfig.enabled():
@@ -288,16 +298,19 @@ def _reverse_kl_variants() -> list[Variant]:
             name="pytorch_eager",
             fwd=lambda inp: _run_dist_fwd(inp, _reverse_kl_eager),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _reverse_kl_eager),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
             fwd=lambda inp: _run_dist_fwd(inp, _reverse_kl_compiled_default),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _reverse_kl_compiled_default),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
             fwd=lambda inp: _run_dist_fwd(inp, _reverse_kl_compiled_max),
             fwd_bwd=lambda inp: _run_dist_fwd_bwd(inp, _reverse_kl_compiled_max),
+            reset_inputs=_reset_logits_grad,
         ),
     ]
     if TritonConfig.enabled():
@@ -362,16 +375,19 @@ def _z_loss_variants() -> list[Variant]:
             name="pytorch_eager",
             fwd=lambda inp: _run_zl_fwd(inp, _z_loss_eager),
             fwd_bwd=lambda inp: _run_zl_fwd_bwd(inp, _z_loss_eager),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
             fwd=lambda inp: _run_zl_fwd(inp, _z_loss_compiled_default),
             fwd_bwd=lambda inp: _run_zl_fwd_bwd(inp, _z_loss_compiled_default),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
             fwd=lambda inp: _run_zl_fwd(inp, _z_loss_compiled_max),
             fwd_bwd=lambda inp: _run_zl_fwd_bwd(inp, _z_loss_compiled_max),
+            reset_inputs=_reset_logits_grad,
         ),
     ]
     if TritonConfig.enabled():

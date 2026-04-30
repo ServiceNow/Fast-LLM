@@ -77,6 +77,10 @@ def _run_fwd_fp32(inp: dict) -> dict:
     }
 
 
+def _reset_logits_grad(inp: dict) -> None:
+    inp["logits"].grad = None
+
+
 def _run_fwd_bwd(inp: dict, fn) -> dict:
     loss = fn(inp["logits"], inp["labels"], inp["advantages"], inp["old_log_probs"])
     loss.backward()
@@ -128,16 +132,19 @@ def _grpo_variants() -> list[Variant]:
             name="pytorch_eager",
             fwd=lambda inp: _run_fwd(inp, _grpo_eager),
             fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_eager),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled",
             fwd=lambda inp: _run_fwd(inp, _grpo_compiled_default),
             fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_compiled_default),
+            reset_inputs=_reset_logits_grad,
         ),
         Variant(
             name="pytorch_compiled_max",
             fwd=lambda inp: _run_fwd(inp, _grpo_compiled_max),
             fwd_bwd=lambda inp: _run_fwd_bwd(inp, _grpo_compiled_max),
+            reset_inputs=_reset_logits_grad,
         ),
     ]
     if TritonConfig.enabled():
