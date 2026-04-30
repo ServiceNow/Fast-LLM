@@ -154,7 +154,8 @@ def _mlp_activation_flops(tokens: int, ffn_dim: int) -> int:
     return 14 * tokens * ffn_dim
 
 
-def _mlp_activation_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _mlp_activation_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("mlp_activation", (tokens, ffn_dim), dtype),
@@ -164,17 +165,24 @@ def _mlp_activation_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, ffn_dim in _SHAPES
+        for tokens, ffn_dim in shapes
     ]
 
 
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
     run_benchmark(
-        "mlp_activation (gated silu)", _mlp_activation_cases(dtypes), _mlp_activation_variants(), verbose=verbose
+        "mlp_activation (gated silu)",
+        _mlp_activation_cases(dtypes, shapes),
+        _mlp_activation_variants(),
+        verbose=verbose,
     )
 
 

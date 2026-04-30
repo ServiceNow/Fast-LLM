@@ -40,7 +40,8 @@ def _make_copy_inputs(numel: int, dtype: torch.dtype) -> dict:
     return {"input_": input_, "out": out}
 
 
-def _copy_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _copy_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
+    sizes = shapes if shapes is not None else _SIZES_NUMEL
     return [
         Case(
             name=case_name("copy", (numel,), dtype),
@@ -49,7 +50,7 @@ def _copy_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             expected_bytes=2 * numel * torch.tensor([], dtype=dtype).element_size(),
         )
         for dtype in dtypes
-        for numel in _SIZES_NUMEL
+        for numel in sizes
     ]
 
 
@@ -71,7 +72,8 @@ def _make_fill_inputs(numel: int, dtype: torch.dtype) -> dict:
     return {"input_": torch.empty(numel, dtype=dtype, device=device()), "value": 1.5}
 
 
-def _fill_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _fill_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
+    sizes = shapes if shapes is not None else _SIZES_NUMEL
     return [
         Case(
             name=case_name("fill", (numel,), dtype),
@@ -80,7 +82,7 @@ def _fill_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             expected_bytes=numel * torch.tensor([], dtype=dtype).element_size(),
         )
         for dtype in dtypes
-        for numel in _SIZES_NUMEL
+        for numel in sizes
     ]
 
 
@@ -106,7 +108,8 @@ def _make_add_inputs(numel: int, dtype: torch.dtype) -> dict:
     }
 
 
-def _add_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _add_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
+    sizes = shapes if shapes is not None else _SIZES_NUMEL
     return [
         Case(
             name=case_name("add", (numel,), dtype),
@@ -118,7 +121,7 @@ def _add_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for numel in _SIZES_NUMEL
+        for numel in sizes
     ]
 
 
@@ -132,11 +135,15 @@ _ADD_VARIANTS = standard_fwd_variants(
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[int] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("pointwise: copy", _copy_cases(dtypes), _COPY_VARIANTS, verbose=verbose)
-    run_benchmark("pointwise: fill", _fill_cases(dtypes), _FILL_VARIANTS, verbose=verbose)
-    run_benchmark("pointwise: add", _add_cases(dtypes), _ADD_VARIANTS, verbose=verbose)
+    run_benchmark("pointwise: copy", _copy_cases(dtypes, shapes), _COPY_VARIANTS, verbose=verbose)
+    run_benchmark("pointwise: fill", _fill_cases(dtypes, shapes), _FILL_VARIANTS, verbose=verbose)
+    run_benchmark("pointwise: add", _add_cases(dtypes, shapes), _ADD_VARIANTS, verbose=verbose)
 
 
 if __name__ == "__main__":

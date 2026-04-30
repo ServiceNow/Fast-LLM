@@ -423,7 +423,10 @@ def _entropy_loss_flops(tokens: int, vocab: int) -> int:
     return 4 * tokens * vocab
 
 
-def _label_cases(kernel_name: str, dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _label_cases(
+    kernel_name: str, dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name(kernel_name, (tokens, vocab), dtype),
@@ -433,11 +436,14 @@ def _label_cases(kernel_name: str, dtypes: tuple[torch.dtype, ...]) -> list[Case
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, vocab in _SHAPES
+        for tokens, vocab in shapes
     ]
 
 
-def _dist_cases(kernel_name: str, dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _dist_cases(
+    kernel_name: str, dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name(kernel_name, (tokens, vocab), dtype),
@@ -447,34 +453,38 @@ def _dist_cases(kernel_name: str, dtypes: tuple[torch.dtype, ...]) -> list[Case]
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, vocab in _SHAPES
+        for tokens, vocab in shapes
     ]
 
 
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
     run_benchmark(
         "entropy_loss: cross_entropy (labels)",
-        _label_cases("cross_entropy_labels", dtypes),
+        _label_cases("cross_entropy_labels", dtypes, shapes),
         _ce_labels_variants(),
         verbose=verbose,
     )
     run_benchmark(
         "entropy_loss: cross_entropy (logits)",
-        _dist_cases("cross_entropy_logits", dtypes),
+        _dist_cases("cross_entropy_logits", dtypes, shapes),
         _ce_dist_variants(),
         verbose=verbose,
     )
     run_benchmark(
         "entropy_loss: reverse_kl (logits)",
-        _dist_cases("reverse_kl_logits", dtypes),
+        _dist_cases("reverse_kl_logits", dtypes, shapes),
         _reverse_kl_variants(),
         verbose=verbose,
     )
-    run_benchmark("entropy_loss: z_loss", _label_cases("z_loss", dtypes), _z_loss_variants(), verbose=verbose)
+    run_benchmark("entropy_loss: z_loss", _label_cases("z_loss", dtypes, shapes), _z_loss_variants(), verbose=verbose)
 
 
 if __name__ == "__main__":

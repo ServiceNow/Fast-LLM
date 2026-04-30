@@ -298,7 +298,10 @@ def _combine_bytes(tokens: int, top_k: int, hidden: int, dtype: torch.dtype) -> 
     return 2 * (sparse_rows + tokens) * hidden * element_size + 4 * tokens * top_k * element_size
 
 
-def _dispatch_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _dispatch_cases(
+    dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("dispatch", (tokens, top_k, num_experts, hidden), dtype),
@@ -308,11 +311,14 @@ def _dispatch_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, top_k, num_experts, hidden in _SHAPES
+        for tokens, top_k, num_experts, hidden in shapes
     ]
 
 
-def _combine_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _combine_cases(
+    dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("combine", (tokens, top_k, num_experts, hidden), dtype),
@@ -322,17 +328,21 @@ def _combine_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, top_k, num_experts, hidden in _SHAPES
+        for tokens, top_k, num_experts, hidden in shapes
     ]
 
 
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int, int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("sparse_copy: dispatch", _dispatch_cases(dtypes), _dispatch_variants(), verbose=verbose)
-    run_benchmark("sparse_copy: combine", _combine_cases(dtypes), _combine_variants(), verbose=verbose)
+    run_benchmark("sparse_copy: dispatch", _dispatch_cases(dtypes, shapes), _dispatch_variants(), verbose=verbose)
+    run_benchmark("sparse_copy: combine", _combine_cases(dtypes, shapes), _combine_variants(), verbose=verbose)
 
 
 if __name__ == "__main__":

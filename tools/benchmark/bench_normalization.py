@@ -307,7 +307,8 @@ def _rms_norm_flops(rows: int, cols: int) -> int:
     return 15 * rows * cols
 
 
-def _layer_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _layer_norm_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("layer_norm", shape, dtype),
@@ -317,11 +318,12 @@ def _layer_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for shape in _SHAPES
+        for shape in shapes
     ]
 
 
-def _rms_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _rms_norm_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("rms_norm", shape, dtype),
@@ -331,17 +333,23 @@ def _rms_norm_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for shape in _SHAPES
+        for shape in shapes
     ]
 
 
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("normalization: layer_norm", _layer_norm_cases(dtypes), _layer_norm_variants(), verbose=verbose)
-    run_benchmark("normalization: rms_norm", _rms_norm_cases(dtypes), _rms_norm_variants(), verbose=verbose)
+    run_benchmark(
+        "normalization: layer_norm", _layer_norm_cases(dtypes, shapes), _layer_norm_variants(), verbose=verbose
+    )
+    run_benchmark("normalization: rms_norm", _rms_norm_cases(dtypes, shapes), _rms_norm_variants(), verbose=verbose)
 
 
 if __name__ == "__main__":

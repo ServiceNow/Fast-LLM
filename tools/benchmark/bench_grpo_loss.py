@@ -180,7 +180,8 @@ def _grpo_flops(tokens: int, vocab: int) -> int:
     return 14 * tokens * vocab
 
 
-def _grpo_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _grpo_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("grpo_loss", (tokens, vocab), dtype),
@@ -190,13 +191,17 @@ def _grpo_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, vocab in _SHAPES
+        for tokens, vocab in shapes
     ]
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("grpo_loss", _grpo_cases(dtypes), _grpo_variants(), verbose=verbose)
+    run_benchmark("grpo_loss", _grpo_cases(dtypes, shapes), _grpo_variants(), verbose=verbose)
 
 
 if __name__ == "__main__":

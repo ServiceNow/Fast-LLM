@@ -98,7 +98,8 @@ def _rotary_variants() -> list[Variant]:
     return variants
 
 
-def _rotary_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _rotary_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int]] | None = None) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("rotary", (tokens, num_heads, head_size), dtype),
@@ -108,13 +109,17 @@ def _rotary_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, num_heads, head_size in _SHAPES
+        for tokens, num_heads, head_size in shapes
     ]
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    run_benchmark("rotary", _rotary_cases(dtypes), _rotary_variants(), verbose=verbose)
+    run_benchmark("rotary", _rotary_cases(dtypes, shapes), _rotary_variants(), verbose=verbose)
 
 
 if __name__ == "__main__":

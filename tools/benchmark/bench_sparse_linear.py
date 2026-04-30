@@ -305,7 +305,10 @@ def _sparse_linear_flops(sparse_tokens_unpadded: int, hidden: int, ffn_per_exper
     return 3 * 2 * sparse_tokens_unpadded * hidden * ffn_per_expert
 
 
-def _output_sparse_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _output_sparse_cases(
+    dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int, int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("output_sparse", (tokens, top_k, num_experts, hidden, ffn_per_expert), dtype),
@@ -315,11 +318,14 @@ def _output_sparse_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, top_k, num_experts, hidden, ffn_per_expert in _SHAPES
+        for tokens, top_k, num_experts, hidden, ffn_per_expert in shapes
     ]
 
 
-def _input_inner_sparse_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
+def _input_inner_sparse_cases(
+    dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int, int, int]] | None = None
+) -> list[Case]:
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         Case(
             name=case_name("input_inner_sparse", (tokens, top_k, num_experts, hidden, ffn_per_expert), dtype),
@@ -331,24 +337,28 @@ def _input_inner_sparse_cases(dtypes: tuple[torch.dtype, ...]) -> list[Case]:
             compute_dtype=dtype,
         )
         for dtype in dtypes
-        for tokens, top_k, num_experts, hidden, ffn_per_expert in _SHAPES
+        for tokens, top_k, num_experts, hidden, ffn_per_expert in shapes
     ]
 
 
 # --------------------------------------------------------------------------- entry point
 
 
-def run(verbose: bool = False, dtypes: tuple[torch.dtype, ...] | None = None) -> None:
+def run(
+    verbose: bool = False,
+    dtypes: tuple[torch.dtype, ...] | None = None,
+    shapes: list[tuple[int, int, int, int, int]] | None = None,
+) -> None:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
     run_benchmark(
         "sparse_linear: output_sparse (layer 1 / up-proj)",
-        _output_sparse_cases(dtypes),
+        _output_sparse_cases(dtypes, shapes),
         _output_sparse_variants(),
         verbose=verbose,
     )
     run_benchmark(
         "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
-        _input_inner_sparse_cases(dtypes),
+        _input_inner_sparse_cases(dtypes, shapes),
         _input_inner_sparse_variants(),
         verbose=verbose,
     )
