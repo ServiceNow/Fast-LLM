@@ -20,6 +20,7 @@ from fast_llm.models.gpt.conversion.config import (
     Apriel2TextCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
+    Gemma4CheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -960,6 +961,74 @@ update_and_add_testing_config(
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
     skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
     requires_cuda=True,
+)
+
+
+# Use init_1 for extra norms to keep the residual stream at small scale (~0.35).
+# Default ones-init would normalize small layer outputs to unit scale before the residual add,
+# growing the stream to ~1.5 per block and causing bf16 absolute errors to exceed compare_factor=2.
+# query_norm/key_norm init_1 also keeps attention logits small (softmax_scale_power=0 otherwise
+# amplifies bf16 relative error 3x). ParameterConfig.initialization is FieldHint.feature so
+# this is invisible to the architecture comparison in test_load_pretrained.
+_gemma4_block_overrides = {
+    "post_mixer_normalization": {"type": "rms_norm", "weight": init_1},
+    "post_mlp_normalization": {"type": "rms_norm", "weight": init_1},
+    "pre_mlp_normalization": {"type": "rms_norm", "weight": init_1},
+}
+_gemma4_mixer_overrides = {
+    "softmax_scale_power": 0,
+    "query_norm": {"type": "rms_norm", "weight": init_1},
+    "key_norm": {"type": "rms_norm", "weight": init_1},
+    "value_norm": {"type": "fixed_rms_norm"},
+}
+
+update_and_add_testing_config(
+    # Tests Gemma4 converter: pattern decoder with alternating sliding/full attention,
+    # per-head norms (q/k/v), post-attention and post-MLP norms, embedding scale.
+    "llama",
+    "gemma4",
+    updates={
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "embeddings", "embedding_scale"): 16.0,  # sqrt(hidden_size=256); must match converter
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "sliding_attention": {
+                    **copy.deepcopy(_llama_block),
+                    **_gemma4_block_overrides,
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        **_gemma4_mixer_overrides,
+                        "window_size": 128,
+                    },
+                },
+                "full_attention": {
+                    **copy.deepcopy(_llama_block),
+                    **_gemma4_block_overrides,
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        **_gemma4_mixer_overrides,
+                        "rotary": {"type": "proportional", "partial_rotary_factor": 0.25},
+                    },
+                },
+            },
+            "pattern": ["sliding_attention", "full_attention"],
+            "num_blocks": 2,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Gemma4CheckpointFormat,
+    compare_factor=5.0,  # init_1 on post_mlp_norm makes its gradient tiny (~5e-6), hitting the fp16 rms_eps floor
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    skip_tests=("sdp", "ms"),
+    requires_cuda=False,
 )
 
 

@@ -1,0 +1,608 @@
+"""Gemma4 checkpoint format converter."""
+
+import typing
+
+from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.checkpoint.external import (
+    SplitWeightConverter,
+    WeightConverter,
+)
+from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.functional.config import ActivationType
+from fast_llm.layers.attention.config import AttentionConfig
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, ProportionalRotaryConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.common.normalization.config import FixedRMSNormConfig, RMSNormalizationConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.decoder.mlp.config import HybridMoEMLPConfig, MLPConfig, MoEMLPConfig
+from fast_llm.layers.language_model.config import (
+    LanguageModelConfig,
+    LanguageModelEmbeddingsConfig,
+    LanguageModelHeadConfig,
+)
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.conversion.config import Gemma4CheckpointFormat
+from fast_llm.models.gpt.conversion.llama import (
+    KeyValueWeightConverter,
+    LlamaEmbeddingsConverter,
+    LlamaHeadConverter,
+    LlamaNormalizationConverter,
+    MLPLayer2Converter,
+    QueryWeightConverter,
+    get_parameter_converter,
+    get_weight_and_bias_converters,
+)
+from fast_llm.models.gpt.model import GPTModel
+from fast_llm.utils import Assert, safe_merge_dicts
+
+_SLIDING_ATTENTION = "sliding_attention"
+_FULL_ATTENTION = "full_attention"
+
+
+class Gemma4AttentionConverter:
+    @classmethod
+    def import_config(cls, config: dict, is_sliding: bool) -> dict:
+        eps = config["rms_norm_eps"]
+        if is_sliding:
+            rope_params = config["rope_parameters"][_SLIDING_ATTENTION]
+            rotary = {"type": "default", "theta": rope_params["rope_theta"]}
+            head_size = config["head_dim"]
+            head_groups = config["num_key_value_heads"]
+            window_size = config["sliding_window"]
+        else:
+            rope_params = config["rope_parameters"][_FULL_ATTENTION]
+            rotary = {
+                "type": "proportional",
+                "theta": rope_params["rope_theta"],
+                "partial_rotary_factor": rope_params["partial_rotary_factor"],
+            }
+            head_size = config["global_head_dim"]
+            num_global_kv_heads = config.get("num_global_key_value_heads")
+            head_groups = config["num_key_value_heads"] if num_global_kv_heads is None else num_global_kv_heads
+            window_size = None
+        out = {
+            "heads": config["num_attention_heads"],
+            "head_groups": head_groups,
+            "head_size": head_size,
+            "add_linear_biases": False,
+            "dropout": config["attention_dropout"],
+            "softmax_scale_power": 0,
+            "rotary": rotary,
+            "query_norm": {"type": "rms_norm", "epsilon": eps},
+            "key_norm": {"type": "rms_norm", "epsilon": eps},
+            "value_norm": {"type": "fixed_rms_norm", "epsilon": eps},
+        }
+        if window_size is not None:
+            out["window_size"] = window_size
+        return out
+
+    @classmethod
+    def export_config(cls, sliding_config: AttentionConfig, full_config: AttentionConfig) -> dict:
+        Assert.custom(isinstance, sliding_config, AttentionConfig)
+        Assert.custom(isinstance, full_config, AttentionConfig)
+        assert not sliding_config.add_linear_biases
+        assert isinstance(sliding_config.rotary, DefaultRotaryConfig)
+        assert isinstance(full_config.rotary, ProportionalRotaryConfig)
+        Assert.custom(isinstance, sliding_config.query_norm, RMSNormalizationConfig)
+        Assert.custom(isinstance, sliding_config.key_norm, RMSNormalizationConfig)
+        Assert.custom(isinstance, sliding_config.value_norm, FixedRMSNormConfig)
+        eps = sliding_config.query_norm.epsilon
+        num_global_kv_heads = (
+            None if full_config.head_groups == sliding_config.head_groups else full_config.head_groups
+        )
+        return {
+            "num_attention_heads": sliding_config.heads,
+            "num_key_value_heads": sliding_config.head_groups,
+            "head_dim": sliding_config.head_size,
+            "global_head_dim": full_config.head_size,
+            "num_global_key_value_heads": num_global_kv_heads,
+            "attention_bias": False,
+            "attention_dropout": sliding_config.dropout,
+            "sliding_window": sliding_config.window_size,
+            "rms_norm_eps": eps,
+            "rope_parameters": {
+                _SLIDING_ATTENTION: {
+                    "rope_type": "default",
+                    "rope_theta": sliding_config.rotary.theta,
+                },
+                _FULL_ATTENTION: {
+                    "rope_type": "proportional",
+                    "rope_theta": full_config.rotary.theta,
+                    "partial_rotary_factor": full_config.rotary.partial_rotary_factor,
+                },
+            },
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: AttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        converters = [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.query",
+                f"{hf_prefix}.q_proj",
+                False,
+                QueryWeightConverter,
+                config,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.key_value",
+                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
+                False,
+                KeyValueWeightConverter,
+                config,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.dense",
+                f"{hf_prefix}.o_proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+        if config.query_norm is not None:
+            converters += LlamaNormalizationConverter.get_converters(
+                config.query_norm,
+                f"{fast_llm_prefix}.query_norm",
+                f"{hf_prefix}.q_norm",
+                drop_on_export=drop_on_export,
+            )
+        if config.key_norm is not None:
+            converters += LlamaNormalizationConverter.get_converters(
+                config.key_norm,
+                f"{fast_llm_prefix}.key_norm",
+                f"{hf_prefix}.k_norm",
+                drop_on_export=drop_on_export,
+            )
+        # value_norm is FixedRMSNorm — no learnable weight to convert
+        return converters
+
+
+class Gemma4MLPConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "intermediate_size": config["intermediate_size"],
+            "add_linear_biases": False,
+            "activation": ActivationType.from_hf_name(config["hidden_activation"]),
+            "gated": True,
+        }
+
+    @classmethod
+    def export_config(cls, config: MLPConfig) -> dict:
+        Assert.custom(isinstance, config, MLPConfig)
+        assert config.gated
+        assert not config.add_linear_biases
+        return {
+            "intermediate_size": config.intermediate_size,
+            "hidden_activation": config.activation.hf_name,
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: MLPConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_1",
+                (f"{hf_prefix}.gate_proj", f"{hf_prefix}.up_proj"),
+                False,
+                SplitWeightConverter,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_2",
+                f"{hf_prefix}.down_proj",
+                False,
+                MLPLayer2Converter,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
+class Gemma4MoEMLPConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "type": "moe",
+            "intermediate_size": config["moe_intermediate_size"],
+            "add_linear_biases": False,
+            "activation": ActivationType.from_hf_name(config["hidden_activation"]),
+            "gated": True,
+            "experts": config["num_experts"],
+            "experts_per_token": config["top_k_experts"],
+        }
+
+    @classmethod
+    def export_config(cls, config: MoEMLPConfig) -> dict:
+        Assert.custom(isinstance, config, MoEMLPConfig)
+        assert config.gated
+        assert not config.add_linear_biases
+        return {
+            "num_experts": config.experts,
+            "top_k_experts": config.experts_per_token,
+            "moe_intermediate_size": config.intermediate_size,
+        }
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: MoEMLPConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        converters = [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.router",
+                f"{hf_prefix}.router.proj",
+                False,
+                drop_on_export=drop_on_export,
+            ),
+            # gate_up_proj shape [experts, 2*intermediate, hidden] matches Fast-LLM layer_1
+            get_parameter_converter(
+                f"{fast_llm_prefix}.layer_1.weight",
+                f"{hf_prefix}.experts.gate_up_proj",
+                drop_on_export=drop_on_export,
+            ),
+            # down_proj shape [experts, hidden, intermediate] matches Fast-LLM layer_2
+            get_parameter_converter(
+                f"{fast_llm_prefix}.layer_2.weight",
+                f"{hf_prefix}.experts.down_proj",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+        if not drop_on_export:
+            # Gemma4-specific router parameters without Fast-LLM equivalents
+            converters += [
+                get_parameter_converter((), f"{hf_prefix}.router.scale", drop_on_import=True),
+                get_parameter_converter((), f"{hf_prefix}.router.per_expert_scale", drop_on_import=True),
+            ]
+        return converters
+
+
+class Gemma4HybridMoEMLPConverter:
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        def make_norm():
+            return {"type": "rms_norm", "epsilon": config["rms_norm_eps"]}
+
+        return {
+            "type": "hybrid_moe",
+            "dense": Gemma4MLPConverter.import_config(config),
+            "routed": Gemma4MoEMLPConverter.import_config(config),
+            "dense_pre_norm": make_norm(),
+            "moe_pre_norm": make_norm(),
+            "dense_post_norm": make_norm(),
+            "moe_post_norm": make_norm(),
+        }
+
+    @classmethod
+    def export_config(cls, config: HybridMoEMLPConfig) -> dict:
+        Assert.custom(isinstance, config, HybridMoEMLPConfig)
+        return safe_merge_dicts(
+            Gemma4MLPConverter.export_config(config.dense),
+            Gemma4MoEMLPConverter.export_config(config.routed),
+            {"enable_moe_block": True},
+        )
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: HybridMoEMLPConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        norm_config = config.dense_pre_norm
+        return [
+            *Gemma4MLPConverter.get_converters(
+                config.dense,
+                f"{fast_llm_prefix}.dense",
+                f"{hf_prefix}.mlp",
+                drop_on_export=drop_on_export,
+            ),
+            *Gemma4MoEMLPConverter.get_converters(
+                config.routed,
+                f"{fast_llm_prefix}.routed",
+                hf_prefix,
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                norm_config,
+                f"{fast_llm_prefix}.dense_pre_norm",
+                f"{hf_prefix}.pre_feedforward_layernorm",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                norm_config,
+                f"{fast_llm_prefix}.moe_pre_norm",
+                f"{hf_prefix}.pre_feedforward_layernorm_2",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                norm_config,
+                f"{fast_llm_prefix}.dense_post_norm",
+                f"{hf_prefix}.post_feedforward_layernorm_1",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                norm_config,
+                f"{fast_llm_prefix}.moe_post_norm",
+                f"{hf_prefix}.post_feedforward_layernorm_2",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
+class Gemma4BlockConverter:
+    @classmethod
+    def import_config(cls, config: dict, is_sliding: bool) -> dict:
+        def make_norm():
+            return {"type": "rms_norm", "epsilon": config["rms_norm_eps"]}
+
+        out = {
+            "mixer": Gemma4AttentionConverter.import_config(config, is_sliding),
+            "normalization": make_norm(),
+            "post_mixer_normalization": make_norm(),
+            "post_mlp_normalization": make_norm(),
+        }
+        if config.get("enable_moe_block"):
+            out["mlp"] = Gemma4HybridMoEMLPConverter.import_config(config)
+            out["pre_mlp_normalization"] = {"type": "none"}
+        else:
+            out["mlp"] = Gemma4MLPConverter.import_config(config)
+            out["pre_mlp_normalization"] = make_norm()
+        return out
+
+    @classmethod
+    def export_config(cls, sliding_config: DecoderBlockConfig, full_config: DecoderBlockConfig) -> dict:
+        Assert.custom(isinstance, sliding_config, DecoderBlockConfig)
+        norm_config = sliding_config.normalization
+        Assert.custom(isinstance, norm_config, RMSNormalizationConfig)
+        is_moe = isinstance(sliding_config.mlp, HybridMoEMLPConfig)
+        out = safe_merge_dicts(
+            Gemma4AttentionConverter.export_config(sliding_config.mixer, full_config.mixer),
+            LlamaNormalizationConverter.export_config(norm_config),
+        )
+        if is_moe:
+            out = safe_merge_dicts(out, Gemma4HybridMoEMLPConverter.export_config(sliding_config.mlp))
+        else:
+            out = safe_merge_dicts(out, Gemma4MLPConverter.export_config(sliding_config.mlp))
+            out["enable_moe_block"] = False
+        return out
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: DecoderBlockConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        is_moe = isinstance(config.mlp, HybridMoEMLPConfig)
+        converters = [
+            *Gemma4AttentionConverter.get_converters(
+                config.mixer,
+                f"{fast_llm_prefix}.mixer",
+                f"{hf_prefix}.self_attn",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+        if is_moe:
+            converters += Gemma4HybridMoEMLPConverter.get_converters(
+                config.mlp,
+                f"{fast_llm_prefix}.mlp",
+                hf_prefix,
+                drop_on_export=drop_on_export,
+            )
+        else:
+            converters += Gemma4MLPConverter.get_converters(
+                config.mlp,
+                f"{fast_llm_prefix}.mlp",
+                f"{hf_prefix}.mlp",
+                drop_on_export=drop_on_export,
+            )
+            converters += LlamaNormalizationConverter.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.norm_2",
+                f"{hf_prefix}.pre_feedforward_layernorm",
+                drop_on_export=drop_on_export,
+            )
+        converters += [
+            *LlamaNormalizationConverter.get_converters(
+                config.normalization,
+                f"{fast_llm_prefix}.norm_1",
+                f"{hf_prefix}.input_layernorm",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                config.post_mixer_normalization,
+                f"{fast_llm_prefix}.post_mixer_norm",
+                f"{hf_prefix}.post_attention_layernorm",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                config.post_mlp_normalization,
+                f"{fast_llm_prefix}.post_mlp_norm",
+                f"{hf_prefix}.post_feedforward_layernorm",
+                drop_on_export=drop_on_export,
+            ),
+        ]
+        if not drop_on_export:
+            converters.append(get_parameter_converter((), f"{hf_prefix}.layer_scalar", drop_on_import=True))
+        return converters
+
+
+class Gemma4DecoderConverter:
+    block_converter_class: typing.ClassVar[type[Gemma4BlockConverter]] = Gemma4BlockConverter
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        layer_types = config["layer_types"]
+        unique_types = list(dict.fromkeys(layer_types))
+        blocks = {
+            layer_type: cls.block_converter_class.import_config(config, layer_type == _SLIDING_ATTENTION)
+            for layer_type in unique_types
+        }
+        return {
+            "type": "pattern",
+            "blocks": blocks,
+            "pattern": layer_types,
+            "num_blocks": config["num_hidden_layers"],
+        }
+
+    @classmethod
+    def export_config(cls, config: PatternBlockSequenceConfig | FixedBlockSequenceConfig) -> dict:
+        Assert.custom(isinstance, config, PatternBlockSequenceConfig)
+        Assert.incl(_SLIDING_ATTENTION, config.blocks)
+        Assert.incl(_FULL_ATTENTION, config.blocks)
+        return safe_merge_dicts(
+            cls.block_converter_class.export_config(
+                config.blocks[_SLIDING_ATTENTION],
+                config.blocks[_FULL_ATTENTION],
+            ),
+            {
+                "num_hidden_layers": config.num_blocks,
+                "layer_types": list(config.expanded_pattern),
+            },
+        )
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: PatternBlockSequenceConfig | FixedBlockSequenceConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        Assert.custom(isinstance, config, PatternBlockSequenceConfig)
+        converters = []
+        for block_index in range(config.num_blocks):
+            block_config = config.blocks[config.expanded_pattern[block_index]]
+            converters += cls.block_converter_class.get_converters(
+                block_config,
+                f"{fast_llm_prefix}.{block_index}",
+                f"{hf_prefix}.{block_index}",
+                drop_on_export=drop_on_export,
+            )
+        return converters
+
+
+class Gemma4EmbeddingsConverter(LlamaEmbeddingsConverter):
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "vocab_size": config["vocab_size"],
+            "embedding_scale": config["hidden_size"] ** 0.5,
+        }
+
+    @classmethod
+    def export_config(cls, config: LanguageModelEmbeddingsConfig) -> dict:
+        Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
+        assert not config.position_embeddings.enabled
+        return {"vocab_size": config.vocab_size}
+
+
+class Gemma4HeadConverter(LlamaHeadConverter):
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        out = {"normalization": LlamaNormalizationConverter.import_config(config)}
+        if (softcap := config.get("final_logit_softcapping")) is not None:
+            out["final_logit_softcap"] = softcap
+        return out
+
+    @classmethod
+    def export_config(cls, config: LanguageModelHeadConfig) -> dict:
+        out = LlamaNormalizationConverter.export_config(config.normalization)
+        if config.final_logit_softcap is not None:
+            out["final_logit_softcapping"] = config.final_logit_softcap
+        return out
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: LanguageModelConfig,
+        exported_config: dict,
+    ) -> list[WeightConverter]:
+        return [
+            *LlamaNormalizationConverter.get_converters(
+                config.head.normalization,
+                "head.final_norm",
+                "model.norm",
+            ),
+            get_parameter_converter(
+                "head.output_weights",
+                "lm_head.weight",
+                drop_on_import=exported_config["tie_word_embeddings"],
+                drop_on_export=exported_config["tie_word_embeddings"],
+            ),
+        ]
+
+
+class Gemma4BaseModelConverter:
+    decoder_converter_class: typing.ClassVar[type[Gemma4DecoderConverter]] = Gemma4DecoderConverter
+    embeddings_converter_class: typing.ClassVar[type[Gemma4EmbeddingsConverter]] = Gemma4EmbeddingsConverter
+    head_converter_class: typing.ClassVar[type[Gemma4HeadConverter]] = Gemma4HeadConverter
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        return {
+            "embeddings": cls.embeddings_converter_class.import_config(config),
+            "decoder": cls.decoder_converter_class.import_config(config),
+            "head": cls.head_converter_class.import_config(config),
+            "hidden_size": config["hidden_size"],
+            "tied_embedding_weight": config["tie_word_embeddings"],
+        }
+
+    @classmethod
+    def export_config(cls, config: GPTBaseModelConfig) -> dict:
+        Assert.custom(isinstance, config, GPTBaseModelConfig)
+        return safe_merge_dicts(
+            cls.embeddings_converter_class.export_config(config.embeddings),
+            cls.decoder_converter_class.export_config(config.decoder),
+            cls.head_converter_class.export_config(config.head),
+            {
+                "tie_word_embeddings": config.tied_embedding_weight,
+                "hidden_size": config.hidden_size,
+                # TODO: Implement Per-Layer Embeddings (PLE). Gemma4TextConfig defaults to 256;
+                # explicitly zero to disable the feature in the exported model until Fast-LLM
+                # supports it natively.
+                "hidden_size_per_layer_input": 0,
+            },
+        )
+
+    @classmethod
+    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        return [
+            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
+            *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
+            *cls.head_converter_class.get_converters(config, exported_config),
+        ]
+
+
+class Gemma4HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    _model: GPTModel
+    _model_class: typing.ClassVar = GPTModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = Gemma4CheckpointFormat
+    architecture: typing.ClassVar[str] = "Gemma4ForCausalLM"
+    base_model_converter_class: typing.ClassVar[type[Gemma4BaseModelConverter]] = Gemma4BaseModelConverter
+
+    @classmethod
+    def get_huggingface_model_type(cls) -> str:
+        return "gemma4_text"
+
+    @classmethod
+    def get_transformers_configuration_class(cls):
+        import transformers
+
+        return transformers.Gemma4TextConfig
