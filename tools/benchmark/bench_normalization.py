@@ -23,8 +23,8 @@ from fast_llm.layers.common.normalization.normalization import (
     FastLayerNorm,
     FusedLayerNorm,
     FusedRMSNorm,
-    _fast_normalization_available,
-    _fused_normalization_available,
+    fast_normalization_available,
+    fused_normalization_available,
 )
 from tools.benchmark.runner import Case, Variant, run_benchmark
 from tools.benchmark.utils import case_name, device
@@ -197,7 +197,7 @@ def _layer_norm_variants() -> list[Variant]:
             fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_compiled_max),
         ),
     ]
-    if _fused_normalization_available:
+    if fused_normalization_available:
         variants.append(
             Variant(
                 name="apex_fused",
@@ -205,7 +205,7 @@ def _layer_norm_variants() -> list[Variant]:
                 fwd_bwd=lambda inp: _run_layer_fwd_bwd(inp, _layer_norm_apex_fused),
             )
         )
-    if _fast_normalization_available:
+    if fast_normalization_available:
         # apex_fast only supports widths in _PERSIST_LN_SIZES; all shapes in _SHAPES qualify.
         variants.append(
             Variant(
@@ -249,7 +249,7 @@ def _rms_norm_variants() -> list[Variant]:
             fwd_bwd=lambda inp: _run_rms_fwd_bwd(inp, _rms_compiled_max),
         ),
     ]
-    if _fused_normalization_available:
+    if fused_normalization_available:
         variants.append(
             Variant(
                 name="apex_fused",

@@ -39,6 +39,12 @@ _SHAPES = [
 ]
 _DEFAULT_DTYPES = (torch.bfloat16,)
 
+# Triton autotuning warmup only needs to run once per shape. make_inputs is
+# called multiple times per case (per variant, per fwd/fwd_bwd/memory pass),
+# so cache which shapes have already been warmed up.
+_output_sparse_warmed_up: set[tuple] = set()
+_input_inner_sparse_warmed_up: set[tuple] = set()
+
 
 def _make_sparse_map(tokens: int, top_k: int, num_experts: int) -> SparseMap:
     top_experts = torch.randint(0, num_experts, (tokens, top_k), device=device())
@@ -63,13 +69,14 @@ def _make_output_sparse_inputs(
     backward_grad = _zero_padded_rows(
         torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
     )
-    # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
-    if TritonConfig.enabled():
+    _warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
+    if TritonConfig.enabled() and _warmup_key not in _output_sparse_warmed_up:
         _w_lhs = lhs_data.detach().requires_grad_(True)
         _w_rhs = rhs_data.detach().requires_grad_(True)
         _w_out = OutputSparseLinear.apply(_w_lhs, _w_rhs, sparse_map)
         _w_out.backward(backward_grad)
         del _w_lhs, _w_rhs, _w_out
+        _output_sparse_warmed_up.add(_warmup_key)
     return {
         "lhs": lhs_data.requires_grad_(True),
         "rhs": rhs_data.requires_grad_(True),
@@ -90,13 +97,14 @@ def _make_input_inner_sparse_inputs(
     backward_grad = _zero_padded_rows(
         torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map
     )
-    # Warm up Triton autotuning so the timed runs aren't dominated by JIT compilation.
-    if TritonConfig.enabled():
+    _warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
+    if TritonConfig.enabled() and _warmup_key not in _input_inner_sparse_warmed_up:
         _w_lhs = lhs_data.detach().requires_grad_(True)
         _w_rhs = rhs_data.detach().requires_grad_(True)
         _w_out = InputSparseLinear.apply(_w_lhs, _w_rhs, sparse_map)
         _w_out.backward(backward_grad)
         del _w_lhs, _w_rhs, _w_out
+        _input_inner_sparse_warmed_up.add(_warmup_key)
     return {
         "lhs": lhs_data.requires_grad_(True),
         "rhs": rhs_data.requires_grad_(True),
