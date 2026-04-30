@@ -108,6 +108,18 @@ def _run_dispatch_fwd_bwd(inp: dict, fn) -> dict:
     return {"output": output.detach(), "grad_dense": inp["dense_input"].grad}
 
 
+def _run_dispatch_fwd_fp32(inp: dict) -> dict:
+    dense_fp32 = inp["dense_input"].float().detach().requires_grad_(True)
+    return {"output": _dispatch_pytorch(dense_fp32, inp["sparse_map"])}
+
+
+def _run_dispatch_fwd_bwd_fp32(inp: dict) -> dict:
+    dense_fp32 = inp["dense_input"].float().detach().requires_grad_(True)
+    output = _dispatch_pytorch(dense_fp32, inp["sparse_map"])
+    output.backward(inp["backward_grad"].float())
+    return {"output": output.detach(), "grad_dense": dense_fp32.grad}
+
+
 def _run_dispatch_fwd_triton(inp: dict) -> dict:
     return {"output": copy_dense_to_sparse_autograd(inp["dense_input"], inp["sparse_map"])}
 
@@ -126,10 +138,15 @@ def _dispatch_postprocess(out: dict[str, torch.Tensor], inp: dict) -> dict[str, 
 def _dispatch_variants() -> list[Variant]:
     variants = [
         Variant(
+            name="fp32_reference",
+            fwd=_run_dispatch_fwd_fp32,
+            fwd_bwd=_run_dispatch_fwd_bwd_fp32,
+            is_reference=True,
+        ),
+        Variant(
             name="pytorch_eager",
             fwd=lambda inp: _run_dispatch_fwd(inp, _dispatch_pytorch),
             fwd_bwd=lambda inp: _run_dispatch_fwd_bwd(inp, _dispatch_pytorch),
-            is_reference=True,
         ),
         Variant(
             name="pytorch_compiled",
@@ -183,6 +200,24 @@ def _run_combine_fwd_bwd(inp: dict, fn) -> dict:
     }
 
 
+def _run_combine_fwd_fp32(inp: dict) -> dict:
+    sparse_fp32 = inp["sparse_input"].float().detach().requires_grad_(True)
+    scores_fp32 = inp["scores"].float().detach().requires_grad_(True)
+    return {"output": _combine_pytorch(sparse_fp32, scores_fp32, inp["sparse_map"])}
+
+
+def _run_combine_fwd_bwd_fp32(inp: dict) -> dict:
+    sparse_fp32 = inp["sparse_input"].float().detach().requires_grad_(True)
+    scores_fp32 = inp["scores"].float().detach().requires_grad_(True)
+    output = _combine_pytorch(sparse_fp32, scores_fp32, inp["sparse_map"])
+    output.backward(inp["backward_grad"].float())
+    return {
+        "output": output.detach(),
+        "grad_sparse": sparse_fp32.grad,
+        "grad_scores": scores_fp32.grad,
+    }
+
+
 def _run_combine_fwd_triton(inp: dict) -> dict:
     return {"output": copy_sparse_to_dense_autograd(inp["sparse_input"], inp["scores"], inp["sparse_map"])}
 
@@ -206,10 +241,15 @@ def _combine_postprocess(out: dict[str, torch.Tensor], inp: dict) -> dict[str, t
 def _combine_variants() -> list[Variant]:
     variants = [
         Variant(
+            name="fp32_reference",
+            fwd=_run_combine_fwd_fp32,
+            fwd_bwd=_run_combine_fwd_bwd_fp32,
+            is_reference=True,
+        ),
+        Variant(
             name="pytorch_eager",
             fwd=lambda inp: _run_combine_fwd(inp, _combine_pytorch),
             fwd_bwd=lambda inp: _run_combine_fwd_bwd(inp, _combine_pytorch),
-            is_reference=True,
         ),
         Variant(
             name="pytorch_compiled",

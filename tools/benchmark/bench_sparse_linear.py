@@ -134,6 +134,20 @@ def _run_output_sparse_fwd_bwd(inp: dict, fn) -> dict:
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 
+def _run_output_sparse_fwd_fp32(inp: dict) -> dict:
+    lhs_fp32 = inp["lhs"].float().detach().requires_grad_(True)
+    rhs_fp32 = inp["rhs"].float().detach().requires_grad_(True)
+    return {"output": _output_sparse_loop(lhs_fp32, rhs_fp32, inp["sparse_map"])}
+
+
+def _run_output_sparse_fwd_bwd_fp32(inp: dict) -> dict:
+    lhs_fp32 = inp["lhs"].float().detach().requires_grad_(True)
+    rhs_fp32 = inp["rhs"].float().detach().requires_grad_(True)
+    output = _output_sparse_loop(lhs_fp32, rhs_fp32, inp["sparse_map"])
+    output.backward(inp["backward_grad"].float())
+    return {"output": output.detach(), "grad_lhs": lhs_fp32.grad, "grad_rhs": rhs_fp32.grad}
+
+
 def _run_output_sparse_fwd_triton(inp: dict) -> dict:
     return {"output": OutputSparseLinear.apply(inp["lhs"], inp["rhs"], inp["sparse_map"])}
 
@@ -147,10 +161,15 @@ def _run_output_sparse_fwd_bwd_triton(inp: dict) -> dict:
 def _output_sparse_variants() -> list[Variant]:
     variants = [
         Variant(
+            name="fp32_reference",
+            fwd=_run_output_sparse_fwd_fp32,
+            fwd_bwd=_run_output_sparse_fwd_bwd_fp32,
+            is_reference=True,
+        ),
+        Variant(
             name="pytorch_loop",
             fwd=lambda inp: _run_output_sparse_fwd(inp, _output_sparse_loop),
             fwd_bwd=lambda inp: _run_output_sparse_fwd_bwd(inp, _output_sparse_loop),
-            is_reference=True,
         ),
         Variant(
             name="pytorch_compiled",
@@ -197,6 +216,20 @@ def _run_input_inner_sparse_fwd_bwd(inp: dict, fn) -> dict:
     return {"output": output.detach(), "grad_lhs": inp["lhs"].grad, "grad_rhs": inp["rhs"].grad}
 
 
+def _run_input_inner_sparse_fwd_fp32(inp: dict) -> dict:
+    lhs_fp32 = inp["lhs"].float().detach().requires_grad_(True)
+    rhs_fp32 = inp["rhs"].float().detach().requires_grad_(True)
+    return {"output": _input_inner_sparse_loop(lhs_fp32, rhs_fp32, inp["sparse_map"])}
+
+
+def _run_input_inner_sparse_fwd_bwd_fp32(inp: dict) -> dict:
+    lhs_fp32 = inp["lhs"].float().detach().requires_grad_(True)
+    rhs_fp32 = inp["rhs"].float().detach().requires_grad_(True)
+    output = _input_inner_sparse_loop(lhs_fp32, rhs_fp32, inp["sparse_map"])
+    output.backward(inp["backward_grad"].float())
+    return {"output": output.detach(), "grad_lhs": lhs_fp32.grad, "grad_rhs": rhs_fp32.grad}
+
+
 def _run_input_inner_sparse_fwd_triton(inp: dict) -> dict:
     return {"output": InputSparseLinear.apply(inp["lhs"], inp["rhs"], inp["sparse_map"])}
 
@@ -210,10 +243,15 @@ def _run_input_inner_sparse_fwd_bwd_triton(inp: dict) -> dict:
 def _input_inner_sparse_variants() -> list[Variant]:
     variants = [
         Variant(
+            name="fp32_reference",
+            fwd=_run_input_inner_sparse_fwd_fp32,
+            fwd_bwd=_run_input_inner_sparse_fwd_bwd_fp32,
+            is_reference=True,
+        ),
+        Variant(
             name="pytorch_loop",
             fwd=lambda inp: _run_input_inner_sparse_fwd(inp, _input_inner_sparse_loop),
             fwd_bwd=lambda inp: _run_input_inner_sparse_fwd_bwd(inp, _input_inner_sparse_loop),
-            is_reference=True,
         ),
         Variant(
             name="pytorch_compiled",
