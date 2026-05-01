@@ -10,7 +10,6 @@ using RMS error. Results are printed as a table per case.
 """
 
 import dataclasses
-import gc
 import math
 import statistics
 import time
@@ -288,7 +287,6 @@ def _run_one_variant(
         # fwd mode
         if variant.fwd is not None:
             inputs = _seeded_inputs(case)
-            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -322,7 +320,6 @@ def _run_one_variant(
         # fwd+bwd mode
         if variant.fwd_bwd is not None:
             inputs = _seeded_inputs(case)
-            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -347,7 +344,6 @@ def _run_one_variant(
 
             # Memory measurement: one fresh call on fresh inputs.
             fresh_inputs = _seeded_inputs(case)
-            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             result.memory = measure_memory(_guarded(lambda: variant.fwd_bwd(fresh_inputs)))
@@ -362,7 +358,6 @@ def _run_one_variant(
         elif variant.fwd is not None and result.memory is None:
             # No backward — measure fwd-mode memory.
             fresh_inputs = _seeded_inputs(case)
-            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             result.memory = measure_memory(_guarded(lambda: variant.fwd(fresh_inputs)))

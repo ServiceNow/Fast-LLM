@@ -2,14 +2,24 @@
 Smoke tests for all benchmark modules.
 
 One test per sub-benchmark (kernel): inputs are tiny so the runner code path is
-exercised quickly on CPU. torch.compile is disabled via a fixture to avoid the
-JIT cold-start (~20 s on CPU per variant). warmup_ms=0 and min_reps=1 cap the
-rep count to one timed call per variant so the suite stays fast.
+exercised quickly without requiring a full benchmark run.
+
+Patches applied to keep each test under ~100 ms:
+- torch.compile disabled (avoids JIT cold-start).
+- fast_llm_triton variants replaced with fp32 reference (no Triton compilation;
+  kernel correctness is covered by the main test suite).
+- TritonConfig.enabled → False (prevents make_inputs warmup in sparse_linear).
+- _cudagraph_mark_step_begin → None and synchronize → no-op (both cause C-level
+  CUDA syncs per fn() call that dominate the wall time without this).
 """
+
+import dataclasses
 
 import pytest
 import torch
 
+import tools.benchmark.runner as _bench_runner
+from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import triton_interpret
 from tools.benchmark import (
     bench_entropy_loss,
@@ -70,8 +80,20 @@ _SKIP_VARIANTS = {"pytorch_compiled", "pytorch_compiled_max"}
 
 
 @pytest.mark.parametrize("name,cases,variants", _PARAMS)
-def test_triton_benchmark(name, cases, variants):
+def test_triton_benchmark(name, cases, variants, monkeypatch):
     if triton_interpret and name in _INTERPRETER_SKIP:
         pytest.skip("tl.histogram is broken in the Triton interpreter")
+
+    monkeypatch.setattr(TritonConfig, "enabled", lambda *a, **kw: False)
+    monkeypatch.setattr(_bench_runner, "_cudagraph_mark_step_begin", None)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+
     variants = [v for v in variants if v.name not in _SKIP_VARIANTS]
+    # Replace fast_llm_triton fwd/fwd_bwd with the fp32 reference so no Triton
+    # kernels are compiled. The runner still exercises the full variant code path.
+    ref = next(v for v in variants if v.is_reference)
+    variants = [
+        dataclasses.replace(v, fwd=ref.fwd, fwd_bwd=ref.fwd_bwd) if v.name == "fast_llm_triton" else v
+        for v in variants
+    ]
     run_benchmark(name, cases, variants, warmup_ms=0, rep_ms=0, min_reps=1)
