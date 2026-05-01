@@ -1,7 +1,3 @@
-"""Entropy loss kernels: cross_entropy (labels and logits target formats),
-reverse_kl, and z_loss. All Triton kernels fuse fwd+bwd into a single
-logits-tensor pass; `grad_output=1.0` triggers gradient computation."""
-
 import torch
 import torch.nn.functional as F
 
@@ -12,7 +8,7 @@ from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_b
 
 # (tokens, vocab_size)
 _SHAPES = [
-    (4096, 32768),  # 7B / Llama-2 vocab
+    (4096, 32768),  # Llama-2 vocab
     (4096, 65536),
     (4096, 131072),  # Llama-3 vocab
 ]
@@ -54,6 +50,7 @@ def _z_loss_eager(logits: torch.Tensor) -> torch.Tensor:
 
 
 def _entropy_variants(eager_function, input_keys, triton_kwargs=None) -> list:
+    """Variants for the 3 entropy_loss kernels that share `triton_entropy_loss_forward_backward`."""
     target_key = input_keys[1]
     triton_kwargs = triton_kwargs or {}
 
@@ -90,15 +87,17 @@ def _z_loss_triton_fwd_bwd(inputs: dict) -> dict:
     return {"loss": loss, "grad_logits": grad_logits}
 
 
-def _label_loss_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
+def _label_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
+    # 2× logits + small labels traffic.
     return 2 * tokens * vocab * dtype.itemsize + tokens * 4
 
 
-def _dist_loss_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
+def _dist_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
+    # 2× logits + 1× target_logits.
     return 3 * tokens * vocab * dtype.itemsize
 
 
-def _entropy_loss_flops(tokens: int, vocab: int) -> int:
+def _flops(tokens: int, vocab: int) -> int:
     # fwd ≈ 3*vocab per token, bwd ≈ vocab.
     return 4 * tokens * vocab
 
@@ -111,21 +110,12 @@ def benchmarks(
     return [
         (
             "entropy_loss: cross_entropy (labels)",
-            make_cases(
-                "cross_entropy_labels", dtypes, shapes, _make_label_inputs, _label_loss_bytes, _entropy_loss_flops
-            ),
+            make_cases("cross_entropy_labels", dtypes, shapes, _make_label_inputs, _label_bytes, _flops),
             _entropy_variants(_ce_labels_eager, input_keys=("logits", "labels")),
         ),
         (
             "entropy_loss: cross_entropy (logits)",
-            make_cases(
-                "cross_entropy_logits",
-                dtypes,
-                shapes,
-                _make_distribution_inputs,
-                _dist_loss_bytes,
-                _entropy_loss_flops,
-            ),
+            make_cases("cross_entropy_logits", dtypes, shapes, _make_distribution_inputs, _dist_bytes, _flops),
             _entropy_variants(
                 _ce_dist_eager,
                 input_keys=("logits", "target_logits"),
@@ -137,9 +127,7 @@ def benchmarks(
         ),
         (
             "entropy_loss: reverse_kl (logits)",
-            make_cases(
-                "reverse_kl_logits", dtypes, shapes, _make_distribution_inputs, _dist_loss_bytes, _entropy_loss_flops
-            ),
+            make_cases("reverse_kl_logits", dtypes, shapes, _make_distribution_inputs, _dist_bytes, _flops),
             _entropy_variants(
                 _reverse_kl_eager,
                 input_keys=("logits", "target_logits"),
@@ -151,7 +139,7 @@ def benchmarks(
         ),
         (
             "entropy_loss: z_loss",
-            make_cases("z_loss", dtypes, shapes, _make_label_inputs, _label_loss_bytes, _entropy_loss_flops),
+            make_cases("z_loss", dtypes, shapes, _make_label_inputs, _label_bytes, _flops),
             standard_fwd_bwd_pytorch_variants(
                 _z_loss_eager,
                 input_keys=("logits",),

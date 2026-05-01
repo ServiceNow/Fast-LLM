@@ -1,5 +1,3 @@
-"""Bandwidth-bound pointwise kernels: copy, fill, add."""
-
 import torch
 
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
@@ -86,7 +84,11 @@ def benchmarks(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None)
     return [
         ("pointwise: copy", make_cases("copy", dtypes, shapes, _make_copy_inputs, _copy_bytes), _COPY_VARIANTS),
         ("pointwise: fill", make_cases("fill", dtypes, shapes, _make_fill_inputs, _fill_bytes), _FILL_VARIANTS),
-        ("pointwise: add", make_cases("add", dtypes, shapes, _make_add_inputs, _add_bytes, _add_flops), _ADD_VARIANTS),
+        (
+            "pointwise: add",
+            make_cases("add", dtypes, shapes, _make_add_inputs, _add_bytes, _add_flops),
+            _ADD_VARIANTS,
+        ),
     ]
 
 

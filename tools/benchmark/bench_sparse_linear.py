@@ -1,12 +1,3 @@
-"""MoE sparse grouped GEMM kernels — the two linear layers in a MoE FFN.
-
-output_sparse (layer 1 / up-proj):
-  out[i, :] = lhs[i, :] @ rhs[:, expert(i)*ffn_per_expert : (expert(i)+1)*ffn_per_expert]
-
-input_inner_sparse (layer 2 / down-proj):
-  out[i, :] = lhs[i, :] @ rhs[expert(i)*ffn_per_expert : (expert(i)+1)*ffn_per_expert, :]
-"""
-
 import torch
 
 from fast_llm.functional.config import TritonConfig

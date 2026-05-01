@@ -1,6 +1,5 @@
-"""LayerNorm and RMSNorm. The Triton implementation handles both via the
-`bias` argument (LayerNorm when given, RMSNorm when None) and writes parameter
-gradients to Fast-LLM's `grad_buffer` attribute rather than autograd's `.grad`."""
+"""LayerNorm and RMSNorm. The Triton kernel writes parameter gradients to a
+`grad_buffer` attribute (Fast-LLM convention) instead of autograd's `.grad`."""
 
 import torch
 
@@ -12,7 +11,6 @@ from fast_llm.layers.common.normalization.normalization import (
     fast_normalization_available,
     fused_normalization_available,
 )
-from tools.benchmark.runner import Variant
 from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
 
 # (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
@@ -28,8 +26,6 @@ _EPS = 1e-5
 
 
 def _setup_param(tensor: torch.Tensor) -> torch.Tensor:
-    """Triton's normalization backward writes weight/bias gradients to a
-    `grad_buffer` attribute (Fast-LLM convention) instead of autograd's `.grad`."""
     tensor.grad_buffer = torch.zeros_like(tensor)
     tensor.param_grad_is_zero = True
     return tensor
@@ -60,20 +56,7 @@ def _rms_norm_eager(input_, weight):
     return torch.rms_norm(input_, weight.shape, weight, _EPS)
 
 
-def _layer_norm_apex_fused(input_, weight, bias):
-    return FusedLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
-
-
-def _layer_norm_apex_fast(input_, weight, bias):
-    return FastLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
-
-
-def _rms_norm_apex_fused(input_, weight):
-    return FusedRMSNorm.apply(input_, weight.shape, weight, _EPS)
-
-
 def _param_grad(param: torch.Tensor) -> torch.Tensor:
-    """Triton writes to `grad_buffer`; autograd writes to `.grad`."""
     return param.grad if param.grad is not None else param.grad_buffer
 
 
@@ -108,48 +91,36 @@ def _rms_norm_triton_fwd_bwd(inputs: dict) -> dict:
     }
 
 
-def _layer_norm_variants() -> list[Variant]:
-    extras: dict = {}
-    if fused_normalization_available:
-        extras["apex_fused"] = _layer_norm_apex_fused
-    if fast_normalization_available:
-        extras["apex_fast"] = _layer_norm_apex_fast
-    return standard_fwd_bwd_pytorch_variants(
-        _layer_norm_eager,
-        input_keys=("input", "weight", "bias"),
-        grad_input_keys=("input", "weight", "bias"),
-        grad_output_key="grad_output",
-        extra_functions=extras,
-        triton_fwd=_layer_norm_triton_fwd,
-        triton_fwd_bwd=_layer_norm_triton_fwd_bwd,
-    )
+def _layer_norm_apex_fused(input_, weight, bias):
+    return FusedLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
 
 
-def _rms_norm_variants() -> list[Variant]:
-    extras: dict = {}
-    if fused_normalization_available:
-        extras["apex_fused"] = _rms_norm_apex_fused
-    return standard_fwd_bwd_pytorch_variants(
-        _rms_norm_eager,
-        input_keys=("input", "weight"),
-        grad_input_keys=("input", "weight"),
-        grad_output_key="grad_output",
-        extra_functions=extras,
-        triton_fwd=_rms_norm_triton_fwd,
-        triton_fwd_bwd=_rms_norm_triton_fwd_bwd,
-    )
+def _layer_norm_apex_fast(input_, weight, bias):
+    return FastLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
+
+
+def _rms_norm_apex_fused(input_, weight):
+    return FusedRMSNorm.apply(input_, weight.shape, weight, _EPS)
+
+
+_LAYER_NORM_EXTRAS: dict = {}
+if fused_normalization_available:
+    _LAYER_NORM_EXTRAS["apex_fused"] = _layer_norm_apex_fused
+if fast_normalization_available:
+    _LAYER_NORM_EXTRAS["apex_fast"] = _layer_norm_apex_fast
+
+_RMS_NORM_EXTRAS: dict = {}
+if fused_normalization_available:
+    _RMS_NORM_EXTRAS["apex_fused"] = _rms_norm_apex_fused
 
 
 def _layer_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
-    activations = 4 * rows * cols * dtype.itemsize  # fwd in/out + bwd grad_in/out
-    parameters = 6 * cols * dtype.itemsize  # weight, bias × (read + grad write) twice
-    return activations + parameters
+    # fwd in/out + bwd grad_in/out (4× activations) + weight & bias × (read + grad write).
+    return 4 * rows * cols * dtype.itemsize + 6 * cols * dtype.itemsize
 
 
 def _rms_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
-    activations = 4 * rows * cols * dtype.itemsize
-    parameters = 3 * cols * dtype.itemsize
-    return activations + parameters
+    return 4 * rows * cols * dtype.itemsize + 3 * cols * dtype.itemsize
 
 
 def _layer_norm_flops(rows: int, cols: int) -> int:
@@ -158,6 +129,7 @@ def _layer_norm_flops(rows: int, cols: int) -> int:
 
 
 def _rms_norm_flops(rows: int, cols: int) -> int:
+    # No mean subtraction or bias.
     return 15 * rows * cols
 
 
@@ -170,12 +142,28 @@ def benchmarks(
         (
             "normalization: layer_norm",
             make_cases("layer_norm", dtypes, shapes, _make_layer_norm_inputs, _layer_norm_bytes, _layer_norm_flops),
-            _layer_norm_variants(),
+            standard_fwd_bwd_pytorch_variants(
+                _layer_norm_eager,
+                input_keys=("input", "weight", "bias"),
+                grad_input_keys=("input", "weight", "bias"),
+                grad_output_key="grad_output",
+                extra_functions=_LAYER_NORM_EXTRAS,
+                triton_fwd=_layer_norm_triton_fwd,
+                triton_fwd_bwd=_layer_norm_triton_fwd_bwd,
+            ),
         ),
         (
             "normalization: rms_norm",
             make_cases("rms_norm", dtypes, shapes, _make_rms_norm_inputs, _rms_norm_bytes, _rms_norm_flops),
-            _rms_norm_variants(),
+            standard_fwd_bwd_pytorch_variants(
+                _rms_norm_eager,
+                input_keys=("input", "weight"),
+                grad_input_keys=("input", "weight"),
+                grad_output_key="grad_output",
+                extra_functions=_RMS_NORM_EXTRAS,
+                triton_fwd=_rms_norm_triton_fwd,
+                triton_fwd_bwd=_rms_norm_triton_fwd_bwd,
+            ),
         ),
     ]
 

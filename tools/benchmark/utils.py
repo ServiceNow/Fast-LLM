@@ -1,7 +1,3 @@
-"""Helpers shared by the `bench_*.py` modules — case construction, variant
-builders for the canonical fp32_reference + pytorch_eager + pytorch_compiled
-chunk, and the `run = bench_main(benchmarks)` glue."""
-
 from collections.abc import Callable
 from functools import partial
 
@@ -14,20 +10,17 @@ from tools.benchmark.runner import Case, Inputs, Variant, VariantFn, run_benchma
 DEFAULT_DTYPES: tuple[torch.dtype, ...] = (torch.bfloat16,)
 
 
-def format_size(n: int) -> str:
+def _format_size(n: int) -> str:
     for unit, factor in (("Gi", 1 << 30), ("Mi", 1 << 20), ("Ki", 1 << 10)):
         if n >= factor and n % factor == 0:
             return f"{n // factor} {unit}"
     return str(n)
 
 
-def format_shape(shape: tuple[int, ...]) -> str:
-    joined = ", ".join(format_size(n) for n in shape)
-    return f"({joined},)" if len(shape) == 1 else f"({joined})"
-
-
-def case_name(kernel: str, shape: tuple[int, ...], dtype: torch.dtype) -> str:
-    return f"[{kernel}] {format_shape(shape)} {DataType.from_torch(dtype).short}"
+def _case_name(kernel: str, shape: tuple[int, ...], dtype: torch.dtype) -> str:
+    joined = ", ".join(_format_size(n) for n in shape)
+    shape_repr = f"({joined},)" if len(shape) == 1 else f"({joined})"
+    return f"[{kernel}] {shape_repr} {DataType.from_torch(dtype).short}"
 
 
 def device() -> str:
@@ -50,7 +43,7 @@ def make_cases(
             shape_tuple = shape if isinstance(shape, tuple) else (shape,)
             cases.append(
                 Case(
-                    name=case_name(kernel_name, shape_tuple, dtype),
+                    name=_case_name(kernel_name, shape_tuple, dtype),
                     make_inputs=partial(make_inputs, *shape_tuple, dtype),
                     expected_bytes=bytes_fn(*shape_tuple, dtype) if bytes_fn else None,
                     expected_flops=flops_fn(*shape_tuple) if flops_fn else None,
@@ -61,8 +54,6 @@ def make_cases(
 
 
 def bench_main(benchmarks_fn: Callable) -> Callable:
-    """Build the `run()` callable each `bench_*.py` exports for `__main__.py` to dispatch to."""
-
     def run(
         verbose: bool = False,
         dtypes: tuple[torch.dtype, ...] | None = None,
@@ -84,8 +75,8 @@ def standard_fwd_variants(
     triton_function: Callable | None,
     unpack: Callable[[Inputs], tuple],
 ) -> list[Variant]:
-    """Forward-only variant set: fp32_reference, pytorch_eager, pytorch_compiled,
-    pytorch_compiled_max, and (if `TritonConfig.enabled()`) fast_llm_triton."""
+    """fp32_reference, pytorch_eager, pytorch_compiled, pytorch_compiled_max,
+    and (if `TritonConfig.enabled()`) fast_llm_triton."""
 
     def fp32_unpack(inputs: Inputs) -> tuple:
         return tuple(
@@ -165,18 +156,13 @@ def standard_fwd_bwd_pytorch_variants(
     eager_name: str = "pytorch_eager",
     enable_max_autotune: bool = True,
 ) -> list[Variant]:
-    """Forward+backward variant set for kernels driven by a dict-style input.
+    """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max] +
+    `extra_functions` + optional `<triton_name>` (gated on `TritonConfig.enabled()`).
 
-    Generates fp32_reference, <eager_name>, pytorch_compiled, [pytorch_compiled_max,]
-    plus any callables in `extra_functions` (variant name = dict key). When
-    `triton_fwd`/`triton_fwd_bwd` are given and `TritonConfig.enabled()`, a
-    `<triton_name>` variant is appended; the callables receive the raw inputs dict.
-
-    `eager_function(*[inputs[key] for key in input_keys])` computes the forward output.
-    `grad_input_keys` lists input keys whose `.grad` is collected as `grad_<key>`.
-    `grad_output_key=None` triggers a scalar-loss `output.backward()`.
-    The fp32 reference upcasts every floating-point tensor in the input dict, re-attaching
-    `requires_grad=True` on `grad_input_keys`.
+    Pytorch variants call `eager_function(*[inputs[k] for k in input_keys])`. For
+    fwd_bwd, `grad_input_keys` are read out as `grad_<key>` and `grad_output_key=None`
+    triggers a scalar `output.backward()`. The fp32 reference upcasts every
+    floating-point input, re-attaching `requires_grad=True` on `grad_input_keys`.
     """
     fwd_kwargs = {"input_keys": input_keys, "output_key": output_key}
     fwd_bwd_kwargs = {

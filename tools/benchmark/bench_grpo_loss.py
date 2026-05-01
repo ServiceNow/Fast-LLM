@@ -1,7 +1,3 @@
-"""Fused GRPO (Group Relative Policy Optimization) loss kernel. The Triton
-kernel fuses softmax, log-prob extraction, ratio + clip, and backward into a
-single pass over logits."""
-
 import torch
 
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
@@ -72,15 +68,13 @@ def _triton_fwd_bwd(inputs: dict) -> dict:
 
 
 def _grpo_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
-    # fwd: read logits + bwd: read logits + write grad_logits
-    logit_traffic = 3 * tokens * vocab * dtype.itemsize
-    # labels (int64), advantages (fp32), old_log_probs (fp32)
-    scalar_traffic = tokens * (8 + 4 + 4)
-    return logit_traffic + scalar_traffic
+    # 3× logits traffic (read fwd, read+write bwd) + per-token scalars:
+    # labels (int64 = 8B), advantages (fp32 = 4B), old_log_probs (fp32 = 4B).
+    return 3 * tokens * vocab * dtype.itemsize + tokens * 16
 
 
 def _grpo_flops(tokens: int, vocab: int) -> int:
-    # softmax (fwd) + grad (bwd) ≈ 14 FLOPs/element
+    # softmax (fwd) + grad (bwd) ≈ 14 FLOPs/element.
     return 14 * tokens * vocab
 
 

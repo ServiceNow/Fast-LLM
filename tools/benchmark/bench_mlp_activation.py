@@ -1,6 +1,3 @@
-"""Fused MLP activation kernel. For gated SiLU the fwd input is (tokens, 2*ffn_dim)
-— [gate_proj, up_proj] concatenated — and the output is (tokens, ffn_dim)."""
-
 import torch
 
 from fast_llm.functional.config import ActivationType
@@ -13,12 +10,12 @@ from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_b
 
 # (tokens, ffn_dim) — input has shape (tokens, 2*ffn_dim) for gated.
 _SHAPES = [
-    (8192, 4096),  # 7B/13B models
-    (8192, 8192),  # large
-    (8192, 14336),  # 70B models
+    (8192, 4096),  # 7B/13B
+    (8192, 8192),
+    (8192, 14336),  # 70B
     (4096, 28672),  # MoE up-projection
 ]
-_ACTIVATION = ActivationType.silu  # standard for Llama-style gated models
+_ACTIVATION = ActivationType.silu
 
 
 def _make_mlp_inputs(tokens: int, ffn_dim: int, dtype: torch.dtype) -> dict:
@@ -42,8 +39,7 @@ def _triton_fwd_bwd(inputs: dict) -> dict:
 
 
 def _mlp_activation_bytes(tokens: int, ffn_dim: int, dtype: torch.dtype) -> int:
-    # fwd: read input (2*ffn_dim) + write output (ffn_dim).
-    # bwd: read grad_output (ffn_dim) + read input (2*ffn_dim) + write grad_input (2*ffn_dim).
+    # fwd: 3*ffn_dim traffic; bwd: 5*ffn_dim. 8 elements/token total.
     return 8 * tokens * ffn_dim * dtype.itemsize
 
 

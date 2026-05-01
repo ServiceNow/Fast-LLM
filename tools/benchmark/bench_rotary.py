@@ -22,7 +22,7 @@ def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torc
     input_ = torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device())
     return {
         "input_": input_,
-        "work": input_.clone(),  # pre-allocated work buffer for in-place variants
+        "work": input_.clone(),
         "frequencies": torch.randn(tokens, 2 * rotary_dim, dtype=torch.float32, device=device()),
     }
 
@@ -42,6 +42,7 @@ _rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagr
 
 
 def _rotary_bytes(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> int:
+    # frequencies are float32, hence the extra 4 bytes per token×head_size.
     return 2 * tokens * num_heads * head_size * dtype.itemsize + tokens * head_size * 4
 
 

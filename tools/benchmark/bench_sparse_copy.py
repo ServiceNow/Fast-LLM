@@ -1,6 +1,3 @@
-"""MoE token dispatch (dense → sparse) and combine (sparse → dense, weighted by
-routing scores) kernels."""
-
 import torch
 
 from fast_llm.functional.triton.sparse_copy import (
@@ -25,8 +22,8 @@ def _make_sparse_map(tokens: int, top_k: int, num_experts: int) -> SparseMap:
 
 
 def _make_phantom_mask(sparse_map: SparseMap) -> torch.Tensor:
-    # Boolean mask (num_rows, 1): True for phantom rows (within-expert padding
-    # and the static tail beyond expert_ends[-1]). Used in output_postprocess only.
+    # True for within-expert padding rows and the static tail past expert_ends[-1];
+    # used only in output_postprocess, never in the timed path.
     mask = torch.zeros(sparse_map.num_rows, 1, dtype=torch.bool, device=device())
     for expert in range(sparse_map.num_experts):
         pad_begin = int(sparse_map.expert_pad_begins[expert])
@@ -117,8 +114,8 @@ def _dispatch_bytes(tokens: int, top_k: int, num_experts: int, hidden: int, dtyp
 
 
 def _combine_bytes(tokens: int, top_k: int, num_experts: int, hidden: int, dtype: torch.dtype) -> int:
-    sparse_rows = top_k * tokens
-    return 2 * (sparse_rows + tokens) * hidden * dtype.itemsize + 4 * tokens * top_k * dtype.itemsize
+    # 2× (sparse + dense) hidden traffic + scores read/write.
+    return 2 * (top_k + 1) * tokens * hidden * dtype.itemsize + 4 * tokens * top_k * dtype.itemsize
 
 
 def benchmarks(
