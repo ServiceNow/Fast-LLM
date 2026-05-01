@@ -25,6 +25,9 @@ class PostNormTestConfig:
     name: str
     post_mixer_norm: bool = False
     post_mlp_norm: bool = False
+    # If set, enable `output_scale` and override its initialized value with this float.
+    # Picking a non-unit value makes the test sensitive to the multiplication (the default init is 1.0).
+    output_scale: float | None = None
 
     def get_block_config(self) -> DecoderBlockConfig:
         config_dict: dict = {
@@ -45,6 +48,8 @@ class PostNormTestConfig:
             config_dict["post_mixer_normalization"] = {"type": "rms_norm"}
         if self.post_mlp_norm:
             config_dict["post_mlp_normalization"] = {"type": "rms_norm"}
+        if self.output_scale is not None:
+            config_dict["output_scale"] = {"enabled": True}
         return DecoderBlockConfig.from_dict(config_dict)
 
     @functools.cached_property
@@ -67,7 +72,10 @@ class PostNormTestConfig:
                 mlp_hidden = block.post_mlp_norm(mlp_hidden)
             if mlp_bias is not None:
                 mlp_hidden = mlp_hidden + mlp_bias
-            return after_mixer + mlp_hidden
+            output = after_mixer + mlp_hidden
+            if self.output_scale is not None:
+                output = output * self.output_scale
+            return output
 
 
 _base_post_norm_cases = [
@@ -75,6 +83,7 @@ _base_post_norm_cases = [
     ("post_mixer_norm", {"post_mixer_norm": True}),
     ("post_mlp_norm", {"post_mlp_norm": True}),
     ("both_post_norms", {"post_mixer_norm": True, "post_mlp_norm": True}),
+    ("output_scale", {"output_scale": 2.5}),
 ]
 
 _post_norm_test_configs = [PostNormTestConfig(name=name, **kwargs) for name, kwargs in _base_post_norm_cases]
@@ -95,6 +104,9 @@ def test_post_norms(test_config: PostNormTestConfig):
     block.eval()
 
     device = distributed.device
+    if test_config.output_scale is not None:
+        with torch.no_grad():
+            block.output_scale.fill_(test_config.output_scale)
     input_ = torch.randn(_NUM_TOKENS, _HIDDEN_SIZE, device=device)
 
     token_dim = TensorDim("token", _NUM_TOKENS)

@@ -6,7 +6,8 @@ import torch
 
 from fast_llm.core.distributed import ReduceOp, all_reduce, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.config_utils.initialization import init_ones_
+from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.utils import AuxiliaryLoss
@@ -123,6 +124,13 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             return_bias=True,
         )
 
+        self.output_scale = self._config.output_scale.get_parameter(
+            (scalar_dim,),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+
     def setup(self, distributed: Distributed) -> None:
         super().setup(distributed)
         self.mixer.setup(distributed)
@@ -175,6 +183,8 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = self.post_mlp_norm(hidden_states)
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
+        if self.output_scale is not None:
+            hidden_states = hidden_states * self.output_scale
         self._debug(hidden_states, None, hidden_dims, kwargs)
 
         if self._return_input:

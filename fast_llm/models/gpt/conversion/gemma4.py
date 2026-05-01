@@ -402,6 +402,9 @@ class Gemma4BlockConverter:
             "normalization": make_norm(),
             "post_mixer_normalization": make_norm(),
             "post_mlp_normalization": make_norm(),
+            # HF stores `layer_scalar` as a non-trained buffer (`register_buffer`); preserve its value
+            # but freeze it on our side so finetuning matches HF training dynamics.
+            "output_scale": {"enabled": True, "lr_scale": 0},
         }
         if config.get("enable_moe_block"):
             out["mlp"] = Gemma4HybridMoEMLPConverter.import_config(config)
@@ -485,8 +488,13 @@ class Gemma4BlockConverter:
                 drop_on_export=drop_on_export,
             ),
         ]
-        if not drop_on_export:
-            converters.append(get_parameter_converter((), f"{hf_prefix}.layer_scalar", drop_on_import=True))
+        converters.append(
+            get_parameter_converter(
+                f"{fast_llm_prefix}.output_scale",
+                f"{hf_prefix}.layer_scalar",
+                drop_on_export=drop_on_export,
+            )
+        )
         return converters
 
 

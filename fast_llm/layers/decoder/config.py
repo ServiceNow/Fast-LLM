@@ -3,7 +3,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import _BIG_PRIMES, DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
@@ -237,6 +237,11 @@ class DecoderBlockConfig(BlockConfig):
     post_mlp_normalization: NormalizationConfig | None = Field(
         default=None,
         desc="Optional normalization applied to the MLP output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    output_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable scalar multiplied into the block output (after the MLP residual add)."
+        " Disabled by default; used by Gemma 4.",
         hint=FieldHint.architecture,
     )
     # TODO: Review names
