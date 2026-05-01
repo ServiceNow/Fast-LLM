@@ -1,16 +1,5 @@
-"""
-Benchmark rotary position embeddings.
-
-The Triton kernel (`triton_rotary_`) operates in-place on (tokens, num_heads,
-head_size) tensors, loading pre-computed (cos, sin) frequencies from
-(tokens, 2*rotary_dim).  The backward is an identical rotation call with
-conjugated frequencies — same cost — so only fwd is benchmarked.
-
-Shapes sweep (tokens, num_heads, head_size) across typical attention configs:
-- 32 heads × 128 → 7B/13B models
-- 64 heads × 128 → 70B / MoE models
-- 8 heads × 128 → GQA key-value heads (Llama 3)
-"""
+"""Rotary position embeddings. The Triton kernel is in-place; backward is an
+identical rotation with conjugated frequencies, so only fwd is benchmarked."""
 
 import torch
 
@@ -26,7 +15,6 @@ _SHAPES = [
     (4096, 64, 128),  # 70B / MoE, 4K context
     (4096, 8, 128),  # GQA key-value heads, 4K context
 ]
-_DEFAULT_DTYPES = (torch.bfloat16,)
 
 
 def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> dict:
@@ -40,9 +28,8 @@ def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torc
 
 
 def _rotary_eager(input_: torch.Tensor, frequencies: torch.Tensor) -> torch.Tensor:
-    """Non-in-place full rotary (rotary_dim = head_size / 2)."""
     rotary_dim = frequencies.shape[-1] // 2
-    freq_re = frequencies[:, :rotary_dim].unsqueeze(1)  # (tokens, 1, rotary_dim)
+    freq_re = frequencies[:, :rotary_dim].unsqueeze(1)
     freq_im = frequencies[:, rotary_dim:].unsqueeze(1)
     x_re, x_im = input_.chunk(2, dim=-1)
     out_re = x_re * freq_re - x_im * freq_im
@@ -55,7 +42,6 @@ _rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagr
 
 
 def _rotary_bytes(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> int:
-    # Read + write input tensor; frequencies are float32.
     return 2 * tokens * num_heads * head_size * dtype.itemsize + tokens * head_size * 4
 
 
@@ -96,10 +82,9 @@ def _rotary_variants() -> list[Variant]:
 
 
 def benchmarks(
-    dtypes: tuple[torch.dtype, ...] | None = None,
+    dtypes: tuple[torch.dtype, ...],
     shapes: list[tuple[int, int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
     shapes = shapes if shapes is not None else _SHAPES
     return [
         (
@@ -111,7 +96,3 @@ def benchmarks(
 
 
 run = bench_main(benchmarks)
-
-
-if __name__ == "__main__":
-    run()

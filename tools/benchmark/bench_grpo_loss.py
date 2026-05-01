@@ -1,28 +1,10 @@
-"""
-Benchmark the fused GRPO loss kernel.
-
-GRPO (Group Relative Policy Optimization) loss computes a clipped importance-weighted
-policy gradient per token: loss = -min(ratio * adv, clip(ratio, 1-eps, 1+eps) * adv),
-where ratio = exp(log_prob_new - log_prob_old).
-
-The Triton kernel fuses softmax, log-prob extraction, ratio computation, clipping, and
-the backward gradient into a single pass over logits — same structure as the cross_entropy
-kernel.
-
-Comparisons:
-- fp32_reference: PyTorch GRPO in fp32
-- pytorch_eager: PyTorch GRPO in compute dtype
-- pytorch_compiled / pytorch_compiled_max: torch.compile of the above
-- fast_llm_triton: triton_grpo_loss_forward_backward
-
-Shapes match bench_entropy_loss: tokens=4096, vocab swept over 32K/64K/128K.
-"""
+"""Fused GRPO (Group Relative Policy Optimization) loss kernel. The Triton
+kernel fuses softmax, log-prob extraction, ratio + clip, and backward into a
+single pass over logits."""
 
 import torch
 
-from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-from tools.benchmark.runner import Variant
 from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
 
 _SHAPES = [
@@ -30,7 +12,6 @@ _SHAPES = [
     (4096, 65536),
     (4096, 131072),
 ]
-_DEFAULT_DTYPES = (torch.bfloat16,)
 _EPSILON_LOW = 0.2
 _EPSILON_HIGH = 0.2
 
@@ -90,19 +71,6 @@ def _triton_fwd_bwd(inputs: dict) -> dict:
     return {"loss": loss, "grad_logits": grad_logits}
 
 
-def _grpo_variants() -> list[Variant]:
-    variants = standard_fwd_bwd_pytorch_variants(
-        _grpo_eager,
-        input_keys=("logits", "labels", "advantages", "old_log_probs"),
-        grad_input_keys=("logits",),
-        output_key="loss",
-        reset_inputs=_reset_logits_grad,
-    )
-    if TritonConfig.enabled():
-        variants.append(Variant(name="fast_llm_triton", fwd=_triton_fwd, fwd_bwd=_triton_fwd_bwd))
-    return variants
-
-
 def _grpo_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
     # fwd: read logits + bwd: read logits + write grad_logits
     logit_traffic = 3 * tokens * vocab * dtype.itemsize
@@ -112,27 +80,30 @@ def _grpo_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
 
 
 def _grpo_flops(tokens: int, vocab: int) -> int:
-    # Similar to cross_entropy labels: softmax (fwd) + grad (bwd) ≈ 14 FLOPs/element
+    # softmax (fwd) + grad (bwd) ≈ 14 FLOPs/element
     return 14 * tokens * vocab
 
 
 def benchmarks(
-    dtypes: tuple[torch.dtype, ...] | None = None,
+    dtypes: tuple[torch.dtype, ...],
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
-    dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
     shapes = shapes if shapes is not None else _SHAPES
     return [
         (
             "grpo_loss",
             make_cases("grpo_loss", dtypes, shapes, _make_grpo_inputs, _grpo_bytes, _grpo_flops),
-            _grpo_variants(),
+            standard_fwd_bwd_pytorch_variants(
+                _grpo_eager,
+                input_keys=("logits", "labels", "advantages", "old_log_probs"),
+                grad_input_keys=("logits",),
+                output_key="loss",
+                reset_inputs=_reset_logits_grad,
+                triton_fwd=_triton_fwd,
+                triton_fwd_bwd=_triton_fwd_bwd,
+            ),
         )
     ]
 
 
 run = bench_main(benchmarks)
-
-
-if __name__ == "__main__":
-    run()

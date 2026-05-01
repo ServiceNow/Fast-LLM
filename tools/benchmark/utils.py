@@ -1,8 +1,6 @@
-"""
-Convenience helpers for writing kernel benchmark files. Reduces the boilerplate
-of building cases and variants so each `bench_*.py` can stay focused on
-kernel-specific logic (input construction, expected_bytes/flops, special variants).
-"""
+"""Helpers shared by the `bench_*.py` modules — case construction, variant
+builders for the canonical fp32_reference + pytorch_eager + pytorch_compiled
+chunk, and the `run = bench_main(benchmarks)` glue."""
 
 from collections.abc import Callable
 from functools import partial
@@ -11,13 +9,12 @@ import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
-from tools.benchmark.runner import Case, Inputs, Variant, run_benchmark
+from tools.benchmark.runner import Case, Inputs, Variant, VariantFn, run_benchmark
 
-# --------------------------------------------------------------------------- formatting
+DEFAULT_DTYPES: tuple[torch.dtype, ...] = (torch.bfloat16,)
 
 
 def format_size(n: int) -> str:
-    """Format an int with the largest binary prefix that divides it exactly: 1048576 → '1 Mi'."""
     for unit, factor in (("Gi", 1 << 30), ("Mi", 1 << 20), ("Ki", 1 << 10)):
         if n >= factor and n % factor == 0:
             return f"{n // factor} {unit}"
@@ -25,23 +22,16 @@ def format_size(n: int) -> str:
 
 
 def format_shape(shape: tuple[int, ...]) -> str:
-    """Format a shape tuple with human-readable sizes per dim: (16777216,) → '(16 Mi,)'."""
     joined = ", ".join(format_size(n) for n in shape)
     return f"({joined},)" if len(shape) == 1 else f"({joined})"
 
 
 def case_name(kernel: str, shape: tuple[int, ...], dtype: torch.dtype) -> str:
-    """Build the standard case header: `[copy] (16 Mi,) bf16`."""
     return f"[{kernel}] {format_shape(shape)} {DataType.from_torch(dtype).short}"
 
 
 def device() -> str:
-    """The device benchmarks should target. Falls back to CPU when CUDA is missing
-    so non-Triton variants can still run for local smoke testing."""
     return "cuda" if torch.cuda.is_available() else "cpu"
-
-
-# --------------------------------------------------------------------------- cases
 
 
 def make_cases(
@@ -52,11 +42,8 @@ def make_cases(
     bytes_fn: Callable | None = None,
     flops_fn: Callable | None = None,
 ) -> list[Case]:
-    """Build the standard `Case` list as the cross-product of `dtypes × shapes`.
-
-    Each `shape` may be a tuple or a scalar; tuples are unpacked positionally
-    into `make_inputs(*shape, dtype)`, `bytes_fn(*shape, dtype)`, and `flops_fn(*shape)`.
-    """
+    """Cross-product of `dtypes × shapes`. Each shape may be a tuple or scalar;
+    tuples are unpacked positionally into `make_inputs`, `bytes_fn`, `flops_fn`."""
     cases = []
     for dtype in dtypes:
         for shape in shapes:
@@ -73,13 +60,8 @@ def make_cases(
     return cases
 
 
-# --------------------------------------------------------------------------- run/main
-
-
 def bench_main(benchmarks_fn: Callable) -> Callable:
-    """Build the standard `run()` callable that loops `benchmarks_fn(dtypes, shapes)`
-    through `run_benchmark`. Each `bench_*.py` exports `run = bench_main(benchmarks)`
-    so the package CLI in `__main__.py` can dispatch to it."""
+    """Build the `run()` callable each `bench_*.py` exports for `__main__.py` to dispatch to."""
 
     def run(
         verbose: bool = False,
@@ -89,7 +71,7 @@ def bench_main(benchmarks_fn: Callable) -> Callable:
         rep_ms: float = 100.0,
         min_reps: int = 5,
     ) -> None:
-        for name, cases, variants in benchmarks_fn(dtypes, shapes):
+        for name, cases, variants in benchmarks_fn(dtypes or DEFAULT_DTYPES, shapes):
             run_benchmark(
                 name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
             )
@@ -97,27 +79,13 @@ def bench_main(benchmarks_fn: Callable) -> Callable:
     return run
 
 
-# --------------------------------------------------------------------------- variant builders
-
-
 def standard_fwd_variants(
     eager_function: Callable,
     triton_function: Callable | None,
     unpack: Callable[[Inputs], tuple],
 ) -> list[Variant]:
-    """Build the canonical 5-variant set for a forward-only kernel.
-
-    Generates: fp32_reference, pytorch_eager, pytorch_compiled, pytorch_compiled_max,
-    and (if `TritonConfig.enabled()`) fast_llm_triton.
-
-    `eager_function` is the plain PyTorch implementation taking positional tensor args.
-    `triton_function` is the Fast-LLM Triton wrapper; pass `None` if the kernel has no
-    Triton variant. Both are invoked with `unpack(inputs)` unpacked positionally;
-    `triton_function` is called with an extra `use_triton=True` kwarg.
-
-    The fp32 reference upcasts every floating-point tensor in the unpacked
-    arguments to fp32 (non-tensor / non-float arguments are passed through).
-    """
+    """Forward-only variant set: fp32_reference, pytorch_eager, pytorch_compiled,
+    pytorch_compiled_max, and (if `TritonConfig.enabled()`) fast_llm_triton."""
 
     def fp32_unpack(inputs: Inputs) -> tuple:
         return tuple(
@@ -190,24 +158,25 @@ def standard_fwd_bwd_pytorch_variants(
     output_key: str = "output",
     reset_inputs: Callable[[Inputs], None] | None = None,
     extra_functions: dict[str, Callable] | None = None,
+    triton_fwd: VariantFn | None = None,
+    triton_fwd_bwd: VariantFn | None = None,
+    triton_name: str = "fast_llm_triton",
+    triton_output_postprocess: Callable[[dict, Inputs], dict] | None = None,
     eager_name: str = "pytorch_eager",
     enable_max_autotune: bool = True,
 ) -> list[Variant]:
-    """Build the canonical pytorch variant chunk for a forward-backward kernel.
+    """Forward+backward variant set for kernels driven by a dict-style input.
 
-    Generates: fp32_reference, <eager_name>, pytorch_compiled, [pytorch_compiled_max,]
-    plus any callables in `extra_functions` (e.g. apex implementations) appended
-    at the end with their dict-key as the variant name.
+    Generates fp32_reference, <eager_name>, pytorch_compiled, [pytorch_compiled_max,]
+    plus any callables in `extra_functions` (variant name = dict key). When
+    `triton_fwd`/`triton_fwd_bwd` are given and `TritonConfig.enabled()`, a
+    `<triton_name>` variant is appended; the callables receive the raw inputs dict.
 
     `eager_function(*[inputs[key] for key in input_keys])` computes the forward output.
-    `grad_input_keys` lists input dict keys whose `.grad` is collected and returned
-    as `grad_<key>` in the output dict. `grad_output_key` is the input dict key for
-    `output.backward(grad_output)`; pass `None` for scalar-loss kernels (uses bare
-    `output.backward()`). `output_key` is the output dict key for the forward result.
-
-    The fp32 reference upcasts every floating-point tensor in the input dict to
-    fp32, re-attaching `requires_grad=True` for `grad_input_keys`. Non-float and
-    non-tensor entries (e.g. ints, enums, SparseMap) are passed through.
+    `grad_input_keys` lists input keys whose `.grad` is collected as `grad_<key>`.
+    `grad_output_key=None` triggers a scalar-loss `output.backward()`.
+    The fp32 reference upcasts every floating-point tensor in the input dict, re-attaching
+    `requires_grad=True` on `grad_input_keys`.
     """
     fwd_kwargs = {"input_keys": input_keys, "output_key": output_key}
     fwd_bwd_kwargs = {
@@ -245,4 +214,14 @@ def standard_fwd_bwd_pytorch_variants(
         variants.append(variant("pytorch_compiled_max", compiled_max))
     for name, function in (extra_functions or {}).items():
         variants.append(variant(name, function))
+    if (triton_fwd is not None or triton_fwd_bwd is not None) and TritonConfig.enabled():
+        variants.append(
+            Variant(
+                name=triton_name,
+                fwd=triton_fwd,
+                fwd_bwd=triton_fwd_bwd,
+                reset_inputs=reset_inputs,
+                output_postprocess=triton_output_postprocess,
+            )
+        )
     return variants
