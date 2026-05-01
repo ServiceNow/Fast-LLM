@@ -66,10 +66,6 @@ def _grpo_eager(logits: torch.Tensor, labels: torch.Tensor, advantages: torch.Te
     return per_token_loss.mean()
 
 
-def _reset_logits_grad(inputs: dict) -> None:
-    inputs["logits"].grad = None
-
-
 def _triton_fwd(inputs: dict) -> dict:
     loss, _, _ = triton_grpo_loss_forward_backward(
         inputs["logits"],
@@ -106,7 +102,6 @@ def benchmarks(
         input_keys=("logits", "labels", "advantages", "old_log_probs"),
         grad_input_keys=("logits",),
         output_key="loss",
-        reset_inputs=_reset_logits_grad,
     )
     if TritonConfig.enabled():
         variants.append(Variant(name="fast_llm_triton", fwd=_triton_fwd, fwd_bwd=_triton_fwd_bwd))

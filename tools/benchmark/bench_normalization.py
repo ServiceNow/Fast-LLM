@@ -15,7 +15,7 @@ from fast_llm.layers.common.normalization.normalization import (
     fused_normalization_available,
 )
 from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
 
 # (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
 # budget across model widths; hidden swept from 1K to 16K.
@@ -169,7 +169,12 @@ def benchmarks(
     )
     if TritonConfig.enabled():
         layer_norm_variants.append(
-            Variant(name="fast_llm_triton", fwd=_layer_norm_triton_fwd, fwd_bwd=_layer_norm_triton_fwd_bwd)
+            Variant(
+                name="fast_llm_triton",
+                fwd=_layer_norm_triton_fwd,
+                fwd_bwd=_layer_norm_triton_fwd_bwd,
+                reset_inputs=make_grad_reset(("input", "weight", "bias")),
+            )
         )
     rms_norm_variants = standard_fwd_bwd_pytorch_variants(
         _rms_norm_eager,
@@ -180,7 +185,12 @@ def benchmarks(
     )
     if TritonConfig.enabled():
         rms_norm_variants.append(
-            Variant(name="fast_llm_triton", fwd=_rms_norm_triton_fwd, fwd_bwd=_rms_norm_triton_fwd_bwd)
+            Variant(
+                name="fast_llm_triton",
+                fwd=_rms_norm_triton_fwd,
+                fwd_bwd=_rms_norm_triton_fwd_bwd,
+                reset_inputs=make_grad_reset(("input", "weight")),
+            )
         )
     return [
         (

@@ -9,7 +9,7 @@ from fast_llm.functional.triton.mlp import (
     triton_mlp_activation_forward,
 )
 from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
 
 # (tokens, ffn_dim) — input has shape (tokens, 2*ffn_dim) for gated.
 _SHAPES = [
@@ -77,7 +77,14 @@ def benchmarks(
         grad_output_key="grad_output",
     )
     if TritonConfig.enabled():
-        variants.append(Variant(name="fast_llm_triton", fwd=_triton_fwd, fwd_bwd=_triton_fwd_bwd))
+        variants.append(
+            Variant(
+                name="fast_llm_triton",
+                fwd=_triton_fwd,
+                fwd_bwd=_triton_fwd_bwd,
+                reset_inputs=make_grad_reset(("input",)),
+            )
+        )
     return [
         (
             "mlp_activation (gated silu)",

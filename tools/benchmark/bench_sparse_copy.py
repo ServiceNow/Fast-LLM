@@ -10,7 +10,7 @@ from fast_llm.functional.triton.sparse_copy import (
     get_sparse_map,
 )
 from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
 
 # (tokens, top_k, num_experts, hidden_size)
 _SHAPES = [
@@ -160,6 +160,7 @@ def benchmarks(
                 fwd=_dispatch_triton_fwd,
                 fwd_bwd=_dispatch_triton_fwd_bwd,
                 output_postprocess=_dispatch_postprocess,
+                reset_inputs=make_grad_reset(("dense",)),
             )
         )
     combine_variants = standard_fwd_bwd_pytorch_variants(
@@ -175,6 +176,7 @@ def benchmarks(
                 fwd=_combine_triton_fwd,
                 fwd_bwd=_combine_triton_fwd_bwd,
                 output_postprocess=_combine_postprocess,
+                reset_inputs=make_grad_reset(("sparse", "scores")),
             )
         )
     return [

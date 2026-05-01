@@ -63,10 +63,6 @@ class EntropyDistCase(_EntropyCase):
         }
 
 
-def _reset_logits_grad(inputs: dict) -> None:
-    inputs["logits"].grad = None
-
-
 def _ce_labels_eager(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, labels)
 
@@ -106,7 +102,6 @@ def _entropy_variants(eager_function, input_keys, triton_kwargs=None) -> list[Va
         input_keys=input_keys,
         grad_input_keys=("logits",),
         output_key="loss",
-        reset_inputs=_reset_logits_grad,
     )
     if TritonConfig.enabled():
         variants.append(Variant(name="fast_llm_triton", fwd=triton_fwd, fwd_bwd=triton_fwd_bwd))
@@ -135,7 +130,6 @@ def benchmarks(
         input_keys=("logits",),
         grad_input_keys=("logits",),
         output_key="loss",
-        reset_inputs=_reset_logits_grad,
     )
     if TritonConfig.enabled():
         z_loss_variants.append(Variant(name="fast_llm_triton", fwd=_z_loss_triton_fwd, fwd_bwd=_z_loss_triton_fwd_bwd))

@@ -6,7 +6,7 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.sparse_copy import SparseMap, get_sparse_map
 from fast_llm.functional.triton.sparse_linear import InputSparseLinear, OutputSparseLinear
 from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
 
 # (tokens, top_k, num_experts, hidden, ffn_per_expert)
 _SHAPES = [
@@ -191,6 +191,7 @@ def benchmarks(
                 fwd=_output_sparse_triton_fwd,
                 fwd_bwd=_output_sparse_triton_fwd_bwd,
                 output_postprocess=_mask_padded_rows,
+                reset_inputs=make_grad_reset(("lhs", "rhs")),
             )
         )
     input_inner_sparse_variants = standard_fwd_bwd_pytorch_variants(
@@ -208,6 +209,7 @@ def benchmarks(
                 fwd=_input_inner_sparse_triton_fwd,
                 fwd_bwd=_input_inner_sparse_triton_fwd_bwd,
                 output_postprocess=_mask_padded_rows,
+                reset_inputs=make_grad_reset(("lhs", "rhs")),
             )
         )
     return [

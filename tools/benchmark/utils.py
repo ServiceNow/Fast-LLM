@@ -149,6 +149,23 @@ def standard_fwd_variants(
     return variants
 
 
+def make_grad_reset(keys: tuple[str, ...]) -> Callable[[Inputs], None]:
+    """Reset autograd `.grad` to None for the given input keys between reps.
+    `.backward()` accumulates into `.grad` on rep 2+, biasing fwd_bwd timing
+    via an extra read+write of the full grad tensor. Also resets
+    `param_grad_is_zero=True` on tensors with a `grad_buffer` (Fast-LLM
+    convention) so the next backward writes fresh instead of accumulating."""
+
+    def reset(inputs: Inputs) -> None:
+        for key in keys:
+            tensor = inputs[key]
+            tensor.grad = None
+            if hasattr(tensor, "grad_buffer"):
+                tensor.param_grad_is_zero = True
+
+    return reset
+
+
 def standard_fwd_bwd_pytorch_variants(
     eager_function: Callable,
     input_keys: tuple[str, ...],
@@ -163,7 +180,10 @@ def standard_fwd_bwd_pytorch_variants(
 ) -> list[Variant]:
     """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max]
     + `extra_functions`. Triton variants are appended by the caller (so each
-    bench file owns its triton wiring explicitly)."""
+    bench file owns its triton wiring explicitly). `reset_inputs` defaults to
+    clearing `.grad` on `grad_input_keys` between reps."""
+    if reset_inputs is None:
+        reset_inputs = make_grad_reset(grad_input_keys)
     common = {
         "input_keys": input_keys,
         "grad_input_keys": grad_input_keys,
