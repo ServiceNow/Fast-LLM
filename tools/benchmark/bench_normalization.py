@@ -1,8 +1,11 @@
 """LayerNorm and RMSNorm. The Triton kernel writes parameter gradients to a
 `grad_buffer` attribute (Fast-LLM convention) instead of autograd's `.grad`."""
 
+import dataclasses
+
 import torch
 
+from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
 from fast_llm.layers.common.normalization.normalization import (
     FastLayerNorm,
@@ -11,7 +14,8 @@ from fast_llm.layers.common.normalization.normalization import (
     fast_normalization_available,
     fused_normalization_available,
 )
-from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.runner import Case, Inputs, Variant
+from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
 
 # (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
 # budget across model widths; hidden swept from 1K to 16K.
@@ -31,21 +35,58 @@ def _setup_param(tensor: torch.Tensor) -> torch.Tensor:
     return tensor
 
 
-def _make_layer_norm_inputs(rows: int, cols: int, dtype: torch.dtype) -> dict:
-    return {
-        "input": torch.randn(rows, cols, dtype=dtype, device=device(), requires_grad=True),
-        "weight": _setup_param(torch.randn(cols, dtype=dtype, device=device(), requires_grad=True)),
-        "bias": _setup_param(torch.zeros(cols, dtype=dtype, device=device(), requires_grad=True)),
-        "grad_output": torch.randn(rows, cols, dtype=dtype, device=device()),
-    }
+@dataclasses.dataclass
+class _NormalizationCase(Case):
+    rows: int
+    cols: int
+    dtype: torch.dtype
+
+    @property
+    def name(self) -> str:
+        return f"({self.rows}, {self.cols}) {dtype_short(self.dtype)}"
+
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        return self.dtype
 
 
-def _make_rms_norm_inputs(rows: int, cols: int, dtype: torch.dtype) -> dict:
-    return {
-        "input": torch.randn(rows, cols, dtype=dtype, device=device(), requires_grad=True),
-        "weight": _setup_param(torch.randn(cols, dtype=dtype, device=device(), requires_grad=True)),
-        "grad_output": torch.randn(rows, cols, dtype=dtype, device=device()),
-    }
+class LayerNormCase(_NormalizationCase):
+    @property
+    def expected_bytes(self) -> int:
+        # 4× activations (fwd+bwd in/out) + weight & bias × (read + grad write).
+        return 4 * self.rows * self.cols * self.dtype.itemsize + 6 * self.cols * self.dtype.itemsize
+
+    @property
+    def expected_flops(self) -> int:
+        # fwd ≈ 7 FLOPs/elem (mean, variance, normalize, scale+shift); bwd ≈ 2× fwd.
+        return 21 * self.rows * self.cols
+
+    def make_inputs(self, device: str) -> Inputs:
+        return {
+            "input": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device, requires_grad=True),
+            "weight": _setup_param(torch.randn(self.cols, dtype=self.dtype, device=device, requires_grad=True)),
+            "bias": _setup_param(torch.zeros(self.cols, dtype=self.dtype, device=device, requires_grad=True)),
+            "grad_output": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device),
+        }
+
+
+class RmsNormCase(_NormalizationCase):
+    @property
+    def expected_bytes(self) -> int:
+        # No bias compared to LayerNorm.
+        return 4 * self.rows * self.cols * self.dtype.itemsize + 3 * self.cols * self.dtype.itemsize
+
+    @property
+    def expected_flops(self) -> int:
+        # No mean subtraction or bias compared to LayerNorm.
+        return 15 * self.rows * self.cols
+
+    def make_inputs(self, device: str) -> Inputs:
+        return {
+            "input": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device, requires_grad=True),
+            "weight": _setup_param(torch.randn(self.cols, dtype=self.dtype, device=device, requires_grad=True)),
+            "grad_output": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device),
+        }
 
 
 def _layer_norm_eager(input_, weight, bias):
@@ -114,56 +155,43 @@ if fused_normalization_available:
     _RMS_NORM_EXTRAS["apex_fused"] = _rms_norm_apex_fused
 
 
-def _layer_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
-    # fwd in/out + bwd grad_in/out (4× activations) + weight & bias × (read + grad write).
-    return 4 * rows * cols * dtype.itemsize + 6 * cols * dtype.itemsize
-
-
-def _rms_norm_bytes(rows: int, cols: int, dtype: torch.dtype) -> int:
-    return 4 * rows * cols * dtype.itemsize + 3 * cols * dtype.itemsize
-
-
-def _layer_norm_flops(rows: int, cols: int) -> int:
-    # fwd ≈ 7 per element (mean, variance, normalize, scale+shift); bwd ≈ 2× fwd.
-    return 21 * rows * cols
-
-
-def _rms_norm_flops(rows: int, cols: int) -> int:
-    # No mean subtraction or bias.
-    return 15 * rows * cols
-
-
 def benchmarks(
     dtypes: tuple[torch.dtype, ...],
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
+    layer_norm_variants = standard_fwd_bwd_pytorch_variants(
+        _layer_norm_eager,
+        input_keys=("input", "weight", "bias"),
+        grad_input_keys=("input", "weight", "bias"),
+        grad_output_key="grad_output",
+        extra_functions=_LAYER_NORM_EXTRAS,
+    )
+    if TritonConfig.enabled():
+        layer_norm_variants.append(
+            Variant(name="fast_llm_triton", fwd=_layer_norm_triton_fwd, fwd_bwd=_layer_norm_triton_fwd_bwd)
+        )
+    rms_norm_variants = standard_fwd_bwd_pytorch_variants(
+        _rms_norm_eager,
+        input_keys=("input", "weight"),
+        grad_input_keys=("input", "weight"),
+        grad_output_key="grad_output",
+        extra_functions=_RMS_NORM_EXTRAS,
+    )
+    if TritonConfig.enabled():
+        rms_norm_variants.append(
+            Variant(name="fast_llm_triton", fwd=_rms_norm_triton_fwd, fwd_bwd=_rms_norm_triton_fwd_bwd)
+        )
     return [
         (
             "normalization: layer_norm",
-            make_cases("layer_norm", dtypes, shapes, _make_layer_norm_inputs, _layer_norm_bytes, _layer_norm_flops),
-            standard_fwd_bwd_pytorch_variants(
-                _layer_norm_eager,
-                input_keys=("input", "weight", "bias"),
-                grad_input_keys=("input", "weight", "bias"),
-                grad_output_key="grad_output",
-                extra_functions=_LAYER_NORM_EXTRAS,
-                triton_fwd=_layer_norm_triton_fwd,
-                triton_fwd_bwd=_layer_norm_triton_fwd_bwd,
-            ),
+            [LayerNormCase(rows=r, cols=c, dtype=d) for d in dtypes for (r, c) in shapes],
+            layer_norm_variants,
         ),
         (
             "normalization: rms_norm",
-            make_cases("rms_norm", dtypes, shapes, _make_rms_norm_inputs, _rms_norm_bytes, _rms_norm_flops),
-            standard_fwd_bwd_pytorch_variants(
-                _rms_norm_eager,
-                input_keys=("input", "weight"),
-                grad_input_keys=("input", "weight"),
-                grad_output_key="grad_output",
-                extra_functions=_RMS_NORM_EXTRAS,
-                triton_fwd=_rms_norm_triton_fwd,
-                triton_fwd_bwd=_rms_norm_triton_fwd_bwd,
-            ),
+            [RmsNormCase(rows=r, cols=c, dtype=d) for d in dtypes for (r, c) in shapes],
+            rms_norm_variants,
         ),
     ]
 

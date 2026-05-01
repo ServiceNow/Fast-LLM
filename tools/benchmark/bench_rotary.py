@@ -1,12 +1,14 @@
 """Rotary position embeddings. The Triton kernel is in-place; backward is an
 identical rotation with conjugated frequencies, so only fwd is benchmarked."""
 
+import dataclasses
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.rotary import triton_rotary_
-from tools.benchmark.runner import Variant
-from tools.benchmark.utils import bench_main, device, make_cases
+from tools.benchmark.runner import Case, Inputs, Variant
+from tools.benchmark.utils import bench_main, dtype_short
 
 # (tokens, num_heads, head_size) — tokens = batch * seq_len
 _SHAPES = [
@@ -17,14 +19,41 @@ _SHAPES = [
 ]
 
 
-def _make_rotary_inputs(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> dict:
-    rotary_dim = head_size // 2
-    input_ = torch.randn(tokens, num_heads, head_size, dtype=dtype, device=device())
-    return {
-        "input_": input_,
-        "work": input_.clone(),
-        "frequencies": torch.randn(tokens, 2 * rotary_dim, dtype=torch.float32, device=device()),
-    }
+@dataclasses.dataclass
+class RotaryCase(Case):
+    tokens: int
+    num_heads: int
+    head_size: int
+    dtype: torch.dtype
+
+    @property
+    def name(self) -> str:
+        return f"({self.tokens}, {self.num_heads}, {self.head_size}) {dtype_short(self.dtype)}"
+
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        return self.dtype
+
+    @property
+    def expected_bytes(self) -> int:
+        # frequencies are float32, hence the extra 4 bytes per token×head_size.
+        return (
+            2 * self.tokens * self.num_heads * self.head_size * self.dtype.itemsize + self.tokens * self.head_size * 4
+        )
+
+    @property
+    def expected_flops(self) -> int:
+        # 6 FLOPs per (re, im) element pair: 4 muls + 2 add/sub.
+        return 6 * self.tokens * self.num_heads * (self.head_size // 2)
+
+    def make_inputs(self, device: str) -> Inputs:
+        rotary_dim = self.head_size // 2
+        input_ = torch.randn(self.tokens, self.num_heads, self.head_size, dtype=self.dtype, device=device)
+        return {
+            "input_": input_,
+            "work": input_.clone(),
+            "frequencies": torch.randn(self.tokens, 2 * rotary_dim, dtype=torch.float32, device=device),
+        }
 
 
 def _rotary_eager(input_: torch.Tensor, frequencies: torch.Tensor) -> torch.Tensor:
@@ -39,16 +68,6 @@ def _rotary_eager(input_: torch.Tensor, frequencies: torch.Tensor) -> torch.Tens
 
 _rotary_compiled_default = torch.compile(_rotary_eager, mode="default", dynamic=False)
 _rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
-def _rotary_bytes(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> int:
-    # frequencies are float32, hence the extra 4 bytes per token×head_size.
-    return 2 * tokens * num_heads * head_size * dtype.itemsize + tokens * head_size * 4
-
-
-def _rotary_flops(tokens: int, num_heads: int, head_size: int) -> int:
-    # 6 FLOPs per (re, im) element pair: 4 muls + 2 add/sub.
-    return 6 * tokens * num_heads * (head_size // 2)
 
 
 def _rotary_variants() -> list[Variant]:
@@ -90,7 +109,7 @@ def benchmarks(
     return [
         (
             "rotary",
-            make_cases("rotary", dtypes, shapes, _make_rotary_inputs, _rotary_bytes, _rotary_flops),
+            [RotaryCase(tokens=t, num_heads=h, head_size=hs, dtype=d) for d in dtypes for (t, h, hs) in shapes],
             _rotary_variants(),
         )
     ]

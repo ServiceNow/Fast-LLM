@@ -73,27 +73,34 @@ class Variant:
     reset_inputs: Callable[[Inputs], Any] | None = None
 
 
-@dataclasses.dataclass
 class Case:
-    """A single input configuration for the kernel under test. `make_inputs`
-    builds fresh input tensors on demand. It is called once per variant per
-    mode, after a global seed reset, so every variant sees identical inputs."""
+    """Base for a single input configuration. Subclasses are dataclasses holding
+    the kernel's shape parameters (e.g. rows, cols, dtype) and override `name`
+    and `make_inputs`; the throughput properties are optional."""
 
+    # Subclasses must provide these.
     name: str
-    make_inputs: Callable[[], Inputs]
-    # Minimum bytes read+written by the op. Used for GB/s + %BW. Optional.
-    expected_bytes: int | None = None
-    # Minimum floating-point ops performed by the op. Used for TFLOP/s + %FLOPs. Optional.
-    expected_flops: int | None = None
-    # For %FLOPs: which peak column to use (dtype of the hot inputs).
-    compute_dtype: torch.dtype | None = None
+    # Subclasses may override these (defaults skip the corresponding columns).
+    expected_bytes: int | None = None  # bytes read+written; enables GB/s + %BW.
+    expected_flops: int | None = None  # FLOPs performed; enables TFLOP/s + %FLOPs.
+    compute_dtype: torch.dtype | None = None  # dtype of hot inputs, picks peak column.
+
+    def make_inputs(self, device: str) -> Inputs:
+        """Return a fresh dict of input tensors on `device`. Called once per
+        variant per mode, after a global seed reset, so every variant sees
+        identical inputs."""
+        raise NotImplementedError
+
+
+def _device() -> str:
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _seeded_inputs(case: Case, seed: int = 0) -> Inputs:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    return case.make_inputs()
+    return case.make_inputs(_device())
 
 
 @dataclasses.dataclass

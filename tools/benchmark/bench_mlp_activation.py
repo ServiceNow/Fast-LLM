@@ -1,12 +1,15 @@
+import dataclasses
+
 import torch
 
-from fast_llm.functional.config import ActivationType
+from fast_llm.functional.config import ActivationType, TritonConfig
 from fast_llm.functional.triton.mlp import (
     torch_mlp_activation,
     triton_mlp_activation_autograd,
     triton_mlp_activation_forward,
 )
-from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.runner import Case, Inputs, Variant
+from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
 
 # (tokens, ffn_dim) — input has shape (tokens, 2*ffn_dim) for gated.
 _SHAPES = [
@@ -18,13 +21,37 @@ _SHAPES = [
 _ACTIVATION = ActivationType.silu
 
 
-def _make_mlp_inputs(tokens: int, ffn_dim: int, dtype: torch.dtype) -> dict:
-    return {
-        "input": torch.randn(tokens, 2 * ffn_dim, dtype=dtype, device=device(), requires_grad=True),
-        "grad_output": torch.randn(tokens, ffn_dim, dtype=dtype, device=device()),
-        "gated": True,
-        "activation_type": _ACTIVATION,
-    }
+@dataclasses.dataclass
+class MlpActivationCase(Case):
+    tokens: int
+    ffn_dim: int
+    dtype: torch.dtype
+
+    @property
+    def name(self) -> str:
+        return f"({self.tokens}, {self.ffn_dim}) {dtype_short(self.dtype)}"
+
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        return self.dtype
+
+    @property
+    def expected_bytes(self) -> int:
+        # fwd: 3*ffn_dim traffic; bwd: 5*ffn_dim. 8 elements/token total.
+        return 8 * self.tokens * self.ffn_dim * self.dtype.itemsize
+
+    @property
+    def expected_flops(self) -> int:
+        # gated silu: fwd ≈ 6 FLOPs/element, bwd ≈ 8 FLOPs/element.
+        return 14 * self.tokens * self.ffn_dim
+
+    def make_inputs(self, device: str) -> Inputs:
+        return {
+            "input": torch.randn(self.tokens, 2 * self.ffn_dim, dtype=self.dtype, device=device, requires_grad=True),
+            "grad_output": torch.randn(self.tokens, self.ffn_dim, dtype=self.dtype, device=device),
+            "gated": True,
+            "activation_type": _ACTIVATION,
+        }
 
 
 def _triton_fwd(inputs: dict) -> dict:
@@ -38,35 +65,24 @@ def _triton_fwd_bwd(inputs: dict) -> dict:
     return {"output": output.detach(), "grad_input": inputs["input"].grad}
 
 
-def _mlp_activation_bytes(tokens: int, ffn_dim: int, dtype: torch.dtype) -> int:
-    # fwd: 3*ffn_dim traffic; bwd: 5*ffn_dim. 8 elements/token total.
-    return 8 * tokens * ffn_dim * dtype.itemsize
-
-
-def _mlp_activation_flops(tokens: int, ffn_dim: int) -> int:
-    # gated silu: fwd ≈ 6 FLOPs/element, bwd ≈ 8 FLOPs/element.
-    return 14 * tokens * ffn_dim
-
-
 def benchmarks(
     dtypes: tuple[torch.dtype, ...],
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
+    variants = standard_fwd_bwd_pytorch_variants(
+        torch_mlp_activation,
+        input_keys=("input", "gated", "activation_type"),
+        grad_input_keys=("input",),
+        grad_output_key="grad_output",
+    )
+    if TritonConfig.enabled():
+        variants.append(Variant(name="fast_llm_triton", fwd=_triton_fwd, fwd_bwd=_triton_fwd_bwd))
     return [
         (
             "mlp_activation (gated silu)",
-            make_cases(
-                "mlp_activation", dtypes, shapes, _make_mlp_inputs, _mlp_activation_bytes, _mlp_activation_flops
-            ),
-            standard_fwd_bwd_pytorch_variants(
-                torch_mlp_activation,
-                input_keys=("input", "gated", "activation_type"),
-                grad_input_keys=("input",),
-                grad_output_key="grad_output",
-                triton_fwd=_triton_fwd,
-                triton_fwd_bwd=_triton_fwd_bwd,
-            ),
+            [MlpActivationCase(tokens=t, ffn_dim=f, dtype=d) for d in dtypes for (t, f) in shapes],
+            variants,
         )
     ]
 

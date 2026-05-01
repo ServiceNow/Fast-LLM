@@ -1,9 +1,12 @@
+import dataclasses
+
 import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.sparse_copy import SparseMap, get_sparse_map
 from fast_llm.functional.triton.sparse_linear import InputSparseLinear, OutputSparseLinear
-from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.runner import Case, Inputs, Variant
+from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
 
 # (tokens, top_k, num_experts, hidden, ffn_per_expert)
 _SHAPES = [
@@ -16,11 +19,6 @@ _SHAPES = [
 # called many times per case (per variant, per fwd/fwd_bwd/memory pass).
 _output_sparse_warmed_up: set[tuple] = set()
 _input_inner_sparse_warmed_up: set[tuple] = set()
-
-
-def _make_sparse_map(tokens: int, top_k: int, num_experts: int) -> SparseMap:
-    top_experts = torch.randint(0, num_experts, (tokens, top_k), device=device())
-    return get_sparse_map(top_experts, num_experts)
 
 
 def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
@@ -46,50 +44,87 @@ def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: dict) -> dict[
     return masked
 
 
-def _make_output_sparse_inputs(
-    tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int, dtype: torch.dtype
-) -> dict:
-    sparse_map = _make_sparse_map(tokens, top_k, num_experts)
-    lhs_data = torch.randn(sparse_map.num_rows, hidden, dtype=dtype, device=device())
-    rhs_data = torch.randn(hidden, ffn_per_expert * num_experts, dtype=dtype, device=device())
-    backward_grad = torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
-    warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
-    if TritonConfig.enabled() and warmup_key not in _output_sparse_warmed_up:
-        warmup_lhs = lhs_data.detach().requires_grad_(True)
-        warmup_rhs = rhs_data.detach().requires_grad_(True)
-        warmup_out = OutputSparseLinear.apply(warmup_lhs, warmup_rhs, sparse_map)
-        warmup_out.backward(backward_grad)
-        del warmup_lhs, warmup_rhs, warmup_out
-        _output_sparse_warmed_up.add(warmup_key)
-    return {
-        "lhs": lhs_data.requires_grad_(True),
-        "rhs": rhs_data.requires_grad_(True),
-        "sparse_map": sparse_map,
-        "backward_grad": backward_grad,
-    }
+@dataclasses.dataclass
+class _SparseLinearCase(Case):
+    tokens: int
+    top_k: int
+    num_experts: int
+    hidden: int
+    ffn_per_expert: int
+    dtype: torch.dtype
+
+    @property
+    def name(self) -> str:
+        return (
+            f"({self.tokens}, {self.top_k}, {self.num_experts}, "
+            f"{self.hidden}, {self.ffn_per_expert}) {dtype_short(self.dtype)}"
+        )
+
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        return self.dtype
+
+    @property
+    def expected_bytes(self) -> int:
+        # Approximation: 3× lhs + 3× rhs + 2× output traffic across fwd+bwd.
+        sparse_tokens = self.tokens * self.top_k
+        lhs_bytes = sparse_tokens * self.hidden * self.dtype.itemsize
+        rhs_bytes = self.hidden * self.ffn_per_expert * self.num_experts * self.dtype.itemsize
+        output_bytes = sparse_tokens * self.ffn_per_expert * self.dtype.itemsize
+        return 3 * lhs_bytes + 3 * rhs_bytes + 2 * output_bytes
+
+    @property
+    def expected_flops(self) -> int:
+        # 3 matmuls (fwd: lhs@rhs, bwd_lhs: grad@rhs.T, bwd_rhs: lhs.T@grad).
+        return 3 * 2 * self.tokens * self.top_k * self.hidden * self.ffn_per_expert
+
+    def _make_sparse_map(self, device: str) -> SparseMap:
+        top_experts = torch.randint(0, self.num_experts, (self.tokens, self.top_k), device=device)
+        return get_sparse_map(top_experts, self.num_experts)
 
 
-def _make_input_inner_sparse_inputs(
-    tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int, dtype: torch.dtype
-) -> dict:
-    sparse_map = _make_sparse_map(tokens, top_k, num_experts)
-    lhs_data = torch.randn(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
-    rhs_data = torch.randn(ffn_per_expert * num_experts, hidden, dtype=dtype, device=device())
-    backward_grad = torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device())
-    warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
-    if TritonConfig.enabled() and warmup_key not in _input_inner_sparse_warmed_up:
-        warmup_lhs = lhs_data.detach().requires_grad_(True)
-        warmup_rhs = rhs_data.detach().requires_grad_(True)
-        warmup_out = InputSparseLinear.apply(warmup_lhs, warmup_rhs, sparse_map)
-        warmup_out.backward(backward_grad)
-        del warmup_lhs, warmup_rhs, warmup_out
-        _input_inner_sparse_warmed_up.add(warmup_key)
-    return {
-        "lhs": lhs_data.requires_grad_(True),
-        "rhs": rhs_data.requires_grad_(True),
-        "sparse_map": sparse_map,
-        "backward_grad": backward_grad,
-    }
+class OutputSparseCase(_SparseLinearCase):
+    def make_inputs(self, device: str) -> Inputs:
+        sparse_map = self._make_sparse_map(device)
+        lhs_data = torch.randn(sparse_map.num_rows, self.hidden, dtype=self.dtype, device=device)
+        rhs_data = torch.randn(self.hidden, self.ffn_per_expert * self.num_experts, dtype=self.dtype, device=device)
+        backward_grad = torch.ones(sparse_map.num_rows, self.ffn_per_expert, dtype=self.dtype, device=device)
+        warmup_key = (self.tokens, self.top_k, self.num_experts, self.hidden, self.ffn_per_expert, self.dtype)
+        if TritonConfig.enabled() and warmup_key not in _output_sparse_warmed_up:
+            warmup_lhs = lhs_data.detach().requires_grad_(True)
+            warmup_rhs = rhs_data.detach().requires_grad_(True)
+            warmup_out = OutputSparseLinear.apply(warmup_lhs, warmup_rhs, sparse_map)
+            warmup_out.backward(backward_grad)
+            del warmup_lhs, warmup_rhs, warmup_out
+            _output_sparse_warmed_up.add(warmup_key)
+        return {
+            "lhs": lhs_data.requires_grad_(True),
+            "rhs": rhs_data.requires_grad_(True),
+            "sparse_map": sparse_map,
+            "backward_grad": backward_grad,
+        }
+
+
+class InputInnerSparseCase(_SparseLinearCase):
+    def make_inputs(self, device: str) -> Inputs:
+        sparse_map = self._make_sparse_map(device)
+        lhs_data = torch.randn(sparse_map.num_rows, self.ffn_per_expert, dtype=self.dtype, device=device)
+        rhs_data = torch.randn(self.ffn_per_expert * self.num_experts, self.hidden, dtype=self.dtype, device=device)
+        backward_grad = torch.ones(sparse_map.num_rows, self.hidden, dtype=self.dtype, device=device)
+        warmup_key = (self.tokens, self.top_k, self.num_experts, self.hidden, self.ffn_per_expert, self.dtype)
+        if TritonConfig.enabled() and warmup_key not in _input_inner_sparse_warmed_up:
+            warmup_lhs = lhs_data.detach().requires_grad_(True)
+            warmup_rhs = rhs_data.detach().requires_grad_(True)
+            warmup_out = InputSparseLinear.apply(warmup_lhs, warmup_rhs, sparse_map)
+            warmup_out.backward(backward_grad)
+            del warmup_lhs, warmup_rhs, warmup_out
+            _input_inner_sparse_warmed_up.add(warmup_key)
+        return {
+            "lhs": lhs_data.requires_grad_(True),
+            "rhs": rhs_data.requires_grad_(True),
+            "sparse_map": sparse_map,
+            "backward_grad": backward_grad,
+        }
 
 
 def _output_sparse_loop(lhs: torch.Tensor, rhs: torch.Tensor, sparse_map: SparseMap) -> torch.Tensor:
@@ -136,66 +171,63 @@ def _input_inner_sparse_triton_fwd_bwd(inputs: dict) -> dict:
     return {"output": output.detach(), "grad_lhs": inputs["lhs"].grad, "grad_rhs": inputs["rhs"].grad}
 
 
-def _sparse_linear_bytes(
-    tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int, dtype: torch.dtype
-) -> int:
-    # Approximation: 3× lhs + 3× rhs + 2× output traffic across fwd+bwd.
-    sparse_tokens = tokens * top_k
-    lhs_bytes = sparse_tokens * hidden * dtype.itemsize
-    rhs_bytes = hidden * ffn_per_expert * num_experts * dtype.itemsize
-    output_bytes = sparse_tokens * ffn_per_expert * dtype.itemsize
-    return 3 * lhs_bytes + 3 * rhs_bytes + 2 * output_bytes
-
-
-def _sparse_linear_flops(tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int) -> int:
-    # 3 matmuls (fwd: lhs@rhs, bwd_lhs: grad@rhs.T, bwd_rhs: lhs.T@grad).
-    return 3 * 2 * tokens * top_k * hidden * ffn_per_expert
-
-
 def benchmarks(
     dtypes: tuple[torch.dtype, ...],
     shapes: list[tuple[int, int, int, int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
+    output_sparse_variants = standard_fwd_bwd_pytorch_variants(
+        _output_sparse_loop,
+        input_keys=("lhs", "rhs", "sparse_map"),
+        grad_input_keys=("lhs", "rhs"),
+        grad_output_key="backward_grad",
+        eager_name="pytorch_loop",
+        enable_max_autotune=False,
+    )
+    if TritonConfig.enabled():
+        output_sparse_variants.append(
+            Variant(
+                name="fast_llm_triton",
+                fwd=_output_sparse_triton_fwd,
+                fwd_bwd=_output_sparse_triton_fwd_bwd,
+                output_postprocess=_mask_padded_rows,
+            )
+        )
+    input_inner_sparse_variants = standard_fwd_bwd_pytorch_variants(
+        _input_inner_sparse_loop,
+        input_keys=("lhs", "rhs", "sparse_map"),
+        grad_input_keys=("lhs", "rhs"),
+        grad_output_key="backward_grad",
+        eager_name="pytorch_loop",
+        enable_max_autotune=False,
+    )
+    if TritonConfig.enabled():
+        input_inner_sparse_variants.append(
+            Variant(
+                name="fast_llm_triton",
+                fwd=_input_inner_sparse_triton_fwd,
+                fwd_bwd=_input_inner_sparse_triton_fwd_bwd,
+                output_postprocess=_mask_padded_rows,
+            )
+        )
     return [
         (
             "sparse_linear: output_sparse (layer 1 / up-proj)",
-            make_cases(
-                "output_sparse", dtypes, shapes, _make_output_sparse_inputs, _sparse_linear_bytes, _sparse_linear_flops
-            ),
-            standard_fwd_bwd_pytorch_variants(
-                _output_sparse_loop,
-                input_keys=("lhs", "rhs", "sparse_map"),
-                grad_input_keys=("lhs", "rhs"),
-                grad_output_key="backward_grad",
-                eager_name="pytorch_loop",
-                enable_max_autotune=False,
-                triton_fwd=_output_sparse_triton_fwd,
-                triton_fwd_bwd=_output_sparse_triton_fwd_bwd,
-                triton_output_postprocess=_mask_padded_rows,
-            ),
+            [
+                OutputSparseCase(tokens=t, top_k=k, num_experts=e, hidden=h, ffn_per_expert=f, dtype=d)
+                for d in dtypes
+                for (t, k, e, h, f) in shapes
+            ],
+            output_sparse_variants,
         ),
         (
             "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
-            make_cases(
-                "input_inner_sparse",
-                dtypes,
-                shapes,
-                _make_input_inner_sparse_inputs,
-                _sparse_linear_bytes,
-                _sparse_linear_flops,
-            ),
-            standard_fwd_bwd_pytorch_variants(
-                _input_inner_sparse_loop,
-                input_keys=("lhs", "rhs", "sparse_map"),
-                grad_input_keys=("lhs", "rhs"),
-                grad_output_key="backward_grad",
-                eager_name="pytorch_loop",
-                enable_max_autotune=False,
-                triton_fwd=_input_inner_sparse_triton_fwd,
-                triton_fwd_bwd=_input_inner_sparse_triton_fwd_bwd,
-                triton_output_postprocess=_mask_padded_rows,
-            ),
+            [
+                InputInnerSparseCase(tokens=t, top_k=k, num_experts=e, hidden=h, ffn_per_expert=f, dtype=d)
+                for d in dtypes
+                for (t, k, e, h, f) in shapes
+            ],
+            input_inner_sparse_variants,
         ),
     ]
 

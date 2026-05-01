@@ -1,56 +1,18 @@
+import dataclasses
 from collections.abc import Callable
-from functools import partial
+from typing import Any
 
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
-from tools.benchmark.runner import Case, Inputs, Variant, VariantFn, run_benchmark
+from tools.benchmark.runner import Inputs, Variant, run_benchmark
 
 DEFAULT_DTYPES: tuple[torch.dtype, ...] = (torch.bfloat16,)
 
 
-def _format_size(n: int) -> str:
-    for unit, factor in (("Gi", 1 << 30), ("Mi", 1 << 20), ("Ki", 1 << 10)):
-        if n >= factor and n % factor == 0:
-            return f"{n // factor} {unit}"
-    return str(n)
-
-
-def _case_name(kernel: str, shape: tuple[int, ...], dtype: torch.dtype) -> str:
-    joined = ", ".join(_format_size(n) for n in shape)
-    shape_repr = f"({joined},)" if len(shape) == 1 else f"({joined})"
-    return f"[{kernel}] {shape_repr} {DataType.from_torch(dtype).short}"
-
-
-def device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def make_cases(
-    kernel_name: str,
-    dtypes: tuple[torch.dtype, ...],
-    shapes: list,
-    make_inputs: Callable,
-    bytes_fn: Callable | None = None,
-    flops_fn: Callable | None = None,
-) -> list[Case]:
-    """Cross-product of `dtypes × shapes`. Each shape may be a tuple or scalar;
-    tuples are unpacked positionally into `make_inputs`, `bytes_fn`, `flops_fn`."""
-    cases = []
-    for dtype in dtypes:
-        for shape in shapes:
-            shape_tuple = shape if isinstance(shape, tuple) else (shape,)
-            cases.append(
-                Case(
-                    name=_case_name(kernel_name, shape_tuple, dtype),
-                    make_inputs=partial(make_inputs, *shape_tuple, dtype),
-                    expected_bytes=bytes_fn(*shape_tuple, dtype) if bytes_fn else None,
-                    expected_flops=flops_fn(*shape_tuple) if flops_fn else None,
-                    compute_dtype=dtype,
-                )
-            )
-    return cases
+def dtype_short(dtype: torch.dtype) -> str:
+    return DataType.from_torch(dtype).short
 
 
 def bench_main(benchmarks_fn: Callable) -> Callable:
@@ -70,6 +32,91 @@ def bench_main(benchmarks_fn: Callable) -> Callable:
     return run
 
 
+@dataclasses.dataclass(kw_only=True)
+class PytorchVariant(Variant):
+    """Variant that calls a pytorch function on inputs picked by key. Used for
+    eager, torch.compile, and apex variants — each instance differs in `function`
+    while sharing the dispatch logic."""
+
+    function: Callable
+    input_keys: tuple[str, ...]
+    grad_input_keys: tuple[str, ...] = ()
+    grad_output_key: str | None = None
+    output_key: str = "output"
+
+    def __post_init__(self) -> None:
+        # Wire the inherited `fwd`/`fwd_bwd` callable fields to bound methods
+        # so subclasses can override the methods without touching the fields.
+        self.fwd = self._fwd
+        self.fwd_bwd = self._fwd_bwd
+
+    def _fwd(self, inputs: Inputs) -> dict:
+        return {self.output_key: self.function(*(inputs[k] for k in self.input_keys))}
+
+    def _fwd_bwd(self, inputs: Inputs) -> dict:
+        output = self.function(*(inputs[k] for k in self.input_keys))
+        if self.grad_output_key is None:
+            output.backward()
+        else:
+            output.backward(inputs[self.grad_output_key])
+        result = {self.output_key: output.detach()}
+        for key in self.grad_input_keys:
+            result[f"grad_{key}"] = inputs[key].grad
+        return result
+
+
+@dataclasses.dataclass(kw_only=True)
+class Fp32ReferenceVariant(PytorchVariant):
+    """Reference variant: upcasts every floating-point input to fp32 before
+    running the eager pytorch function. Re-attaches `requires_grad=True` on
+    `grad_input_keys` so backward sees a leaf tensor."""
+
+    name: str = "fp32_reference"
+    is_reference: bool = True
+
+    def _fwd(self, inputs: Inputs) -> dict:
+        return super()._fwd(self._to_fp32(inputs))
+
+    def _fwd_bwd(self, inputs: Inputs) -> dict:
+        return super()._fwd_bwd(self._to_fp32(inputs))
+
+    def _to_fp32(self, inputs: Inputs) -> Inputs:
+        result = dict(inputs)
+        for key, value in inputs.items():
+            if isinstance(value, torch.Tensor) and value.is_floating_point():
+                float_value = value.float().detach()
+                result[key] = float_value.requires_grad_(True) if key in self.grad_input_keys else float_value
+        return result
+
+
+@dataclasses.dataclass(kw_only=True)
+class FwdOnlyPytorchVariant(Variant):
+    """Forward-only variant: calls a pytorch function with positional args
+    extracted via `unpack`. Used by bench_pointwise where there's no backward."""
+
+    function: Callable
+    unpack: Callable[[Inputs], tuple]
+
+    def __post_init__(self) -> None:
+        self.fwd = self._fwd
+
+    def _fwd(self, inputs: Inputs) -> Any:
+        return self.function(*self.unpack(inputs))
+
+
+@dataclasses.dataclass(kw_only=True)
+class Fp32FwdOnlyReferenceVariant(FwdOnlyPytorchVariant):
+    name: str = "fp32_reference"
+    is_reference: bool = True
+
+    def _fwd(self, inputs: Inputs) -> Any:
+        args = tuple(
+            arg.float() if isinstance(arg, torch.Tensor) and arg.is_floating_point() else arg
+            for arg in self.unpack(inputs)
+        )
+        return self.function(*args)
+
+
 def standard_fwd_variants(
     eager_function: Callable,
     triton_function: Callable | None,
@@ -77,67 +124,29 @@ def standard_fwd_variants(
 ) -> list[Variant]:
     """fp32_reference, pytorch_eager, pytorch_compiled, pytorch_compiled_max,
     and (if `TritonConfig.enabled()`) fast_llm_triton."""
-
-    def fp32_unpack(inputs: Inputs) -> tuple:
-        return tuple(
-            arg.float() if isinstance(arg, torch.Tensor) and arg.is_floating_point() else arg for arg in unpack(inputs)
-        )
-
-    compiled_default = torch.compile(eager_function, mode="default", dynamic=False)
-    compiled_max = torch.compile(eager_function, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=lambda inputs: eager_function(*fp32_unpack(inputs)),
-            is_reference=True,
+    variants: list[Variant] = [
+        Fp32FwdOnlyReferenceVariant(function=eager_function, unpack=unpack),
+        FwdOnlyPytorchVariant(name="pytorch_eager", function=eager_function, unpack=unpack),
+        FwdOnlyPytorchVariant(
+            name="pytorch_compiled",
+            function=torch.compile(eager_function, mode="default", dynamic=False),
+            unpack=unpack,
         ),
-        Variant(name="pytorch_eager", fwd=lambda inputs: eager_function(*unpack(inputs))),
-        Variant(name="pytorch_compiled", fwd=lambda inputs: compiled_default(*unpack(inputs))),
-        Variant(name="pytorch_compiled_max", fwd=lambda inputs: compiled_max(*unpack(inputs))),
+        FwdOnlyPytorchVariant(
+            name="pytorch_compiled_max",
+            function=torch.compile(eager_function, mode="max-autotune-no-cudagraphs", dynamic=False),
+            unpack=unpack,
+        ),
     ]
     if triton_function is not None and TritonConfig.enabled():
         variants.append(
-            Variant(name="fast_llm_triton", fwd=lambda inputs: triton_function(*unpack(inputs), use_triton=True))
+            FwdOnlyPytorchVariant(
+                name="fast_llm_triton",
+                function=lambda *args: triton_function(*args, use_triton=True),
+                unpack=unpack,
+            )
         )
     return variants
-
-
-def _run_pytorch_fwd(
-    inputs: Inputs,
-    function: Callable,
-    input_keys: tuple[str, ...],
-    output_key: str,
-) -> dict:
-    return {output_key: function(*(inputs[key] for key in input_keys))}
-
-
-def _run_pytorch_fwd_bwd(
-    inputs: Inputs,
-    function: Callable,
-    input_keys: tuple[str, ...],
-    grad_input_keys: tuple[str, ...],
-    grad_output_key: str | None,
-    output_key: str,
-) -> dict:
-    output = function(*(inputs[key] for key in input_keys))
-    if grad_output_key is None:
-        output.backward()
-    else:
-        output.backward(inputs[grad_output_key])
-    result = {output_key: output.detach()}
-    for key in grad_input_keys:
-        result[f"grad_{key}"] = inputs[key].grad
-    return result
-
-
-def _to_fp32_inputs(inputs: Inputs, grad_input_keys: tuple[str, ...]) -> Inputs:
-    result = dict(inputs)
-    for key, value in inputs.items():
-        if isinstance(value, torch.Tensor) and value.is_floating_point():
-            float_value = value.float().detach()
-            result[key] = float_value.requires_grad_(True) if key in grad_input_keys else float_value
-    return result
 
 
 def standard_fwd_bwd_pytorch_variants(
@@ -149,65 +158,36 @@ def standard_fwd_bwd_pytorch_variants(
     output_key: str = "output",
     reset_inputs: Callable[[Inputs], None] | None = None,
     extra_functions: dict[str, Callable] | None = None,
-    triton_fwd: VariantFn | None = None,
-    triton_fwd_bwd: VariantFn | None = None,
-    triton_name: str = "fast_llm_triton",
-    triton_output_postprocess: Callable[[dict, Inputs], dict] | None = None,
     eager_name: str = "pytorch_eager",
     enable_max_autotune: bool = True,
 ) -> list[Variant]:
-    """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max] +
-    `extra_functions` + optional `<triton_name>` (gated on `TritonConfig.enabled()`).
-
-    Pytorch variants call `eager_function(*[inputs[k] for k in input_keys])`. For
-    fwd_bwd, `grad_input_keys` are read out as `grad_<key>` and `grad_output_key=None`
-    triggers a scalar `output.backward()`. The fp32 reference upcasts every
-    floating-point input, re-attaching `requires_grad=True` on `grad_input_keys`.
-    """
-    fwd_kwargs = {"input_keys": input_keys, "output_key": output_key}
-    fwd_bwd_kwargs = {
+    """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max]
+    + `extra_functions`. Triton variants are appended by the caller (so each
+    bench file owns its triton wiring explicitly)."""
+    common = {
         "input_keys": input_keys,
         "grad_input_keys": grad_input_keys,
         "grad_output_key": grad_output_key,
         "output_key": output_key,
+        "reset_inputs": reset_inputs,
     }
-
-    def variant(name: str, function: Callable) -> Variant:
-        return Variant(
-            name=name,
-            fwd=partial(_run_pytorch_fwd, function=function, **fwd_kwargs),
-            fwd_bwd=partial(_run_pytorch_fwd_bwd, function=function, **fwd_bwd_kwargs),
-            reset_inputs=reset_inputs,
-        )
-
-    compiled_default = torch.compile(eager_function, mode="default", dynamic=False)
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=lambda inputs: _run_pytorch_fwd(
-                _to_fp32_inputs(inputs, grad_input_keys), eager_function, **fwd_kwargs
-            ),
-            fwd_bwd=lambda inputs: _run_pytorch_fwd_bwd(
-                _to_fp32_inputs(inputs, grad_input_keys), eager_function, **fwd_bwd_kwargs
-            ),
-            is_reference=True,
+    variants: list[Variant] = [
+        Fp32ReferenceVariant(function=eager_function, **common),
+        PytorchVariant(name=eager_name, function=eager_function, **common),
+        PytorchVariant(
+            name="pytorch_compiled",
+            function=torch.compile(eager_function, mode="default", dynamic=False),
+            **common,
         ),
-        variant(eager_name, eager_function),
-        variant("pytorch_compiled", compiled_default),
     ]
     if enable_max_autotune:
-        compiled_max = torch.compile(eager_function, mode="max-autotune-no-cudagraphs", dynamic=False)
-        variants.append(variant("pytorch_compiled_max", compiled_max))
-    for name, function in (extra_functions or {}).items():
-        variants.append(variant(name, function))
-    if (triton_fwd is not None or triton_fwd_bwd is not None) and TritonConfig.enabled():
         variants.append(
-            Variant(
-                name=triton_name,
-                fwd=triton_fwd,
-                fwd_bwd=triton_fwd_bwd,
-                reset_inputs=reset_inputs,
-                output_postprocess=triton_output_postprocess,
+            PytorchVariant(
+                name="pytorch_compiled_max",
+                function=torch.compile(eager_function, mode="max-autotune-no-cudagraphs", dynamic=False),
+                **common,
             )
         )
+    for name, function in (extra_functions or {}).items():
+        variants.append(PytorchVariant(name=name, function=function, **common))
     return variants
