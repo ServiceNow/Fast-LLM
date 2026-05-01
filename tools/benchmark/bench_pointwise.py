@@ -7,13 +7,10 @@ Triton kernels live in `fast_llm/functional/triton/pointwise.py` and are
 documented as being ~2x faster than the PyTorch equivalent on A100.
 """
 
-from functools import partial
-
 import torch
 
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
-from tools.benchmark.runner import Case, run_benchmark
-from tools.benchmark.utils import case_name, device, standard_fwd_variants
+from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_variants
 
 # Sizes span from L2-resident to comfortably HBM-bound, in 4× steps so the
 # regime transitions (L2 → HBM, mid-HBM → saturated-HBM) are visible.
@@ -36,27 +33,17 @@ def _copy_eager(input_: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
 
 def _make_copy_inputs(numel: int, dtype: torch.dtype) -> dict:
     input_ = torch.randn(numel, dtype=dtype, device=device())
-    out = torch.empty_like(input_)
-    return {"input_": input_, "out": out}
+    return {"input_": input_, "out": torch.empty_like(input_)}
 
 
-def _copy_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
-    sizes = shapes if shapes is not None else _SIZES_NUMEL
-    return [
-        Case(
-            name=case_name("copy", (numel,), dtype),
-            make_inputs=partial(_make_copy_inputs, numel, dtype),
-            # Read input + write output.
-            expected_bytes=2 * numel * torch.tensor([], dtype=dtype).element_size(),
-        )
-        for dtype in dtypes
-        for numel in sizes
-    ]
+def _copy_bytes(numel: int, dtype: torch.dtype) -> int:
+    # Read input + write output.
+    return 2 * numel * dtype.itemsize
 
 
 _COPY_VARIANTS = standard_fwd_variants(
-    eager_fn=_copy_eager,
-    triton_fn=triton_copy,
+    eager_function=_copy_eager,
+    triton_function=triton_copy,
     unpack=lambda inputs: (inputs["input_"], inputs["out"]),
 )
 
@@ -72,23 +59,14 @@ def _make_fill_inputs(numel: int, dtype: torch.dtype) -> dict:
     return {"input_": torch.empty(numel, dtype=dtype, device=device()), "value": 1.5}
 
 
-def _fill_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
-    sizes = shapes if shapes is not None else _SIZES_NUMEL
-    return [
-        Case(
-            name=case_name("fill", (numel,), dtype),
-            make_inputs=partial(_make_fill_inputs, numel, dtype),
-            # Write only.
-            expected_bytes=numel * torch.tensor([], dtype=dtype).element_size(),
-        )
-        for dtype in dtypes
-        for numel in sizes
-    ]
+def _fill_bytes(numel: int, dtype: torch.dtype) -> int:
+    # Write only.
+    return numel * dtype.itemsize
 
 
 _FILL_VARIANTS = standard_fwd_variants(
-    eager_fn=_fill_eager,
-    triton_fn=triton_fill,
+    eager_function=_fill_eager,
+    triton_function=triton_fill,
     unpack=lambda inputs: (inputs["input_"], inputs["value"]),
 )
 
@@ -108,26 +86,19 @@ def _make_add_inputs(numel: int, dtype: torch.dtype) -> dict:
     }
 
 
-def _add_cases(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[Case]:
-    sizes = shapes if shapes is not None else _SIZES_NUMEL
-    return [
-        Case(
-            name=case_name("add", (numel,), dtype),
-            make_inputs=partial(_make_add_inputs, numel, dtype),
-            # Read 2 inputs + write 1 output.
-            expected_bytes=3 * numel * torch.tensor([], dtype=dtype).element_size(),
-            # One fp add per element.
-            expected_flops=numel,
-            compute_dtype=dtype,
-        )
-        for dtype in dtypes
-        for numel in sizes
-    ]
+def _add_bytes(numel: int, dtype: torch.dtype) -> int:
+    # Read 2 inputs + write 1 output.
+    return 3 * numel * dtype.itemsize
+
+
+def _add_flops(numel: int) -> int:
+    # One fp add per element.
+    return numel
 
 
 _ADD_VARIANTS = standard_fwd_variants(
-    eager_fn=_add_eager,
-    triton_fn=triton_add,
+    eager_function=_add_eager,
+    triton_function=triton_add,
     unpack=lambda inputs: (inputs["input_"], inputs["other"], inputs["out"]),
 )
 
@@ -140,23 +111,19 @@ def benchmarks(
     shapes: list[int] | None = None,
 ) -> list[tuple[str, list, list]]:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    shapes = shapes if shapes is not None else _SIZES_NUMEL
     return [
-        ("pointwise: copy", _copy_cases(dtypes, shapes), _COPY_VARIANTS),
-        ("pointwise: fill", _fill_cases(dtypes, shapes), _FILL_VARIANTS),
-        ("pointwise: add", _add_cases(dtypes, shapes), _ADD_VARIANTS),
+        ("pointwise: copy", make_cases("copy", dtypes, shapes, _make_copy_inputs, _copy_bytes), _COPY_VARIANTS),
+        ("pointwise: fill", make_cases("fill", dtypes, shapes, _make_fill_inputs, _fill_bytes), _FILL_VARIANTS),
+        (
+            "pointwise: add",
+            make_cases("add", dtypes, shapes, _make_add_inputs, _add_bytes, _add_flops),
+            _ADD_VARIANTS,
+        ),
     ]
 
 
-def run(
-    verbose: bool = False,
-    dtypes: tuple[torch.dtype, ...] | None = None,
-    shapes: list[int] | None = None,
-    warmup_ms: float = 25.0,
-    rep_ms: float = 100.0,
-    min_reps: int = 5,
-) -> None:
-    for name, cases, variants in benchmarks(dtypes, shapes):
-        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+run = bench_main(benchmarks)
 
 
 if __name__ == "__main__":

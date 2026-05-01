@@ -18,14 +18,12 @@ Comparisons:
 Shapes match bench_entropy_loss: tokens=4096, vocab swept over 32K/64K/128K.
 """
 
-from functools import partial
-
 import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-from tools.benchmark.runner import Case, Variant, run_benchmark
-from tools.benchmark.utils import case_name, device
+from tools.benchmark.runner import Variant
+from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
 
 _SHAPES = [
     (4096, 32768),
@@ -62,43 +60,11 @@ def _grpo_eager(logits: torch.Tensor, labels: torch.Tensor, advantages: torch.Te
     return per_token_loss.mean()
 
 
-_grpo_compiled_default = torch.compile(_grpo_eager, mode="default", dynamic=False)
-_grpo_compiled_max = torch.compile(_grpo_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
-def _run_fwd(inputs: dict, fn) -> dict:
-    return {"loss": fn(inputs["logits"], inputs["labels"], inputs["advantages"], inputs["old_log_probs"])}
-
-
-def _run_fwd_fp32(inputs: dict) -> dict:
-    return {
-        "loss": _grpo_eager(
-            inputs["logits"].float().detach().requires_grad_(),
-            inputs["labels"],
-            inputs["advantages"],
-            inputs["old_log_probs"],
-        )
-    }
-
-
 def _reset_logits_grad(inputs: dict) -> None:
     inputs["logits"].grad = None
 
 
-def _run_fwd_bwd(inputs: dict, fn) -> dict:
-    loss = fn(inputs["logits"], inputs["labels"], inputs["advantages"], inputs["old_log_probs"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": inputs["logits"].grad}
-
-
-def _run_fwd_bwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_()
-    loss = _grpo_eager(logits_fp32, inputs["labels"], inputs["advantages"], inputs["old_log_probs"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
-
-
-def _run_fwd_triton(inputs: dict) -> dict:
+def _triton_fwd(inputs: dict) -> dict:
     loss, _, _ = triton_grpo_loss_forward_backward(
         inputs["logits"],
         inputs["labels"],
@@ -111,7 +77,7 @@ def _run_fwd_triton(inputs: dict) -> dict:
     return {"loss": loss}
 
 
-def _run_fwd_bwd_triton(inputs: dict) -> dict:
+def _triton_fwd_bwd(inputs: dict) -> dict:
     loss, grad_logits, _ = triton_grpo_loss_forward_backward(
         inputs["logits"],
         inputs["labels"],
@@ -125,51 +91,21 @@ def _run_fwd_bwd_triton(inputs: dict) -> dict:
 
 
 def _grpo_variants() -> list[Variant]:
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=_run_fwd_fp32,
-            fwd_bwd=_run_fwd_bwd_fp32,
-            is_reference=True,
-        ),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: _run_fwd(inputs, _grpo_eager),
-            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_eager),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: _run_fwd(inputs, _grpo_compiled_default),
-            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_compiled_default),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: _run_fwd(inputs, _grpo_compiled_max),
-            fwd_bwd=lambda inputs: _run_fwd_bwd(inputs, _grpo_compiled_max),
-            reset_inputs=_reset_logits_grad,
-        ),
-    ]
+    variants = standard_fwd_bwd_pytorch_variants(
+        _grpo_eager,
+        input_keys=("logits", "labels", "advantages", "old_log_probs"),
+        grad_input_keys=("logits",),
+        output_key="loss",
+        reset_inputs=_reset_logits_grad,
+    )
     if TritonConfig.enabled():
-        variants.append(
-            Variant(
-                name="fast_llm_triton",
-                fwd=_run_fwd_triton,
-                fwd_bwd=_run_fwd_bwd_triton,
-            )
-        )
+        variants.append(Variant(name="fast_llm_triton", fwd=_triton_fwd, fwd_bwd=_triton_fwd_bwd))
     return variants
 
 
-def _bytes_per_element(dtype: torch.dtype) -> int:
-    return torch.tensor([], dtype=dtype).element_size()
-
-
 def _grpo_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
-    element_size = _bytes_per_element(dtype)
     # fwd: read logits + bwd: read logits + write grad_logits
-    logit_traffic = 3 * tokens * vocab * element_size
+    logit_traffic = 3 * tokens * vocab * dtype.itemsize
     # labels (int64), advantages (fp32), old_log_probs (fp32)
     scalar_traffic = tokens * (8 + 4 + 4)
     return logit_traffic + scalar_traffic
@@ -180,39 +116,22 @@ def _grpo_flops(tokens: int, vocab: int) -> int:
     return 14 * tokens * vocab
 
 
-def _grpo_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None) -> list[Case]:
-    shapes = shapes if shapes is not None else _SHAPES
-    return [
-        Case(
-            name=case_name("grpo_loss", (tokens, vocab), dtype),
-            make_inputs=partial(_make_grpo_inputs, tokens, vocab, dtype),
-            expected_bytes=_grpo_bytes(tokens, vocab, dtype),
-            expected_flops=_grpo_flops(tokens, vocab),
-            compute_dtype=dtype,
-        )
-        for dtype in dtypes
-        for tokens, vocab in shapes
-    ]
-
-
 def benchmarks(
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    return [("grpo_loss", _grpo_cases(dtypes, shapes), _grpo_variants())]
+    shapes = shapes if shapes is not None else _SHAPES
+    return [
+        (
+            "grpo_loss",
+            make_cases("grpo_loss", dtypes, shapes, _make_grpo_inputs, _grpo_bytes, _grpo_flops),
+            _grpo_variants(),
+        )
+    ]
 
 
-def run(
-    verbose: bool = False,
-    dtypes: tuple[torch.dtype, ...] | None = None,
-    shapes: list[tuple[int, int]] | None = None,
-    warmup_ms: float = 25.0,
-    rep_ms: float = 100.0,
-    min_reps: int = 5,
-) -> None:
-    for name, cases, variants in benchmarks(dtypes, shapes):
-        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+run = bench_main(benchmarks)
 
 
 if __name__ == "__main__":

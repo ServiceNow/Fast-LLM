@@ -15,16 +15,14 @@ z_loss is also included (shared input structure with the labels case).
 Shapes fix tokens=4096, sweep vocab size from Llama-2 (32K) to Llama-3 (128K).
 """
 
-from functools import partial
-
 import torch
 import torch.nn.functional as F
 
 from fast_llm.functional.config import EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
-from tools.benchmark.runner import Case, Variant, run_benchmark
-from tools.benchmark.utils import case_name, device
+from tools.benchmark.runner import Variant
+from tools.benchmark.utils import bench_main, device, make_cases, standard_fwd_bwd_pytorch_variants
 
 # (tokens, vocab_size)
 _SHAPES = [
@@ -53,96 +51,15 @@ def _make_distribution_inputs(tokens: int, vocab: int, dtype: torch.dtype) -> di
     }
 
 
-# --------------------------------------------------------------------------- cross_entropy (labels)
-
-
-def _ce_labels_eager(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    return F.cross_entropy(logits, labels)
-
-
-_ce_labels_compiled_default = torch.compile(_ce_labels_eager, mode="default", dynamic=False)
-_ce_labels_compiled_max = torch.compile(_ce_labels_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
-def _run_ce_labels_fwd(inputs: dict, fn) -> dict:
-    return {"loss": fn(inputs["logits"], inputs["labels"])}
-
-
-def _run_ce_labels_fwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    return {"loss": _ce_labels_eager(logits_fp32, inputs["labels"])}
-
-
 def _reset_logits_grad(inputs: dict) -> None:
     inputs["logits"].grad = None
 
 
-def _run_ce_labels_fwd_bwd(inputs: dict, fn) -> dict:
-    loss = fn(inputs["logits"], inputs["labels"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": inputs["logits"].grad}
+# --------------------------------------------------------------------------- eager kernels
 
 
-def _run_ce_labels_fwd_bwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    loss = _ce_labels_eager(logits_fp32, inputs["labels"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
-
-
-def _run_ce_labels_fwd_triton(inputs: dict) -> dict:
-    loss, _ = triton_entropy_loss_forward_backward(
-        inputs["logits"], inputs["labels"], loss_mask=None, grad_output=None
-    )
-    return {"loss": loss}
-
-
-def _run_ce_labels_fwd_bwd_triton(inputs: dict) -> dict:
-    loss, grad_logits = triton_entropy_loss_forward_backward(
-        inputs["logits"], inputs["labels"], loss_mask=None, grad_output=1.0
-    )
-    return {"loss": loss, "grad_logits": grad_logits}
-
-
-def _ce_labels_variants() -> list[Variant]:
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=_run_ce_labels_fwd_fp32,
-            fwd_bwd=_run_ce_labels_fwd_bwd_fp32,
-            is_reference=True,
-        ),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: _run_ce_labels_fwd(inputs, _ce_labels_eager),
-            fwd_bwd=lambda inputs: _run_ce_labels_fwd_bwd(inputs, _ce_labels_eager),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: _run_ce_labels_fwd(inputs, _ce_labels_compiled_default),
-            fwd_bwd=lambda inputs: _run_ce_labels_fwd_bwd(inputs, _ce_labels_compiled_default),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: _run_ce_labels_fwd(inputs, _ce_labels_compiled_max),
-            fwd_bwd=lambda inputs: _run_ce_labels_fwd_bwd(inputs, _ce_labels_compiled_max),
-            reset_inputs=_reset_logits_grad,
-        ),
-    ]
-    if TritonConfig.enabled():
-        variants.append(
-            Variant(
-                name="fast_llm_triton",
-                fwd=_run_ce_labels_fwd_triton,
-                fwd_bwd=_run_ce_labels_fwd_bwd_triton,
-            )
-        )
-    return variants
-
-
-# --------------------------------------------------------------------------- cross_entropy (logits / distribution)
+def _ce_labels_eager(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    return F.cross_entropy(logits, labels)
 
 
 def _ce_dist_eager(logits: torch.Tensor, target_logits: torch.Tensor) -> torch.Tensor:
@@ -150,185 +67,9 @@ def _ce_dist_eager(logits: torch.Tensor, target_logits: torch.Tensor) -> torch.T
     return F.cross_entropy(logits, target_logits.softmax(dim=-1))
 
 
-_ce_dist_compiled_default = torch.compile(_ce_dist_eager, mode="default", dynamic=False)
-_ce_dist_compiled_max = torch.compile(_ce_dist_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
-def _run_dist_fwd(inputs: dict, fn) -> dict:
-    return {"loss": fn(inputs["logits"], inputs["target_logits"])}
-
-
-def _run_ce_dist_fwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    return {"loss": _ce_dist_eager(logits_fp32, inputs["target_logits"].float())}
-
-
-def _run_dist_fwd_bwd(inputs: dict, fn) -> dict:
-    loss = fn(inputs["logits"], inputs["target_logits"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": inputs["logits"].grad}
-
-
-def _run_ce_dist_fwd_bwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    loss = _ce_dist_eager(logits_fp32, inputs["target_logits"].float())
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
-
-
-def _run_ce_dist_fwd_triton(inputs: dict) -> dict:
-    loss, _ = triton_entropy_loss_forward_backward(
-        inputs["logits"],
-        inputs["target_logits"],
-        loss_mask=None,
-        grad_output=None,
-        target_format=TargetFormat.logits,
-        entropy_loss_type=EntropyLossType.cross_entropy,
-    )
-    return {"loss": loss}
-
-
-def _run_ce_dist_fwd_bwd_triton(inputs: dict) -> dict:
-    loss, grad_logits = triton_entropy_loss_forward_backward(
-        inputs["logits"],
-        inputs["target_logits"],
-        loss_mask=None,
-        grad_output=1.0,
-        target_format=TargetFormat.logits,
-        entropy_loss_type=EntropyLossType.cross_entropy,
-    )
-    return {"loss": loss, "grad_logits": grad_logits}
-
-
-def _ce_dist_variants() -> list[Variant]:
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=_run_ce_dist_fwd_fp32,
-            fwd_bwd=_run_ce_dist_fwd_bwd_fp32,
-            is_reference=True,
-        ),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _ce_dist_eager),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _ce_dist_eager),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _ce_dist_compiled_default),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _ce_dist_compiled_default),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _ce_dist_compiled_max),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _ce_dist_compiled_max),
-            reset_inputs=_reset_logits_grad,
-        ),
-    ]
-    if TritonConfig.enabled():
-        variants.append(
-            Variant(
-                name="fast_llm_triton",
-                fwd=_run_ce_dist_fwd_triton,
-                fwd_bwd=_run_ce_dist_fwd_bwd_triton,
-            )
-        )
-    return variants
-
-
-# --------------------------------------------------------------------------- reverse_kl (logits / distribution)
-
-
 def _reverse_kl_eager(logits: torch.Tensor, target_logits: torch.Tensor) -> torch.Tensor:
     """KL(q||p) where q = softmax(logits), p = softmax(target_logits)."""
-    return F.kl_div(
-        target_logits.log_softmax(dim=-1),
-        logits.softmax(dim=-1),
-        reduction="batchmean",
-    )
-
-
-_reverse_kl_compiled_default = torch.compile(_reverse_kl_eager, mode="default", dynamic=False)
-_reverse_kl_compiled_max = torch.compile(_reverse_kl_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
-def _run_rkl_fwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    return {"loss": _reverse_kl_eager(logits_fp32, inputs["target_logits"].float())}
-
-
-def _run_rkl_fwd_bwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    loss = _reverse_kl_eager(logits_fp32, inputs["target_logits"].float())
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
-
-
-def _run_rkl_fwd_triton(inputs: dict) -> dict:
-    loss, _ = triton_entropy_loss_forward_backward(
-        inputs["logits"],
-        inputs["target_logits"],
-        loss_mask=None,
-        grad_output=None,
-        target_format=TargetFormat.logits,
-        entropy_loss_type=EntropyLossType.reverse_kl,
-    )
-    return {"loss": loss}
-
-
-def _run_rkl_fwd_bwd_triton(inputs: dict) -> dict:
-    loss, grad_logits = triton_entropy_loss_forward_backward(
-        inputs["logits"],
-        inputs["target_logits"],
-        loss_mask=None,
-        grad_output=1.0,
-        target_format=TargetFormat.logits,
-        entropy_loss_type=EntropyLossType.reverse_kl,
-    )
-    return {"loss": loss, "grad_logits": grad_logits}
-
-
-def _reverse_kl_variants() -> list[Variant]:
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=_run_rkl_fwd_fp32,
-            fwd_bwd=_run_rkl_fwd_bwd_fp32,
-            is_reference=True,
-        ),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _reverse_kl_eager),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _reverse_kl_eager),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _reverse_kl_compiled_default),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _reverse_kl_compiled_default),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: _run_dist_fwd(inputs, _reverse_kl_compiled_max),
-            fwd_bwd=lambda inputs: _run_dist_fwd_bwd(inputs, _reverse_kl_compiled_max),
-            reset_inputs=_reset_logits_grad,
-        ),
-    ]
-    if TritonConfig.enabled():
-        variants.append(
-            Variant(
-                name="fast_llm_triton",
-                fwd=_run_rkl_fwd_triton,
-                fwd_bwd=_run_rkl_fwd_bwd_triton,
-            )
-        )
-    return variants
-
-
-# --------------------------------------------------------------------------- z_loss
+    return F.kl_div(target_logits.log_softmax(dim=-1), logits.softmax(dim=-1), reduction="batchmean")
 
 
 def _z_loss_eager(logits: torch.Tensor) -> torch.Tensor:
@@ -336,125 +77,75 @@ def _z_loss_eager(logits: torch.Tensor) -> torch.Tensor:
     return (log_z * log_z).mean()
 
 
-_z_loss_compiled_default = torch.compile(_z_loss_eager, mode="default", dynamic=False)
-_z_loss_compiled_max = torch.compile(_z_loss_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
+# --------------------------------------------------------------------------- variant assembly
 
 
-def _run_zl_fwd(inputs: dict, fn) -> dict:
-    return {"loss": fn(inputs["logits"])}
-
-
-def _run_zl_fwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    return {"loss": _z_loss_eager(logits_fp32)}
-
-
-def _run_zl_fwd_bwd(inputs: dict, fn) -> dict:
-    loss = fn(inputs["logits"])
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": inputs["logits"].grad}
-
-
-def _run_zl_fwd_bwd_fp32(inputs: dict) -> dict:
-    logits_fp32 = inputs["logits"].float().detach().requires_grad_(True)
-    loss = _z_loss_eager(logits_fp32)
-    loss.backward()
-    return {"loss": loss.detach(), "grad_logits": logits_fp32.grad}
-
-
-def _run_zl_fwd_triton(inputs: dict) -> dict:
-    loss, _ = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=None)
-    return {"loss": loss}
-
-
-def _run_zl_fwd_bwd_triton(inputs: dict) -> dict:
-    loss, grad_logits = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=1.0)
-    return {"loss": loss, "grad_logits": grad_logits}
-
-
-def _z_loss_variants() -> list[Variant]:
-    variants = [
-        Variant(name="fp32_reference", fwd=_run_zl_fwd_fp32, fwd_bwd=_run_zl_fwd_bwd_fp32, is_reference=True),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: _run_zl_fwd(inputs, _z_loss_eager),
-            fwd_bwd=lambda inputs: _run_zl_fwd_bwd(inputs, _z_loss_eager),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: _run_zl_fwd(inputs, _z_loss_compiled_default),
-            fwd_bwd=lambda inputs: _run_zl_fwd_bwd(inputs, _z_loss_compiled_default),
-            reset_inputs=_reset_logits_grad,
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: _run_zl_fwd(inputs, _z_loss_compiled_max),
-            fwd_bwd=lambda inputs: _run_zl_fwd_bwd(inputs, _z_loss_compiled_max),
-            reset_inputs=_reset_logits_grad,
-        ),
-    ]
+def _entropy_variants(eager_function, input_keys, triton_kwargs=None) -> list[Variant]:
+    variants = standard_fwd_bwd_pytorch_variants(
+        eager_function,
+        input_keys=input_keys,
+        grad_input_keys=("logits",),
+        output_key="loss",
+        reset_inputs=_reset_logits_grad,
+    )
     if TritonConfig.enabled():
-        variants.append(Variant(name="fast_llm_triton", fwd=_run_zl_fwd_triton, fwd_bwd=_run_zl_fwd_bwd_triton))
+        target_key = input_keys[1]
+        kwargs = triton_kwargs or {}
+
+        def triton_fwd(inputs: dict) -> dict:
+            loss, _ = triton_entropy_loss_forward_backward(
+                inputs["logits"], inputs[target_key], loss_mask=None, grad_output=None, **kwargs
+            )
+            return {"loss": loss}
+
+        def triton_fwd_bwd(inputs: dict) -> dict:
+            loss, grad_logits = triton_entropy_loss_forward_backward(
+                inputs["logits"], inputs[target_key], loss_mask=None, grad_output=1.0, **kwargs
+            )
+            return {"loss": loss, "grad_logits": grad_logits}
+
+        variants.append(Variant(name="fast_llm_triton", fwd=triton_fwd, fwd_bwd=triton_fwd_bwd))
     return variants
 
 
-# --------------------------------------------------------------------------- cases
+def _z_loss_variants() -> list[Variant]:
+    variants = standard_fwd_bwd_pytorch_variants(
+        _z_loss_eager,
+        input_keys=("logits",),
+        grad_input_keys=("logits",),
+        output_key="loss",
+        reset_inputs=_reset_logits_grad,
+    )
+    if TritonConfig.enabled():
+
+        def triton_fwd(inputs: dict) -> dict:
+            loss, _ = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=None)
+            return {"loss": loss}
+
+        def triton_fwd_bwd(inputs: dict) -> dict:
+            loss, grad_logits = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=1.0)
+            return {"loss": loss, "grad_logits": grad_logits}
+
+        variants.append(Variant(name="fast_llm_triton", fwd=triton_fwd, fwd_bwd=triton_fwd_bwd))
+    return variants
 
 
-def _bytes_per_element(dtype: torch.dtype) -> int:
-    return torch.tensor([], dtype=dtype).element_size()
+# --------------------------------------------------------------------------- bytes / flops
 
 
 def _label_loss_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
-    """fwd+bwd: read logits, read labels (int32), write grad_logits."""
-    element_size = _bytes_per_element(dtype)
-    return 2 * tokens * vocab * element_size + tokens * 4
+    # fwd+bwd: read logits, read labels (int32), write grad_logits.
+    return 2 * tokens * vocab * dtype.itemsize + tokens * 4
 
 
 def _dist_loss_bytes(tokens: int, vocab: int, dtype: torch.dtype) -> int:
-    """fwd+bwd: read logits, read target_logits, write grad_logits."""
-    element_size = _bytes_per_element(dtype)
-    return 3 * tokens * vocab * element_size
+    # fwd+bwd: read logits, read target_logits, write grad_logits.
+    return 3 * tokens * vocab * dtype.itemsize
 
 
 def _entropy_loss_flops(tokens: int, vocab: int) -> int:
     # fwd ≈ 3*vocab per token (max, sum_exp, CE); bwd ≈ vocab. Total ≈ 4*vocab.
     return 4 * tokens * vocab
-
-
-def _label_cases(
-    kernel_name: str, dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None
-) -> list[Case]:
-    shapes = shapes if shapes is not None else _SHAPES
-    return [
-        Case(
-            name=case_name(kernel_name, (tokens, vocab), dtype),
-            make_inputs=partial(_make_label_inputs, tokens, vocab, dtype),
-            expected_bytes=_label_loss_bytes(tokens, vocab, dtype),
-            expected_flops=_entropy_loss_flops(tokens, vocab),
-            compute_dtype=dtype,
-        )
-        for dtype in dtypes
-        for tokens, vocab in shapes
-    ]
-
-
-def _dist_cases(
-    kernel_name: str, dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int]] | None = None
-) -> list[Case]:
-    shapes = shapes if shapes is not None else _SHAPES
-    return [
-        Case(
-            name=case_name(kernel_name, (tokens, vocab), dtype),
-            make_inputs=partial(_make_distribution_inputs, tokens, vocab, dtype),
-            expected_bytes=_dist_loss_bytes(tokens, vocab, dtype),
-            expected_flops=_entropy_loss_flops(tokens, vocab),
-            compute_dtype=dtype,
-        )
-        for dtype in dtypes
-        for tokens, vocab in shapes
-    ]
 
 
 # --------------------------------------------------------------------------- entry point
@@ -465,36 +156,57 @@ def benchmarks(
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
+    shapes = shapes if shapes is not None else _SHAPES
     return [
         (
             "entropy_loss: cross_entropy (labels)",
-            _label_cases("cross_entropy_labels", dtypes, shapes),
-            _ce_labels_variants(),
+            make_cases(
+                "cross_entropy_labels", dtypes, shapes, _make_label_inputs, _label_loss_bytes, _entropy_loss_flops
+            ),
+            _entropy_variants(_ce_labels_eager, input_keys=("logits", "labels")),
         ),
         (
             "entropy_loss: cross_entropy (logits)",
-            _dist_cases("cross_entropy_logits", dtypes, shapes),
-            _ce_dist_variants(),
+            make_cases(
+                "cross_entropy_logits",
+                dtypes,
+                shapes,
+                _make_distribution_inputs,
+                _dist_loss_bytes,
+                _entropy_loss_flops,
+            ),
+            _entropy_variants(
+                _ce_dist_eager,
+                input_keys=("logits", "target_logits"),
+                triton_kwargs={
+                    "target_format": TargetFormat.logits,
+                    "entropy_loss_type": EntropyLossType.cross_entropy,
+                },
+            ),
         ),
         (
             "entropy_loss: reverse_kl (logits)",
-            _dist_cases("reverse_kl_logits", dtypes, shapes),
-            _reverse_kl_variants(),
+            make_cases(
+                "reverse_kl_logits", dtypes, shapes, _make_distribution_inputs, _dist_loss_bytes, _entropy_loss_flops
+            ),
+            _entropy_variants(
+                _reverse_kl_eager,
+                input_keys=("logits", "target_logits"),
+                triton_kwargs={
+                    "target_format": TargetFormat.logits,
+                    "entropy_loss_type": EntropyLossType.reverse_kl,
+                },
+            ),
         ),
-        ("entropy_loss: z_loss", _label_cases("z_loss", dtypes, shapes), _z_loss_variants()),
+        (
+            "entropy_loss: z_loss",
+            make_cases("z_loss", dtypes, shapes, _make_label_inputs, _label_loss_bytes, _entropy_loss_flops),
+            _z_loss_variants(),
+        ),
     ]
 
 
-def run(
-    verbose: bool = False,
-    dtypes: tuple[torch.dtype, ...] | None = None,
-    shapes: list[tuple[int, int]] | None = None,
-    warmup_ms: float = 25.0,
-    rep_ms: float = 100.0,
-    min_reps: int = 5,
-) -> None:
-    for name, cases, variants in benchmarks(dtypes, shapes):
-        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+run = bench_main(benchmarks)
 
 
 if __name__ == "__main__":

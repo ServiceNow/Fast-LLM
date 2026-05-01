@@ -12,14 +12,12 @@ Shapes sweep (tokens, num_heads, head_size) across typical attention configs:
 - 8 heads × 128 → GQA key-value heads (Llama 3)
 """
 
-from functools import partial
-
 import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.rotary import triton_rotary_
-from tools.benchmark.runner import Case, Variant, run_benchmark
-from tools.benchmark.utils import case_name, device
+from tools.benchmark.runner import Variant
+from tools.benchmark.utils import bench_main, device, make_cases
 
 # (tokens, num_heads, head_size) — tokens = batch * seq_len
 _SHAPES = [
@@ -57,9 +55,8 @@ _rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagr
 
 
 def _rotary_bytes(tokens: int, num_heads: int, head_size: int, dtype: torch.dtype) -> int:
-    element_size = torch.tensor([], dtype=dtype).element_size()
     # Read + write input tensor; frequencies are float32.
-    return 2 * tokens * num_heads * head_size * element_size + tokens * head_size * 4
+    return 2 * tokens * num_heads * head_size * dtype.itemsize + tokens * head_size * 4
 
 
 def _rotary_flops(tokens: int, num_heads: int, head_size: int) -> int:
@@ -98,39 +95,22 @@ def _rotary_variants() -> list[Variant]:
     return variants
 
 
-def _rotary_cases(dtypes: tuple[torch.dtype, ...], shapes: list[tuple[int, int, int]] | None = None) -> list[Case]:
-    shapes = shapes if shapes is not None else _SHAPES
-    return [
-        Case(
-            name=case_name("rotary", (tokens, num_heads, head_size), dtype),
-            make_inputs=partial(_make_rotary_inputs, tokens, num_heads, head_size, dtype),
-            expected_bytes=_rotary_bytes(tokens, num_heads, head_size, dtype),
-            expected_flops=_rotary_flops(tokens, num_heads, head_size),
-            compute_dtype=dtype,
-        )
-        for dtype in dtypes
-        for tokens, num_heads, head_size in shapes
-    ]
-
-
 def benchmarks(
     dtypes: tuple[torch.dtype, ...] | None = None,
     shapes: list[tuple[int, int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     dtypes = tuple(dtypes) if dtypes else _DEFAULT_DTYPES
-    return [("rotary", _rotary_cases(dtypes, shapes), _rotary_variants())]
+    shapes = shapes if shapes is not None else _SHAPES
+    return [
+        (
+            "rotary",
+            make_cases("rotary", dtypes, shapes, _make_rotary_inputs, _rotary_bytes, _rotary_flops),
+            _rotary_variants(),
+        )
+    ]
 
 
-def run(
-    verbose: bool = False,
-    dtypes: tuple[torch.dtype, ...] | None = None,
-    shapes: list[tuple[int, int, int]] | None = None,
-    warmup_ms: float = 25.0,
-    rep_ms: float = 100.0,
-    min_reps: int = 5,
-) -> None:
-    for name, cases, variants in benchmarks(dtypes, shapes):
-        run_benchmark(name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+run = bench_main(benchmarks)
 
 
 if __name__ == "__main__":
