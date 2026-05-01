@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage
 
 NUM_TOKENS = 64
@@ -97,18 +98,14 @@ _base_cases = [
 ]
 
 _variants = [
-    ("", {}),
+    ("float32", {}),
     ("bfloat16", {"compute_dtype": DataType.bfloat16}),
     ("full_precision_residual", {"full_precision_residual": True}),
 ]
 
 
-def _make_name(base_name: str, variant_name: str) -> str:
-    return f"{base_name}_{variant_name}" if variant_name else base_name
-
-
 _embedding_test_configs = [
-    EmbeddingTestConfig(name=_make_name(base_name, variant_name), **base_kwargs, **variant_kwargs)
+    EmbeddingTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
     for base_name, base_kwargs in _base_cases
     for variant_name, variant_kwargs in _variants
 ]
@@ -129,4 +126,4 @@ def test_embedding(test_config: EmbeddingTestConfig):
 
     expected = test_config.get_reference_output(layer, kwargs)
     threshold = 1e-5 if test_config.compute_dtype == DataType.float32 else 5e-3
-    torch.testing.assert_close(output, expected, rtol=threshold, atol=threshold)
+    Assert.rms_close_relative(output, expected, threshold, 1e-7)

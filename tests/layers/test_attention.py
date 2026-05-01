@@ -45,6 +45,7 @@ class AttentionTestConfig:
     causal: bool = True
     window_size: int | None = None
     rotary: bool = False
+    rotary_theta: float = 10000.0
 
     @property
     def hidden_size(self) -> int:
@@ -66,7 +67,7 @@ class AttentionTestConfig:
         if self.window_size is not None:
             config["window_size"] = self.window_size
         if self.rotary:
-            config["rotary"] = {"type": "default"}
+            config["rotary"] = {"type": "default", "theta": self.rotary_theta}
         return AttentionConfig.from_dict(config)
 
     def expected_output(
@@ -88,7 +89,7 @@ class AttentionTestConfig:
             )
 
             if self.rotary:
-                freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, 10000.0, input_.device)
+                freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, self.rotary_theta, input_.device)
                 q = _apply_rotary(q, freqs)
                 k_rotated = _apply_rotary(kv[:, : self.kv_heads, :], freqs)
                 kv = torch.cat([k_rotated, kv[:, self.kv_heads :, :]], dim=1)
@@ -109,7 +110,6 @@ class AttentionTestConfig:
                     scores = (q_doc[:, head_index, :].float() @ k_doc[:, group, :].float().T) * scale
                     if self.causal:
                         positions = torch.arange(length, device=input_.device)
-                        # mask[i, j] = True if j <= i (query i can attend to key j)
                         mask = positions.unsqueeze(1) >= positions.unsqueeze(0)
                         if self.window_size is not None:
                             mask = mask & (positions.unsqueeze(1) - positions.unsqueeze(0) < self.window_size)
@@ -126,14 +126,12 @@ _base_attention_cases = [
     ("causal", {"causal": True}),
     ("noncausal", {"causal": False}),
     ("window", {"causal": True, "window_size": 4}),
-    # MQA: all query heads share a single KV head
     ("mqa", {"causal": True, "kv_heads": 1}),
-    # MHA: each query head has its own KV head
     ("mha", {"causal": True, "kv_heads": _HEADS}),
 ]
 
 _attention_rotary_cases = [
-    # Rotary: only independent reference check (packing equivalence requires per-doc position reset)
+    # Rotary: only independent reference check (packing equivalence requires per-doc position reset).
     ("causal_rotary", {"causal": True, "rotary": True}),
 ]
 
@@ -157,6 +155,7 @@ def _run_per_seq_reference(
     hidden_states: torch.Tensor,
     lengths: list[int],
     device: torch.device,
+    with_backward: bool = True,
 ) -> torch.Tensor:
     out_refs = []
     for length, hidden_slice in zip(lengths, torch.split(hidden_states, lengths, dim=0), strict=True):
@@ -172,7 +171,8 @@ def _run_per_seq_reference(
         kwargs = model_input.to_kwargs()
         attention.preprocess(kwargs)
         out, context = stage.forward(hidden_slice, kwargs)
-        stage.backward(torch.ones_like(out), context)
+        if with_backward:
+            stage.backward(torch.ones_like(out), context)
         out_refs.append(out.detach())
     return torch.cat(out_refs, dim=0)
 
@@ -188,11 +188,6 @@ def _no_tf32():
 
 
 def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
-    with _no_tf32():
-        _test_attention_impl(config, lengths)
-
-
-def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> None:
     num_tokens = sum(lengths)
     hidden_dim = TensorDim("hidden", config.hidden_size)
 
@@ -209,7 +204,6 @@ def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> Non
     # Backup attention uses baddbmm over head groups; the reference uses per-head matmul — a
     # different summation order. With TF32 enabled these can differ by ~3e-4 on A100/H100;
     # disabling TF32 reduces the gap to ~1e-7, well within rtol=1e-4.
-    # Running on GPU (not CPU) avoids Triton failing on CPU tensors when key/query norm is enabled.
     attention.eval()
     input_for_ref = torch.randn(num_tokens, config.hidden_size, device=device)
     (model_input_ref,) = LanguageModelBatch(
@@ -275,11 +269,16 @@ def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> Non
         for param_bf16, param_f32 in zip(attention_backup_bf16.parameters(), attention.parameters(), strict=True):
             param_bf16.data.copy_(param_f32.data)
 
-        hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16).requires_grad_(True)
+        hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16)
         out_ref_bf16 = _run_per_seq_reference(
-            attention_backup_bf16, stage_backup_bf16, distributed_config_bf16, hidden_states_bf16, lengths, device
+            attention_backup_bf16,
+            stage_backup_bf16,
+            distributed_config_bf16,
+            hidden_states_bf16,
+            lengths,
+            device,
+            with_backward=False,
         )
-        stage_backup_bf16.reset_gradients()
 
         attention_flash: Attention = config.get_attention_config("flash").get_layer(
             distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
@@ -301,7 +300,7 @@ def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> Non
         attention_flash.preprocess(kwargs_flash)
         out_flash, _ = stage_flash.forward(hidden_states_bf16, kwargs_flash)
 
-        Assert.rms_close(out_flash, out_ref_bf16, 4e-3)
+        Assert.rms_close_relative(out_flash, out_ref_bf16, 4e-3, 1e-7)
 
 
 @pytest.mark.parametrize(
@@ -313,4 +312,5 @@ def _test_attention_impl(config: AttentionTestConfig, lengths: list[int]) -> Non
     [pytest.param(config, id=config.name) for config in _attention_test_configs],
 )
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
-    _test_attention(config, lengths)
+    with _no_tf32():
+        _test_attention(config, lengths)
