@@ -67,6 +67,17 @@ def _build_params() -> list:
 
 _PARAMS = _build_params()
 
+# Guard against silent drift if a benchmark or variant is renamed: every entry
+# in _INTERPRETER_SKIP / _SKIP_VARIANTS must match at least one real name.
+_actual_benchmark_names = {p.id for p in _PARAMS}
+assert (
+    _INTERPRETER_SKIP <= _actual_benchmark_names
+), f"_INTERPRETER_SKIP entries don't match any benchmark: {_INTERPRETER_SKIP - _actual_benchmark_names}"
+_actual_variant_names = {v.name for p in _PARAMS for v in p.values[2]}
+assert (
+    _SKIP_VARIANTS <= _actual_variant_names
+), f"_SKIP_VARIANTS entries don't match any variant: {_SKIP_VARIANTS - _actual_variant_names}"
+
 
 @pytest.fixture(autouse=True)
 def _patch_benchmark_env(monkeypatch):

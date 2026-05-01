@@ -378,6 +378,11 @@ def _collect_reference_outputs(
     variant: Variant,
     case: Case,
 ) -> dict[str, dict[str, torch.Tensor]]:
+    # Reference outputs are taken raw — output_postprocess is only applied to
+    # candidate variants. The reference is therefore expected to natively
+    # produce zeros (or whatever value) in regions that output_postprocess
+    # masks, so the comparison is symmetric. Sparse benches honor this by
+    # zeroing padded/phantom rows in their loop reference.
     out: dict[str, dict[str, torch.Tensor]] = {}
     if variant.fwd is not None:
         out["fwd"] = _as_output_dict(variant.fwd(_seeded_inputs(case)))
