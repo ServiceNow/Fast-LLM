@@ -3,6 +3,7 @@ import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
@@ -98,6 +99,21 @@ class MoEMLPConfig(MLPConfig):
         desc="Configuration for the MoE router.",
         hint=FieldHint.feature,
     )
+    router_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the router input (independent of `pre_norm`, which goes to experts).",
+        hint=FieldHint.architecture,
+    )
+    router_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable per-feature scale applied to the router input after `router_normalization`.",
+        hint=FieldHint.architecture,
+    )
+    router_input_scale: float = Field(
+        default=1.0,
+        desc="Constant multiplied into the router input after `router_normalization` and `router_scale`."
+        " Set to `hidden_size ** -0.5` for Gemma-style routing.",
+        hint=FieldHint.architecture,
+    )
     experts: int = Field(
         default=2,
         desc="Number of MLP experts in a Mixture of Expert (MoE) model",
@@ -179,26 +195,6 @@ class HybridMoEMLPConfig(MLPBaseConfig):
     )
     routed: MoEMLPConfig = Field(
         desc="Configuration for the top-K routed expert MLP.",
-        hint=FieldHint.architecture,
-    )
-    dense_pre_norm: NormalizationConfig | None = Field(
-        default=None,
-        desc="Optional normalization applied to the dense MLP input.",
-        hint=FieldHint.architecture,
-    )
-    dense_post_norm: NormalizationConfig | None = Field(
-        default=None,
-        desc="Optional normalization applied to the dense MLP output before summing.",
-        hint=FieldHint.architecture,
-    )
-    moe_pre_norm: NormalizationConfig | None = Field(
-        default=None,
-        desc="Optional normalization applied to the routed MLP input.",
-        hint=FieldHint.architecture,
-    )
-    moe_post_norm: NormalizationConfig | None = Field(
-        default=None,
-        desc="Optional normalization applied to the routed MLP output before summing.",
         hint=FieldHint.architecture,
     )
 

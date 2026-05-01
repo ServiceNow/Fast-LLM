@@ -7,7 +7,7 @@ import torch
 from fast_llm.core.distributed import ProcessGroup, set_generator
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton import triton_available
@@ -80,6 +80,18 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
+        self.router_normalization = (
+            self._config.router_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.router_normalization is not None
+            else None
+        )
+        self.router_scale = self._config.router_scale.get_parameter(
+            (self._hidden_dim,),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self._router_input_scale = self._config.router_input_scale
         implementation = self._config.implementation
         if implementation == MoEImplementation.auto:
             implementation = MoEImplementation.dropless if triton_available else MoEImplementation.looped
@@ -100,13 +112,25 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             CompositeTensorDim("moe_intermediate_2", (experts_dim, intermediate_2_dim)),
         )
 
+    @torch.compile
+    def _scale_router_input(self, x: torch.Tensor, scale: torch.Tensor | None, input_scale: float) -> torch.Tensor:
+        if scale is not None:
+            x = x * scale
+        if input_scale != 1.0:
+            x = x * input_scale
+        return x
+
     def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> tuple[torch.Tensor, None]:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
-        logits = self.router(hidden_states)
+        router_input = (
+            self.router_normalization(hidden_states) if self.router_normalization is not None else hidden_states
+        )
+        router_input = self._scale_router_input(router_input, self.router_scale, self._router_input_scale)
+        logits = self.router(router_input)
         hidden_token_dim = kwargs[BlockKwargs.hidden_token_dim]
         logit_dims = (hidden_token_dim, self._top_expert_dim)
         self._debug(logits, "Router logits", logit_dims, kwargs)
@@ -139,7 +163,10 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         self._debug(scores, "router_scores", logit_dims, kwargs)
         self._debug(top_experts, "router_top_experts", logit_dims, kwargs)
 
-        out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
+        expert_input = self.pre_norm(hidden_states) if self.pre_norm is not None else hidden_states
+        out = self._mlp_forward(expert_input, scores, top_experts).view_as(input_)  # noqa
+        if self.post_norm is not None:
+            out = self.post_norm(out)
         self._debug(out, None, (hidden_token_dim, self._hidden_dim), kwargs)
         return out, None
 
@@ -302,24 +329,14 @@ class HybridMoEMLP[ConfigType: HybridMoEMLPConfig](BlockWithBias[ConfigType]):
         self.routed = config.routed.get_layer(
             distributed_config, hidden_dim, output_dim=output_dim, lr_scale=lr_scale, peft=peft, return_bias=True
         )
-        self.dense_pre_norm = (
-            config.dense_pre_norm.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
-            if config.dense_pre_norm is not None
+        self.pre_norm = (
+            config.pre_norm.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if config.pre_norm is not None
             else None
         )
-        self.dense_post_norm = (
-            config.dense_post_norm.get_layer(self._output_dim, lr_scale=self._lr_scale, peft=self._peft)
-            if config.dense_post_norm is not None
-            else None
-        )
-        self.moe_pre_norm = (
-            config.moe_pre_norm.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
-            if config.moe_pre_norm is not None
-            else None
-        )
-        self.moe_post_norm = (
-            config.moe_post_norm.get_layer(self._output_dim, lr_scale=self._lr_scale, peft=self._peft)
-            if config.moe_post_norm is not None
+        self.post_norm = (
+            config.post_norm.get_layer(self._output_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if config.post_norm is not None
             else None
         )
 
@@ -342,15 +359,17 @@ class HybridMoEMLP[ConfigType: HybridMoEMLPConfig](BlockWithBias[ConfigType]):
                 ),
                 None,
             )
-        dense_input = self.dense_pre_norm(input_) if self.dense_pre_norm is not None else input_
-        moe_input = self.moe_pre_norm(input_) if self.moe_pre_norm is not None else input_
-        dense_out, dense_bias = self.dense(dense_input, kwargs, losses, metrics)
-        routed_out, _ = self.routed(moe_input, kwargs, losses, metrics)
-        if self.dense_post_norm is not None:
-            dense_out = self.dense_post_norm(dense_out)
-        if self.moe_post_norm is not None:
-            routed_out = self.moe_post_norm(routed_out)
-        return dense_out + routed_out, dense_bias
+        if self.pre_norm is not None:
+            input_ = self.pre_norm(input_)
+        dense_out, dense_bias = self.dense(input_, kwargs, losses, metrics)
+        routed_out, _ = self.routed(input_, kwargs, losses, metrics)
+        out = dense_out + routed_out
+        if self.post_norm is not None:
+            if dense_bias is not None:
+                out = out + dense_bias
+                dense_bias = None
+            out = self.post_norm(out)
+        return out, dense_bias
 
     def get_loss_definitions(self) -> list[LossDef]:
         return self.routed.get_loss_definitions()

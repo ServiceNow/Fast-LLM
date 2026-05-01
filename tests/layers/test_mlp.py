@@ -25,44 +25,50 @@ class HybridMoEMLPTestConfig:
     name: str
     gated: bool = False
     experts_per_token: int = 1
+    wrapper_pre_norm: bool = False
+    wrapper_post_norm: bool = False
     dense_pre_norm: bool = False
     dense_post_norm: bool = False
-    moe_pre_norm: bool = False
-    moe_post_norm: bool = False
+    routed_pre_norm: bool = False
+    routed_post_norm: bool = False
 
     def get_mlp_config(self) -> HybridMoEMLPConfig:
-        return HybridMoEMLPConfig.from_dict(
-            {
-                "dense": {
-                    "intermediate_size": _INTERMEDIATE_SIZE,
-                    "gated": self.gated,
-                    "add_linear_biases": False,
-                },
-                "routed": {
-                    "intermediate_size": _INTERMEDIATE_SIZE,
-                    "gated": self.gated,
-                    "add_linear_biases": False,
-                    "experts": _EXPERTS,
-                    "experts_per_token": self.experts_per_token,
-                },
-                **({"dense_pre_norm": _NORM} if self.dense_pre_norm else {}),
-                **({"dense_post_norm": _NORM} if self.dense_post_norm else {}),
-                **({"moe_pre_norm": _NORM} if self.moe_pre_norm else {}),
-                **({"moe_post_norm": _NORM} if self.moe_post_norm else {}),
-            }
-        )
+        dense: dict = {
+            "intermediate_size": _INTERMEDIATE_SIZE,
+            "gated": self.gated,
+            "add_linear_biases": False,
+        }
+        routed: dict = {
+            "intermediate_size": _INTERMEDIATE_SIZE,
+            "gated": self.gated,
+            "add_linear_biases": False,
+            "experts": _EXPERTS,
+            "experts_per_token": self.experts_per_token,
+        }
+        if self.dense_pre_norm:
+            dense["pre_norm"] = _NORM
+        if self.dense_post_norm:
+            dense["post_norm"] = _NORM
+        if self.routed_pre_norm:
+            routed["pre_norm"] = _NORM
+        if self.routed_post_norm:
+            routed["post_norm"] = _NORM
+        wrapper: dict = {"dense": dense, "routed": routed}
+        if self.wrapper_pre_norm:
+            wrapper["pre_norm"] = _NORM
+        if self.wrapper_post_norm:
+            wrapper["post_norm"] = _NORM
+        return HybridMoEMLPConfig.from_dict(wrapper)
 
     def expected_output(self, hybrid: HybridMoEMLP, input_: torch.Tensor, kwargs: dict) -> torch.Tensor:
         with torch.no_grad():
-            dense_input = hybrid.dense_pre_norm(input_) if hybrid.dense_pre_norm is not None else input_
-            moe_input = hybrid.moe_pre_norm(input_) if hybrid.moe_pre_norm is not None else input_
-            dense_out, _ = hybrid.dense(dense_input, kwargs)
-            routed_out, _ = hybrid.routed(moe_input, kwargs)
-            if hybrid.dense_post_norm is not None:
-                dense_out = hybrid.dense_post_norm(dense_out)
-            if hybrid.moe_post_norm is not None:
-                routed_out = hybrid.moe_post_norm(routed_out)
-            return dense_out + routed_out
+            shared = hybrid.pre_norm(input_) if hybrid.pre_norm is not None else input_
+            dense_out, _ = hybrid.dense(shared, kwargs)
+            routed_out, _ = hybrid.routed(shared, kwargs)
+            out = dense_out + routed_out
+            if hybrid.post_norm is not None:
+                out = hybrid.post_norm(out)
+            return out
 
 
 _test_configs = [
@@ -70,12 +76,19 @@ _test_configs = [
     HybridMoEMLPTestConfig(name="gated", gated=True),
     HybridMoEMLPTestConfig(name="topk2", experts_per_token=2),
     HybridMoEMLPTestConfig(name="gated_topk2", gated=True, experts_per_token=2),
-    HybridMoEMLPTestConfig(name="pre_norms", dense_pre_norm=True, moe_pre_norm=True),
-    HybridMoEMLPTestConfig(name="post_norms", dense_post_norm=True, moe_post_norm=True),
+    HybridMoEMLPTestConfig(name="branch_pre_norms", dense_pre_norm=True, routed_pre_norm=True),
+    HybridMoEMLPTestConfig(name="branch_post_norms", dense_post_norm=True, routed_post_norm=True),
+    HybridMoEMLPTestConfig(name="wrapper_norms", wrapper_pre_norm=True, wrapper_post_norm=True),
     HybridMoEMLPTestConfig(
-        name="all_norms", dense_pre_norm=True, dense_post_norm=True, moe_pre_norm=True, moe_post_norm=True
+        name="all_norms",
+        wrapper_pre_norm=True,
+        wrapper_post_norm=True,
+        dense_pre_norm=True,
+        dense_post_norm=True,
+        routed_pre_norm=True,
+        routed_post_norm=True,
     ),
-    HybridMoEMLPTestConfig(name="asymmetric_norms", dense_pre_norm=True, moe_post_norm=True),
+    HybridMoEMLPTestConfig(name="asymmetric_norms", dense_pre_norm=True, routed_post_norm=True),
 ]
 
 

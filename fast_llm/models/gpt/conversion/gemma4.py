@@ -210,13 +210,18 @@ class Gemma4AttentionConverter:
 
 class Gemma4MLPConverter:
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {
+    def import_config(cls, config: dict, with_norms: bool = False) -> dict:
+        out = {
             "intermediate_size": config["intermediate_size"],
             "add_linear_biases": False,
             "activation": ActivationType.from_hf_name(config["hidden_activation"]),
             "gated": True,
         }
+        if with_norms:
+            eps = config["rms_norm_eps"]
+            out["pre_norm"] = {"type": "rms_norm", "epsilon": eps}
+            out["post_norm"] = {"type": "rms_norm", "epsilon": eps}
+        return out
 
     @classmethod
     def export_config(cls, config: MLPConfig) -> dict:
@@ -257,6 +262,7 @@ class Gemma4MLPConverter:
 class Gemma4MoEMLPConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
+        eps = config["rms_norm_eps"]
         return {
             "type": "moe",
             "intermediate_size": config["moe_intermediate_size"],
@@ -265,6 +271,11 @@ class Gemma4MoEMLPConverter:
             "gated": True,
             "experts": config["num_experts"],
             "experts_per_token": config["top_k_experts"],
+            "pre_norm": {"type": "rms_norm", "epsilon": eps},
+            "post_norm": {"type": "rms_norm", "epsilon": eps},
+            "router_normalization": {"type": "fixed_rms_norm", "epsilon": eps},
+            "router_scale": {"enabled": True},
+            "router_input_scale": config["hidden_size"] ** -0.5,
         }
 
     @classmethod
@@ -294,6 +305,11 @@ class Gemma4MoEMLPConverter:
                 drop_on_export=drop_on_export,
             ),
             get_parameter_converter(
+                f"{fast_llm_prefix}.router_scale",
+                f"{hf_prefix}.router.scale",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
                 f"{fast_llm_prefix}.layer_1.weight",
                 f"{hf_prefix}.experts.gate_up_proj",
                 Gemma4MoELayer1Converter,
@@ -308,10 +324,23 @@ class Gemma4MoEMLPConverter:
                 drop_on_export=drop_on_export,
             ),
         ]
+        if config.pre_norm is not None:
+            converters += LlamaNormalizationConverter.get_converters(
+                config.pre_norm,
+                f"{fast_llm_prefix}.pre_norm",
+                f"{hf_prefix}.pre_feedforward_layernorm_2",
+                drop_on_export=drop_on_export,
+            )
+        if config.post_norm is not None:
+            converters += LlamaNormalizationConverter.get_converters(
+                config.post_norm,
+                f"{fast_llm_prefix}.post_norm",
+                f"{hf_prefix}.post_feedforward_layernorm_2",
+                drop_on_export=drop_on_export,
+            )
+        # router.norm is FixedRMSNorm — no learnable weight to convert.
         if not drop_on_export:
-            # Gemma4-specific router parameters without Fast-LLM equivalents
             converters += [
-                get_parameter_converter((), f"{hf_prefix}.router.scale", drop_on_import=True),
                 get_parameter_converter((), f"{hf_prefix}.router.per_expert_scale", drop_on_import=True),
             ]
         return converters
@@ -320,17 +349,10 @@ class Gemma4MoEMLPConverter:
 class Gemma4HybridMoEMLPConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        def make_norm():
-            return {"type": "rms_norm", "epsilon": config["rms_norm_eps"]}
-
         return {
             "type": "hybrid_moe",
-            "dense": Gemma4MLPConverter.import_config(config),
+            "dense": Gemma4MLPConverter.import_config(config, with_norms=True),
             "routed": Gemma4MoEMLPConverter.import_config(config),
-            "dense_pre_norm": make_norm(),
-            "moe_pre_norm": make_norm(),
-            "dense_post_norm": make_norm(),
-            "moe_post_norm": make_norm(),
         }
 
     @classmethod
@@ -350,7 +372,6 @@ class Gemma4HybridMoEMLPConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        norm_config = config.dense_pre_norm
         return [
             *Gemma4MLPConverter.get_converters(
                 config.dense,
@@ -365,27 +386,15 @@ class Gemma4HybridMoEMLPConverter:
                 drop_on_export=drop_on_export,
             ),
             *LlamaNormalizationConverter.get_converters(
-                norm_config,
-                f"{fast_llm_prefix}.dense_pre_norm",
+                config.dense.pre_norm,
+                f"{fast_llm_prefix}.dense.pre_norm",
                 f"{hf_prefix}.pre_feedforward_layernorm",
                 drop_on_export=drop_on_export,
             ),
             *LlamaNormalizationConverter.get_converters(
-                norm_config,
-                f"{fast_llm_prefix}.moe_pre_norm",
-                f"{hf_prefix}.pre_feedforward_layernorm_2",
-                drop_on_export=drop_on_export,
-            ),
-            *LlamaNormalizationConverter.get_converters(
-                norm_config,
-                f"{fast_llm_prefix}.dense_post_norm",
+                config.dense.post_norm,
+                f"{fast_llm_prefix}.dense.post_norm",
                 f"{hf_prefix}.post_feedforward_layernorm_1",
-                drop_on_export=drop_on_export,
-            ),
-            *LlamaNormalizationConverter.get_converters(
-                norm_config,
-                f"{fast_llm_prefix}.moe_post_norm",
-                f"{hf_prefix}.post_feedforward_layernorm_2",
                 drop_on_export=drop_on_export,
             ),
         ]

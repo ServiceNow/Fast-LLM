@@ -60,6 +60,17 @@ class MLPBaseConfig(BlockWithBiasConfig):
 
     _abstract = True
 
+    pre_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP input.",
+        hint=FieldHint.architecture,
+    )
+    post_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output.",
+        hint=FieldHint.architecture,
+    )
+
     def get_layer(
         self,
         distributed_config: DistributedConfig,
