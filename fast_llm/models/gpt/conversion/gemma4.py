@@ -402,8 +402,7 @@ class Gemma4BlockConverter:
             "normalization": make_norm(),
             "post_mixer_normalization": make_norm(),
             "post_mlp_normalization": make_norm(),
-            # HF stores `layer_scalar` as a non-trained buffer (`register_buffer`); preserve its value
-            # but freeze it on our side so finetuning matches HF training dynamics.
+            # HF stores `layer_scalar` as a non-trained buffer; freeze on our side to match.
             "output_scale": {"enabled": True, "lr_scale": 0},
         }
         if config.get("enable_moe_block"):

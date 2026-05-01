@@ -138,11 +138,18 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
 
     @torch.compile
     def _bias_dropout_add(
-        self, input_: torch.Tensor, bias: torch.Tensor | None, residual: torch.Tensor
+        self,
+        input_: torch.Tensor,
+        bias: torch.Tensor | None,
+        residual: torch.Tensor,
+        output_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
-        return residual + torch.dropout(input_, self._config.dropout, self.training)
+        output = residual + torch.dropout(input_, self._config.dropout, self.training)
+        if output_scale is not None:
+            output = output * output_scale
+        return output
 
     def forward(
         self,
@@ -182,9 +189,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         if self.post_mlp_norm is not None:
             hidden_states = self.post_mlp_norm(hidden_states)
         with set_generator(generator):
-            hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
-        if self.output_scale is not None:
-            hidden_states = hidden_states * self.output_scale
+            hidden_states = self._bias_dropout_add(hidden_states, bias, input_, self.output_scale)
         self._debug(hidden_states, None, hidden_dims, kwargs)
 
         if self._return_input:

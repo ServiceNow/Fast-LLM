@@ -240,8 +240,7 @@ class DecoderBlockConfig(BlockConfig):
         hint=FieldHint.architecture,
     )
     output_scale: OptionalParameterConfig = Field(
-        desc="Optional learnable scalar multiplied into the block output (after the MLP residual add)."
-        " Disabled by default; used by Gemma 4.",
+        desc="Optional learnable scalar multiplied into the block output (after the MLP residual add).",
         hint=FieldHint.architecture,
     )
     # TODO: Review names

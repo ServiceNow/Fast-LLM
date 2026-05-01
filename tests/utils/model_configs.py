@@ -974,9 +974,8 @@ _gemma4_block_overrides = {
     "post_mixer_normalization": {"type": "rms_norm", "weight": init_1},
     "post_mlp_normalization": {"type": "rms_norm", "weight": init_1},
     "pre_mlp_normalization": {"type": "rms_norm", "weight": init_1},
-    # Match the gemma4 converter's import_config which freezes output_scale (HF stores it as a non-trained
-    # buffer); without lr_scale=0 here, the converter round-trip would produce a different shard layout
-    # than the original because frozen parameters are packed at the end of the stage.
+    # Must match the gemma4 converter's lr_scale=0 — frozen params are packed at the end of the stage,
+    # so a mismatch produces a shifted shard layout that fails round-trip.
     "output_scale": {"enabled": True, "lr_scale": 0},
 }
 _gemma4_mixer_overrides = {

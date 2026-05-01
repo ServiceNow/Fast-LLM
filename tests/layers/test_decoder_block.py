@@ -25,8 +25,6 @@ class PostNormTestConfig:
     name: str
     post_mixer_norm: bool = False
     post_mlp_norm: bool = False
-    # If set, enable `output_scale` and override its initialized value with this float.
-    # Picking a non-unit value makes the test sensitive to the multiplication (the default init is 1.0).
     output_scale: float | None = None
 
     def get_block_config(self) -> DecoderBlockConfig:
