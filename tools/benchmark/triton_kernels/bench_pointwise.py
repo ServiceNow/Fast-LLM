@@ -4,8 +4,8 @@ import typing
 import torch
 
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
-from tools.benchmark.runner import Case, Inputs
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs
+from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_variants
 
 # 4× steps so L2 → HBM and saturated-HBM regimes are visible.
 _SIZES_NUMEL = [

@@ -2,7 +2,7 @@
 CLI entry point for the Fast-LLM Triton kernel benchmarking suite.
 
 Usage:
-    python -m tools.benchmark <kernel>
+    python -m tools.benchmark.triton_kernels <kernel>
 
 Available kernels are discovered dynamically from `bench_*.py` files in this
 package. Each such module must expose a `run(verbose: bool = False)` callable.
@@ -19,7 +19,7 @@ import warnings
 # to eager. Bump it before any `torch.compile`-decorated code runs.
 import torch._dynamo
 
-import tools.benchmark as _pkg
+import tools.benchmark.triton_kernels as _pkg
 from fast_llm.engine.config_utils.data_type import DataType
 
 torch._dynamo.config.cache_size_limit = 64
@@ -35,14 +35,14 @@ def _list_benchmarks() -> dict[str, str]:
     names = {}
     for info in pkgutil.iter_modules(_pkg.__path__):
         if info.name.startswith("bench_"):
-            names[info.name.removeprefix("bench_")] = f"tools.benchmark.{info.name}"
+            names[info.name.removeprefix("bench_")] = f"tools.benchmark.triton_kernels.{info.name}"
     return names
 
 
 def main() -> None:
     benches = _list_benchmarks()
     parser = argparse.ArgumentParser(
-        prog="python -m tools.benchmark",
+        prog="python -m tools.benchmark.triton_kernels",
         description="Benchmark Fast-LLM Triton kernels against PyTorch alternatives.",
     )
     parser.add_argument(

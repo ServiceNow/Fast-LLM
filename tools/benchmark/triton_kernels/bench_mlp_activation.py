@@ -8,8 +8,13 @@ from fast_llm.functional.triton.mlp import (
     triton_mlp_activation_autograd,
     triton_mlp_activation_forward,
 )
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import (
+    bench_main,
+    dtype_short,
+    make_grad_reset,
+    standard_fwd_bwd_pytorch_variants,
+)
 
 # (tokens, ffn_dim) — input has shape (tokens, 2*ffn_dim) for gated.
 _SHAPES = [

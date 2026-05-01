@@ -9,8 +9,13 @@ from fast_llm.functional.triton.sparse_copy import (
     copy_sparse_to_dense_autograd,
     get_sparse_map,
 )
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import (
+    bench_main,
+    dtype_short,
+    make_grad_reset,
+    standard_fwd_bwd_pytorch_variants,
+)
 
 # (tokens, top_k, num_experts, hidden_size)
 _SHAPES = [

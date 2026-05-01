@@ -6,7 +6,7 @@ import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
-from tools.benchmark.runner import Inputs, Variant, run_benchmark
+from tools.benchmark.triton_kernels.runner import Inputs, Variant, run_benchmark
 
 DEFAULT_DTYPES: tuple[torch.dtype, ...] = (torch.bfloat16,)
 

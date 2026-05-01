@@ -18,10 +18,10 @@ import dataclasses
 import pytest
 import torch
 
-import tools.benchmark.runner as _bench_runner
+import tools.benchmark.triton_kernels.runner as _bench_runner
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import triton_interpret
-from tools.benchmark import (
+from tools.benchmark.triton_kernels import (
     bench_entropy_loss,
     bench_grpo_loss,
     bench_mlp_activation,
@@ -31,7 +31,7 @@ from tools.benchmark import (
     bench_sparse_copy,
     bench_sparse_linear,
 )
-from tools.benchmark.runner import run_benchmark
+from tools.benchmark.triton_kernels.runner import run_benchmark
 
 _DTYPES = (torch.float32,)
 

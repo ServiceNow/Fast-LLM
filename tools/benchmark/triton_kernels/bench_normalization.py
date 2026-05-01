@@ -14,8 +14,13 @@ from fast_llm.layers.common.normalization.normalization import (
     fast_normalization_available,
     fused_normalization_available,
 )
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import (
+    bench_main,
+    dtype_short,
+    make_grad_reset,
+    standard_fwd_bwd_pytorch_variants,
+)
 
 # (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
 # budget across model widths; hidden swept from 1K to 16K.

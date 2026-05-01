@@ -7,8 +7,8 @@ import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.rotary import triton_rotary_
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import bench_main, dtype_short
 
 # (tokens, num_heads, head_size) — tokens = batch * seq_len
 _SHAPES = [

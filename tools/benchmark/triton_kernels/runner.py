@@ -19,7 +19,7 @@ from typing import Any
 import torch
 
 from fast_llm.utils import header
-from tools.benchmark.gpu_specs import GpuSpec, detect_gpu_spec
+from tools.benchmark.triton_kernels.gpu_specs import GpuSpec, detect_gpu_spec
 
 # Before each timed CUDA-graph-backed call we must mark a new step so the graph
 # system knows the previous rep's output buffers are no longer live. Without

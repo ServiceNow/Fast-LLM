@@ -4,8 +4,8 @@ import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
 
 _SHAPES = [
     (4096, 32768),

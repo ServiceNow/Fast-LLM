@@ -5,8 +5,13 @@ import torch
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.sparse_copy import SparseMap, get_sparse_map
 from fast_llm.functional.triton.sparse_linear import InputSparseLinear, OutputSparseLinear
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, make_grad_reset, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import (
+    bench_main,
+    dtype_short,
+    make_grad_reset,
+    standard_fwd_bwd_pytorch_variants,
+)
 
 # (tokens, top_k, num_experts, hidden, ffn_per_expert)
 _SHAPES = [

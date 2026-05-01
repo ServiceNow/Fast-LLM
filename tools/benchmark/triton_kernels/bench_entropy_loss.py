@@ -6,8 +6,8 @@ import torch.nn.functional as F
 from fast_llm.functional.config import EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
-from tools.benchmark.runner import Case, Inputs, Variant
-from tools.benchmark.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
 
 # (tokens, vocab_size)
 _SHAPES = [
