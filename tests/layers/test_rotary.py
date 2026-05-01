@@ -186,23 +186,24 @@ class RotaryTestConfig:
 
 _head_sizes = [16, 32, 64]
 
-_rotary_test_configs: list[RotaryTestConfig] = []
+_rotary_type_specs = [
+    ("default", {}),
+    ("default_big_theta", {"theta": 500000.0}),
+    ("llama3", {"rotary_type": "llama3"}),
+    ("yarn", {"rotary_type": "yarn"}),
+    ("2d", {"rotary_type": "2d"}),
+]
 
-
-def _add_configs(name: str, **kwargs) -> None:
-    for head_size in _head_sizes:
-        _rotary_test_configs.append(RotaryTestConfig(name=f"{name}_h{head_size}", head_size=head_size, **kwargs))
-
-
-_add_configs("default")
-_add_configs("default_big_theta", theta=500000.0)
-_add_configs("llama3", rotary_type="llama3")
-_add_configs("yarn", rotary_type="yarn")
-_add_configs("2d", rotary_type="2d")
+_rotary_test_configs = [
+    RotaryTestConfig(name=f"{name}_h{head_size}", head_size=head_size, **kwargs)
+    for name, kwargs in _rotary_type_specs
+    for head_size in _head_sizes
+]
 
 _sequence_lengths = [8, 24]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "sequence_length",
     [pytest.param(seq_len, id=str(seq_len)) for seq_len in _sequence_lengths],

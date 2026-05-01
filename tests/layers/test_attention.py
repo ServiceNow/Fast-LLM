@@ -131,7 +131,8 @@ _base_attention_cases = [
 ]
 
 _attention_rotary_cases = [
-    # Rotary: only independent reference check (packing equivalence requires per-doc position reset).
+    # Rotary: packing equivalence is skipped for multi-document inputs (packed rotary uses global
+    # positions; per-sequence reference uses per-doc positions). All three checks run for single-doc inputs.
     ("causal_rotary", {"causal": True, "rotary": True}),
 ]
 
@@ -303,6 +304,7 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         Assert.rms_close_relative(out_flash, out_ref_bf16, 4e-3, 1e-7)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "lengths",
     [pytest.param(lengths, id=str(lengths)) for lengths in _attention_lengths],

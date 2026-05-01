@@ -95,6 +95,8 @@ _base_cases = [
     ("default", {}),
     ("with_padding", {"with_padding": True}),
     ("with_position_embeddings", {"with_position_embeddings": True}),
+    # Padding + position embeddings: catches bugs where position addition happens before the padding mask.
+    ("with_padding_and_position_embeddings", {"with_padding": True, "with_position_embeddings": True}),
 ]
 
 _variants = [
