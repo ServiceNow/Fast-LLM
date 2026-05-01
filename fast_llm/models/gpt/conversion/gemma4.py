@@ -276,6 +276,7 @@ class Gemma4MoEMLPConverter:
             "router_normalization": {"type": "fixed_rms_norm", "epsilon": eps},
             "router_scale": {"enabled": True},
             "router_input_scale": config["hidden_size"] ** -0.5,
+            "router_per_expert_scale": {"enabled": True},
         }
 
     @classmethod
@@ -310,6 +311,11 @@ class Gemma4MoEMLPConverter:
                 drop_on_export=drop_on_export,
             ),
             get_parameter_converter(
+                f"{fast_llm_prefix}.router_per_expert_scale",
+                f"{hf_prefix}.router.per_expert_scale",
+                drop_on_export=drop_on_export,
+            ),
+            get_parameter_converter(
                 f"{fast_llm_prefix}.layer_1.weight",
                 f"{hf_prefix}.experts.gate_up_proj",
                 Gemma4MoELayer1Converter,
@@ -339,10 +345,6 @@ class Gemma4MoEMLPConverter:
                 drop_on_export=drop_on_export,
             )
         # router.norm is FixedRMSNorm — no learnable weight to convert.
-        if not drop_on_export:
-            converters += [
-                get_parameter_converter((), f"{hf_prefix}.router.per_expert_scale", drop_on_import=True),
-            ]
         return converters
 
 

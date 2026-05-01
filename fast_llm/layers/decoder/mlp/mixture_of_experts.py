@@ -92,6 +92,12 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             peft=self._peft,
         )
         self._router_input_scale = self._config.router_input_scale
+        self.router_per_expert_scale = self._config.router_per_expert_scale.get_parameter(
+            (TensorDim("experts", self._config.experts),),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
         implementation = self._config.implementation
         if implementation == MoEImplementation.auto:
             implementation = MoEImplementation.dropless if triton_available else MoEImplementation.looped
@@ -159,6 +165,9 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             scores, top_experts = self._sinkhorn_routing(logits)
         else:
             raise NotImplementedError(self._config.routing)
+
+        if self.router_per_expert_scale is not None:
+            scores = scores * self.router_per_expert_scale[top_experts]
 
         self._debug(scores, "router_scores", logit_dims, kwargs)
         self._debug(top_experts, "router_top_experts", logit_dims, kwargs)

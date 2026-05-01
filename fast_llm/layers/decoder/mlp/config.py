@@ -114,6 +114,10 @@ class MoEMLPConfig(MLPConfig):
         " Set to `hidden_size ** -0.5` for Gemma-style routing.",
         hint=FieldHint.architecture,
     )
+    router_per_expert_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable per-expert scale multiplied into the router scores after top-k selection.",
+        hint=FieldHint.architecture,
+    )
     experts: int = Field(
         default=2,
         desc="Number of MLP experts in a Mixture of Expert (MoE) model",
