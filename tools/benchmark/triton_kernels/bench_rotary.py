@@ -46,7 +46,7 @@ class RotaryCase(Case):
         # 6 FLOPs per (re, im) element pair: 4 muls + 2 add/sub.
         return 6 * self.tokens * self.num_heads * (self.head_size // 2)
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         rotary_dim = self.head_size // 2
         input_ = torch.randn(self.tokens, self.num_heads, self.head_size, dtype=self.dtype, device=device)
         return {

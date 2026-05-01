@@ -13,8 +13,7 @@ import dataclasses
 import math
 import statistics
 import time
-from collections.abc import Callable
-from typing import Any
+import typing
 
 import torch
 
@@ -25,12 +24,12 @@ from tools.benchmark.triton_kernels.gpu_specs import GpuSpec, detect_gpu_spec
 # system knows the previous rep's output buffers are no longer live. Without
 # this, max-autotune compiled functions raise "tensor output of CUDAGraphs has
 # been overwritten by a subsequent run" on the second call.
-_cudagraph_mark_step_begin: Callable[[], None] | None = getattr(
+_cudagraph_mark_step_begin: typing.Callable[[], None] | None = getattr(
     getattr(torch, "compiler", None), "cudagraph_mark_step_begin", None
 )
 
 
-def _guarded(fn: Callable[[], Any]) -> Callable[[], Any]:
+def _guarded(fn: typing.Callable[[], typing.Any]) -> typing.Callable[[], typing.Any]:
     """Wrap fn so cudagraph_mark_step_begin() is called before each invocation.
     This tells the CUDA graph system that previous outputs are no longer live
     and can be overwritten, preventing 'overwritten by subsequent run' errors
@@ -39,15 +38,15 @@ def _guarded(fn: Callable[[], Any]) -> Callable[[], Any]:
     if _cudagraph_mark_step_begin is None:
         return fn
 
-    def _wrapped() -> Any:
+    def _wrapped() -> typing.Any:
         _cudagraph_mark_step_begin()
         return fn()
 
     return _wrapped
 
 
-Inputs = dict[str, Any]
-VariantFn = Callable[[Inputs], Any]
+Inputs = dict[str, typing.Any]
+VariantFn = typing.Callable[[Inputs], typing.Any]
 
 
 @dataclasses.dataclass
@@ -66,11 +65,11 @@ class Variant:
     # timing. Receives {name: tensor} and the full inputs dict; returns the
     # (possibly modified) dict. Use this to mask out don't-care regions so they
     # don't inflate RMS errors (e.g. uninitialized phantom rows in sparse buffers).
-    output_postprocess: Callable[[dict[str, torch.Tensor], Inputs], dict[str, torch.Tensor]] | None = None
+    output_postprocess: typing.Callable[[dict[str, torch.Tensor], Inputs], dict[str, torch.Tensor]] | None = None
     # Called between timing reps (outside the timed region) to restore any
     # input tensors the variant mutates in-place. Use this instead of cloning
     # inside the timed callable so the mutation cost is not measured.
-    reset_inputs: Callable[[Inputs], Any] | None = None
+    reset_inputs: typing.Callable[[Inputs], typing.Any] | None = None
 
 
 class Case:
@@ -78,22 +77,35 @@ class Case:
     the kernel's shape parameters (e.g. rows, cols, dtype) and override `name`
     and `make_inputs`; the throughput properties are optional."""
 
-    # Subclasses must provide these.
-    name: str
-    # Subclasses may override these (defaults skip the corresponding columns).
-    expected_bytes: int | None = None  # bytes read+written; enables GB/s + %BW.
-    expected_flops: int | None = None  # FLOPs performed; enables TFLOP/s + %FLOPs.
-    compute_dtype: torch.dtype | None = None  # dtype of hot inputs, picks peak column.
+    @property
+    def name(self) -> str:
+        raise NotImplementedError()
 
-    def make_inputs(self, device: str) -> Inputs:
+    # Optional — defaults skip the corresponding columns.
+    @property
+    def expected_bytes(self) -> int | None:
+        """Bytes read+written; enables GB/s + %BW columns."""
+        return None
+
+    @property
+    def expected_flops(self) -> int | None:
+        """FLOPs performed; enables TFLOP/s + %FLOPs columns."""
+        return None
+
+    @property
+    def compute_dtype(self) -> torch.dtype | None:
+        """Dtype of hot inputs; picks the peak column for the %FLOPs computation."""
+        return None
+
+    def make_inputs(self, device: torch.device) -> Inputs:
         """Return a fresh dict of input tensors on `device`. Called once per
         variant per mode, after a global seed reset, so every variant sees
         identical inputs."""
-        raise NotImplementedError
+        raise NotImplementedError()
 
 
-def _device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+def _device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _seeded_inputs(case: Case, seed: int = 0) -> Inputs:
@@ -133,7 +145,7 @@ class VariantResult:
 # --------------------------------------------------------------------------- timing
 
 
-def _make_cache_flusher(size_bytes: int = 256 * 1024 * 1024) -> Callable[[], None]:
+def _make_cache_flusher(size_bytes: int = 256 * 1024 * 1024) -> typing.Callable[[], None]:
     """Allocate a scratch buffer larger than any GPU L2 and zero it between reps
     to invalidate cached values (avoids over-optimistic timings)."""
     if not torch.cuda.is_available():
@@ -147,8 +159,8 @@ def _make_cache_flusher(size_bytes: int = 256 * 1024 * 1024) -> Callable[[], Non
 
 
 def bench_fn(
-    fn: Callable[[], Any],
-    reset: Callable[[], None] | None = None,
+    fn: typing.Callable[[], typing.Any],
+    reset: typing.Callable[[], None] | None = None,
     warmup_ms: float = 25.0,
     rep_ms: float = 100.0,
     min_reps: int = 5,
@@ -232,7 +244,7 @@ def bench_fn(
 # --------------------------------------------------------------------------- memory
 
 
-def measure_memory(fn: Callable[[], Any]) -> MemoryStats:
+def measure_memory(fn: typing.Callable[[], typing.Any]) -> MemoryStats:
     """Run `fn` once and capture peak and final device memory. Must be called
     on a fresh GPU state (the caller resets stats before constructing inputs)."""
     if not torch.cuda.is_available():
@@ -266,7 +278,7 @@ def rms_relative_error(candidate: torch.Tensor, reference: torch.Tensor) -> floa
     return diff_rms / max(ref_rms, 1e-30)
 
 
-def _as_output_dict(output: Any) -> dict[str, torch.Tensor]:
+def _as_output_dict(output: typing.Any) -> dict[str, torch.Tensor]:
     """Normalize a variant's output into a {name: tensor} dict for comparison."""
     if isinstance(output, torch.Tensor):
         return {"out": output}
@@ -297,7 +309,7 @@ def _run_one_variant(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            def _fwd_once() -> Any:
+            def _fwd_once() -> typing.Any:
                 return variant.fwd(inputs)
 
             _guarded_fwd = _guarded(_fwd_once)
@@ -330,7 +342,7 @@ def _run_one_variant(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            def _fwd_bwd_once() -> Any:
+            def _fwd_bwd_once() -> typing.Any:
                 return variant.fwd_bwd(inputs)
 
             _guarded_fwd_bwd = _guarded(_fwd_bwd_once)
@@ -369,7 +381,9 @@ def _run_one_variant(
                 torch.cuda.empty_cache()
             result.memory = measure_memory(_guarded(lambda: variant.fwd(fresh_inputs)))
             del fresh_inputs
-    except Exception as exc:  # noqa: BLE001
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — variant failures are reported in the result column, not propagated, so a single broken kernel doesn't kill the rest of the sweep.
         result.error = f"{type(exc).__name__}: {exc}"
     return result
 
@@ -467,8 +481,8 @@ def _unit_column(
             ((unit_label, unit_scale) for (unit_label, unit_scale) in units if unit_scale == 1.0), units[0]
         )
     scaled = [v * scale if v is not None else None for v in canonical_values]
-    header = f"{prefix} {label}" if prefix else label
-    return header, _format_aligned(scaled)
+    column_header = f"{prefix} {label}" if prefix else label
+    return column_header, _format_aligned(scaled)
 
 
 def _percent_column(values: list[float | None]) -> list[str]:
@@ -531,8 +545,8 @@ def _render_table(
     # variant-name column are merged into one (avoids a redundant title line).
     columns: list[tuple[str, list[str]]] = [(case.name, [r.variant_name for r in results])]
 
-    def _add(header: str, values: list[str]) -> None:
-        columns.append((header, values))
+    def _add(column_header: str, values: list[str]) -> None:
+        columns.append((column_header, values))
 
     if has_fwd:
         _add(*_unit_column("fwd", [r.fwd_timing.median_ms if r.fwd_timing else None for r in results], _TIME_UNITS))
@@ -576,8 +590,7 @@ def _render_table(
         for r in results:
             t_ms = _time_for_throughput(r)
             bandwidths.append(case.expected_bytes / (t_ms / 1000) if t_ms is not None else None)
-        header, values = _unit_column("", bandwidths, _BANDWIDTH_UNITS)
-        _add(header, values)
+        _add(*_unit_column("", bandwidths, _BANDWIDTH_UNITS))
         if gpu_spec is not None:
             peak_bytes_per_s = gpu_spec.peak_bandwidth_gbps * 1e9
             pct = [bw / peak_bytes_per_s if bw is not None else None for bw in bandwidths]
@@ -588,8 +601,7 @@ def _render_table(
         for r in results:
             t_ms = _time_for_throughput(r)
             flop_rates.append(case.expected_flops / (t_ms / 1000) if t_ms is not None else None)
-        header, values = _unit_column("", flop_rates, _FLOPS_UNITS)
-        _add(header, values)
+        _add(*_unit_column("", flop_rates, _FLOPS_UNITS))
         peak_tflops = gpu_spec.peak_tflops(case.compute_dtype) if gpu_spec and case.compute_dtype else None
         if peak_tflops is not None:
             peak_flops_per_s = peak_tflops * 1e12
@@ -609,7 +621,7 @@ def _render_table(
     if not any(r.error for r in results):
         columns.pop()
 
-    widths = [max(len(header), *(len(v) for v in values)) for header, values in columns]
+    widths = [max(len(column_header), *(len(v) for v in values)) for column_header, values in columns]
     separator = "  "
 
     # First column (case name + variant names) is text — left-justify. All other
@@ -639,7 +651,7 @@ def run_benchmark(
     rep_ms: float = 100.0,
     min_reps: int = 5,
     verbose: bool = False,
-    print_fn: Callable[[str], None] = print,
+    print_fn: typing.Callable[[str], None] = print,
 ) -> list[tuple[Case, list[VariantResult]]]:
     """Run all (case, variant) combinations and print one table per case.
 

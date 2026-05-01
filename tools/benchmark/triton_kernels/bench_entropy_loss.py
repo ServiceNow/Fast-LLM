@@ -1,4 +1,8 @@
+"""Cross-entropy and z-loss kernels: label-target CE, logit-target CE, reverse
+KL, and z-loss (logsumexp²)."""
+
 import dataclasses
+import typing
 
 import torch
 import torch.nn.functional as F
@@ -37,26 +41,28 @@ class _EntropyCase(Case):
         return 4 * self.tokens * self.vocab
 
 
+@dataclasses.dataclass
 class EntropyLabelCase(_EntropyCase):
     @property
     def expected_bytes(self) -> int:
         # 2× logits + small labels traffic.
         return 2 * self.tokens * self.vocab * self.dtype.itemsize + self.tokens * 4
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "logits": torch.randn(self.tokens, self.vocab, dtype=self.dtype, device=device, requires_grad=True),
             "labels": torch.randint(0, self.vocab, (self.tokens,), dtype=torch.long, device=device),
         }
 
 
+@dataclasses.dataclass
 class EntropyDistCase(_EntropyCase):
     @property
     def expected_bytes(self) -> int:
         # 2× logits + 1× target_logits.
         return 3 * self.tokens * self.vocab * self.dtype.itemsize
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "logits": torch.randn(self.tokens, self.vocab, dtype=self.dtype, device=device, requires_grad=True),
             "target_logits": torch.randn(self.tokens, self.vocab, dtype=self.dtype, device=device),
@@ -80,7 +86,11 @@ def _z_loss_eager(logits: torch.Tensor) -> torch.Tensor:
     return (log_z * log_z).mean()
 
 
-def _entropy_variants(eager_function, input_keys, triton_kwargs=None) -> list[Variant]:
+def _entropy_variants(
+    eager_function: typing.Callable,
+    input_keys: tuple[str, ...],
+    triton_kwargs: dict | None = None,
+) -> list[Variant]:
     """Variants for the 3 entropy_loss kernels that share `triton_entropy_loss_forward_backward`."""
     target_key = input_keys[1]
     triton_kwargs = triton_kwargs or {}

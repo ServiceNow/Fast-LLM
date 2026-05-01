@@ -1,3 +1,7 @@
+"""Memory-bound pointwise ops (copy, fill, add). Sweeps numel from L2-resident
+to HBM-saturated to surface the bandwidth-bound regime where Triton wins or
+loses against PyTorch."""
+
 import dataclasses
 import typing
 
@@ -37,21 +41,24 @@ class _PointwiseCase(Case):
         return self.bytes_factor * self.numel * self.dtype.itemsize
 
 
+@dataclasses.dataclass
 class CopyCase(_PointwiseCase):
     bytes_factor = 2
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         input_ = torch.randn(self.numel, dtype=self.dtype, device=device)
         return {"input_": input_, "out": torch.empty_like(input_)}
 
 
+@dataclasses.dataclass
 class FillCase(_PointwiseCase):
     bytes_factor = 1
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {"input_": torch.empty(self.numel, dtype=self.dtype, device=device), "value": 1.5}
 
 
+@dataclasses.dataclass
 class AddCase(_PointwiseCase):
     bytes_factor = 3
 
@@ -59,7 +66,7 @@ class AddCase(_PointwiseCase):
     def expected_flops(self) -> int:
         return self.numel
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "input_": torch.randn(self.numel, dtype=self.dtype, device=device),
             "other": torch.randn(self.numel, dtype=self.dtype, device=device),

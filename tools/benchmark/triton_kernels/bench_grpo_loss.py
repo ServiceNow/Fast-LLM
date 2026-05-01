@@ -1,3 +1,6 @@
+"""GRPO (Group Relative Policy Optimization) loss: clipped policy ratio with
+fused softmax + gather + clipped advantage in a single kernel."""
+
 import dataclasses
 
 import torch
@@ -41,7 +44,7 @@ class GrpoLossCase(Case):
         # softmax (fwd) + grad (bwd) ≈ 14 FLOPs/element.
         return 14 * self.tokens * self.vocab
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "logits": torch.randn(self.tokens, self.vocab, dtype=self.dtype, device=device, requires_grad=True),
             "labels": torch.randint(0, self.vocab, (self.tokens,), dtype=torch.long, device=device),
@@ -50,7 +53,9 @@ class GrpoLossCase(Case):
         }
 
 
-def _grpo_eager(logits: torch.Tensor, labels: torch.Tensor, advantages: torch.Tensor, old_log_probs: torch.Tensor):
+def _grpo_eager(
+    logits: torch.Tensor, labels: torch.Tensor, advantages: torch.Tensor, old_log_probs: torch.Tensor
+) -> torch.Tensor:
     log_probs = logits.float().log_softmax(-1)
     # clamp + labels>=0 guards mirror production code that handles ignore_index=-100;
     # labels here are always non-negative (randint), so the masks are dead in this benchmark.

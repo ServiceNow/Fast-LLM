@@ -22,16 +22,16 @@ from fast_llm.utils import Assert
 try:
     import fused_layer_norm_cuda  # noqa
 
-    fused_normalization_available = torch.cuda.is_available()
+    _fused_normalization_available = torch.cuda.is_available()
 except ImportError:
-    fused_normalization_available = False
+    _fused_normalization_available = False
 
 try:
     import fast_layer_norm  # noqa
 
-    fast_normalization_available = torch.cuda.is_available()
+    _fast_normalization_available = torch.cuda.is_available()
 except ImportError:
-    fast_normalization_available = False
+    _fast_normalization_available = False
 
 
 try:
@@ -79,7 +79,7 @@ class FastLayerNorm(torch.autograd.Function):
     def forward(
         ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, eps: float
     ) -> torch.Tensor:  # noqa
-        assert fast_normalization_available
+        assert _fast_normalization_available
         Assert.incl(normalized_shape.numel(), _PERSIST_LN_SIZES)
         output, _, inv_var = fast_layer_norm.ln_fwd(input_, weight, bias, eps)
         ctx.save_for_backward(output, weight, bias, inv_var)
@@ -110,7 +110,7 @@ class FusedLayerNorm(torch.autograd.Function):
     def forward(
         ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, eps: float
     ) -> torch.Tensor:  # noqa
-        assert fused_normalization_available
+        assert _fused_normalization_available
         ctx.eps = eps
         ctx.normalized_shape = normalized_shape
         output, _, inv_var = fused_layer_norm_cuda.forward_affine(input_, normalized_shape, weight, bias, eps)
@@ -136,7 +136,7 @@ class FusedRMSNorm(torch.autograd.Function):
     def forward(
         ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, eps: float
     ) -> torch.Tensor:  # noqa
-        assert fused_normalization_available
+        assert _fused_normalization_available
         ctx.eps = eps
         ctx.normalized_shape = normalized_shape
         output, inv_var = fused_layer_norm_cuda.rms_forward_affine(input_, normalized_shape, weight, eps)
@@ -185,7 +185,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
         implementation = self._config.implementation
         if implementation == NormalizationImplementation.auto:
             if (
-                fast_normalization_available
+                _fast_normalization_available
                 and hidden_dim.size in _PERSIST_LN_SIZES
                 and not self._config.zero_centered
             ):
@@ -193,7 +193,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
             elif TritonConfig.enabled(torch.device("cuda")) or self._config.zero_centered:
                 log_main_rank("Fast layer norm unavailable, using backup triton implementation.")
                 implementation = NormalizationImplementation.triton
-            elif fused_normalization_available:
+            elif _fused_normalization_available:
                 log_main_rank("Fast layer norm unavailable, using backup fused implementation.")
                 implementation = NormalizationImplementation.fused
             else:
@@ -261,7 +261,7 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         if implementation == NormalizationImplementation.auto:
             if TritonConfig.enabled(torch.device("cuda")) or self._config.zero_centered:
                 implementation = NormalizationImplementation.triton
-            elif fused_normalization_available:
+            elif _fused_normalization_available:
                 log_main_rank("Triton RMS norm unavailable, using fused implementation.")
                 implementation = NormalizationImplementation.fused
             else:

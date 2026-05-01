@@ -21,6 +21,7 @@ import torch
 import tools.benchmark.triton_kernels.runner as _bench_runner
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import triton_interpret
+from fast_llm.utils import Assert
 from tools.benchmark.triton_kernels import (
     bench_entropy_loss,
     bench_grpo_loss,
@@ -70,13 +71,9 @@ _PARAMS = _build_params()
 # Guard against silent drift if a benchmark or variant is renamed: every entry
 # in _INTERPRETER_SKIP / _SKIP_VARIANTS must match at least one real name.
 _actual_benchmark_names = {p.id for p in _PARAMS}
-assert (
-    _INTERPRETER_SKIP <= _actual_benchmark_names
-), f"_INTERPRETER_SKIP entries don't match any benchmark: {_INTERPRETER_SKIP - _actual_benchmark_names}"
 _actual_variant_names = {v.name for p in _PARAMS for v in p.values[2]}
-assert (
-    _SKIP_VARIANTS <= _actual_variant_names
-), f"_SKIP_VARIANTS entries don't match any variant: {_SKIP_VARIANTS - _actual_variant_names}"
+Assert.custom(set.issubset, _INTERPRETER_SKIP, _actual_benchmark_names)
+Assert.custom(set.issubset, _SKIP_VARIANTS, _actual_variant_names)
 
 
 @pytest.fixture(autouse=True)

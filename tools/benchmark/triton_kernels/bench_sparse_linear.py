@@ -1,3 +1,7 @@
+"""MoE expert-grouped matmul: layer-1 (output_sparse, up-proj) and layer-2
+(input_inner_sparse, down-proj). Compares the Triton sparse kernel against a
+per-expert pytorch loop reference."""
+
 import dataclasses
 
 import torch
@@ -22,8 +26,11 @@ _SHAPES = [
 
 # Triton autotuning warmup needs to run only once per shape; make_inputs is
 # called many times per case (per variant, per fwd/fwd_bwd/memory pass).
-_output_sparse_warmed_up: set[tuple] = set()
-_input_inner_sparse_warmed_up: set[tuple] = set()
+# Process-local — a fresh interpreter starts with empty caches, which is
+# desired (autotuning state may differ across processes).
+_WarmupKey = tuple[int, int, int, int, int, torch.dtype]
+_output_sparse_warmed_up: set[_WarmupKey] = set()
+_input_inner_sparse_warmed_up: set[_WarmupKey] = set()
 
 
 def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
@@ -83,13 +90,14 @@ class _SparseLinearCase(Case):
         # 3 matmuls (fwd: lhs@rhs, bwd_lhs: grad@rhs.T, bwd_rhs: lhs.T@grad).
         return 3 * 2 * self.tokens * self.top_k * self.hidden * self.ffn_per_expert
 
-    def _make_sparse_map(self, device: str) -> SparseMap:
+    def _make_sparse_map(self, device: torch.device) -> SparseMap:
         top_experts = torch.randint(0, self.num_experts, (self.tokens, self.top_k), device=device)
         return get_sparse_map(top_experts, self.num_experts)
 
 
+@dataclasses.dataclass
 class OutputSparseCase(_SparseLinearCase):
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         sparse_map = self._make_sparse_map(device)
         lhs_data = torch.randn(sparse_map.num_rows, self.hidden, dtype=self.dtype, device=device)
         rhs_data = torch.randn(self.hidden, self.ffn_per_expert * self.num_experts, dtype=self.dtype, device=device)
@@ -110,8 +118,9 @@ class OutputSparseCase(_SparseLinearCase):
         }
 
 
+@dataclasses.dataclass
 class InputInnerSparseCase(_SparseLinearCase):
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         sparse_map = self._make_sparse_map(device)
         lhs_data = torch.randn(sparse_map.num_rows, self.ffn_per_expert, dtype=self.dtype, device=device)
         rhs_data = torch.randn(self.ffn_per_expert * self.num_experts, self.hidden, dtype=self.dtype, device=device)

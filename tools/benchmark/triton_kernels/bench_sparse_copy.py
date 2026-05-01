@@ -1,3 +1,6 @@
+"""MoE dispatch and combine: scatter dense rows into sparse expert-grouped
+buffers and gather them back with score weighting."""
+
 import dataclasses
 
 import torch
@@ -25,7 +28,7 @@ _SHAPES = [
 ]
 
 
-def _make_phantom_mask(sparse_map: SparseMap, device: str) -> torch.Tensor:
+def _make_phantom_mask(sparse_map: SparseMap, device: torch.device) -> torch.Tensor:
     # True for within-expert padding rows and the static tail past expert_ends[-1];
     # used only in output_postprocess, never in the timed path.
     mask = torch.zeros(sparse_map.num_rows, 1, dtype=torch.bool, device=device)
@@ -62,8 +65,9 @@ class _SparseCopyCase(Case):
         return 2 * (1 + self.top_k) * self.tokens * self.hidden * self.dtype.itemsize
 
 
+@dataclasses.dataclass
 class DispatchCase(_SparseCopyCase):
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         top_experts = torch.randint(0, self.num_experts, (self.tokens, self.top_k), device=device)
         sparse_map = get_sparse_map(top_experts, self.num_experts)
         return {
@@ -74,13 +78,14 @@ class DispatchCase(_SparseCopyCase):
         }
 
 
+@dataclasses.dataclass
 class CombineCase(_SparseCopyCase):
     @property
     def expected_bytes(self) -> int:
         # Adds scores read/write on top of the dispatch traffic.
         return super().expected_bytes + 4 * self.tokens * self.top_k * self.dtype.itemsize
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         top_experts = torch.randint(0, self.num_experts, (self.tokens, self.top_k), device=device)
         sparse_map = get_sparse_map(top_experts, self.num_experts)
         return {

@@ -7,13 +7,7 @@ import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
-from fast_llm.layers.common.normalization.normalization import (
-    FastLayerNorm,
-    FusedLayerNorm,
-    FusedRMSNorm,
-    fast_normalization_available,
-    fused_normalization_available,
-)
+from fast_llm.layers.common.normalization.normalization import FastLayerNorm, FusedLayerNorm, FusedRMSNorm
 from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
 from tools.benchmark.triton_kernels.utils import (
     bench_main,
@@ -21,6 +15,20 @@ from tools.benchmark.triton_kernels.utils import (
     make_grad_reset,
     standard_fwd_bwd_pytorch_variants,
 )
+
+try:
+    import fused_layer_norm_cuda  # noqa: F401
+
+    _fused_normalization_available = torch.cuda.is_available()
+except ImportError:
+    _fused_normalization_available = False
+
+try:
+    import fast_layer_norm  # noqa: F401
+
+    _fast_normalization_available = torch.cuda.is_available()
+except ImportError:
+    _fast_normalization_available = False
 
 # (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
 # budget across model widths; hidden swept from 1K to 16K.
@@ -55,6 +63,7 @@ class _NormalizationCase(Case):
         return self.dtype
 
 
+@dataclasses.dataclass
 class LayerNormCase(_NormalizationCase):
     @property
     def expected_bytes(self) -> int:
@@ -66,7 +75,7 @@ class LayerNormCase(_NormalizationCase):
         # fwd ≈ 7 FLOPs/elem (mean, variance, normalize, scale+shift); bwd ≈ 2× fwd.
         return 21 * self.rows * self.cols
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "input": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device, requires_grad=True),
             "weight": _setup_param(torch.randn(self.cols, dtype=self.dtype, device=device, requires_grad=True)),
@@ -75,6 +84,7 @@ class LayerNormCase(_NormalizationCase):
         }
 
 
+@dataclasses.dataclass
 class RmsNormCase(_NormalizationCase):
     @property
     def expected_bytes(self) -> int:
@@ -86,7 +96,7 @@ class RmsNormCase(_NormalizationCase):
         # No mean subtraction or bias compared to LayerNorm.
         return 15 * self.rows * self.cols
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "input": torch.randn(self.rows, self.cols, dtype=self.dtype, device=device, requires_grad=True),
             "weight": _setup_param(torch.randn(self.cols, dtype=self.dtype, device=device, requires_grad=True)),
@@ -94,11 +104,11 @@ class RmsNormCase(_NormalizationCase):
         }
 
 
-def _layer_norm_eager(input_, weight, bias):
+def _layer_norm_eager(input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
     return torch.layer_norm(input_, weight.shape, weight, bias, _EPS)
 
 
-def _rms_norm_eager(input_, weight):
+def _rms_norm_eager(input_: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     return torch.rms_norm(input_, weight.shape, weight, _EPS)
 
 
@@ -106,14 +116,24 @@ def _param_grad(param: torch.Tensor) -> torch.Tensor:
     return param.grad if param.grad is not None else param.grad_buffer
 
 
+def _layer_norm_triton(inputs: dict) -> torch.Tensor:
+    return triton_normalization_autograd(
+        inputs["input"], inputs["weight"], inputs["bias"], eps=_EPS, training=True, zero_centered=False
+    )
+
+
+def _rms_norm_triton(inputs: dict) -> torch.Tensor:
+    return triton_normalization_autograd(
+        inputs["input"], inputs["weight"], None, eps=_EPS, training=True, zero_centered=False
+    )
+
+
 def _layer_norm_triton_fwd(inputs: dict) -> dict:
-    return {
-        "output": triton_normalization_autograd(inputs["input"], inputs["weight"], inputs["bias"], _EPS, True, False)
-    }
+    return {"output": _layer_norm_triton(inputs)}
 
 
 def _layer_norm_triton_fwd_bwd(inputs: dict) -> dict:
-    output = triton_normalization_autograd(inputs["input"], inputs["weight"], inputs["bias"], _EPS, True, False)
+    output = _layer_norm_triton(inputs)
     output.backward(inputs["grad_output"])
     return {
         "output": output.detach(),
@@ -124,11 +144,11 @@ def _layer_norm_triton_fwd_bwd(inputs: dict) -> dict:
 
 
 def _rms_norm_triton_fwd(inputs: dict) -> dict:
-    return {"output": triton_normalization_autograd(inputs["input"], inputs["weight"], None, _EPS, True, False)}
+    return {"output": _rms_norm_triton(inputs)}
 
 
 def _rms_norm_triton_fwd_bwd(inputs: dict) -> dict:
-    output = triton_normalization_autograd(inputs["input"], inputs["weight"], None, _EPS, True, False)
+    output = _rms_norm_triton(inputs)
     output.backward(inputs["grad_output"])
     return {
         "output": output.detach(),
@@ -137,26 +157,26 @@ def _rms_norm_triton_fwd_bwd(inputs: dict) -> dict:
     }
 
 
-def _layer_norm_apex_fused(input_, weight, bias):
+def _layer_norm_apex_fused(input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
     return FusedLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
 
 
-def _layer_norm_apex_fast(input_, weight, bias):
+def _layer_norm_apex_fast(input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
     return FastLayerNorm.apply(input_, weight.shape, weight, bias, _EPS)
 
 
-def _rms_norm_apex_fused(input_, weight):
+def _rms_norm_apex_fused(input_: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     return FusedRMSNorm.apply(input_, weight.shape, weight, _EPS)
 
 
 _LAYER_NORM_EXTRAS: dict = {}
-if fused_normalization_available:
+if _fused_normalization_available:
     _LAYER_NORM_EXTRAS["apex_fused"] = _layer_norm_apex_fused
-if fast_normalization_available:
+if _fast_normalization_available:
     _LAYER_NORM_EXTRAS["apex_fast"] = _layer_norm_apex_fast
 
 _RMS_NORM_EXTRAS: dict = {}
-if fused_normalization_available:
+if _fused_normalization_available:
     _RMS_NORM_EXTRAS["apex_fused"] = _rms_norm_apex_fused
 
 

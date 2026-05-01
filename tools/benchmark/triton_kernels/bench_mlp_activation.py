@@ -1,3 +1,6 @@
+"""Gated MLP activation (e.g. SiLU): splits the input into (linear, gate),
+applies the activation to gate, multiplies them, in a single kernel."""
+
 import dataclasses
 
 import torch
@@ -50,7 +53,7 @@ class MlpActivationCase(Case):
         # gated silu: fwd ≈ 6 FLOPs/element, bwd ≈ 8 FLOPs/element.
         return 14 * self.tokens * self.ffn_dim
 
-    def make_inputs(self, device: str) -> Inputs:
+    def make_inputs(self, device: torch.device) -> Inputs:
         return {
             "input": torch.randn(self.tokens, 2 * self.ffn_dim, dtype=self.dtype, device=device, requires_grad=True),
             "grad_output": torch.randn(self.tokens, self.ffn_dim, dtype=self.dtype, device=device),
