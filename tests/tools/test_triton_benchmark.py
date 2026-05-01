@@ -44,6 +44,8 @@ _INTERPRETER_SKIP = {
     "sparse_linear: input_inner_sparse (layer 2 / down-proj)",
 }
 
+_SKIP_VARIANTS = {"pytorch_compiled", "pytorch_compiled_max"}
+
 
 def _build_params() -> list:
     modules_and_shapes = [
@@ -67,30 +69,23 @@ _PARAMS = _build_params()
 
 
 @pytest.fixture(autouse=True)
-def _disable_dynamo():
+def _patch_benchmark_env(monkeypatch):
     import torch._dynamo
 
-    orig = torch._dynamo.config.disable
-    torch._dynamo.config.disable = True
-    yield
-    torch._dynamo.config.disable = orig
-
-
-_SKIP_VARIANTS = {"pytorch_compiled", "pytorch_compiled_max"}
-
-
-@pytest.mark.parametrize("name,cases,variants", _PARAMS)
-def test_triton_benchmark(name, cases, variants, monkeypatch):
-    if triton_interpret and name in _INTERPRETER_SKIP:
-        pytest.skip("tl.histogram is broken in the Triton interpreter")
-
+    monkeypatch.setattr(torch._dynamo.config, "disable", True)
     monkeypatch.setattr(TritonConfig, "enabled", lambda *a, **kw: False)
     monkeypatch.setattr(_bench_runner, "_cudagraph_mark_step_begin", None)
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
 
-    variants = [v for v in variants if v.name not in _SKIP_VARIANTS]
+
+@pytest.mark.parametrize("name,cases,variants", _PARAMS)
+def test_triton_benchmark(name, cases, variants):
+    if triton_interpret and name in _INTERPRETER_SKIP:
+        pytest.skip("tl.histogram is broken in the Triton interpreter")
+
     # Replace fast_llm_triton fwd/fwd_bwd with the fp32 reference so no Triton
     # kernels are compiled. The runner still exercises the full variant code path.
+    variants = [v for v in variants if v.name not in _SKIP_VARIANTS]
     ref = next(v for v in variants if v.is_reference)
     variants = [
         dataclasses.replace(v, fwd=ref.fwd, fwd_bwd=ref.fwd_bwd) if v.name == "fast_llm_triton" else v

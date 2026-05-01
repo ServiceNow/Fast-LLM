@@ -231,23 +231,18 @@ def output_sparse_matmul_kernel(
     sparse_range = tl_arange(0, padded_sparse_dim)
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
+    if sparse_index == sparse_dim:
+        # Phantom block past the last expert; the caller is expected to ignore these rows.
+        return
+    col_dense_offset = col_sparse_offset + sparse_index * col_sparse_dim
 
     # Pointers
     row_range = tl_arange(0, block_size_row)[:, None]
     col_range = tl_arange(0, block_size_col)[None, :]
-    out_ptr += (row_offset + row_range) * out_stride_row + (col_sparse_offset + col_range) * out_stride_col
-
-    if sparse_index == sparse_dim:
-        # Phantom block: row_offset is past the last expert. Write zeros so the
-        # output is fully defined regardless of the caller's allocation.
-        if not accumulate:
-            tl.store(out_ptr, tl.zeros((block_size_row, block_size_col), dtype=out_ptr.dtype.element_ty))
-        return
-    col_dense_offset = col_sparse_offset + sparse_index * col_sparse_dim
-
     inner_range = tl_arange(0, block_size_inner)
     lhs_ptr += (row_offset + row_range) * lhs_stride_row + inner_range[None, :] * lhs_stride_inner
     rhs_ptr += inner_range[:, None] * rhs_stride_inner + (col_dense_offset + col_range) * rhs_stride_col
+    out_ptr += (row_offset + row_range) * out_stride_row + (col_sparse_offset + col_range) * out_stride_col
 
     # Matrix multiplication
     out = tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)
@@ -356,30 +351,25 @@ def input_inner_sparse_matmul_kernel(
 
     # Grid offsets
     row_offset = pid_row * block_size_row
-    col_offset = pid_col * block_size_col
 
     sparse_range = tl_arange(0, padded_sparse_dim)
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
+    if sparse_index == sparse_dim:
+        # Phantom block past the last expert; the caller is expected to ignore these rows.
+        return
+    inner_dense_offset = sparse_index * inner_sparse_dim
+    col_offset = pid_col * block_size_col
 
     # Pointers
     row_range = tl_arange(0, block_size_row)[:, None]
     col_range = tl_arange(0, block_size_col)[None, :]
-    out_ptr += (row_offset + row_range) * out_stride_row + (col_offset + col_range) * out_stride_col
-
-    if sparse_index == sparse_dim:
-        # Phantom block: row_offset is past the last expert. Write zeros so the
-        # output is fully defined regardless of the caller's allocation.
-        if not accumulate:
-            tl.store(out_ptr, tl.zeros((block_size_row, block_size_col), dtype=out_ptr.dtype.element_ty))
-        return
-    inner_dense_offset = sparse_index * inner_sparse_dim
-
     inner_range = tl_arange(0, block_size_inner)
     lhs_ptr += (row_offset + row_range) * lhs_stride_row + inner_range[None, :] * lhs_stride_inner
     rhs_ptr += (inner_dense_offset + inner_range[:, None]) * rhs_stride_inner + (
         col_offset + col_range
     ) * rhs_stride_col
+    out_ptr += (row_offset + row_range) * out_stride_row + (col_offset + col_range) * out_stride_col
 
     # Matrix multiplication
     out = tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)

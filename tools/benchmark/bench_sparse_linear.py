@@ -53,24 +53,39 @@ def _make_sparse_map(tokens: int, top_k: int, num_experts: int) -> SparseMap:
     return get_sparse_map(top_experts, num_experts)
 
 
-def _zero_padded_rows(tensor: torch.Tensor, sparse_map: SparseMap) -> torch.Tensor:
-    for e in range(sparse_map.num_experts):
-        pad_start = int(sparse_map.expert_pad_begins[e])
-        pad_end = int(sparse_map.expert_ends[e])
-        if pad_end > pad_start:
-            tensor[pad_start:pad_end] = 0
-    return tensor
+def _mask_padded_rows(cand: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
+    # Two regions in the kernel's forward output and grad_lhs are by-design garbage that
+    # downstream consumers ignore: per-expert padding [pad_begin, expert_end) (where the
+    # kernel does a matmul on random padding inputs) and phantom rows [expert_ends[-1],
+    # num_rows) past the last expert (where the kernel early-returns and leaves the output
+    # buffer uninitialized). The loop reference produces zeros in both regions, so without
+    # masking those mismatches would dominate rel_rms. grad_rhs already excludes padded
+    # contributions in both the kernel and reference, so it needs no masking.
+    sparse_map = inputs["sparse_map"]
+    pad_begins = sparse_map.expert_pad_begins.tolist()
+    pad_ends = sparse_map.expert_ends.tolist()
+    last_expert_end = pad_ends[-1]
+    masked = dict(cand)
+    for key in ("output", "grad_lhs"):
+        if key not in masked:
+            continue
+        clone = masked[key].clone()
+        for begin, end in zip(pad_begins, pad_ends, strict=True):
+            if end > begin:
+                clone[begin:end] = 0
+        if clone.shape[0] > last_expert_end:
+            clone[last_expert_end:] = 0
+        masked[key] = clone
+    return masked
 
 
 def _make_output_sparse_inputs(
     tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int, dtype: torch.dtype
 ) -> dict:
     sparse_map = _make_sparse_map(tokens, top_k, num_experts)
-    lhs_data = _zero_padded_rows(torch.randn(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map)
+    lhs_data = torch.randn(sparse_map.num_rows, hidden, dtype=dtype, device=device())
     rhs_data = torch.randn(hidden, ffn_per_expert * num_experts, dtype=dtype, device=device())
-    backward_grad = _zero_padded_rows(
-        torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
-    )
+    backward_grad = torch.ones(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
     _warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
     if TritonConfig.enabled() and _warmup_key not in _output_sparse_warmed_up:
         _w_lhs = lhs_data.detach().requires_grad_(True)
@@ -92,13 +107,9 @@ def _make_input_inner_sparse_inputs(
     tokens: int, top_k: int, num_experts: int, hidden: int, ffn_per_expert: int, dtype: torch.dtype
 ) -> dict:
     sparse_map = _make_sparse_map(tokens, top_k, num_experts)
-    lhs_data = _zero_padded_rows(
-        torch.randn(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device()), sparse_map
-    )
+    lhs_data = torch.randn(sparse_map.num_rows, ffn_per_expert, dtype=dtype, device=device())
     rhs_data = torch.randn(ffn_per_expert * num_experts, hidden, dtype=dtype, device=device())
-    backward_grad = _zero_padded_rows(
-        torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device()), sparse_map
-    )
+    backward_grad = torch.ones(sparse_map.num_rows, hidden, dtype=dtype, device=device())
     _warmup_key = (tokens, top_k, num_experts, hidden, ffn_per_expert, dtype)
     if TritonConfig.enabled() and _warmup_key not in _input_inner_sparse_warmed_up:
         _w_lhs = lhs_data.detach().requires_grad_(True)
@@ -193,6 +204,7 @@ def _output_sparse_variants() -> list[Variant]:
                 name="fast_llm_triton",
                 fwd=_run_output_sparse_fwd_triton,
                 fwd_bwd=_run_output_sparse_fwd_bwd_triton,
+                output_postprocess=_mask_padded_rows,
             )
         )
     return variants
@@ -275,6 +287,7 @@ def _input_inner_sparse_variants() -> list[Variant]:
                 name="fast_llm_triton",
                 fwd=_run_input_inner_sparse_fwd_triton,
                 fwd_bwd=_run_input_inner_sparse_fwd_bwd_triton,
+                output_postprocess=_mask_padded_rows,
             )
         )
     return variants
