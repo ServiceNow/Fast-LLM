@@ -140,6 +140,10 @@ class LlamaMLPConverter:
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
         assert config.gated
+        if config.pre_norm is not None:
+            raise NotImplementedError(f"MLP `pre_norm` is not supported by `{cls.__name__}`.")
+        if config.post_norm is not None:
+            raise NotImplementedError(f"MLP `post_norm` is not supported by `{cls.__name__}`.")
         return {
             "intermediate_size": config.intermediate_size,
             "mlp_bias": config.add_linear_biases,
@@ -383,6 +387,8 @@ class LlamaBlockConverter:
     @classmethod
     def export_config(cls, config: DecoderBlockConfig) -> dict:
         Assert.custom(isinstance, config, DecoderBlockConfig)
+        if config.output_scale.enabled:
+            raise NotImplementedError(f"`output_scale` is not supported by `{cls.__name__}`.")
         return safe_merge_dicts(
             cls.mixer_converter_class.export_config(config.mixer),
             cls.mlp_converter_class.export_config(config.mlp),

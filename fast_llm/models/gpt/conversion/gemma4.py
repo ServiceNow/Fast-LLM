@@ -621,6 +621,20 @@ class Gemma4BaseModelConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
+        if config.get("hidden_size_per_layer_input", 256):
+            raise NotImplementedError(
+                "Gemma 4 Per-Layer Embeddings (`hidden_size_per_layer_input != 0`) are not supported."
+            )
+        if config.get("num_kv_shared_layers", 0):
+            raise NotImplementedError("Gemma 4 cross-layer KV sharing (`num_kv_shared_layers != 0`) is not supported.")
+        if config.get("use_double_wide_mlp", False):
+            raise NotImplementedError("Gemma 4 `use_double_wide_mlp=True` is not supported.")
+        # `use_bidirectional_attention="vision"` only affects vision tokens; the text path stays causal.
+        # Only `"all"` toggles `is_causal=False` for the text decoder, which we don't implement.
+        if config.get("use_bidirectional_attention") == "all":
+            raise NotImplementedError(
+                'Gemma 4 `use_bidirectional_attention="all"` is not supported (text path stays causal).'
+            )
         return {
             "embeddings": cls.embeddings_converter_class.import_config(config),
             "decoder": cls.decoder_converter_class.import_config(config),
