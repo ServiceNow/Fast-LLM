@@ -436,7 +436,7 @@ def _pick_unit(max_value: float, table: list[tuple[str, float]]) -> tuple[str, f
 # Each table is ordered ascending (small unit → large unit). `scale` converts
 # from the canonical storage unit (ms / bytes-per-second / flops-per-second /
 # MiB) into the display unit.
-_TIME_UNITS = [("ns", 1e6), ("us", 1e3), ("ms", 1.0), ("s", 1e-3)]
+_TIME_UNITS = [("ns", 1e6), ("μs", 1e3), ("ms", 1.0), ("s", 1e-3)]
 _BANDWIDTH_UNITS = [("B/s", 1.0), ("KB/s", 1e-3), ("MB/s", 1e-6), ("GB/s", 1e-9), ("TB/s", 1e-12)]
 _FLOPS_UNITS = [
     ("FLOP/s", 1.0),
