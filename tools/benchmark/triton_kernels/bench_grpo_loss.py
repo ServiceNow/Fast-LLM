@@ -7,8 +7,8 @@ import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
-from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import dtype_short, standard_pytorch_variants
 
 _SHAPES = [
     (4096, 32768),
@@ -20,7 +20,7 @@ _EPSILON_HIGH = 0.2
 
 
 @dataclasses.dataclass
-class GrpoLossCase(Case):
+class GrpoLossCase(DtypedCase):
     tokens: int
     vocab: int
     dtype: torch.dtype
@@ -28,10 +28,6 @@ class GrpoLossCase(Case):
     @property
     def name(self) -> str:
         return f"({self.tokens}, {self.vocab}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -102,7 +98,7 @@ def benchmarks(
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
-    variants = standard_fwd_bwd_pytorch_variants(
+    variants = standard_pytorch_variants(
         _grpo_eager,
         input_keys=("logits", "labels", "advantages", "old_log_probs"),
         grad_input_keys=("logits",),
@@ -117,6 +113,3 @@ def benchmarks(
             variants,
         )
     ]
-
-
-run = bench_main(benchmarks)

@@ -7,9 +7,10 @@ import typing
 
 import torch
 
+from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
-from tools.benchmark.triton_kernels.runner import Case, Inputs
-from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_variants
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import dtype_short, standard_pytorch_variants
 
 # 4× steps so L2 → HBM and saturated-HBM regimes are visible.
 _SIZES_NUMEL = [
@@ -22,7 +23,7 @@ _SIZES_NUMEL = [
 
 
 @dataclasses.dataclass
-class _PointwiseCase(Case):
+class _PointwiseCase(DtypedCase):
     numel: int
     dtype: torch.dtype
     # Bytes traffic = bytes_factor × numel × dtype.itemsize.
@@ -31,10 +32,6 @@ class _PointwiseCase(Case):
     @property
     def name(self) -> str:
         return f"({self.numel},) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -86,30 +83,36 @@ def _add_eager(input_: torch.Tensor, other: torch.Tensor, out: torch.Tensor) -> 
     return torch.add(input_, other, out=out)
 
 
-_COPY_VARIANTS = standard_fwd_variants(
-    eager_function=_copy_eager,
-    triton_function=triton_copy,
-    unpack=lambda inputs: (inputs["input_"], inputs["out"]),
-)
-_FILL_VARIANTS = standard_fwd_variants(
-    eager_function=_fill_eager,
-    triton_function=triton_fill,
-    unpack=lambda inputs: (inputs["input_"], inputs["value"]),
-)
-_ADD_VARIANTS = standard_fwd_variants(
-    eager_function=_add_eager,
-    triton_function=triton_add,
-    unpack=lambda inputs: (inputs["input_"], inputs["other"], inputs["out"]),
-)
+def _make_variants(
+    eager_function: typing.Callable, triton_function: typing.Callable, input_keys: tuple[str, ...]
+) -> list[Variant]:
+    variants = standard_pytorch_variants(eager_function, input_keys=input_keys)
+    if TritonConfig.enabled():
+        variants.append(
+            Variant(
+                name="fast_llm_triton",
+                fwd=lambda inputs: {"output": triton_function(*(inputs[k] for k in input_keys), use_triton=True)},
+            )
+        )
+    return variants
 
 
 def benchmarks(dtypes: tuple[torch.dtype, ...], shapes: list[int] | None = None) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SIZES_NUMEL
     return [
-        ("pointwise: copy", [CopyCase(numel=n, dtype=d) for d in dtypes for n in shapes], _COPY_VARIANTS),
-        ("pointwise: fill", [FillCase(numel=n, dtype=d) for d in dtypes for n in shapes], _FILL_VARIANTS),
-        ("pointwise: add", [AddCase(numel=n, dtype=d) for d in dtypes for n in shapes], _ADD_VARIANTS),
+        (
+            "pointwise: copy",
+            [CopyCase(numel=n, dtype=d) for d in dtypes for n in shapes],
+            _make_variants(_copy_eager, triton_copy, ("input_", "out")),
+        ),
+        (
+            "pointwise: fill",
+            [FillCase(numel=n, dtype=d) for d in dtypes for n in shapes],
+            _make_variants(_fill_eager, triton_fill, ("input_", "value")),
+        ),
+        (
+            "pointwise: add",
+            [AddCase(numel=n, dtype=d) for d in dtypes for n in shapes],
+            _make_variants(_add_eager, triton_add, ("input_", "other", "out")),
+        ),
     ]
-
-
-run = bench_main(benchmarks)

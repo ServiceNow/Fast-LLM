@@ -6,31 +6,11 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.functional.config import TritonConfig
-from tools.benchmark.triton_kernels.runner import Inputs, Variant, run_benchmark
-
-DEFAULT_DTYPES: tuple[torch.dtype, ...] = (torch.bfloat16,)
+from tools.benchmark.triton_kernels.runner import Inputs, Variant
 
 
 def dtype_short(dtype: torch.dtype) -> str:
     return DataType.from_torch(dtype).short
-
-
-def bench_main(benchmarks_fn: typing.Callable) -> typing.Callable:
-    def run(
-        verbose: bool = False,
-        dtypes: tuple[torch.dtype, ...] | None = None,
-        shapes: list | None = None,
-        warmup_ms: float = 25.0,
-        rep_ms: float = 100.0,
-        min_reps: int = 5,
-    ) -> None:
-        for name, cases, variants in benchmarks_fn(dtypes or DEFAULT_DTYPES, shapes):
-            run_benchmark(
-                name, cases, variants, verbose=verbose, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
-            )
-
-    return run
 
 
 def make_grad_reset(keys: tuple[str, ...]) -> typing.Callable[[Inputs], None]:
@@ -74,7 +54,7 @@ def pytorch_variant(
     reset_inputs: typing.Callable[[Inputs], typing.Any] | None = None,
 ) -> Variant:
     """Build a Variant that calls `function(*[inputs[k] for k in input_keys])`.
-    Supports backward when `grad_input_keys` is non-empty; if `convert_to_fp32`
+    Backward is wired up when `grad_input_keys` is non-empty; if `convert_to_fp32`
     is set, all floating-point inputs are upcast to fp32 first (used by the
     reference variant)."""
 
@@ -106,57 +86,11 @@ def pytorch_variant(
     )
 
 
-def fwd_only_variant(
-    name: str,
-    function: typing.Callable,
-    unpack: typing.Callable[[Inputs], tuple],
-    *,
-    is_reference: bool = False,
-    convert_to_fp32: bool = False,
-) -> Variant:
-    """Build a forward-only Variant. Used by bench_pointwise where there's no
-    backward; `unpack` extracts positional args from the inputs dict."""
-
-    def fwd(inputs: Inputs) -> typing.Any:
-        args = unpack(inputs)
-        if convert_to_fp32:
-            args = tuple(
-                arg.float() if isinstance(arg, torch.Tensor) and arg.is_floating_point() else arg for arg in args
-            )
-        return function(*args)
-
-    return Variant(name=name, fwd=fwd, is_reference=is_reference)
-
-
-def standard_fwd_variants(
-    eager_function: typing.Callable,
-    triton_function: typing.Callable | None,
-    unpack: typing.Callable[[Inputs], tuple],
-) -> list[Variant]:
-    """fp32_reference, pytorch_eager, pytorch_compiled, pytorch_compiled_max,
-    and (if `TritonConfig.enabled()`) fast_llm_triton."""
-    variants: list[Variant] = [
-        fwd_only_variant("fp32_reference", eager_function, unpack, is_reference=True, convert_to_fp32=True),
-        fwd_only_variant("pytorch_eager", eager_function, unpack),
-        fwd_only_variant("pytorch_compiled", torch.compile(eager_function, mode="default", dynamic=False), unpack),
-        fwd_only_variant(
-            "pytorch_compiled_max",
-            torch.compile(eager_function, mode="max-autotune-no-cudagraphs", dynamic=False),
-            unpack,
-        ),
-    ]
-    if triton_function is not None and TritonConfig.enabled():
-        variants.append(
-            fwd_only_variant("fast_llm_triton", lambda *args: triton_function(*args, use_triton=True), unpack)
-        )
-    return variants
-
-
-def standard_fwd_bwd_pytorch_variants(
+def standard_pytorch_variants(
     eager_function: typing.Callable,
     input_keys: tuple[str, ...],
-    grad_input_keys: tuple[str, ...],
     *,
+    grad_input_keys: tuple[str, ...] = (),
     grad_output_key: str | None = None,
     output_key: str = "output",
     reset_inputs: typing.Callable[[Inputs], None] | None = None,
@@ -165,10 +99,11 @@ def standard_fwd_bwd_pytorch_variants(
     enable_max_autotune: bool = True,
 ) -> list[Variant]:
     """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max]
-    + `extra_functions`. Triton variants are appended by the caller (so each
-    bench file owns its triton wiring explicitly). `reset_inputs` defaults to
+    + `extra_functions`. When `grad_input_keys` is empty, only fwd is wired up.
+    Triton variants are appended by the caller (so each bench file owns its
+    triton wiring explicitly). For fwd_bwd cases, `reset_inputs` defaults to
     clearing `.grad` on `grad_input_keys` between reps."""
-    if reset_inputs is None:
+    if grad_input_keys and reset_inputs is None:
         reset_inputs = make_grad_reset(grad_input_keys)
     common = {
         "input_keys": input_keys,

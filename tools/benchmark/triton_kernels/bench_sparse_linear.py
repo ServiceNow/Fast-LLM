@@ -9,12 +9,11 @@ import torch
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.sparse_copy import SparseMap, get_sparse_map
 from fast_llm.functional.triton.sparse_linear import InputSparseLinear, OutputSparseLinear
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
 from tools.benchmark.triton_kernels.utils import (
-    bench_main,
     dtype_short,
     make_grad_reset,
-    standard_fwd_bwd_pytorch_variants,
+    standard_pytorch_variants,
 )
 
 # (tokens, top_k, num_experts, hidden, ffn_per_expert)
@@ -57,7 +56,7 @@ def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: dict) -> dict[
 
 
 @dataclasses.dataclass
-class _SparseLinearCase(Case):
+class _SparseLinearCase(DtypedCase):
     tokens: int
     top_k: int
     num_experts: int
@@ -71,10 +70,6 @@ class _SparseLinearCase(Case):
             f"({self.tokens}, {self.top_k}, {self.num_experts}, "
             f"{self.hidden}, {self.ffn_per_expert}) {dtype_short(self.dtype)}"
         )
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -190,7 +185,7 @@ def benchmarks(
     shapes: list[tuple[int, int, int, int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
-    output_sparse_variants = standard_fwd_bwd_pytorch_variants(
+    output_sparse_variants = standard_pytorch_variants(
         _output_sparse_loop,
         input_keys=("lhs", "rhs", "sparse_map"),
         grad_input_keys=("lhs", "rhs"),
@@ -208,7 +203,7 @@ def benchmarks(
                 reset_inputs=make_grad_reset(("lhs", "rhs")),
             )
         )
-    input_inner_sparse_variants = standard_fwd_bwd_pytorch_variants(
+    input_inner_sparse_variants = standard_pytorch_variants(
         _input_inner_sparse_loop,
         input_keys=("lhs", "rhs", "sparse_map"),
         grad_input_keys=("lhs", "rhs"),
@@ -246,6 +241,3 @@ def benchmarks(
             input_inner_sparse_variants,
         ),
     ]
-
-
-run = bench_main(benchmarks)

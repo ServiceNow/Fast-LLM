@@ -12,12 +12,11 @@ from fast_llm.functional.triton.sparse_copy import (
     copy_sparse_to_dense_autograd,
     get_sparse_map,
 )
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
 from tools.benchmark.triton_kernels.utils import (
-    bench_main,
     dtype_short,
     make_grad_reset,
-    standard_fwd_bwd_pytorch_variants,
+    standard_pytorch_variants,
 )
 
 # (tokens, top_k, num_experts, hidden_size)
@@ -44,7 +43,7 @@ def _make_phantom_mask(sparse_map: SparseMap, device: torch.device) -> torch.Ten
 
 
 @dataclasses.dataclass
-class _SparseCopyCase(Case):
+class _SparseCopyCase(DtypedCase):
     tokens: int
     top_k: int
     num_experts: int
@@ -54,10 +53,6 @@ class _SparseCopyCase(Case):
     @property
     def name(self) -> str:
         return f"({self.tokens}, {self.top_k}, {self.num_experts}, {self.hidden}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -157,7 +152,7 @@ def benchmarks(
     shapes: list[tuple[int, int, int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
-    dispatch_variants = standard_fwd_bwd_pytorch_variants(
+    dispatch_variants = standard_pytorch_variants(
         _dispatch_pytorch,
         input_keys=("dense", "sparse_map"),
         grad_input_keys=("dense",),
@@ -173,7 +168,7 @@ def benchmarks(
                 reset_inputs=make_grad_reset(("dense",)),
             )
         )
-    combine_variants = standard_fwd_bwd_pytorch_variants(
+    combine_variants = standard_pytorch_variants(
         _combine_pytorch,
         input_keys=("sparse", "scores", "sparse_map"),
         grad_input_keys=("sparse", "scores"),
@@ -209,6 +204,3 @@ def benchmarks(
             combine_variants,
         ),
     ]
-
-
-run = bench_main(benchmarks)

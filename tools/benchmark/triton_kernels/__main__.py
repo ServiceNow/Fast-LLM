@@ -3,15 +3,10 @@ CLI entry point for the Fast-LLM Triton kernel benchmarking suite.
 
 Usage:
     python -m tools.benchmark.triton_kernels <kernel>
-
-Available kernels are discovered dynamically from `bench_*.py` files in this
-package. Each such module must expose a `run(verbose: bool = False)` callable.
 """
 
 import argparse
-import importlib
 import logging
-import pkgutil
 import warnings
 
 # Each bench file compiles the same function with multiple shapes/dtypes; the
@@ -19,8 +14,18 @@ import warnings
 # to eager. Bump it before any `torch.compile`-decorated code runs.
 import torch._dynamo
 
-import tools.benchmark.triton_kernels as _pkg
 from fast_llm.engine.config_utils.data_type import DataType
+from tools.benchmark.triton_kernels import (
+    bench_entropy_loss,
+    bench_grpo_loss,
+    bench_mlp_activation,
+    bench_normalization,
+    bench_pointwise,
+    bench_rotary,
+    bench_sparse_copy,
+    bench_sparse_linear,
+)
+from tools.benchmark.triton_kernels.runner import run_benchmark
 
 torch._dynamo.config.cache_size_limit = 64
 
@@ -29,18 +34,19 @@ torch._dynamo.config.cache_size_limit = 64
 warnings.filterwarnings("ignore", message=".*[Ss]kipping (cuda|CUDA)[Gg]raphs.*")
 logging.getLogger("torch._inductor.cudagraph_trees").setLevel(logging.ERROR)
 
-
-def _list_benchmarks() -> dict[str, str]:
-    """Map short kernel name → fully-qualified bench module name."""
-    names = {}
-    for info in pkgutil.iter_modules(_pkg.__path__):
-        if info.name.startswith("bench_"):
-            names[info.name.removeprefix("bench_")] = f"tools.benchmark.triton_kernels.{info.name}"
-    return names
+_BENCHMARKS = {
+    "entropy_loss": bench_entropy_loss,
+    "grpo_loss": bench_grpo_loss,
+    "mlp_activation": bench_mlp_activation,
+    "normalization": bench_normalization,
+    "pointwise": bench_pointwise,
+    "rotary": bench_rotary,
+    "sparse_copy": bench_sparse_copy,
+    "sparse_linear": bench_sparse_linear,
+}
 
 
 def main() -> None:
-    benches = _list_benchmarks()
     parser = argparse.ArgumentParser(
         prog="python -m tools.benchmark.triton_kernels",
         description="Benchmark Fast-LLM Triton kernels against PyTorch alternatives.",
@@ -48,7 +54,7 @@ def main() -> None:
     parser.add_argument(
         "kernels",
         nargs="*",
-        choices=sorted(benches),
+        choices=sorted(_BENCHMARKS),
         metavar="kernel",
         help="Which kernels to benchmark. If omitted, run all kernels.",
     )
@@ -68,11 +74,12 @@ def main() -> None:
         "Examples: bfloat16 float32 fp16. Accepts alternate names like bf16.",
     )
     args = parser.parse_args()
-    dtypes = [DataType(d).torch for d in args.dtypes]
+    dtypes = tuple(DataType(d).torch for d in args.dtypes)
 
-    selected = args.kernels or sorted(benches)
+    selected = args.kernels or sorted(_BENCHMARKS)
     for kernel in selected:
-        importlib.import_module(benches[kernel]).run(verbose=args.verbose, dtypes=dtypes)
+        for name, cases, variants in _BENCHMARKS[kernel].benchmarks(dtypes=dtypes):
+            run_benchmark(name, cases, variants, verbose=args.verbose)
 
 
 if __name__ == "__main__":

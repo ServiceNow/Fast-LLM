@@ -10,8 +10,8 @@ import torch.nn.functional as F
 from fast_llm.functional.config import EntropyLossType, TargetFormat, TritonConfig
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
-from tools.benchmark.triton_kernels.utils import bench_main, dtype_short, standard_fwd_bwd_pytorch_variants
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import dtype_short, standard_pytorch_variants
 
 # (tokens, vocab_size)
 _SHAPES = [
@@ -22,7 +22,7 @@ _SHAPES = [
 
 
 @dataclasses.dataclass
-class _EntropyCase(Case):
+class _EntropyCase(DtypedCase):
     tokens: int
     vocab: int
     dtype: torch.dtype
@@ -30,10 +30,6 @@ class _EntropyCase(Case):
     @property
     def name(self) -> str:
         return f"({self.tokens}, {self.vocab}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_flops(self) -> int:
@@ -107,7 +103,7 @@ def _entropy_variants(
         )
         return {"loss": loss, "grad_logits": grad_logits}
 
-    variants = standard_fwd_bwd_pytorch_variants(
+    variants = standard_pytorch_variants(
         eager_function,
         input_keys=input_keys,
         grad_input_keys=("logits",),
@@ -135,7 +131,7 @@ def benchmarks(
     shapes = shapes if shapes is not None else _SHAPES
     label_cases = [EntropyLabelCase(tokens=t, vocab=v, dtype=d) for d in dtypes for (t, v) in shapes]
     dist_cases = [EntropyDistCase(tokens=t, vocab=v, dtype=d) for d in dtypes for (t, v) in shapes]
-    z_loss_variants = standard_fwd_bwd_pytorch_variants(
+    z_loss_variants = standard_pytorch_variants(
         _z_loss_eager,
         input_keys=("logits",),
         grad_input_keys=("logits",),
@@ -175,6 +171,3 @@ def benchmarks(
         ),
         ("entropy_loss: z_loss", label_cases, z_loss_variants),
     ]
-
-
-run = bench_main(benchmarks)

@@ -104,6 +104,15 @@ class Case:
         raise NotImplementedError()
 
 
+class DtypedCase(Case):
+    """Subclasses must declare a `dtype: torch.dtype` field. Provides
+    `compute_dtype` automatically."""
+
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        return self.dtype  # type: ignore[attr-defined]
+
+
 def _device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -145,19 +154,6 @@ class VariantResult:
 # --------------------------------------------------------------------------- timing
 
 
-def _make_cache_flusher(size_bytes: int = 256 * 1024 * 1024) -> typing.Callable[[], None]:
-    """Allocate a scratch buffer larger than any GPU L2 and zero it between reps
-    to invalidate cached values (avoids over-optimistic timings)."""
-    if not torch.cuda.is_available():
-        return lambda: None
-    buffer = torch.empty(size_bytes // 4, dtype=torch.int32, device="cuda")
-
-    def flush() -> None:
-        buffer.zero_()
-
-    return flush
-
-
 def bench_fn(
     fn: typing.Callable[[], typing.Any],
     reset: typing.Callable[[], None] | None = None,
@@ -184,7 +180,9 @@ def bench_fn(
         elapsed_ms = (time.perf_counter() - start) * 1000
         return TimingStats(elapsed_ms, elapsed_ms, elapsed_ms, elapsed_ms, 0.0, 1)
 
-    flush = _make_cache_flusher()
+    # Scratch buffer larger than any GPU L2; zeroed between reps to flush
+    # cached values (avoids over-optimistic timings).
+    flush_buffer = torch.empty(64 * 1024 * 1024, dtype=torch.int32, device="cuda")
 
     # Warmup to JIT-compile, autotune, etc.
     torch.cuda.synchronize()
@@ -224,7 +222,7 @@ def bench_fn(
     for i in range(num_reps):
         if reset is not None:
             reset()
-        flush()
+        flush_buffer.zero_()
         start_events[i].record()
         fn()
         end_events[i].record()
@@ -292,6 +290,45 @@ def _as_output_dict(output: typing.Any) -> dict[str, torch.Tensor]:
 # --------------------------------------------------------------------------- runner
 
 
+def _measure_mode(
+    variant: Variant,
+    case: Case,
+    variant_fn: VariantFn,
+    mode_label: str,
+    reference_outputs: dict[str, torch.Tensor] | None,
+    warmup_ms: float,
+    rep_ms: float,
+    min_reps: int,
+) -> tuple[TimingStats, dict[str, float]]:
+    """Run one mode (fwd or fwd_bwd) of one variant: correctness check against
+    the reference, then timing. Returns (timing, rms_errors keyed by mode_label)."""
+    inputs = _seeded_inputs(case)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    guarded = _guarded(lambda: variant_fn(inputs))
+
+    output = guarded()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    rms_errors: dict[str, float] = {}
+    if reference_outputs is not None and not variant.is_reference:
+        cand = _as_output_dict(output)
+        if variant.output_postprocess is not None:
+            cand = variant.output_postprocess(cand, inputs)
+        rms_errors = {
+            f"{mode_label}.{name}": rms_relative_error(cand[name], reference_outputs[name])
+            for name in reference_outputs
+            if name in cand
+        }
+    del output
+
+    reset = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
+    timing = bench_fn(guarded, reset=reset, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+    return timing, rms_errors
+
+
 def _run_one_variant(
     variant: Variant,
     case: Case,
@@ -302,64 +339,21 @@ def _run_one_variant(
 ) -> VariantResult:
     result = VariantResult(variant_name=variant.name)
     try:
-        # --- correctness + memory: one fresh invocation per mode
-        # fwd mode
         if variant.fwd is not None:
-            inputs = _seeded_inputs(case)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            def _fwd_once() -> typing.Any:
-                return variant.fwd(inputs)
-
-            _guarded_fwd = _guarded(_fwd_once)
-
-            # First: correctness. Run once, capture output for comparison.
-            fwd_output = _guarded_fwd()
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-
-            if reference_outputs is not None and not variant.is_reference:
-                ref_fwd = reference_outputs.get("fwd")
-                if ref_fwd is not None:
-                    cand = _as_output_dict(fwd_output)
-                    if variant.output_postprocess is not None:
-                        cand = variant.output_postprocess(cand, inputs)
-                    rms = {name: rms_relative_error(cand[name], ref_fwd[name]) for name in ref_fwd if name in cand}
-                    result.rms_errors = (result.rms_errors or {}) | {f"fwd.{k}": v for k, v in rms.items()}
-            del fwd_output
-
-            # Timing: reuse the same input tensors, fn closes over them.
-            _reset_fwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
-            result.fwd_timing = bench_fn(
-                _guarded_fwd, reset=_reset_fwd, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
+            ref_fwd = reference_outputs.get("fwd") if reference_outputs is not None else None
+            result.fwd_timing, fwd_rms = _measure_mode(
+                variant, case, variant.fwd, "fwd", ref_fwd, warmup_ms, rep_ms, min_reps
             )
-            del inputs
+            if fwd_rms:
+                result.rms_errors = (result.rms_errors or {}) | fwd_rms
 
-        # fwd+bwd mode
         if variant.fwd_bwd is not None:
-            inputs = _seeded_inputs(case)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            def _fwd_bwd_once() -> typing.Any:
-                return variant.fwd_bwd(inputs)
-
-            _guarded_fwd_bwd = _guarded(_fwd_bwd_once)
-
-            fwd_bwd_output = _guarded_fwd_bwd()
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-
-            if reference_outputs is not None and not variant.is_reference:
-                ref_fb = reference_outputs.get("fwd_bwd")
-                if ref_fb is not None:
-                    cand = _as_output_dict(fwd_bwd_output)
-                    if variant.output_postprocess is not None:
-                        cand = variant.output_postprocess(cand, inputs)
-                    rms = {name: rms_relative_error(cand[name], ref_fb[name]) for name in ref_fb if name in cand}
-                    result.rms_errors = (result.rms_errors or {}) | {f"fb.{k}": v for k, v in rms.items()}
-            del fwd_bwd_output
+            ref_fb = reference_outputs.get("fwd_bwd") if reference_outputs is not None else None
+            result.fwd_bwd_timing, bwd_rms = _measure_mode(
+                variant, case, variant.fwd_bwd, "bwd", ref_fb, warmup_ms, rep_ms, min_reps
+            )
+            if bwd_rms:
+                result.rms_errors = (result.rms_errors or {}) | bwd_rms
 
             # Memory measurement: one fresh call on fresh inputs.
             fresh_inputs = _seeded_inputs(case)
@@ -367,14 +361,7 @@ def _run_one_variant(
                 torch.cuda.empty_cache()
             result.memory = measure_memory(_guarded(lambda: variant.fwd_bwd(fresh_inputs)))
             del fresh_inputs
-
-            # Timing.
-            _reset_fwd_bwd = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
-            result.fwd_bwd_timing = bench_fn(
-                _guarded_fwd_bwd, reset=_reset_fwd_bwd, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps
-            )
-            del inputs
-        elif variant.fwd is not None and result.memory is None:
+        elif variant.fwd is not None:
             # No backward — measure fwd-mode memory.
             fresh_inputs = _seeded_inputs(case)
             if torch.cuda.is_available():
@@ -506,30 +493,13 @@ def _rms_column(values: list[float | None]) -> list[str]:
     return out
 
 
-def _simplify_rms_key(key: str, all_keys: list[str]) -> str:
-    """Turn internal keys like 'fwd.out' / 'fb.loss' into concise display labels.
-
-    Rules:
-    - strip the mode prefix ('fwd.'/'fb.') when all keys share the same mode
-    - rename 'fb' → 'bwd' for display when it survives
-    - drop the trailing '.out' / standalone 'out' (the placeholder key used
-      when a variant returns a single unnamed tensor)
-    """
-    mode, _, tensor = key.partition(".")
-    all_modes = {k.partition(".")[0] for k in all_keys}
-    if len(all_modes) <= 1:
-        remainder = tensor
-    else:
-        pretty = "bwd" if mode == "fb" else mode
-        remainder = f"{pretty}.{tensor}" if tensor else pretty
-    if remainder == "out":
-        return ""
-    return remainder.removesuffix(".out")
-
-
 def _rms_header(key: str, all_keys: list[str]) -> str:
-    simplified = _simplify_rms_key(key, all_keys)
-    return f"rel_rms({simplified})" if simplified else "rel_rms"
+    """Header for an `rms_errors` column. Strip the `<mode>.` prefix when every
+    key shares the same mode (one-mode benches don't need to repeat 'fwd.')."""
+    mode, _, tensor = key.partition(".")
+    if len({k.partition(".")[0] for k in all_keys}) <= 1:
+        return f"rel_rms({tensor})"
+    return f"rel_rms({key})"
 
 
 def _render_table(

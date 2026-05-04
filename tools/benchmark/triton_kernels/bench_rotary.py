@@ -7,8 +7,8 @@ import torch
 
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.rotary import triton_rotary_
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
-from tools.benchmark.triton_kernels.utils import bench_main, dtype_short
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
+from tools.benchmark.triton_kernels.utils import dtype_short
 
 # (tokens, num_heads, head_size) — tokens = batch * seq_len
 _SHAPES = [
@@ -20,7 +20,7 @@ _SHAPES = [
 
 
 @dataclasses.dataclass
-class RotaryCase(Case):
+class RotaryCase(DtypedCase):
     tokens: int
     num_heads: int
     head_size: int
@@ -29,10 +29,6 @@ class RotaryCase(Case):
     @property
     def name(self) -> str:
         return f"({self.tokens}, {self.num_heads}, {self.head_size}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -113,6 +109,3 @@ def benchmarks(
             _rotary_variants(),
         )
     ]
-
-
-run = bench_main(benchmarks)

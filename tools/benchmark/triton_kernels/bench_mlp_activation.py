@@ -11,12 +11,11 @@ from fast_llm.functional.triton.mlp import (
     triton_mlp_activation_autograd,
     triton_mlp_activation_forward,
 )
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
 from tools.benchmark.triton_kernels.utils import (
-    bench_main,
     dtype_short,
     make_grad_reset,
-    standard_fwd_bwd_pytorch_variants,
+    standard_pytorch_variants,
 )
 
 # (tokens, ffn_dim) — input has shape (tokens, 2*ffn_dim) for gated.
@@ -30,7 +29,7 @@ _ACTIVATION = ActivationType.silu
 
 
 @dataclasses.dataclass
-class MlpActivationCase(Case):
+class MlpActivationCase(DtypedCase):
     tokens: int
     ffn_dim: int
     dtype: torch.dtype
@@ -38,10 +37,6 @@ class MlpActivationCase(Case):
     @property
     def name(self) -> str:
         return f"({self.tokens}, {self.ffn_dim}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
     @property
     def expected_bytes(self) -> int:
@@ -78,7 +73,7 @@ def benchmarks(
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
-    variants = standard_fwd_bwd_pytorch_variants(
+    variants = standard_pytorch_variants(
         torch_mlp_activation,
         input_keys=("input", "gated", "activation_type"),
         grad_input_keys=("input",),
@@ -100,6 +95,3 @@ def benchmarks(
             variants,
         )
     ]
-
-
-run = bench_main(benchmarks)

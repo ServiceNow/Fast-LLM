@@ -8,12 +8,11 @@ import torch
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
 from fast_llm.layers.common.normalization.normalization import FastLayerNorm, FusedLayerNorm, FusedRMSNorm
-from tools.benchmark.triton_kernels.runner import Case, Inputs, Variant
+from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
 from tools.benchmark.triton_kernels.utils import (
-    bench_main,
     dtype_short,
     make_grad_reset,
-    standard_fwd_bwd_pytorch_variants,
+    standard_pytorch_variants,
 )
 
 try:
@@ -49,7 +48,7 @@ def _setup_param(tensor: torch.Tensor) -> torch.Tensor:
 
 
 @dataclasses.dataclass
-class _NormalizationCase(Case):
+class _NormalizationCase(DtypedCase):
     rows: int
     cols: int
     dtype: torch.dtype
@@ -57,10 +56,6 @@ class _NormalizationCase(Case):
     @property
     def name(self) -> str:
         return f"({self.rows}, {self.cols}) {dtype_short(self.dtype)}"
-
-    @property
-    def compute_dtype(self) -> torch.dtype:
-        return self.dtype
 
 
 @dataclasses.dataclass
@@ -185,7 +180,7 @@ def benchmarks(
     shapes: list[tuple[int, int]] | None = None,
 ) -> list[tuple[str, list, list]]:
     shapes = shapes if shapes is not None else _SHAPES
-    layer_norm_variants = standard_fwd_bwd_pytorch_variants(
+    layer_norm_variants = standard_pytorch_variants(
         _layer_norm_eager,
         input_keys=("input", "weight", "bias"),
         grad_input_keys=("input", "weight", "bias"),
@@ -201,7 +196,7 @@ def benchmarks(
                 reset_inputs=make_grad_reset(("input", "weight", "bias")),
             )
         )
-    rms_norm_variants = standard_fwd_bwd_pytorch_variants(
+    rms_norm_variants = standard_pytorch_variants(
         _rms_norm_eager,
         input_keys=("input", "weight"),
         grad_input_keys=("input", "weight"),
@@ -229,6 +224,3 @@ def benchmarks(
             rms_norm_variants,
         ),
     ]
-
-
-run = bench_main(benchmarks)
