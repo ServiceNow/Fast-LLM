@@ -242,9 +242,16 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         split_index: int = 0,
         return_logits: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if self._config.fp32_lm_head:
+            input_dtype = input_.dtype
+            input_ = input_.to(torch.float32)
+            weight = self.output_weights.to(torch.float32)
+        else:
+            weight = self.output_weights
+
         logits, context = output_parallel_linear_forward(
             input_=input_,
-            weight=self.output_weights,
+            weight=weight,
             bias=None,
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sequence_parallel=self._sequence_parallel and self._vocab_parallel,
@@ -273,9 +280,14 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if loss_value is not None:
                 losses_.append(loss_value.detach())
 
-        return sum(losses_) if losses_ else None, (
-            output_parallel_linear_backward(grad, context) if self.training else None
-        )
+        if not self.training or grad is None:
+            return sum(losses_) if losses_ else None, None
+
+        input_grad = output_parallel_linear_backward(grad, context)
+        if self._config.fp32_lm_head:
+            input_grad = input_grad.to(input_dtype)
+
+        return sum(losses_) if losses_ else None, input_grad
 
     def get_loss_definitions(self) -> list[LossDef]:
         return [
