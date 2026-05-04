@@ -450,10 +450,10 @@ _MEMORY_UNITS = [("KiB", 1024.0), ("MiB", 1.0), ("GiB", 1 / 1024), ("TiB", 1 / 1
 
 
 def _unit_column(
-    prefix: str, canonical_values: list[float | None], units: list[tuple[str, float]]
-) -> tuple[str, list[str]]:
+    variable: str, canonical_values: list[float | None], units: list[tuple[str, float]]
+) -> tuple[str, str, list[str]]:
     """Pick the best display unit for a column's magnitude and format with
-    aligned decimals. Header is '<prefix> <unit>'."""
+    aligned decimals. Returns (variable, unit, values) for the 2-line header."""
     non_none = [abs(v) for v in canonical_values if v is not None]
     max_value = max(non_none, default=0.0)
     if max_value > 0:
@@ -465,8 +465,7 @@ def _unit_column(
             ((unit_label, unit_scale) for (unit_label, unit_scale) in units if unit_scale == 1.0), units[0]
         )
     scaled = [v * scale if v is not None else None for v in canonical_values]
-    column_header = f"{prefix} {label}" if prefix else label
-    return column_header, _format_aligned(scaled)
+    return variable, label, _format_aligned(scaled)
 
 
 def _percent_column(values: list[float | None]) -> list[str]:
@@ -500,12 +499,12 @@ def _render_table(
     rms_keys: list[str],
     verbose: bool,
 ) -> str:
-    # First column header carries the case name so the per-case label and the
-    # variant-name column are merged into one (avoids a redundant title line).
-    columns: list[tuple[str, list[str]]] = [(case.name, [r.variant_name for r in results])]
+    # First column carries the case name on the variable line; the variant-name
+    # column lives on the unit line so the table needs no separate title row.
+    columns: list[tuple[str, str, list[str]]] = [(case.name, "", [r.variant_name for r in results])]
 
-    def _add(column_header: str, values: list[str]) -> None:
-        columns.append((column_header, values))
+    def _add(variable: str, unit: str, values: list[str]) -> None:
+        columns.append((variable, unit, values))
 
     if has_fwd:
         _add(*_unit_column("fwd", [r.fwd_timing.median_ms if r.fwd_timing else None for r in results], _TIME_UNITS))
@@ -549,23 +548,23 @@ def _render_table(
         for r in results:
             t_ms = _time_for_throughput(r)
             bandwidths.append(case.expected_bytes / (t_ms / 1000) if t_ms is not None else None)
-        _add(*_unit_column("", bandwidths, _BANDWIDTH_UNITS))
+        _add(*_unit_column("bw", bandwidths, _BANDWIDTH_UNITS))
         if gpu_spec is not None:
             peak_bytes_per_s = gpu_spec.peak_bandwidth_gbps * 1e9
             pct = [bw / peak_bytes_per_s if bw is not None else None for bw in bandwidths]
-            _add("%BW", _percent_column(pct))
+            _add("bw", "%peak", _percent_column(pct))
 
     if case.expected_flops is not None:
         flop_rates: list[float | None] = []
         for r in results:
             t_ms = _time_for_throughput(r)
             flop_rates.append(case.expected_flops / (t_ms / 1000) if t_ms is not None else None)
-        _add(*_unit_column("", flop_rates, _FLOPS_UNITS))
+        _add(*_unit_column("flops", flop_rates, _FLOPS_UNITS))
         peak_tflops = gpu_spec.peak_tflops(case.compute_dtype) if gpu_spec and case.compute_dtype else None
         if peak_tflops is not None:
             peak_flops_per_s = peak_tflops * 1e12
             pct = [fr / peak_flops_per_s if fr is not None else None for fr in flop_rates]
-            _add("%FLOPs", _percent_column(pct))
+            _add("flops", "%peak", _percent_column(pct))
 
     peak_mib = [r.memory.peak_mib if r.memory else None for r in results]
     final_mib = [r.memory.final_mib if r.memory else None for r in results]
@@ -573,14 +572,14 @@ def _render_table(
     _add(*_unit_column("Δfinal", final_mib, _MEMORY_UNITS))
 
     for key in rms_keys:
-        _add(_rms_header(key, rms_keys), _rms_column([(r.rms_errors or {}).get(key) for r in results]))
+        _add(_rms_header(key, rms_keys), "", _rms_column([(r.rms_errors or {}).get(key) for r in results]))
 
-    _add("error", [r.error or "" for r in results])
+    _add("error", "", [r.error or "" for r in results])
     # Drop the error column if nothing failed
     if not any(r.error for r in results):
         columns.pop()
 
-    widths = [max(len(column_header), *(len(v) for v in values)) for column_header, values in columns]
+    widths = [max(len(variable), len(unit), *(len(v) for v in values)) for variable, unit, values in columns]
     separator = "  "
 
     # First column (case name + variant names) is text — left-justify. All other
@@ -588,14 +587,15 @@ def _render_table(
     def _justify(text: str, width: int, column_index: int) -> str:
         return text.ljust(width) if column_index == 0 else text.rjust(width)
 
-    header_line = separator.join(_justify(h, w, i) for i, ((h, _), w) in enumerate(zip(columns, widths)))
+    variable_line = separator.join(_justify(var, w, i) for i, ((var, _, _), w) in enumerate(zip(columns, widths)))
+    unit_line = separator.join(_justify(unit, w, i) for i, ((_, unit, _), w) in enumerate(zip(columns, widths)))
     divider = separator.join("-" * w for w in widths)
     body_lines = []
     for row in range(len(results)):
         body_lines.append(
-            separator.join(_justify(values[row], w, i) for i, ((_, values), w) in enumerate(zip(columns, widths)))
+            separator.join(_justify(values[row], w, i) for i, ((_, _, values), w) in enumerate(zip(columns, widths)))
         )
-    return "\n".join([header_line, divider, *body_lines])
+    return "\n".join([variable_line, unit_line, divider, *body_lines])
 
 
 # --------------------------------------------------------------------------- orchestration
