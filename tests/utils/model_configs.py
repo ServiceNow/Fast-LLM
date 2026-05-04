@@ -973,7 +973,8 @@ update_and_add_testing_config(
 _gemma4_block_overrides = {
     "post_mixer_normalization": {"type": "rms_norm", "weight": init_1},
     "post_mlp_normalization": {"type": "rms_norm", "weight": init_1},
-    "pre_mlp_normalization": {"type": "rms_norm", "weight": init_1},
+    # MoE blocks normalize per branch inside HybridMoEMLP; DecoderBlock skips its own pre-MLP norm.
+    "pre_mlp_normalization": {"type": "none"},
     # Must match the gemma4 converter's lr_scale=0 — frozen params are packed at the end of the stage,
     # so a mismatch produces a shifted shard layout that fails round-trip.
     "output_scale": {"enabled": True, "lr_scale": 0},
@@ -984,10 +985,44 @@ _gemma4_mixer_overrides = {
     "key_norm": {"type": "rms_norm", "weight": init_1},
     "value_norm": {"type": "fixed_rms_norm"},
 }
+# Hybrid MoE structure mirrors what `Gemma4HybridMoEMLPConverter.import_config` produces from the
+# real `google/gemma-4-26B-A4B` config (always-active dense + top-k routed, both with their own
+# pre/post norms, plus router preprocessing).
+_gemma4_moe_mlp = {
+    "type": "hybrid_moe",
+    "dense": {
+        "intermediate_size": 1024,
+        "gated": True,
+        "add_linear_biases": False,
+        "activation": "gelu",  # matches HF "gelu_pytorch_tanh"
+        "layer_1": {"weight": init_1},
+        "layer_2": {"weight": init_2},
+        "pre_norm": {"type": "rms_norm", "weight": init_1},
+        "post_norm": {"type": "rms_norm", "weight": init_1},
+    },
+    "routed": {
+        "intermediate_size": 256,
+        "gated": True,
+        "add_linear_biases": False,
+        "activation": "gelu",
+        "experts": 4,
+        "experts_per_token": 2,
+        "layer_1": {"weight": init_1},
+        "layer_2": {"weight": init_2},
+        "router": {"weight": init_1},
+        "pre_norm": {"type": "rms_norm", "weight": init_1},
+        "post_norm": {"type": "rms_norm", "weight": init_1},
+        "router_normalization": {"type": "fixed_rms_norm"},
+        "router_scale": {"enabled": True},
+        "router_input_scale": 256**-0.5,  # hidden_size ** -0.5 (hidden_size=256 in tests)
+        "router_per_expert_scale": {"enabled": True},
+    },
+}
 
 update_and_add_testing_config(
     # Tests Gemma4 converter: pattern decoder with alternating sliding/full attention,
-    # per-head norms (q/k/v), post-attention and post-MLP norms, embedding scale.
+    # per-head norms (q/k/v), post-attention and post-MLP norms, embedding scale,
+    # HybridMoE MLP with router preprocessing (norm + scale + 1/sqrt(H) + per-expert scale).
     "llama",
     "gemma4",
     updates={
@@ -1004,6 +1039,7 @@ update_and_add_testing_config(
                         **_gemma4_mixer_overrides,
                         "window_size": 128,
                     },
+                    "mlp": copy.deepcopy(_gemma4_moe_mlp),
                 },
                 "full_attention": {
                     **copy.deepcopy(_llama_block),
@@ -1013,6 +1049,7 @@ update_and_add_testing_config(
                         **_gemma4_mixer_overrides,
                         "rotary": {"type": "proportional", "partial_rotary_factor": 0.25},
                     },
+                    "mlp": copy.deepcopy(_gemma4_moe_mlp),
                 },
             },
             "pattern": ["sliding_attention", "full_attention"],
@@ -1021,7 +1058,7 @@ update_and_add_testing_config(
     },
     megatron_args=None,
     checkpoint_format=Gemma4CheckpointFormat,
-    compare_factor=5.0,  # init_1 on post_mlp_norm makes its gradient tiny (~5e-6), hitting the fp16 rms_eps floor
+    compare_factor=8.0,  # init_1 on post_mlp_norm and routed.pre_norm makes their gradients tiny (~5e-6 / ~3e-5), hitting the fp16 rms_eps floor
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
