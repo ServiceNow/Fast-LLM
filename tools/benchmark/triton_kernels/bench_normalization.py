@@ -111,23 +111,23 @@ def _param_grad(param: torch.Tensor) -> torch.Tensor:
     return param.grad if param.grad is not None else param.grad_buffer
 
 
-def _layer_norm_triton(inputs: dict) -> torch.Tensor:
+def _layer_norm_triton(inputs: Inputs) -> torch.Tensor:
     return triton_normalization_autograd(
         inputs["input"], inputs["weight"], inputs["bias"], eps=_EPS, training=True, zero_centered=False
     )
 
 
-def _rms_norm_triton(inputs: dict) -> torch.Tensor:
+def _rms_norm_triton(inputs: Inputs) -> torch.Tensor:
     return triton_normalization_autograd(
         inputs["input"], inputs["weight"], None, eps=_EPS, training=True, zero_centered=False
     )
 
 
-def _layer_norm_triton_fwd(inputs: dict) -> dict:
+def _layer_norm_triton_fwd(inputs: Inputs) -> dict:
     return {"output": _layer_norm_triton(inputs)}
 
 
-def _layer_norm_triton_fwd_bwd(inputs: dict) -> dict:
+def _layer_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = _layer_norm_triton(inputs)
     output.backward(inputs["grad_output"])
     return {
@@ -138,11 +138,11 @@ def _layer_norm_triton_fwd_bwd(inputs: dict) -> dict:
     }
 
 
-def _rms_norm_triton_fwd(inputs: dict) -> dict:
+def _rms_norm_triton_fwd(inputs: Inputs) -> dict:
     return {"output": _rms_norm_triton(inputs)}
 
 
-def _rms_norm_triton_fwd_bwd(inputs: dict) -> dict:
+def _rms_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = _rms_norm_triton(inputs)
     output.backward(inputs["grad_output"])
     return {

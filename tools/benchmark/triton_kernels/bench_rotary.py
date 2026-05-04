@@ -8,7 +8,7 @@ import torch
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.rotary import triton_rotary_
 from tools.benchmark.triton_kernels.runner import DtypedCase, Inputs, Variant
-from tools.benchmark.triton_kernels.utils import dtype_short
+from tools.benchmark.triton_kernels.utils import dtype_short, standard_pytorch_variants
 
 # (tokens, num_heads, head_size) — tokens = batch * seq_len
 _SHAPES = [
@@ -62,30 +62,8 @@ def _rotary_eager(input_: torch.Tensor, frequencies: torch.Tensor) -> torch.Tens
     return torch.cat([out_re, out_im], dim=-1)
 
 
-_rotary_compiled_default = torch.compile(_rotary_eager, mode="default", dynamic=False)
-_rotary_compiled_max = torch.compile(_rotary_eager, mode="max-autotune-no-cudagraphs", dynamic=False)
-
-
 def _rotary_variants() -> list[Variant]:
-    variants = [
-        Variant(
-            name="fp32_reference",
-            fwd=lambda inputs: {"output": _rotary_eager(inputs["input_"].float(), inputs["frequencies"])},
-            is_reference=True,
-        ),
-        Variant(
-            name="pytorch_eager",
-            fwd=lambda inputs: {"output": _rotary_eager(inputs["input_"], inputs["frequencies"])},
-        ),
-        Variant(
-            name="pytorch_compiled",
-            fwd=lambda inputs: {"output": _rotary_compiled_default(inputs["input_"], inputs["frequencies"])},
-        ),
-        Variant(
-            name="pytorch_compiled_max",
-            fwd=lambda inputs: {"output": _rotary_compiled_max(inputs["input_"], inputs["frequencies"])},
-        ),
-    ]
+    variants = standard_pytorch_variants(_rotary_eager, input_keys=("input_", "frequencies"))
     if TritonConfig.enabled():
         variants.append(
             Variant(

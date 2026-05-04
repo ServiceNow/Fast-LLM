@@ -30,11 +30,6 @@ _cudagraph_mark_step_begin: typing.Callable[[], None] | None = getattr(
 
 
 def _guarded(fn: typing.Callable[[], typing.Any]) -> typing.Callable[[], typing.Any]:
-    """Wrap fn so cudagraph_mark_step_begin() is called before each invocation.
-    This tells the CUDA graph system that previous outputs are no longer live
-    and can be overwritten, preventing 'overwritten by subsequent run' errors
-    when a max-autotune compiled function is called more than once.
-    When CUDA graphs are not in use the wrapper is a no-op pass-through."""
     if _cudagraph_mark_step_begin is None:
         return fn
 
@@ -117,10 +112,10 @@ def _device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _seeded_inputs(case: Case, seed: int = 0) -> Inputs:
-    torch.manual_seed(seed)
+def _seeded_inputs(case: Case) -> Inputs:
+    torch.manual_seed(0)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed_all(0)
     return case.make_inputs(_device())
 
 
@@ -136,9 +131,12 @@ class TimingStats:
 
 @dataclasses.dataclass
 class MemoryStats:
+    # Both above the pre-call baseline, so input tensors don't inflate the numbers.
+    # `peak` is the transient maximum during fn (matters when memory is tight);
+    # `final` is what remains allocated after fn returns (output + saved-for-bwd
+    # tensors + .grad on inputs) — usually the more interesting of the two.
     peak_mib: float
     final_mib: float
-    delta_peak_mib: float
 
 
 @dataclasses.dataclass
@@ -169,7 +167,9 @@ def bench_fn(
     can compute {median, mean, min, max, std} from one set of runs.
     """
     if not torch.cuda.is_available():
-        # CPU / Triton interpret: single timed run with wall clock.
+        # CPU / Triton interpret: single timed run with wall clock. min_reps,
+        # max_reps, warmup_ms, rep_ms are ignored — this path is for smoke
+        # testing kernel correctness, not measurement.
         if reset is not None:
             reset()
         fn()  # warmup
@@ -222,6 +222,8 @@ def bench_fn(
     for i in range(num_reps):
         if reset is not None:
             reset()
+        # The L2 flush is enqueued before start_events[i] on the same stream, so
+        # the timed window starts after the zero completes — only fn() is timed.
         flush_buffer.zero_()
         start_events[i].record()
         fn()
@@ -246,7 +248,7 @@ def measure_memory(fn: typing.Callable[[], typing.Any]) -> MemoryStats:
     """Run `fn` once and capture peak and final device memory. Must be called
     on a fresh GPU state (the caller resets stats before constructing inputs)."""
     if not torch.cuda.is_available():
-        return MemoryStats(0.0, 0.0, 0.0)
+        return MemoryStats(0.0, 0.0)
     torch.cuda.synchronize()
     baseline = torch.cuda.memory_allocated()
     torch.cuda.reset_peak_memory_stats()
@@ -257,9 +259,8 @@ def measure_memory(fn: typing.Callable[[], typing.Any]) -> MemoryStats:
     # Hold onto the result until after the measurement so it stays in `final`.
     del result
     return MemoryStats(
-        peak_mib=peak / 1024 / 1024,
-        final_mib=final / 1024 / 1024,
-        delta_peak_mib=(peak - baseline) / 1024 / 1024,
+        peak_mib=(peak - baseline) / 1024 / 1024,
+        final_mib=(final - baseline) / 1024 / 1024,
     )
 
 
@@ -355,18 +356,14 @@ def _run_one_variant(
             if bwd_rms:
                 result.rms_errors = (result.rms_errors or {}) | bwd_rms
 
-            # Memory measurement: one fresh call on fresh inputs.
+        # Memory measurement: one fresh call on fresh inputs. fwd_bwd is preferred
+        # since it captures saved-for-bwd tensors and .grad allocation.
+        memory_fn = variant.fwd_bwd or variant.fwd
+        if memory_fn is not None:
             fresh_inputs = _seeded_inputs(case)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            result.memory = measure_memory(_guarded(lambda: variant.fwd_bwd(fresh_inputs)))
-            del fresh_inputs
-        elif variant.fwd is not None:
-            # No backward — measure fwd-mode memory.
-            fresh_inputs = _seeded_inputs(case)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            result.memory = measure_memory(_guarded(lambda: variant.fwd(fresh_inputs)))
+            result.memory = measure_memory(_guarded(lambda: memory_fn(fresh_inputs)))
             del fresh_inputs
     except (
         Exception
@@ -482,15 +479,7 @@ def _percent_column(values: list[float | None]) -> list[str]:
 def _rms_column(values: list[float | None]) -> list[str]:
     """Align RMS errors in scientific notation with a shared exponent-free width."""
     decimals = 3  # 4 sig figs
-    out: list[str] = []
-    for value in values:
-        if value is None:
-            out.append("—")
-        elif value == 0.0:
-            out.append(f"{0.0:.{decimals}e}")
-        else:
-            out.append(f"{value:.{decimals}e}")
-    return out
+    return ["—" if value is None else f"{value:.{decimals}e}" for value in values]
 
 
 def _rms_header(key: str, all_keys: list[str]) -> str:
@@ -579,9 +568,9 @@ def _render_table(
             _add("%FLOPs", _percent_column(pct))
 
     peak_mib = [r.memory.peak_mib if r.memory else None for r in results]
-    delta_mib = [r.memory.delta_peak_mib if r.memory else None for r in results]
-    _add(*_unit_column("peak", peak_mib, _MEMORY_UNITS))
-    _add(*_unit_column("Δpeak", delta_mib, _MEMORY_UNITS))
+    final_mib = [r.memory.final_mib if r.memory else None for r in results]
+    _add(*_unit_column("Δpeak", peak_mib, _MEMORY_UNITS))
+    _add(*_unit_column("Δfinal", final_mib, _MEMORY_UNITS))
 
     for key in rms_keys:
         _add(_rms_header(key, rms_keys), _rms_column([(r.rms_errors or {}).get(key) for r in results]))

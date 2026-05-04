@@ -67,7 +67,7 @@ def _grpo_eager(
     return per_token_loss.mean()
 
 
-def _triton_fwd(inputs: dict) -> dict:
+def _triton_fwd(inputs: Inputs) -> dict:
     loss, _, _ = triton_grpo_loss_forward_backward(
         inputs["logits"],
         inputs["labels"],
@@ -80,7 +80,7 @@ def _triton_fwd(inputs: dict) -> dict:
     return {"loss": loss}
 
 
-def _triton_fwd_bwd(inputs: dict) -> dict:
+def _triton_fwd_bwd(inputs: Inputs) -> dict:
     loss, grad_logits, _ = triton_grpo_loss_forward_backward(
         inputs["logits"],
         inputs["labels"],

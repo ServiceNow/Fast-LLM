@@ -91,13 +91,13 @@ def _entropy_variants(
     target_key = input_keys[1]
     triton_kwargs = triton_kwargs or {}
 
-    def triton_fwd(inputs: dict) -> dict:
+    def triton_fwd(inputs: Inputs) -> dict:
         loss, _ = triton_entropy_loss_forward_backward(
             inputs["logits"], inputs[target_key], loss_mask=None, grad_output=None, **triton_kwargs
         )
         return {"loss": loss}
 
-    def triton_fwd_bwd(inputs: dict) -> dict:
+    def triton_fwd_bwd(inputs: Inputs) -> dict:
         loss, grad_logits = triton_entropy_loss_forward_backward(
             inputs["logits"], inputs[target_key], loss_mask=None, grad_output=1.0, **triton_kwargs
         )
@@ -114,12 +114,12 @@ def _entropy_variants(
     return variants
 
 
-def _z_loss_triton_fwd(inputs: dict) -> dict:
+def _z_loss_triton_fwd(inputs: Inputs) -> dict:
     loss, _ = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=None)
     return {"loss": loss}
 
 
-def _z_loss_triton_fwd_bwd(inputs: dict) -> dict:
+def _z_loss_triton_fwd_bwd(inputs: Inputs) -> dict:
     loss, grad_logits = triton_z_loss_forward_backward(inputs["logits"], loss_mask=None, grad_output=1.0)
     return {"loss": loss, "grad_logits": grad_logits}
 

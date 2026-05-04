@@ -104,17 +104,17 @@ def _dispatch_pytorch(dense_input: torch.Tensor, sparse_map: SparseMap) -> torch
     return out
 
 
-def _dispatch_triton_fwd(inputs: dict) -> dict:
+def _dispatch_triton_fwd(inputs: Inputs) -> dict:
     return {"output": copy_dense_to_sparse_autograd(inputs["dense"], inputs["sparse_map"])}
 
 
-def _dispatch_triton_fwd_bwd(inputs: dict) -> dict:
+def _dispatch_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = copy_dense_to_sparse_autograd(inputs["dense"], inputs["sparse_map"])
     output.backward(inputs["backward_grad"])
     return {"output": output.detach(), "grad_dense": inputs["dense"].grad}
 
 
-def _dispatch_postprocess(output: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
+def _dispatch_postprocess(output: dict[str, torch.Tensor], inputs: Inputs) -> dict[str, torch.Tensor]:
     output["output"].masked_fill_(inputs["phantom_mask"], 0)
     return output
 
@@ -127,11 +127,11 @@ def _combine_pytorch(sparse_input: torch.Tensor, scores: torch.Tensor, sparse_ma
     return out
 
 
-def _combine_triton_fwd(inputs: dict) -> dict:
+def _combine_triton_fwd(inputs: Inputs) -> dict:
     return {"output": copy_sparse_to_dense_autograd(inputs["sparse"], inputs["scores"], inputs["sparse_map"])}
 
 
-def _combine_triton_fwd_bwd(inputs: dict) -> dict:
+def _combine_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = copy_sparse_to_dense_autograd(inputs["sparse"], inputs["scores"], inputs["sparse_map"])
     output.backward(inputs["backward_grad"])
     return {
@@ -141,7 +141,7 @@ def _combine_triton_fwd_bwd(inputs: dict) -> dict:
     }
 
 
-def _combine_postprocess(output: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
+def _combine_postprocess(output: dict[str, torch.Tensor], inputs: Inputs) -> dict[str, torch.Tensor]:
     if "grad_sparse" in output:
         output["grad_sparse"].masked_fill_(inputs["phantom_mask"], 0)
     return output

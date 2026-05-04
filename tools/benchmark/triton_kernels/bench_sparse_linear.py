@@ -32,7 +32,7 @@ _output_sparse_warmed_up: set[_WarmupKey] = set()
 _input_inner_sparse_warmed_up: set[_WarmupKey] = set()
 
 
-def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: dict) -> dict[str, torch.Tensor]:
+def _mask_padded_rows(candidate: dict[str, torch.Tensor], inputs: Inputs) -> dict[str, torch.Tensor]:
     # Two regions in the kernel's forward output and grad_lhs are by-design garbage:
     # per-expert padding [pad_begin, expert_end) and phantom rows past expert_ends[-1].
     # The loop reference produces zeros there; mask the kernel output to match so
@@ -148,11 +148,11 @@ def _output_sparse_loop(lhs: torch.Tensor, rhs: torch.Tensor, sparse_map: Sparse
     return out
 
 
-def _output_sparse_triton_fwd(inputs: dict) -> dict:
+def _output_sparse_triton_fwd(inputs: Inputs) -> dict:
     return {"output": OutputSparseLinear.apply(inputs["lhs"], inputs["rhs"], inputs["sparse_map"])}
 
 
-def _output_sparse_triton_fwd_bwd(inputs: dict) -> dict:
+def _output_sparse_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = OutputSparseLinear.apply(inputs["lhs"], inputs["rhs"], inputs["sparse_map"])
     output.backward(inputs["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inputs["lhs"].grad, "grad_rhs": inputs["rhs"].grad}
@@ -170,11 +170,11 @@ def _input_inner_sparse_loop(lhs: torch.Tensor, rhs: torch.Tensor, sparse_map: S
     return out
 
 
-def _input_inner_sparse_triton_fwd(inputs: dict) -> dict:
+def _input_inner_sparse_triton_fwd(inputs: Inputs) -> dict:
     return {"output": InputSparseLinear.apply(inputs["lhs"], inputs["rhs"], inputs["sparse_map"])}
 
 
-def _input_inner_sparse_triton_fwd_bwd(inputs: dict) -> dict:
+def _input_inner_sparse_triton_fwd_bwd(inputs: Inputs) -> dict:
     output = InputSparseLinear.apply(inputs["lhs"], inputs["rhs"], inputs["sparse_map"])
     output.backward(inputs["backward_grad"])
     return {"output": output.detach(), "grad_lhs": inputs["lhs"].grad, "grad_rhs": inputs["rhs"].grad}

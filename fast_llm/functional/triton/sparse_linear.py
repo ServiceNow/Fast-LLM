@@ -131,7 +131,7 @@ def dense_matmul_kernel(
                 out_dtype=tl.float32,
             )
         else:
-            out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr))
+            out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)
 
     # Output
     if masked:

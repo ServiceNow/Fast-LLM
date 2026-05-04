@@ -57,12 +57,12 @@ class MlpActivationCase(DtypedCase):
         }
 
 
-def _triton_fwd(inputs: dict) -> dict:
+def _triton_fwd(inputs: Inputs) -> dict:
     output, _ = triton_mlp_activation_forward(inputs["input"], inputs["gated"], inputs["activation_type"])
     return {"output": output}
 
 
-def _triton_fwd_bwd(inputs: dict) -> dict:
+def _triton_fwd_bwd(inputs: Inputs) -> dict:
     output = triton_mlp_activation_autograd(inputs["input"], inputs["gated"], inputs["activation_type"])
     output.backward(inputs["grad_output"])
     return {"output": output.detach(), "grad_input": inputs["input"].grad}

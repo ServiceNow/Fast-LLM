@@ -16,9 +16,10 @@ def dtype_short(dtype: torch.dtype) -> str:
 def make_grad_reset(keys: tuple[str, ...]) -> typing.Callable[[Inputs], None]:
     """Reset autograd `.grad` to None for the given input keys between reps.
     `.backward()` accumulates into `.grad` on rep 2+, biasing fwd_bwd timing
-    via an extra read+write of the full grad tensor. Also resets
-    `param_grad_is_zero=True` on tensors with a `grad_buffer` (Fast-LLM
-    convention) so the next backward writes fresh instead of accumulating."""
+    via an extra read+write of the full grad tensor. For tensors with a
+    `grad_buffer` (Fast-LLM convention), set `param_grad_is_zero=True` instead
+    of zeroing the buffer — Triton kernels that respect the flag will overwrite
+    it on the next backward, so an explicit zero would be wasted bandwidth."""
 
     def reset(inputs: Inputs) -> None:
         for key in keys:
