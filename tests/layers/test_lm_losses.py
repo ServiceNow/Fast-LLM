@@ -151,8 +151,8 @@ def reference_grpo_metrics(
         "kl_new_old": (kl * masked).sum(),
         "clipped_ratio_fraction": (clipped.float() * masked).sum(),
         "advantage": (advantages.float() * masked).sum(),
-        "max_advantage": torch.where(loss_mask, advantages, advantages.new_full((), float("-inf"))).max(),
-        "min_advantage": torch.where(loss_mask, advantages, advantages.new_full((), float("inf"))).min(),
+        "max_advantage": advantages[loss_mask].max(),
+        "min_advantage": advantages[loss_mask].min(),
         "num_tokens": mask.sum(),
         "entropy": None,
     }

@@ -217,7 +217,7 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         desc=(
             "Additional GRPO metrics to log. "
             "`basic`: old_logprobs, ratio, KL(new||old), advantage stats, clipped fraction, token count. "
-            "`with_entropy`: also log per-token entropy (-Σ p log p; ~10-20%% overhead from a second softmax pass). "
+            "`with_entropy`: also log per-token entropy (-Σ p log p). "
             "Not supported with pipeline_parallel > 1."
         ),
         hint=FieldHint.feature,
