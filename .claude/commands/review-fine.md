@@ -20,4 +20,8 @@ On a follow-up review after fixes have been pushed, run `git diff <last-reviewed
 
 ## Output
 
-Number every review item (1, 2, 3...) so items can be referenced by number (`fix 2 and 4`, `ignore 5`). Don't use unnumbered bullets where ordinals would make items addressable.
+Each numbered item must stand on its own as a concrete, actionable finding — a specific change to make or a clear problem to fix, phrased so `fix N` is a complete instruction. Keep items concise by default; add context (rationale, alternatives considered) only when it's needed for the contributor to act. Surrounding sections (overview, summary, framing) are fine; this constraint applies only to the numbered list.
+
+When an item refers to specific code, include a path from the repo root and the relevant line number(s), in the form `path/to/file.py:42` or `path/to/file.py:42-58`.
+
+Number every item (1, 2, 3...) so items can be referenced by number (`fix 2 and 4`, `ignore 5`). Don't use unnumbered bullets where ordinals would make items addressable.
