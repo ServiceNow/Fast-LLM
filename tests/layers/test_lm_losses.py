@@ -1,4 +1,3 @@
-import dataclasses
 import pathlib
 import random
 
@@ -352,11 +351,11 @@ def _test_grpo_loss(
 
 
 def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:
-    for field in dataclasses.fields(GRPOMetrics):
-        ref_value = getattr(ref, field.name)
-        got_value = getattr(got, field.name)
+    for name in GRPOMetrics._fields:
+        ref_value = getattr(ref, name)
+        got_value = getattr(got, name)
         if ref_value is None:
-            assert got_value is None, field.name
+            assert got_value is None, name
         else:
             Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
 

@@ -1,4 +1,3 @@
-import dataclasses
 import functools
 import typing
 
@@ -18,8 +17,7 @@ from fast_llm.layers.language_model.loss.config import (
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
-@dataclasses.dataclass
-class GRPOMetrics:
+class GRPOMetrics(typing.NamedTuple):
     old_logprobs: torch.Tensor
     ratio_new_old: torch.Tensor
     ratio_new_old_sum: torch.Tensor
@@ -200,6 +198,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         return f"{self._name}_new_logprobs"
 
 
+@torch.compile
 def compute_grpo_metrics(
     logits: torch.Tensor,  # (*batch, vocab_local)
     target: torch.Tensor,  # (*batch,)
@@ -212,47 +211,6 @@ def compute_grpo_metrics(
     group: torch.distributed.ProcessGroup | None = None,
     compute_entropy: bool = False,
 ) -> GRPOMetrics:
-    return GRPOMetrics(
-        *_compute_grpo_metrics(
-            logits,
-            target,
-            advantages,
-            old_log_probabilities,
-            label_counts,
-            epsilon_low,
-            epsilon_high,
-            logits_scale_factor,
-            group,
-            compute_entropy,
-        )
-    )
-
-
-@torch.compile
-def _compute_grpo_metrics(
-    logits: torch.Tensor,
-    target: torch.Tensor,
-    advantages: torch.Tensor,
-    old_log_probabilities: torch.Tensor,
-    label_counts: torch.Tensor,
-    epsilon_low: float,
-    epsilon_high: float,
-    logits_scale_factor: float,
-    group: torch.distributed.ProcessGroup | None,
-    compute_entropy: bool,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor | None,
-]:
     loss_mask = target >= 0
     mask = loss_mask.float()
     masked = mask / label_counts.float().clamp(min=1)
@@ -275,18 +233,18 @@ def _compute_grpo_metrics(
         entropy_per_token = sum_exp_logits.log() - (exp_logits * logits_norm).sum(-1) / sum_exp_logits
         entropy = (entropy_per_token * masked).sum()
 
-    return (
-        (old_log_probabilities * masked).sum(),
-        (ratio * masked).sum(),
-        (ratio * mask).sum(),
-        (ratio * ratio * mask).sum(),
-        (kl * masked).sum(),
-        (clipped.float() * masked).sum(),
-        (advantages * masked).sum(),
-        torch.where(loss_mask, advantages, neg_inf).max(),
-        torch.where(loss_mask, advantages, pos_inf).min(),
-        mask.sum(),
-        entropy,
+    return GRPOMetrics(
+        old_logprobs=(old_log_probabilities * masked).sum(),
+        ratio_new_old=(ratio * masked).sum(),
+        ratio_new_old_sum=(ratio * mask).sum(),
+        ratio_new_old_squared_sum=(ratio * ratio * mask).sum(),
+        kl_new_old=(kl * masked).sum(),
+        clipped_ratio_fraction=(clipped.float() * masked).sum(),
+        advantage=(advantages * masked).sum(),
+        max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
+        min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
+        num_tokens=mask.sum(),
+        entropy=entropy,
     )
 
 
