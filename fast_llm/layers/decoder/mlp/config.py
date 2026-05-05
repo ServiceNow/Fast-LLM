@@ -41,7 +41,8 @@ class MLPConfig(MLPBaseConfig):
         desc="Configuration for the first MLP layer.",
         hint=FieldHint.architecture,
     )
-    # TODO: Separate gate and up
+    # Note: gate and up are fused into one linear (single matmul instead of two).
+    # Separating them is a perf regression — keep fused.
     layer_2: AffineLinearConfig = Field(
         desc="Configuration for the second MLP layer.",
         hint=FieldHint.architecture,

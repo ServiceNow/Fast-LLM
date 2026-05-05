@@ -14,12 +14,14 @@ class Wandb:
         self._is_setup = True
         self._run = run
         if self._config.entity_name is not None and self._run.is_main_rank:
+            import wandb
             import wandb.sdk.lib.runid
 
-            # Wandb login from file
+            # Read the W&B key from a file and pass it to `wandb.login` directly. Avoid putting it
+            # in `os.environ`, where any subprocess we spawn would inherit it.
             api_key_path = os.environ.get("WANDB_API_KEY_PATH")
             if api_key_path:
-                os.environ["WANDB_API_KEY"] = pathlib.Path(api_key_path).read_text().strip()
+                wandb.login(key=pathlib.Path(api_key_path).read_text().strip())
             wandb_path = (
                 None
                 if self._run.experiment_directory is None

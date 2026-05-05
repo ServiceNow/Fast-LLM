@@ -131,7 +131,7 @@ def dense_matmul_kernel(
                 out_dtype=tl.float32,
             )
         else:
-            out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr))
+            out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)
 
     # Output
     if masked:
@@ -232,6 +232,7 @@ def output_sparse_matmul_kernel(
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
     if sparse_index == sparse_dim:
+        # Phantom block past the last expert; the caller is expected to ignore these rows.
         return
     col_dense_offset = col_sparse_offset + sparse_index * col_sparse_dim
 
@@ -248,7 +249,7 @@ def output_sparse_matmul_kernel(
     for k in range(1, inner_dim // block_size_inner):
         lhs_ptr += block_size_inner * lhs_stride_inner
         rhs_ptr += block_size_inner * rhs_stride_inner
-        out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr))
+        out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)
 
     if accumulate:
         out += tl.load(out_ptr)
@@ -355,6 +356,7 @@ def input_inner_sparse_matmul_kernel(
     expert_ends = tl.load(expert_ends_ptr + sparse_range, mask=sparse_range < sparse_dim, other=row_dim)
     sparse_index = tl.sum((expert_ends <= row_offset).to(tl.int64))  # noqa
     if sparse_index == sparse_dim:
+        # Phantom block past the last expert; the caller is expected to ignore these rows.
         return
     inner_dense_offset = sparse_index * inner_sparse_dim
     col_offset = pid_col * block_size_col
@@ -374,7 +376,7 @@ def input_inner_sparse_matmul_kernel(
     for k in range(1, inner_sparse_dim // block_size_inner):
         lhs_ptr += block_size_inner * lhs_stride_inner
         rhs_ptr += block_size_inner * rhs_stride_inner
-        out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr))
+        out += tl.dot(tl.load(lhs_ptr), tl.load(rhs_ptr), out_dtype=tl.float32)
 
     if accumulate:
         out += tl.load(out_ptr)
@@ -497,6 +499,7 @@ def input_row_sparse_matmul_kernel(
     out = tl.dot(
         tl.load(lhs_ptr + inner_range[None, :] * lhs_stride_inner, mask=mask[None, :], other=0),
         tl.load(rhs_ptr + inner_range[:, None] * rhs_stride_inner, mask=mask[:, None], other=0),
+        out_dtype=tl.float32,
     )
     for i in range(1, tl.cdiv(inner_end - inner_offset, block_size_inner)):
         inner_range += block_size_inner
@@ -504,6 +507,7 @@ def input_row_sparse_matmul_kernel(
         out += tl.dot(
             tl.load(lhs_ptr + inner_range[None, :] * lhs_stride_inner, mask=mask[None, :], other=0),
             tl.load(rhs_ptr + inner_range[:, None] * rhs_stride_inner, mask=mask[:, None], other=0),
+            out_dtype=tl.float32,
         )
 
     if accumulate:
@@ -578,7 +582,7 @@ class OutputSparseLinear(torch.autograd.Function):
         grad_out = grad_out.contiguous()
         lhs, rhs = ctx.saved_tensors
         grad_lhs = input_inner_sparse_matmul(grad_out, rhs.t(), ctx.sparse_map)
-        grad_rhs = input_row_sparse_matmul(lhs.t(), grad_out, ctx.sparse_map).t()
+        grad_rhs = input_row_sparse_matmul(grad_out.t(), lhs, ctx.sparse_map).t()
         return grad_lhs, grad_rhs, None
 
 
@@ -597,7 +601,7 @@ class InputSparseLinear(torch.autograd.Function):
         grad_out = grad_out.contiguous()
         lhs, rhs = ctx.saved_tensors
         grad_lhs = output_sparse_matmul(grad_out, rhs.t(), ctx.sparse_map)
-        grad_rhs = input_row_sparse_matmul(grad_out.t(), lhs, ctx.sparse_map)
+        grad_rhs = input_row_sparse_matmul(lhs.t(), grad_out, ctx.sparse_map)
         return grad_lhs, grad_rhs, None
 
 

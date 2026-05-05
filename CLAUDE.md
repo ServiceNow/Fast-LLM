@@ -29,17 +29,17 @@ Always redirect output to a file to avoid truncation, e.g. `pytest ... 2>&1 | te
 
 ```bash
 # All tests
-pytest -v -n 8 tests/
+pytest -v -n 6 tests/
 
 # Single test file or function
 pytest -v tests/layers/test_lm_losses.py
 pytest -v tests/layers/test_lm_losses.py::test_name
 
 # Run extra-slow tests (disabled by default)
-pytest -v -n 8 --run-extra-slow tests/
+pytest -v -n 6 --run-extra-slow tests/
 
 # Filter by model type
-pytest -v -n 8 --models gpt tests/
+pytest -v -n 6 --models gpt tests/
 
 # Test Triton kernels on CPU (no GPU required)
 TRITON_INTERPRET=1 pytest -v tests/layers/test_lm_losses.py
@@ -47,11 +47,13 @@ TRITON_INTERPRET=1 pytest -v tests/layers/test_lm_losses.py
 
 The test suite sets `FAST_LLM_SKIP_TRITON_AUTOTUNE=TRUE` automatically. Tests that require distributed execution spawn child processes via `torchrun`. `TRITON_INTERPRET=1` enables the Triton interpreter so Triton kernels run on CPU — use this when developing or debugging Triton code without a GPU.
 
-When working with external models (`fast_llm_external_models/`), also run:
+When working with external models, run as a **separate** pytest invocation — combining `tests/` and `fast_llm_external_models/tests/` in one run causes OOM:
 
 ```bash
-pytest -v -n 8 fast_llm_external_models/tests/
+pytest -v -n 6 fast_llm_external_models/tests/
 ```
+
+Tests in `tests/models/` chain via pytest-depends and must be run as a whole file. Use `--models <name>` to filter; never use `-k` or `::test_name`, which breaks the dependency chain (causes "dependency not found" failures).
 
 ### CLI
 
@@ -65,6 +67,10 @@ fast-llm train gpt --config config.yaml --validate
 # Example: train GPT
 fast-llm train gpt --config examples/mistral-4-node-benchmark.yaml
 ```
+
+## Design principles
+
+- **Generalize rather than special-case.** New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
 
 ## Architecture
 
@@ -144,19 +150,43 @@ Tests live in `tests/`. The following patterns work well in this codebase.
 **Structure:**
 - Prefer thin test bodies: construct inputs, call the function, compare outputs. Put expected-value derivation in a helper dataclass with `@cached_property` fields built up step by step.
 - Return `None` from an `expected_*` property when a feature flag is off so the test body stays unconditional.
+- Test all outputs, not just `[0]`. When a function returns results indexed by multiple dimensions (e.g. splits × targets), loop over every result; structure expected values to mirror the loop.
+- Build complex expected values through layered named `cached_property` fields, each adding one transformation. A test failure then points to the layer where it diverges.
 
 **Parametrization:**
 - Generate test cases as a cross-product of `base_cases × variants` via list comprehension with a `_make_name` helper and a filter clause for invalid combinations.
 - Include boundary inputs (e.g., sequences shorter than a parameter, zero padding) as named base cases with explanatory comments.
+- Prefer adding specific named cases over new parameter dimensions — cross-products get costly fast. Expand a dimension only when there's a real reason.
 
 **Reference implementations:**
 - Reference/ground-truth functions in tests must stay independently correct. Never change a reference to match new implementation behavior — if they disagree, suspect the new implementation first.
 - Prefer plain Python loops over tensor ops in reference helpers to stay clearly independent from the implementation.
 
+**Result paths:**
+- Tests write debug artifacts (logs, configs, intermediate state) to a unique named subdirectory under `result_path`. This material is valuable for post-mortem investigation of failures — preserve the per-test subdirectory pattern.
+
 ## Code Style
 
+- **Comments**: Write no comments by default. Only add one when the WHY is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug, behavior that would surprise a reader. Never restate what the code already says; well-named identifiers do that.
 - **Imports**: Third-party → `import package.module` (keep fully qualified). First-party → `from fast_llm.module import Thing`. No relative imports. Optional/slow imports inside methods or under `if typing.TYPE_CHECKING:`.
 - **Naming**: No abbreviations (use `batch_size` not `bs`). Private members get a single `_` prefix; never use `__`. Keep public interfaces lean.
-- **Types**: Always type-hint public interfaces. Use modern syntax (`X | Y`, `list[T]` not `List[T]`).
+- **Types**: Always type-hint public interfaces. Use modern syntax (`X | Y`, `list[T]` not `List[T]`, PEP 695 generics like `class X[T: Bound]:` instead of `typing.TypeVar`).
+- **Assert**: Use the `Assert` namespace from `fast_llm.utils` for contract checks (`Assert.eq`, `Assert.geq`, `Assert.incl`, `Assert.custom`, etc.) — error messages auto-format with actual values. Bare `assert` is reserved for internal state-validity invariants (`assert self._is_setup`).
+- **Exceptions**: Raise stdlib exceptions for runtime errors (`ValueError`, `RuntimeError`, `NotImplementedError`). Custom exception classes are rare — only `ValidationError`, `NestedValidationError`, `FieldTypeError` in `config.py`.
+- **Logging**: `logger = logging.getLogger(__name__)` per module. Use `info`/`warning`/`error`; `logger.debug` is not used in this codebase. For rank-aware logging, use `log_main_rank` from `fast_llm.engine.config_utils.run`.
+- **`zip(...)`**: Always pass `strict=True` — length mismatch is a bug worth catching.
+- **Conditionals**: Avoid double negations — prefer `b if x else a` over `a if not x else b`.
 - **Paths**: Use `pathlib.Path`, not `os.path`.
 - **Python version**: 3.12+.
+
+## PR review focus
+
+When reviewing PRs (`/review` reads this section as part of its checklist):
+
+- **Consistency** with the rest of the codebase. New code should match neighbor patterns; flag arbitrary divergences from existing conventions.
+- **Necessity**: flag anything that doesn't pull its weight — dead code, unused parameters, abstractions that aren't reused, comments that restate obvious code.
+- **Simplification**: actively look for non-trivial simplifications and refactoring opportunities, not just style nitpicks.
+- **Correctness**: edge cases, off-by-ones, error handling, race conditions. Read the code; don't trust comments.
+- **Test coverage**: new code paths should have tests; modified behavior should have updated tests. Untested control flow is a flag.
+- **Diff discipline**: don't substitute commit messages or `git --stat` for reading the code. On a follow-up review after fixes, read `git diff <last-reviewed-sha>..HEAD` in full before claiming an item is "verified" or "fixed". Never put ✅ on items whose diff you haven't read.
+- **Numbering**: number every review item (1, 2, 3...) so the user can reference them by number when responding (`fix 2 and 4`, `ignore 5`). Don't use unnumbered bullets where ordinals would make items addressable.

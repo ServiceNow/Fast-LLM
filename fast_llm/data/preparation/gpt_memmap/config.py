@@ -220,7 +220,9 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
     trust_remote_code: bool = Field(
         default=False,
-        desc="Trust remote code when downloading the dataset.",
+        desc="Allow this dataset to load custom Python code shipped with its repository."
+        " Has no effect unless `--trust-remote-code` is also passed on the command line; both"
+        " are required so a config file alone cannot enable remote-code execution.",
         hint=FieldHint.optional,
     )
     disable_disk_space_check: bool = Field(
