@@ -5,10 +5,18 @@ import typing
 import torch
 import transformers
 
+from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
+    ConstantImportConfigConverter,
+    CustomConfigConverter,
+    DefaultConfigConverter,
+    IgnoredConfigConverter,
     IgnoreExportWeightConverter,
     IgnoreImportWeightConverter,
+    NestedConfigConverter,
+    RenameConfigConverter,
     SplitWeightConverter,
     WeightConverter,
 )
@@ -30,11 +38,16 @@ from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert, div, safe_merge_dicts
+from fast_llm.utils import Assert, div
 
 _TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Weight converters (imperative — kept as-is during config migration)
+# ============================================================
 
 
 def get_parameter_converter(
@@ -97,81 +110,6 @@ def get_weight_and_bias_converters(
     return converters
 
 
-class LlamaNormalizationConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {"type": "rms_norm", "epsilon": config["rms_norm_eps"]}
-
-    @classmethod
-    def export_config(cls, config: RMSNormalizationConfig) -> dict:
-        Assert.custom(isinstance, config, RMSNormalizationConfig)
-        assert not config.zero_centered
-        return {"rms_norm_eps": config.epsilon}
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: RMSNormalizationConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return get_weight_and_bias_converters(
-            fast_llm_prefix,
-            () if drop_on_export else hf_prefix,
-            False,
-            IgnoreExportWeightConverter if drop_on_export else WeightConverter,
-        )
-
-
-class LlamaMLPConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {
-            "intermediate_size": config["intermediate_size"],
-            "add_linear_biases": config["mlp_bias"],
-            "activation": ActivationType.from_hf_name(config["hidden_act"]),
-            "gated": True,
-        }
-
-    @classmethod
-    def export_config(cls, config: MLPConfig) -> dict:
-        Assert.custom(isinstance, config, MLPConfig)
-        Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
-        Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
-        assert config.gated
-        return {
-            "intermediate_size": config.intermediate_size,
-            "mlp_bias": config.add_linear_biases,
-            "hidden_act": config.activation.hf_name,
-        }
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: MLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                (f"{hf_prefix}.gate_proj", f"{hf_prefix}.up_proj"),
-                config.add_linear_biases,
-                SplitWeightConverter,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                f"{hf_prefix}.down_proj",
-                config.add_linear_biases,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ]
-
-
 class MLPLayer2Converter(WeightConverter):
     # Similar to SplitWeightConverter, but handles the optional MLP transpose.
     # Still ok for non-gated (trivial split) and biases (trivial 1d transpose)
@@ -187,144 +125,6 @@ class MLPLayer2Converter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         merged_weight = torch.cat([weight_[:] for weight_ in weight], dim=-1)
         return (merged_weight.t().contiguous(),)
-
-
-class LlamaAttentionConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        # Normalize rope params to a single dict before dispatching on rope_type.
-        # transformers v5 consolidates rope_theta + rope_scaling into rope_parameters.
-        # transformers v4: rope_theta at top level, rope_scaling dict for non-default types.
-        # Note: detection is on checkpoint format, not transformers version — old checkpoints
-        # remain loadable with v5 transformers.
-        if "rope_parameters" in config:  # transformers v5
-            rope_params = config["rope_parameters"]
-            rope_theta = rope_params["rope_theta"]
-        else:  # transformers v4
-            rope_params = config.get("rope_scaling") or {}
-            rope_theta = config["rope_theta"]
-        rope_type = rope_params.get("rope_type", "default")
-        rotary_config = {"type": rope_type, "theta": rope_theta}
-        if rope_type == "default":
-            pass
-        elif rope_type == "llama3":
-            rotary_config.update(
-                {
-                    "scale_factor": rope_params["factor"],
-                    "low_frequency_factor": rope_params["low_freq_factor"],
-                    "high_frequency_factor": rope_params["high_freq_factor"],
-                    "original_context_length": rope_params["original_max_position_embeddings"],
-                }
-            )
-        elif rope_type == "yarn":
-            rotary_config.update(
-                {
-                    "attention_factor": rope_params["attention_factor"],
-                    "beta_fast": rope_params["beta_fast"],
-                    "beta_slow": rope_params["beta_slow"],
-                    "original_context_length": rope_params["original_max_position_embeddings"],
-                }
-            )
-        else:
-            raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
-        out = {
-            "rotary": rotary_config,
-            "heads": config["num_attention_heads"],
-            "head_groups": config["num_key_value_heads"],
-            "head_size": config.get("head_dim"),
-            "add_linear_biases": config["attention_bias"],
-            "dropout": config["attention_dropout"],
-        }
-        if out["head_size"] is None:
-            out["head_size"] = div(config["hidden_size"], out["heads"])
-
-        return out
-
-    @classmethod
-    def export_config(cls, config: AttentionConfig) -> dict:
-        cls._check_config(config)
-        Assert.eq(config.softmax_scale_power, 0.5)
-        rope_parameters = {"rope_theta": config.rotary.theta}
-        if type(config.rotary) is DefaultRotaryConfig:
-            rope_parameters["rope_type"] = "default"
-        elif type(config.rotary) is Llama3RotaryConfig:
-            rope_parameters.update(
-                {
-                    "rope_type": "llama3",
-                    "factor": config.rotary.scale_factor,
-                    "low_freq_factor": config.rotary.low_frequency_factor,
-                    "high_freq_factor": config.rotary.high_frequency_factor,
-                    "original_max_position_embeddings": config.rotary.original_context_length,
-                }
-            )
-        elif type(config.rotary) is YarnRotaryConfig:
-            rope_parameters.update(
-                {
-                    "rope_type": "yarn",
-                    "attention_factor": config.rotary.attention_factor,
-                    "beta_fast": config.rotary.beta_fast,
-                    "beta_slow": config.rotary.beta_slow,
-                    "original_max_position_embeddings": config.rotary.original_context_length,
-                }
-            )
-        else:
-            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
-
-        common = {
-            "num_attention_heads": config.heads,
-            "num_key_value_heads": config.head_groups,
-            "head_dim": config.head_size,
-            "attention_bias": config.add_linear_biases,
-            "attention_dropout": config.dropout,
-        }
-        if _TRANSFORMERS_V4:
-            out = {**common, "rope_theta": rope_parameters["rope_theta"]}
-            if type(config.rotary) is not DefaultRotaryConfig:
-                out["rope_scaling"] = {k: v for k, v in rope_parameters.items() if k != "rope_theta"}
-            return out
-        return {**common, "rope_parameters": rope_parameters}
-
-    @classmethod
-    def _check_config(cls, config: AttentionConfig) -> None:
-        # Opportunity to make derived classes less constrained.
-        Assert.is_(type(config), AttentionConfig)
-        Assert.incl(config.query_layer.bias.enabled, (None, config.add_linear_biases))
-        Assert.incl(config.key_layer.bias.enabled, (None, config.add_linear_biases))
-        Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
-        Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: AttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.query",
-                f"{hf_prefix}.q_proj",
-                config.add_linear_biases,
-                QueryWeightConverter,
-                config,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.key_value",
-                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                config.add_linear_biases,
-                KeyValueWeightConverter,
-                config,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dense",
-                f"{hf_prefix}.o_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
-            ),
-        ]
 
 
 class QueryWeightConverter(WeightConverter):
@@ -363,31 +163,328 @@ class KeyValueWeightConverter(WeightConverter):
         return (key_value,)
 
 
-class LlamaBlockConverter:
-    mixer_converter_class: typing.ClassVar[type[LlamaAttentionConverter]] = LlamaAttentionConverter
-    mlp_converter_class: typing.ClassVar[type[LlamaMLPConverter]] = LlamaMLPConverter
-    normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
+# ============================================================
+# Config converters (declarative)
+# ============================================================
+
+
+def _llama_rotary_export(config: AttentionConfig) -> dict:
+    """Build the HF rotary block(s) from a Fast-LLM rotary config.
+
+    Returns a dict keyed by the (Llama-flat) HF paths the converter declares; values vary with rotary subtype and
+    the active transformers major version (v4 puts ``rope_theta`` flat with optional ``rope_scaling``;
+    v5 consolidates everything into ``rope_parameters``).
+    """
+    rotary = config.rotary
+    rope_parameters = {"rope_theta": rotary.theta}
+    if type(rotary) is DefaultRotaryConfig:
+        rope_parameters["rope_type"] = "default"
+    elif type(rotary) is Llama3RotaryConfig:
+        rope_parameters.update(
+            {
+                "rope_type": "llama3",
+                "factor": rotary.scale_factor,
+                "low_freq_factor": rotary.low_frequency_factor,
+                "high_freq_factor": rotary.high_frequency_factor,
+                "original_max_position_embeddings": rotary.original_context_length,
+            }
+        )
+    elif type(rotary) is YarnRotaryConfig:
+        rope_parameters.update(
+            {
+                "rope_type": "yarn",
+                "attention_factor": rotary.attention_factor,
+                "beta_fast": rotary.beta_fast,
+                "beta_slow": rotary.beta_slow,
+                "original_max_position_embeddings": rotary.original_context_length,
+            }
+        )
+    else:
+        raise NotImplementedError(f"Unsupported rotary type: {type(rotary).__name__}")
+
+    if _TRANSFORMERS_V4:
+        out: dict = {("rope_theta",): rope_parameters["rope_theta"]}
+        if type(rotary) is not DefaultRotaryConfig:
+            out[("rope_scaling",)] = {k: v for k, v in rope_parameters.items() if k != "rope_theta"}
+        return out
+    return {("rope_parameters",): rope_parameters}
+
+
+def _llama_rotary_import(hf_dict: dict, _parent_context: dict | None) -> dict:
+    """Reverse of :func:`_llama_rotary_export`. Detects v4/v5 layout from the HF dict."""
+    if "rope_parameters" in hf_dict:  # transformers v5
+        rope_params = hf_dict["rope_parameters"]
+        rope_theta = rope_params["rope_theta"]
+    else:  # transformers v4
+        rope_params = hf_dict.get("rope_scaling") or {}
+        rope_theta = hf_dict["rope_theta"]
+    rope_type = rope_params.get("rope_type", "default")
+    rotary_config: dict = {"type": rope_type, "theta": rope_theta}
+    if rope_type == "default":
+        pass
+    elif rope_type == "llama3":
+        rotary_config.update(
+            {
+                "scale_factor": rope_params["factor"],
+                "low_frequency_factor": rope_params["low_freq_factor"],
+                "high_frequency_factor": rope_params["high_freq_factor"],
+                "original_context_length": rope_params["original_max_position_embeddings"],
+            }
+        )
+    elif rope_type == "yarn":
+        rotary_config.update(
+            {
+                "attention_factor": rope_params["attention_factor"],
+                "beta_fast": rope_params["beta_fast"],
+                "beta_slow": rope_params["beta_slow"],
+                "original_context_length": rope_params["original_max_position_embeddings"],
+            }
+        )
+    else:
+        raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
+    return {("rotary",): rotary_config}
+
+
+def _llama_attention_check_config(config: AttentionConfig) -> None:
+    """Default attention layer-bias check for Llama-style formats.
+
+    Subclasses that diverge (e.g. Qwen2 always-on Q/K/V biases with no dense bias) override
+    :py:meth:`LlamaAttentionConverter._check_config` rather than re-implementing the export function.
+    """
+    Assert.is_(type(config), AttentionConfig)
+    Assert.incl(config.query_layer.bias.enabled, (None, config.add_linear_biases))
+    Assert.incl(config.key_layer.bias.enabled, (None, config.add_linear_biases))
+    Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
+    Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
+
+
+def _llama_mlp_layers_export(config: MLPConfig) -> dict:
+    """Validate that MLP layer biases match the parent ``add_linear_biases`` flag and emit nothing.
+
+    Mirrors the attention-layer check: Llama does not expose per-layer bias overrides, so configurations
+    that disagree with the flat ``mlp_bias`` field are rejected rather than silently dropped.
+    """
+    Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
+    Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
+    return {}
+
+
+def _llama_position_embeddings_export(config: LanguageModelEmbeddingsConfig) -> dict:
+    Assert.incl(config.position_embeddings.enabled, (None, False))
+    return {}
+
+
+def _llama_peft_export(config: GPTBaseModelConfig) -> dict:
+    """Assert PEFT is at default (no PEFT). Llama format cannot represent PEFT — non-default values change
+    the parameter set and must fail loudly rather than be silently dropped on export.
+    """
+    from fast_llm.layers.common.peft.config import NoPeftConfig
+
+    Assert.custom(isinstance, config.peft, NoPeftConfig)
+    return {}
+
+
+class LlamaNormalizationConverter(ConfigSectionConverter):
+    """Converts ``RMSNormalizationConfig`` ↔ Llama's flat ``rms_norm_eps`` field."""
+
+    fast_llm_config_class = RMSNormalizationConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "type": ConstantImportConfigConverter(("type",), "rms_norm"),
+            "epsilon": RenameConfigConverter(("epsilon",), ("rms_norm_eps",)),
+            "weight": IgnoredConfigConverter(("weight",)),
+            "zero_centered": ConstantImportConfigConverter(("zero_centered",), False),
+        }
+
+    # --- weight side (imperative) ---
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: RMSNormalizationConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return get_weight_and_bias_converters(
+            fast_llm_prefix,
+            () if drop_on_export else hf_prefix,
+            False,
+            IgnoreExportWeightConverter if drop_on_export else WeightConverter,
+        )
+
+
+class LlamaMLPConverter(ConfigSectionConverter):
+    """Converts ``MLPConfig`` ↔ Llama's flat ``intermediate_size``/``mlp_bias``/``hidden_act`` fields.
+
+    Llama is always gated (``ConstantImportConfigConverter(("gated",), True)``).
+    """
+
+    fast_llm_config_class = MLPConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "intermediate_size": RenameConfigConverter(("intermediate_size",), ("intermediate_size",)),
+            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("mlp_bias",)),
+            "activation": CustomConfigConverter(
+                fast_llm_paths=(("activation",),),
+                hf_paths=(("hidden_act",),),
+                export_fn=lambda c: {("hidden_act",): c.activation.hf_name},
+                import_fn=lambda hf, _ctx: {("activation",): ActivationType.from_hf_name(hf["hidden_act"])},
+            ),
+            "gated": ConstantImportConfigConverter(("gated",), True),
+            "layers": CustomConfigConverter(
+                fast_llm_paths=(("layer_1",), ("layer_2",)),
+                hf_paths=(),
+                export_fn=_llama_mlp_layers_export,
+                import_fn=lambda hf, _ctx: {},
+            ),
+        }
+
+    # --- weight side (imperative) ---
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: MLPConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_1",
+                (f"{hf_prefix}.gate_proj", f"{hf_prefix}.up_proj"),
+                config.add_linear_biases,
+                SplitWeightConverter,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_2",
+                f"{hf_prefix}.down_proj",
+                config.add_linear_biases,
+                MLPLayer2Converter,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
+class LlamaAttentionConverter(ConfigSectionConverter):
+    """Converts ``AttentionConfig`` ↔ Llama's flat attention fields.
+
+    Notable wrinkles:
+      - ``head_dim`` is computed from ``hidden_size // num_attention_heads`` when missing on import.
+      - Rotary handling is delegated to a :class:`CustomConfigConverter` because it spans v4/v5 transformers
+        layouts and three rotary subtypes.
+      - Per-layer linear biases (query/key/value/dense) are validated to match ``add_linear_biases``; Llama
+        does not expose layer-level overrides, so the sub-config fields are blanket-consumed.
+    """
+
+    fast_llm_config_class = AttentionConfig
+
+    @classmethod
+    def _check_config(cls, config: AttentionConfig) -> None:
+        """Hook for subclasses to enforce format-specific per-layer bias rules.
+
+        Default: Llama requires per-layer biases to be unset (``None``) or to match the parent
+        ``add_linear_biases``. Subclasses (e.g. Qwen2) override to relax or replace this rule.
+        """
+        _llama_attention_check_config(config)
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        def _layers_export(config: AttentionConfig) -> dict:
+            cls._check_config(config)
+            return {}
+
+        return {
+            "heads": RenameConfigConverter(("heads",), ("num_attention_heads",)),
+            "head_groups": RenameConfigConverter(("head_groups",), ("num_key_value_heads",)),
+            "head_size": DefaultConfigConverter(
+                ("head_size",),
+                ("head_dim",),
+                hf_default_fn=lambda hf: div(hf["hidden_size"], hf["num_attention_heads"]),
+            ),
+            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("attention_bias",)),
+            "dropout": RenameConfigConverter(("dropout",), ("attention_dropout",)),
+            "causal": ConstantImportConfigConverter(("causal",), True),
+            "softmax_scale_power": ConstantImportConfigConverter(("softmax_scale_power",), 0.5),
+            "linear_layers": CustomConfigConverter(
+                fast_llm_paths=(("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)),
+                hf_paths=(),
+                export_fn=_layers_export,
+                import_fn=lambda hf, _ctx: {},
+            ),
+            "rotary": CustomConfigConverter(
+                fast_llm_paths=(("rotary",),),
+                hf_paths=(("rope_parameters",), ("rope_theta",), ("rope_scaling",)),
+                export_fn=_llama_rotary_export,
+                import_fn=_llama_rotary_import,
+            ),
+        }
+
+    # --- weight side (imperative) ---
+
+    @classmethod
+    def get_converters(
+        cls,
+        config: AttentionConfig,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        drop_on_export: bool = False,
+    ) -> list[WeightConverter]:
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.query",
+                f"{hf_prefix}.q_proj",
+                config.add_linear_biases,
+                QueryWeightConverter,
+                config,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.key_value",
+                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
+                config.add_linear_biases,
+                KeyValueWeightConverter,
+                config,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.dense",
+                f"{hf_prefix}.o_proj",
+                config.add_linear_biases,
+                drop_on_export=drop_on_export,
+            ),
+        ]
+
+
+class LlamaBlockConverter(ConfigSectionConverter):
+    """Converts ``DecoderBlockConfig`` ↔ Llama block fields (flat-merged into the parent's HF dict)."""
+
+    fast_llm_config_class = DecoderBlockConfig
+
+    mixer_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaAttentionConverter
+    mlp_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaMLPConverter
+    normalization_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaNormalizationConverter
+
     hf_mixer_name: typing.ClassVar[str] = "self_attn"
     hf_mlp_name: typing.ClassVar[str] = "mlp"
     hf_norm_1_name: typing.ClassVar[str] = "input_layernorm"
     hf_norm_2_name: typing.ClassVar[str] = "post_attention_layernorm"
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "mixer": cls.mixer_converter_class.import_config(config),
-            "mlp": cls.mlp_converter_class.import_config(config),
-            "normalization": cls.normalization_converter_class.import_config(config),
+            "mixer": NestedConfigConverter(("mixer",), cls.mixer_converter_class),
+            "mlp": NestedConfigConverter(("mlp",), cls.mlp_converter_class),
+            "normalization": NestedConfigConverter(("normalization",), cls.normalization_converter_class),
         }
 
-    @classmethod
-    def export_config(cls, config: DecoderBlockConfig) -> dict:
-        Assert.custom(isinstance, config, DecoderBlockConfig)
-        return safe_merge_dicts(
-            cls.mixer_converter_class.export_config(config.mixer),
-            cls.mlp_converter_class.export_config(config.mlp),
-            cls.normalization_converter_class.export_config(config.normalization),
-        )
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -422,34 +519,34 @@ class LlamaBlockConverter:
 
 
 class LlamaDecoderConverter:
-    block_converter_class: typing.ClassVar[type[LlamaBlockConverter]] = LlamaBlockConverter
+    """Converts ``BlockSequenceConfig`` (polymorphic Fixed/Pattern) ↔ Llama's flat block + ``num_hidden_layers``.
+
+    Kept as a regular class (not a :class:`ConfigSectionConverter`) so it can stay imperative — the polymorphism
+    between Fixed/Pattern block sequences doesn't lend itself to the declarative shape, and subclasses (Mistral,
+    Qwen2, MTP-Llama, ...) plug in different block converters via ``block_converter_class``.
+    """
+
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def import_config(cls, hf_dict: dict) -> dict:
         return {
-            "block": cls.block_converter_class.import_config(config),
-            "num_blocks": config["num_hidden_layers"],
+            "block": cls.block_converter_class.import_config(hf_dict),
+            "num_blocks": hf_dict["num_hidden_layers"],
         }
 
     @classmethod
-    def export_config(cls, config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
-        if isinstance(config, PatternBlockSequenceConfig):
-            # All exported block configs must be equal
-            exported_block_configs = [
-                safe_merge_dicts(
-                    cls.block_converter_class.export_config(block_config),
-                    {"num_hidden_layers": config.num_blocks},
-                )
-                for block_config in config.blocks.values()
-            ]
-            for other in exported_block_configs[1:]:
-                Assert.eq(exported_block_configs[0], other)
-            return exported_block_configs[0]
-        Assert.custom(isinstance, config, FixedBlockSequenceConfig)
-        return safe_merge_dicts(
-            cls.block_converter_class.export_config(config.block),
-            {"num_hidden_layers": config.num_blocks},
-        )
+    def export_config(cls, decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
+        if isinstance(decoder_config, PatternBlockSequenceConfig):
+            exports = [cls.block_converter_class.export_config(block) for block in decoder_config.blocks.values()]
+            for other in exports[1:]:
+                Assert.eq(exports[0], other)
+            block_hf = exports[0]
+        elif isinstance(decoder_config, FixedBlockSequenceConfig):
+            block_hf = cls.block_converter_class.export_config(decoder_config.block)
+        else:
+            raise NotImplementedError(f"Unsupported decoder type: {type(decoder_config).__name__}")
+        return {**block_hf, "num_hidden_layers": decoder_config.num_blocks}
 
     @classmethod
     def get_converters(
@@ -459,11 +556,10 @@ class LlamaDecoderConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        # In the case of PatternBlockSequenceConfig, compatibility was already checked in export_config
         block_config = (
             config.block if isinstance(config, FixedBlockSequenceConfig) else next(iter(config.blocks.values()))
         )
-        converters = []
+        converters: list[WeightConverter] = []
         for block_index in range(config.num_blocks):
             converters += cls.block_converter_class.get_converters(
                 block_config,
@@ -474,16 +570,29 @@ class LlamaDecoderConverter:
         return converters
 
 
-class LlamaEmbeddingsConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {"vocab_size": config["vocab_size"]}
+class LlamaEmbeddingsConverter(ConfigSectionConverter):
+    """Converts ``LanguageModelEmbeddingsConfig`` ↔ Llama (flat ``vocab_size``).
+
+    Llama has no learnable position embeddings; ``num_position_embeddings`` is irrelevant when
+    ``position_embeddings.enabled`` is ``False``/``None`` and is therefore blanket-consumed.
+    """
+
+    fast_llm_config_class = LanguageModelEmbeddingsConfig
 
     @classmethod
-    def export_config(cls, config: LanguageModelEmbeddingsConfig) -> dict:
-        Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
-        assert not config.position_embeddings.enabled
-        return {"vocab_size": config.vocab_size}
+    def _create_config_converters(cls) -> dict:
+        return {
+            "vocab_size": RenameConfigConverter(("vocab_size",), ("vocab_size",)),
+            "word_embeddings": IgnoredConfigConverter(("word_embeddings",)),
+            "position_embeddings": CustomConfigConverter(
+                fast_llm_paths=(("position_embeddings",), ("num_position_embeddings",)),
+                hf_paths=(),
+                export_fn=_llama_position_embeddings_export,
+                import_fn=lambda hf, _ctx: {},
+            ),
+        }
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -492,18 +601,27 @@ class LlamaEmbeddingsConverter:
         return [WeightConverter(f"{fast_llm_prefix}.word_embeddings_weight", f"{hf_prefix}.embed_tokens.weight")]
 
 
-class LlamaHeadConverter:
-    normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
-    block_converter_class: typing.ClassVar[type[LlamaBlockConverter]] = LlamaBlockConverter
+class LlamaHeadConverter(ConfigSectionConverter):
+    """Converts ``LanguageModelHeadConfig`` ↔ Llama final-norm fields (flat-merged)."""
+
+    fast_llm_config_class = LanguageModelHeadConfig
+
+    normalization_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaNormalizationConverter
+    # Used by MTP-Llama subclass to emit per-prediction-head block weight converters; Llama itself doesn't read it.
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {"normalization": cls.normalization_converter_class.import_config(config)}
+    def _create_config_converters(cls) -> dict:
+        return {
+            "normalization": NestedConfigConverter(("normalization",), cls.normalization_converter_class),
+            "output_weight": IgnoredConfigConverter(("output_weight",)),
+            # ``prediction_heads`` is architecture (>1 enables multi-token prediction); Llama HF format does
+            # not represent it. We don't pin it to 1 here so MTP-Llama (a Llama-derived format) can override
+            # the declaration with a Rename without first hitting an assertion in the inherited path.
+            "prediction_heads": IgnoredConfigConverter(("prediction_heads",)),
+        }
 
-    @classmethod
-    def export_config(cls, config: LanguageModelHeadConfig) -> dict:
-        Assert.custom(isinstance, config, LanguageModelHeadConfig)
-        return cls.normalization_converter_class.export_config(config.normalization)
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -526,34 +644,48 @@ class LlamaHeadConverter:
         ]
 
 
-class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
+class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+    """Top-level converter for ``GPTBaseModelConfig`` ↔ Llama HF dict."""
+
+    fast_llm_config_class = GPTBaseModelConfig
+
     # TODO: Peft?
     decoder_converter_class: typing.ClassVar[type[LlamaDecoderConverter]] = LlamaDecoderConverter
-    embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
-    head_converter_class: typing.ClassVar[type[LlamaHeadConverter]] = LlamaHeadConverter
+    embeddings_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaEmbeddingsConverter
+    head_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaHeadConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
+        decoder_converter_class = cls.decoder_converter_class
+
+        def _decoder_export(parent: Config) -> dict:
+            return {(k,): v for k, v in decoder_converter_class.export_config(parent.decoder).items()}
+
+        def _decoder_import(hf_dict: dict, _parent_context: dict | None) -> dict:
+            return {("decoder",): decoder_converter_class.import_config(hf_dict)}
+
         return {
-            "embeddings": cls.embeddings_converter_class.import_config(config),
-            "decoder": cls.decoder_converter_class.import_config(config),
-            "head": cls.head_converter_class.import_config(config),
-            "hidden_size": config["hidden_size"],
-            "tied_embedding_weight": config["tie_word_embeddings"],
+            "embeddings": NestedConfigConverter(("embeddings",), cls.embeddings_converter_class),
+            "head": NestedConfigConverter(("head",), cls.head_converter_class),
+            "decoder": CustomConfigConverter(
+                fast_llm_paths=(("decoder",),),
+                hf_paths=(("num_hidden_layers",),),
+                export_fn=_decoder_export,
+                import_fn=_decoder_import,
+            ),
+            "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
+            "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
+            # Llama format does not represent PEFT. Strictly assert ``NoPeftConfig`` on export so a
+            # user-configured LoRA fails clearly rather than being silently dropped.
+            "peft": CustomConfigConverter(
+                fast_llm_paths=(("peft",),),
+                hf_paths=(),
+                export_fn=_llama_peft_export,
+                import_fn=lambda hf, _ctx: {},
+            ),
         }
 
-    @classmethod
-    def export_config(cls, config: GPTBaseModelConfig) -> dict:
-        Assert.custom(isinstance, config, GPTBaseModelConfig)
-        return safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings),
-            cls.decoder_converter_class.export_config(config.decoder),
-            cls.head_converter_class.export_config(config.head),
-            {
-                "tie_word_embeddings": config.tied_embedding_weight,
-                "hidden_size": config.hidden_size,
-            },
-        )
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
