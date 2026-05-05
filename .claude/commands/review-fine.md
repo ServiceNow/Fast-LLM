@@ -14,7 +14,7 @@ On a follow-up review after fixes have been pushed, run `git diff <last-reviewed
 
 - **Naming**: unclear, abbreviated, or inconsistent identifiers. Project convention: no abbreviations (`batch_size` not `bs`); private members use single `_` prefix, never `__`.
 - **Comments**: comments that restate the code, reference the current task/PR/issue (those belong in the PR description), or document obvious behavior. Default is no comment unless the *why* is non-obvious — a hidden constraint, subtle invariant, or workaround for a specific bug.
-- **Dead code & necessity**: unused parameters, unreached branches, leftover debug prints, vestigial helpers, abstractions with a single caller, comments restating what well-named identifiers already say.
+- **Dead code & necessity**: unused parameters, unreached branches, leftover debug prints, vestigial helpers, abstractions with a single caller, defensive checks (validation, fallbacks, `try/except`, `if x is None: raise`) for situations that can't happen or inputs that should be trusted at internal boundaries, comments restating what well-named identifiers already say.
 - **Redundancy**: duplicated logic that could collapse, repeated literals that could be constants.
 - **Style nits**: typing (`X | Y`, `list[T]`, PEP 695 generics), import style (third-party fully qualified; first-party `from fast_llm...`), `Assert` namespace vs bare `assert`, `zip(..., strict=True)`, `pathlib.Path` over `os.path`, no double negations.
 
