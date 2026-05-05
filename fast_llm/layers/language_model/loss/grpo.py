@@ -3,6 +3,7 @@ import typing
 
 import torch
 
+from fast_llm.core.distributed import ReduceOp, all_reduce
 from fast_llm.engine.base_model.config import LossDef, ReductionType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
@@ -15,6 +16,7 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelLossKwargs,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.utils import Assert
 
 
 class GRPOMetrics(typing.NamedTuple):
@@ -58,14 +60,11 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             weight=weight,
             register_loss=register_loss,
         )
-        # MAX/MIN reductions are unsafe under pipeline parallelism: ranks without this loss layer
-        # contribute a torch.zeros([1]) placeholder in LossDef.reduce, which corrupts the extremum
-        # whenever the real value has the opposite sign.
-        if config.metrics != GRPOMetricsLevel.none and distributed_config.pipeline_parallel > 1:
-            raise NotImplementedError(
-                "GRPO extra metrics are not supported with pipeline_parallel > 1 "
-                "(MAX/MIN advantage reductions would be corrupted by the zero placeholder on empty pipeline ranks)."
-            )
+        Assert.custom(
+            lambda metrics, pipeline_parallel: metrics == GRPOMetricsLevel.none or pipeline_parallel == 1,
+            config.metrics,
+            distributed_config.pipeline_parallel,
+        )
 
     def _forward_backward(
         self,
@@ -116,7 +115,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self,
         logits: torch.Tensor,
         kwargs: dict[str, typing.Any],
-        losses: dict[str, list[torch.Tensor]],
+        losses: dict | None,
         split_index: int,
     ) -> None:
         metrics = compute_grpo_metrics(
@@ -222,7 +221,6 @@ def compute_grpo_metrics(
     log_ratio = new_log_probs - old_log_probabilities
     ratio = log_ratio.exp()
     clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
-    # k3
     kl = ratio - log_ratio - 1.0
 
     neg_inf = advantages.new_full((), float("-inf"))
@@ -230,7 +228,13 @@ def compute_grpo_metrics(
 
     entropy: torch.Tensor | None = None
     if compute_entropy:
-        entropy_per_token = sum_exp_logits.log() - (exp_logits * logits_norm).sum(-1) / sum_exp_logits
+        # exp_logits and logits_norm are local vocab slices — sum over the local slice, then all-reduce
+        # across the tensor-parallel group to recover the global E_p[logit_norm] before dividing by the
+        # already-global sum_exp_logits.
+        weighted_logits_sum = (exp_logits * logits_norm).sum(-1)
+        if group is not None:
+            all_reduce(weighted_logits_sum, op=ReduceOp.SUM, group=group)
+        entropy_per_token = sum_exp_logits.log() - weighted_logits_sum / sum_exp_logits
         entropy = (entropy_per_token * masked).sum()
 
     return GRPOMetrics(
