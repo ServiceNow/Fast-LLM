@@ -70,7 +70,7 @@ fast-llm train gpt --config examples/mistral-4-node-benchmark.yaml
 
 ## Design principles
 
-<!-- Sync with docs/contributing/contributing.md → ## 🧱 Design principles. The bullets in both files cover the same four rules. -->
+<!-- Sync with docs/contributing/contributing.md → ## 🧱 Design principles. Bullet titles and bodies must stay byte-identical (modulo prose-vs-list markdown punctuation: `**Title.**` here vs `**Title**:` in contributing.md). When you change one, update the other in the same commit. -->
 
 - **Generalize rather than special-case.** New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
 - **No overhead when unused.** A new feature must add no measurable cost on the disabled path: no new kernel launches, GPU sync points, or slower GPU code paths; no CPU work added to training hot loops (forward/backward, schedule loop, per-step dataloader path); no cost that scales with model size, sequence length, batch size, or step count. Trivial additions outside hot loops — a config-flag branch, a one-shot validation in `__init__` — are fine. Gate new behavior behind a config flag that short-circuits cheaply when off.

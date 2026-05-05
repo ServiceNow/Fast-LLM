@@ -37,14 +37,14 @@ Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/
 
 ## 🧱 Design principles
 
-<!-- Sync with CLAUDE.md → ## Design principles. The bullets in both files cover the same four rules. -->
+<!-- Sync with CLAUDE.md → ## Design principles. Bullet titles and bodies must stay byte-identical (modulo list-vs-prose markdown punctuation: `**Title**:` here vs `**Title.**` in CLAUDE.md). When you change one, update the other in the same commit. -->
 
 These apply to every change. Internalize them before writing non-trivial code, not just before opening a PR.
 
--   **Generalize rather than special-case**: New features should extend existing abstractions, not create parallel ones for a specific use case. Prefer parameterizing the existing module (attention, MLP, normalization, loss) over forking it.
--   **Keep new features zero-cost when disabled**: A new feature must add no measurable overhead on the disabled path — no new kernel launches, no slower GPU code path, no extra work in training hot loops, and no cost that scales with model size, sequence length, batch size, or step count. Gate new behavior behind a config flag that short-circuits cheaply when off.
--   **Avoid deadweight**: Don't add modules, classes, abstractions, code paths, or config flags that don't pull their weight. If a new helper ends up with one caller, inline it; if a code path has no real consumer, drop it.
--   **Trust internal boundaries**: Validate at system boundaries (user input, external APIs, file formats), but trust internal callers and framework invariants. Don't add `try/except`, defensive validation, fallbacks, or "can't happen" guards on code you control.
+-   **Generalize rather than special-case**: New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
+-   **No overhead when unused**: A new feature must add no measurable cost on the disabled path: no new kernel launches, GPU sync points, or slower GPU code paths; no CPU work added to training hot loops (forward/backward, schedule loop, per-step dataloader path); no cost that scales with model size, sequence length, batch size, or step count. Trivial additions outside hot loops — a config-flag branch, a one-shot validation in `__init__` — are fine. Gate new behavior behind a config flag that short-circuits cheaply when off.
+-   **No deadweight**: Don't add modules, classes, abstractions, or code paths that don't pull their weight, or config options that don't toggle meaningful behavior. If a new helper ends up with one caller, inline it; if a new branch has no real consumer, drop it. Three similar lines beats a premature abstraction.
+-   **Trust internal boundaries**: Validate at system boundaries (user input, external APIs, file formats); trust internal callers and framework invariants. Don't add `try/except`, input validation, fallbacks, or "can't happen" guards on code you control — let it crash so the bug surfaces clearly.
 
 ## 🏆 Guidelines for a Successful Pull Request
 
