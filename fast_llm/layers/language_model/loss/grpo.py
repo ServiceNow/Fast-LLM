@@ -21,11 +21,29 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        divisor = (
-            kwargs[LanguageModelKwargs.num_documents_in_batch]
-            if self._config.normalize_by_documents
-            else self._get_label_count(kwargs)
-        )
+        if self._config.normalize_by_documents:
+            # Match DeepSpeed exactly. DS has TWO 1/batch_size factors with different sources:
+            #   - Loss reported uses /batch_size (via tokens_weights = 1/batch_size, see
+            #     pipelinerl/finetune/rl/__init__.py:246).
+            #   - Gradient buffer uses an ADDITIONAL /(gas × world_size) factor that comes from
+            #     `scale_wrt_gas=True` in engine.backward() (deepspeed/runtime/engine.py:1995-1996)
+            #     and `tensor.div_(world_sz)` in reduce_scatter_coalesced
+            #     (deepspeed/runtime/comm/coalesced_collectives.py:124).
+            # For DS with samples_per_microbatch=1 (PipelineRL standard), gas × world_size = batch_size,
+            # so the gradient buffer effectively has factor 1/batch_size² while the loss metric has 1/batch_size.
+            # Fast-LLM cancels DS's /(gas × world_size) factor via `grad_output = data_parallel × grad_scale`
+            # (runner.py:318) interacting with FSDP's RS-AVG over data_parallel ranks (fsdp.py:396).
+            # So we need to apply the second 1/batch_size factor explicitly only to the gradient,
+            # keeping the loss metric matched to DS:
+            #   loss divisor      = num_documents (matches DS rl/loss)
+            #   gradient divisor  = num_documents²  (matches DS grad_norm)
+            # Both are independent of TP/PP/SDP/DP parallelism and microbatching schedule.
+            num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+            divisor = num_documents
+            grad_divisor = num_documents * num_documents
+        else:
+            divisor = self._get_label_count(kwargs)
+            grad_divisor = None  # use divisor (default behavior)
         if self._config.policy_loss == "gspo":
             loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
                 logits,
@@ -45,6 +63,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                     else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
                 ),
                 divisor=divisor,
+                grad_divisor=grad_divisor,
                 sdp_group=self._sdp_dim.group if self._sdp_active else None,
             )
         else:
@@ -71,6 +90,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                     else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
                 ),
                 divisor=divisor,
+                grad_divisor=grad_divisor,
             )
 
         if new_logprobs_mean is not None:
@@ -198,10 +218,13 @@ def fused_grpo_loss_forward_backward(
         torch.Tensor | None
     ) = None,  # (*batch,) — response-span length broadcast per token, 0 for non-response
     divisor: float | None = None,
+    grad_divisor: float | None = None,  # Optional separate divisor for the gradient (defaults to divisor)
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     if divisor is None:
         divisor = logits.shape[:-1].numel()
-    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
+    if grad_divisor is None:
+        grad_divisor = divisor
+    grad_output = None if grad_output is None else grad_output / grad_divisor * logits_scale_factor
     loss_mask = target >= 0
 
     logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
@@ -272,6 +295,7 @@ def fused_gspo_loss_forward_backward(
     logits_scale_factor: float = 1.0,
     num_labels_in_seq: torch.Tensor | None = None,  # for new_logprobs_mean metric
     divisor: float | None = None,
+    grad_divisor: float | None = None,  # Optional separate divisor for the gradient (defaults to divisor)
     sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     """GSPO loss: sequence-level geometric-mean IS ratio clipping.
@@ -282,10 +306,15 @@ def fused_gspo_loss_forward_backward(
 
     SDP correctness: scatter_add sums are all-reduced across sdp_group before computing R_s and A_s,
     ensuring correct segment-level ratios when tokens are split across ranks.
+
+    The optional `grad_divisor` allows the gradient to use a different divisor than the loss
+    (e.g., to match DeepSpeed's metric where loss has /batch_size and gradient has /batch_size²).
     """
     if divisor is None:
         divisor = float(logits.shape[0]) if logits.shape[0] > 0 else 1.0
-    grad_output_scaled = None if grad_output is None else grad_output / divisor * logits_scale_factor
+    if grad_divisor is None:
+        grad_divisor = divisor
+    grad_output_scaled = None if grad_output is None else grad_output / grad_divisor * logits_scale_factor
 
     loss_mask = target >= 0
     mask_float = loss_mask.float()
@@ -340,6 +369,13 @@ def fused_gspo_loss_forward_backward(
     surr2 = R.clamp(1.0 - epsilon_low, 1.0 + epsilon_high) * A
     loss_per_seg = -torch.minimum(surr1, surr2) * tok_sum * valid.float()
     loss = loss_per_seg.sum() / divisor
+    # SDP correction: after SDP allreduce of lrn/adv/tok, both SDP ranks compute the IDENTICAL
+    # per-segment loss, so when LossDef.reduce sums across data_group (which includes SDP), the
+    # metric is double-counted by sdp_size. Divide here so each SDP rank reports loss/sdp_size,
+    # making the SUM-reduction match a non-SDP run. Gradient is unaffected (each SDP rank
+    # contributes gradient from its own LOCAL tokens, no double-counting in the gradient buffer).
+    if sdp_group is not None:
+        loss = loss / torch.distributed.get_world_size(sdp_group)
 
     # Step 7: Gradient — broadcast segment-level factors to token level
     if grad_output_scaled is not None and n_segs > 0:

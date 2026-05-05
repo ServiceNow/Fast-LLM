@@ -137,6 +137,7 @@ def triton_grpo_loss_forward_backward(
     logits_scale_factor: float = 1.0,
     num_labels_in_seq: torch.Tensor | None = None,
     divisor: float | None = None,
+    grad_divisor: float | None = None,  # Optional separate divisor for the gradient (defaults to divisor)
     block_size: int | None = None,
     num_warps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
@@ -148,6 +149,8 @@ def triton_grpo_loss_forward_backward(
     n_cols = logits.size(-1)
     if divisor is None:
         divisor = n_rows
+    if grad_divisor is None:
+        grad_divisor = divisor
     if block_size is None:
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:
@@ -171,7 +174,7 @@ def triton_grpo_loss_forward_backward(
         grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
         backward_kwargs = {
             "grad_logits_ptr": grad_logits,
-            "grad_losses": grad_output / divisor,
+            "grad_losses": grad_output / grad_divisor,
             "grad_logits_stride_0": grad_logits.stride(-2),
             "accumulate": accumulate,
         }
