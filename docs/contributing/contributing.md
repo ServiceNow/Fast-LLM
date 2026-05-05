@@ -35,15 +35,22 @@ Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/
 5.  **Push to Your Fork**: Push the branch to your GitHub fork.
 6.  **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
 
+## 🧱 Design principles
+
+<!-- Sync with CLAUDE.md → ## Design principles. The bullets in both files cover the same four rules. -->
+
+These apply to every change. Internalize them before writing non-trivial code, not just before opening a PR.
+
+-   **Generalize rather than special-case**: New features should extend existing abstractions, not create parallel ones for a specific use case. Prefer parameterizing the existing module (attention, MLP, normalization, loss) over forking it.
+-   **Keep new features zero-cost when disabled**: A new feature must add no measurable overhead on the disabled path — no new kernel launches, no slower GPU code path, no extra work in training hot loops, and no cost that scales with model size, sequence length, batch size, or step count. Gate new behavior behind a config flag that short-circuits cheaply when off.
+-   **Avoid deadweight**: Don't add modules, classes, abstractions, code paths, or config flags that don't pull their weight. If a new helper ends up with one caller, inline it; if a code path has no real consumer, drop it.
+-   **Trust internal boundaries**: Validate at system boundaries (user input, external APIs, file formats), but trust internal callers and framework invariants. Don't add `try/except`, defensive validation, fallbacks, or "can't happen" guards on code you control.
+
 ## 🏆 Guidelines for a Successful Pull Request
 
 Here are some tips to ensure your pull request gets reviewed and merged promptly:
 
 -   **Follow our coding standards**: Stick to our [style guide and conventions](https://servicenow.github.io/Fast-LLM/developers/style-guide) to keep the code clean and consistent.
--   **Generalize rather than special-case**: New features should extend existing abstractions, not create parallel ones for a specific use case. Prefer parameterizing the existing module (attention, MLP, normalization, loss) over forking it.
--   **Keep new features zero-cost when disabled**: A new feature must add no measurable overhead on the disabled path — no new kernel launches, no slower GPU code path, no extra work in training hot loops, and no cost that scales with model size, sequence length, batch size, or step count. Gate new behavior behind a config flag that short-circuits cheaply when off.
--   **Avoid deadweight**: Don't add modules, classes, abstractions, code paths, or config flags that don't pull their weight. If a new helper ends up with one caller, inline it; if a code path has no real consumer, drop it.
--   **Trust internal boundaries**: Validate at system boundaries (user input, external APIs, file formats), but trust internal callers and framework invariants. Don't add `try/except`, defensive validation, fallbacks, or "can't happen" guards on code you control.
 -   **Write tests**: Verify your changes with unit tests for new features or bug fixes. See our [testing guide](https://servicenow.github.io/Fast-LLM/contributing/testing) for tips and recommendations on testing.
 -   **Test on GPUs and real-world workloads**: Since Fast-LLM is all about training large language models, make sure your changes work smoothly in GPU environments and on typical training setups.
 -   **Run benchmarks and performance tests**: Make sure your changes don't slow things down. If there's any impact on performance, provide benchmark results to back it up.
