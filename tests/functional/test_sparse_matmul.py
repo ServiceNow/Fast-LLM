@@ -6,6 +6,8 @@ import torch
 
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.functional.triton.sparse_linear import (
+    InputSparseLinear,
+    OutputSparseLinear,
     dense_matmul,
     input_inner_sparse_matmul,
     input_row_sparse_matmul,
@@ -74,7 +76,24 @@ _SPARSE_TEST_DATAS = (
         dense_dim=256,
         sparse_dim=512,
         expert_ends=(128, 256, 256, 384),
-        tokens_per_expert=(52, 125, 0, 97),
+        tokens_per_expert=(52, 125, 0, 97),  # expert 2 has zero real tokens
+    ),
+    # Single expert — the simplest non-trivial case; also exercises the no-padding path.
+    _SparseTestData(
+        dense_dim=512,
+        sparse_dim=256,
+        expert_ends=(256,),
+        tokens_per_expert=(200,),
+    ),
+    # Four experts, fully packed (no padding rows) — exercises the pad_begin == expert_end path.
+    # Expert sizes must be multiples of the largest autotune block_size_row (128); otherwise
+    # blocks straddle expert boundaries and the kernel's "sparse_index constant within a block"
+    # assumption breaks.
+    _SparseTestData(
+        dense_dim=384,
+        sparse_dim=128,
+        expert_ends=(128, 256, 384, 512),
+        tokens_per_expert=(128, 128, 128, 128),
     ),
 )
 
@@ -151,3 +170,64 @@ def test_input_row_sparse_matmul(sparse_test_data, testing_device):
         )
 
     Assert.rms_close(output, output_ref, 1e-3)
+
+
+# --------------------------------------------------------------------------- autograd wrappers
+
+
+def _sparse_linear_ref(lhs: torch.Tensor, rhs: torch.Tensor, data: _SparseTestData, expert_axis: int) -> torch.Tensor:
+    """Per-expert matmul reference; rows past `expert_pad_begins` are zero in the output."""
+    rhs_per_expert = rhs.chunk(data.num_experts, dim=expert_axis)
+    out = lhs.new_zeros(data.token_dim, rhs_per_expert[0].shape[1])
+    for i, (begin, end) in enumerate(zip(data.expert_begins, data.expert_pad_begins, strict=True)):
+        out[begin:end] = lhs[begin:end] @ rhs_per_expert[i]
+    return out
+
+
+def _zero_padded_rows(tensor: torch.Tensor, data: _SparseTestData) -> torch.Tensor:
+    # The autograd kernels treat padded tokens as regular ones; forward output and grad_lhs
+    # contain matmul-of-random garbage in [pad_begin, expert_end). Zero those rows so the
+    # comparison vs the reference (which produces zeros there) reflects only real-row error.
+    masked = tensor.clone()
+    for begin, end in zip(data.expert_pad_begins, data.expert_ends, strict=True):
+        if end > begin:
+            masked[begin:end] = 0
+    return masked
+
+
+@requires_triton
+@pytest.mark.slow
+@pytest.mark.parametrize("sparse_test_data", _SPARSE_TEST_DATAS)
+@pytest.mark.parametrize(
+    "autograd_class,expert_axis",
+    [(OutputSparseLinear, 1), (InputSparseLinear, 0)],
+    ids=["output_sparse", "input_sparse"],
+)
+def test_sparse_linear_autograd(sparse_test_data, testing_device, autograd_class, expert_axis):
+    # `expert_axis` is the rhs axis split per expert. Matmul contracts rhs's axis 0, so
+    # OutputSparseLinear (expert_axis=1) splits the output dim, InputSparseLinear (expert_axis=0)
+    # splits the contracting dim.
+    if expert_axis == 1:
+        lhs_features, out_features = sparse_test_data.dense_dim, sparse_test_data.sparse_dim
+        rhs_shape = (sparse_test_data.dense_dim, sparse_test_data.sparse_dim_expanded)
+    else:
+        lhs_features, out_features = sparse_test_data.sparse_dim, sparse_test_data.dense_dim
+        rhs_shape = (sparse_test_data.sparse_dim_expanded, sparse_test_data.dense_dim)
+
+    lhs = sparse_test_data.normal(sparse_test_data.token_dim, lhs_features, testing_device)
+    rhs = sparse_test_data.normal(*rhs_shape, testing_device)
+    grad_output = sparse_test_data.normal(sparse_test_data.token_dim, out_features, testing_device)
+
+    lhs_ref = lhs.detach().requires_grad_(True)
+    rhs_ref = rhs.detach().requires_grad_(True)
+    out_ref = _sparse_linear_ref(lhs_ref, rhs_ref, sparse_test_data, expert_axis)
+    out_ref.backward(grad_output)
+
+    lhs_t = lhs.detach().requires_grad_(True)
+    rhs_t = rhs.detach().requires_grad_(True)
+    out_t = autograd_class.apply(lhs_t, rhs_t, sparse_test_data.get_sparse_map(testing_device))
+    out_t.backward(grad_output)
+
+    Assert.rms_close(_zero_padded_rows(out_t, sparse_test_data), out_ref, 1e-3)
+    Assert.rms_close(_zero_padded_rows(lhs_t.grad, sparse_test_data), lhs_ref.grad, 1e-3)
+    Assert.rms_close(rhs_t.grad, rhs_ref.grad, 1e-3)
