@@ -82,11 +82,16 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/servicenow/fast-llm:cache,mode=max
 
       - name: Output build info
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          BRANCH: ${{ inputs.branch }}
+          FULL_SHA: ${{ steps.commit_info.outputs.full_sha }}
+          SHORT_SHA: ${{ steps.commit_info.outputs.short_sha }}
         run: |
           echo "Built Docker image with tags:"
-          echo "${{ steps.meta.outputs.tags }}"
+          echo "$TAGS"
           echo ""
           echo "Build details:"
-          echo "Branch: ${{ inputs.branch }}"
-          echo "Commit: ${{ steps.commit_info.outputs.full_sha }}"
-          echo "Short SHA: ${{ steps.commit_info.outputs.short_sha }}"
+          echo "Branch: $BRANCH"
+          echo "Commit: $FULL_SHA"
+          echo "Short SHA: $SHORT_SHA"

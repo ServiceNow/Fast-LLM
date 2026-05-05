@@ -216,7 +216,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     def _add_shared_experts(
         self, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Add the shared experts (last ones) to the top experts.
+        # Shared experts are appended to top_experts as the last routing slots with score 1,
+        # rather than a parallel dense branch. Keeps everything on the sparse MoE path.
         shared_experts = torch.arange(
             self._config.unshared_experts,
             self._config.experts,

@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Config, Configurable, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.engine.config_utils.runnable import get_trust_remote_code
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -37,6 +38,13 @@ class TokenizerConfig(Config):
         desc="Constrain output tokens to a specific range. Used for testing.",
         hint=FieldHint.testing,
     )
+    trust_remote_code: bool = Field(
+        default=False,
+        desc="Allow this tokenizer to load custom Python code shipped with its repository."
+        " Has no effect unless `--trust-remote-code` is also passed on the command line; both"
+        " are required so a config file alone cannot enable remote-code execution.",
+        hint=FieldHint.feature,
+    )
 
     def get_tokenizer(self) -> "Tokenizer":
         return Tokenizer(self)
@@ -56,7 +64,7 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
             pretrained_model_name_or_path=self._config.path,
             errors="replace",
             max_len=None,
-            trust_remote_code=True,
+            trust_remote_code=get_trust_remote_code(self._config.trust_remote_code),
             use_fast=True,
         )
         if self._config.bos_token is not None:

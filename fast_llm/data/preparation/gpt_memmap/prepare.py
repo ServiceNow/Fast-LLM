@@ -41,6 +41,7 @@ from fast_llm.data.preparation.gpt_memmap.config import (
 from fast_llm.data.preparation.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.engine.config_utils.runnable import get_trust_remote_code
 from fast_llm.utils import normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 data_files=self._config.dataset.data_files,
                 split=self._config.dataset.split,
                 num_proc=self._config.num_workers,
-                trust_remote_code=self._config.dataset.trust_remote_code,
+                trust_remote_code=get_trust_remote_code(self._config.dataset.trust_remote_code),
             )
         assert isinstance(dataset, datasets.Dataset)
         return dataset
