@@ -16,7 +16,7 @@ from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
-from fast_llm.layers.language_model.loss.grpo import fused_grpo_loss_forward_backward
+from fast_llm.layers.language_model.loss.grpo import compute_grpo_metrics, fused_grpo_loss_forward_backward
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
 from fast_llm.utils import Assert
@@ -119,6 +119,47 @@ def reference_dpo_loss(
     pi_logratios = policy_chosen_logps - policy_rejected_logps
     ref_logratios = reference_chosen_logps - reference_rejected_logps
     return -torch.nn.functional.logsigmoid(beta * (pi_logratios - ref_logratios)).mean()
+
+
+def reference_grpo_metrics(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    advantages: torch.Tensor,
+    old_log_probabilities: torch.Tensor,
+    label_counts: torch.Tensor,
+    epsilon_low: float,
+    epsilon_high: float,
+    logits_scale_factor: float,
+    compute_entropy: bool,
+) -> dict[str, torch.Tensor]:
+    log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
+    loss_mask = target >= 0
+    mask = loss_mask.float()
+    masked = mask / label_counts.float().clamp(min=1)
+
+    new_log_probs = log_softmax.gather(-1, (target * loss_mask).unsqueeze(-1)).squeeze(-1)
+    log_ratio = new_log_probs - old_log_probabilities.float()
+    ratio = log_ratio.exp()
+    clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
+    kl = ratio - log_ratio - 1.0
+
+    metrics = {
+        "old_logprobs": (old_log_probabilities.float() * masked).sum(),
+        "ratio_new_old": (ratio * masked).sum(),
+        "ratio_new_old_sum": (ratio * mask).sum(),
+        "ratio_new_old_squared_sum": (ratio * ratio * mask).sum(),
+        "kl_new_old": (kl * masked).sum(),
+        "clipped_ratio_fraction": (clipped.float() * masked).sum(),
+        "advantage": (advantages.float() * masked).sum(),
+        "max_advantage": torch.where(loss_mask, advantages, advantages.new_full((), float("-inf"))).max(),
+        "min_advantage": torch.where(loss_mask, advantages, advantages.new_full((), float("inf"))).min(),
+        "num_tokens": mask.sum(),
+        "entropy": None,
+    }
+    if compute_entropy:
+        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
+        metrics["entropy"] = (entropy_per_token * masked).sum()
+    return metrics
 
 
 def reference_grpo_loss(
@@ -304,6 +345,50 @@ def _test_grpo_loss(
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
+def _test_grpo_metrics(
+    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, group=None
+):
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    num_labels = max(int((target >= 0).sum().item()), 1)
+    label_counts = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+
+    ref = reference_grpo_metrics(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        label_counts,
+        epsilon_low=0.2,
+        epsilon_high=0.2,
+        logits_scale_factor=logits_scale_factor,
+        compute_entropy=compute_entropy,
+    )
+    got = compute_grpo_metrics(
+        split_op(logits, group, -1).contiguous(),
+        target,
+        old_log_probabilities,
+        advantages,
+        label_counts,
+        epsilon_low=0.2,
+        epsilon_high=0.2,
+        logits_scale_factor=logits_scale_factor,
+        group=group,
+        compute_entropy=compute_entropy,
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    for key, ref_value in ref.items():
+        if ref_value is None:
+            assert getattr(got, key) is None
+        else:
+            Assert.rms_close_relative(getattr(got, key), ref_value, threshold, 1e-6)
+
+
 def _test_z_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
 ):
@@ -421,6 +506,27 @@ def test_grpo_loss(
     )
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+@pytest.mark.parametrize("compute_entropy", (False, True))
+def test_grpo_metrics(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    block_size,
+    accumulate,
+    compute_entropy,
+):
+    _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy)
+
+
 @pytest.mark.skip(reason="DPO loss is broken")
 def test_dpo_loss():
     logits = torch.normal(0, 1, (200, 100))
@@ -498,6 +604,20 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # GRPO metrics
+            for compute_entropy in (False, True):
+                with test_context.subtest(base_path, f"grpo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_grpo_metrics(
+                            batch_shape,
+                            num_columns,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            compute_entropy,
+                            test_context.group,
+                        )
 
 
 @pytest.mark.slow
@@ -538,6 +658,8 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         ),
         "z_loss",
         "grpo",
+        "grpo_metrics-False",
+        "grpo_metrics-True",
     ),
 )
 def test_lm_loss_distributed(

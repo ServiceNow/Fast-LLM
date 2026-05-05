@@ -1,18 +1,55 @@
+import dataclasses
 import functools
 import typing
 
 import torch
 
 from fast_llm.engine.base_model.config import LossDef, ReductionType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import (
+    GRPOMetricsLevel,
+    LanguageModelGRPOLossConfig,
+    LanguageModelLossKwargs,
+)
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
 
+@dataclasses.dataclass
+class GRPOMetrics:
+    old_logprobs: torch.Tensor
+    ratio_new_old: torch.Tensor
+    ratio_new_old_sum: torch.Tensor
+    ratio_new_old_squared_sum: torch.Tensor
+    kl_new_old: torch.Tensor
+    clipped_ratio_fraction: torch.Tensor
+    advantage: torch.Tensor
+    max_advantage: torch.Tensor
+    min_advantage: torch.Tensor
+    num_tokens: torch.Tensor
+    entropy: torch.Tensor | None
+
+
 class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelLoss[ConfigType]):
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        **kwargs,
+    ):
+        super().__init__(config, distributed_config, **kwargs)
+        # MAX/MIN reductions are unsafe under pipeline parallelism: ranks without this loss layer
+        # contribute a torch.zeros([1]) placeholder in LossDef.reduce, which corrupts the extremum
+        # whenever the real value has the opposite sign.
+        if config.metrics != GRPOMetricsLevel.none and distributed_config.pipeline_parallel > 1:
+            raise NotImplementedError(
+                "GRPO extra metrics are not supported with pipeline_parallel > 1 "
+                "(MAX/MIN advantage reductions would be corrupted by the zero placeholder on empty pipeline ranks)."
+            )
+
     def _forward_backward(
         self,
         logits: "torch.Tensor",
@@ -52,21 +89,19 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
         )
 
-        if losses is not None and (self._config.compute_extra_metrics or self._config.compute_entropy_metric):
-            self._register_pg_metrics(logits, kwargs, losses, split_index)
+        if losses is not None and self._config.metrics != GRPOMetricsLevel.none:
+            self._register_extra_metrics(logits, kwargs, losses, split_index)
 
         return loss, grad
 
-    def _register_pg_metrics(
+    def _register_extra_metrics(
         self,
         logits: torch.Tensor,
         kwargs: dict[str, typing.Any],
         losses: dict,
         split_index: int,
     ) -> None:
-        from fast_llm.layers.language_model.loss.pg_metrics import compute_policy_gradient_metrics
-
-        metrics = compute_policy_gradient_metrics(
+        metrics = compute_grpo_metrics(
             logits,
             self._get_labels(kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
@@ -75,25 +110,22 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._config.epsilon_low,
             self._config.epsilon_high,
             self._logits_scale_factor,
-            vocab_parallel_group=self._parallel_dim.group if self._vocab_parallel else None,
-            compute_entropy=self._config.compute_entropy_metric,
-            entropy_chunk_size=self._config.entropy_chunk_size,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
+            compute_entropy=self._config.metrics == GRPOMetricsLevel.with_entropy,
         )
 
         num_docs = kwargs[LanguageModelKwargs.num_documents_in_batch]
         name = self._name
 
-        # Per-token mean metrics: divide by num_docs to match new_logprobs_mean normalization.
         for attr in (
             "old_logprobs",
             "ratio_new_old",
             "kl_new_old",
-            "clamp_log_ratio_new_old_indicator",
+            "clipped_ratio_fraction",
             "advantage",
         ):
             self._register_loss(f"{name}_{attr}", getattr(metrics, attr) / num_docs, losses)
 
-        # Raw sum metrics (no per-doc normalization).
         for attr in (
             "ratio_new_old_sum",
             "ratio_new_old_squared_sum",
@@ -101,7 +133,6 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         ):
             self._register_loss(f"{name}_{attr}", getattr(metrics, attr), losses)
 
-        # MAX/MIN metrics: pass correct reduce_op for sequence-parallel mode.
         self._register_loss(
             f"{name}_max_advantage",
             metrics.max_advantage,
@@ -120,7 +151,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
 
     def get_loss_definitions(self) -> list[LossDef]:
         defs = super().get_loss_definitions() + [LossDef(self._logprob_metric_name)]
-        if self._config.compute_extra_metrics or self._config.compute_entropy_metric:
+        if self._config.metrics != GRPOMetricsLevel.none:
             name = self._name
             defs += [
                 LossDef(f"{name}_old_logprobs"),
@@ -128,13 +159,13 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                 LossDef(f"{name}_ratio_new_old_sum"),
                 LossDef(f"{name}_ratio_new_old_squared_sum"),
                 LossDef(f"{name}_kl_new_old"),
-                LossDef(f"{name}_clamp_log_ratio_new_old_indicator"),
+                LossDef(f"{name}_clipped_ratio_fraction"),
                 LossDef(f"{name}_advantage"),
                 LossDef(f"{name}_max_advantage", reduction=ReductionType.maximum),
                 LossDef(f"{name}_min_advantage", reduction=ReductionType.minimum),
                 LossDef(f"{name}_num_tokens"),
             ]
-            if self._config.compute_entropy_metric:
+            if self._config.metrics == GRPOMetricsLevel.with_entropy:
                 defs.append(LossDef(f"{name}_entropy"))
         return defs
 
@@ -146,6 +177,57 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
     @functools.cached_property
     def _logprob_metric_name(self) -> str:
         return f"{self._name}_new_logprobs"
+
+
+@torch.compile
+def compute_grpo_metrics(
+    logits: torch.Tensor,  # (*batch, vocab_local)
+    target: torch.Tensor,  # (*batch,)
+    old_log_probabilities: torch.Tensor,  # (*batch,)
+    advantages: torch.Tensor,  # (*batch,)
+    label_counts: torch.Tensor,  # (*batch,) — global per-sequence count broadcast per token
+    epsilon_low: float,
+    epsilon_high: float,
+    logits_scale_factor: float,
+    group: torch.distributed.ProcessGroup | None,
+    compute_entropy: bool,
+) -> GRPOMetrics:
+    loss_mask = target >= 0
+    mask = loss_mask.float()
+    denom = label_counts.float().clamp(min=1)
+    masked = mask / denom
+
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, _, _ = fused_predicted_logits_from_labels(logits_norm, target, loss_mask, group)
+    new_log_probs = predicted_logits - sum_exp_logits.log()
+
+    log_ratio = new_log_probs - old_log_probabilities
+    ratio = log_ratio.exp()
+    clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
+    # Schulman k3 KL approximation: exp(r) - r - 1
+    kl = ratio - log_ratio - 1.0
+
+    neg_inf = advantages.new_full((), float("-inf"))
+    pos_inf = advantages.new_full((), float("inf"))
+
+    entropy = None
+    if compute_entropy:
+        entropy_per_token = sum_exp_logits.log() - (exp_logits * logits_norm).sum(-1) / sum_exp_logits
+        entropy = (entropy_per_token * masked).sum()
+
+    return GRPOMetrics(
+        old_logprobs=(old_log_probabilities * masked).sum(),
+        ratio_new_old=(ratio * masked).sum(),
+        ratio_new_old_sum=(ratio * mask).sum(),
+        ratio_new_old_squared_sum=(ratio * ratio * mask).sum(),
+        kl_new_old=(kl * masked).sum(),
+        clipped_ratio_fraction=(clipped.float() * masked).sum(),
+        advantage=(advantages * masked).sum(),
+        max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
+        min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
+        num_tokens=mask.sum(),
+        entropy=entropy,
+    )
 
 
 @torch.compile
