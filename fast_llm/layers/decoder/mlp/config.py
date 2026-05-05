@@ -205,6 +205,10 @@ class HybridMoEMLPConfig(MLPBaseConfig):
     def _validate(self) -> None:
         super()._validate()
         Assert.eq(self.routed.shared_experts, 0)
+        # The HF Gemma 4 export uses a single `hidden_activation` key for both branches; reject
+        # divergent gating/activation rather than silently picking the dense value on export.
+        Assert.eq(self.dense.gated, self.routed.gated)
+        Assert.eq(self.dense.activation, self.routed.activation)
 
     @property
     def layer_class(self) -> "type[HybridMoEMLP]":

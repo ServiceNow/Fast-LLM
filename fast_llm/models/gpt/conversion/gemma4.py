@@ -16,7 +16,6 @@ from fast_llm.layers.common.normalization.config import FixedRMSNormConfig, RMSN
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import HybridMoEMLPConfig, MLPConfig, MoEMLPConfig
 from fast_llm.layers.language_model.config import (
-    LanguageModelConfig,
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadConfig,
 )
@@ -46,11 +45,11 @@ class Gemma4MoELayer1Converter(WeightConverter):
 
     def export_weight(self, weight):
         (layer_1,) = weight
-        w = layer_1[:]
-        return (w.reshape(self._config.experts, -1, w.shape[-1]),)
+        return (layer_1.reshape(self._config.experts, -1, layer_1.shape[-1]),)
 
     def import_weight(self, weight):
         (gate_up_proj,) = weight
+        # `[:]` materializes the HF safetensors slice into a real tensor before reshape.
         w = gate_up_proj[:]
         return (w.reshape(-1, w.shape[-1]),)
 
@@ -62,11 +61,11 @@ class Gemma4MoELayer2Converter(WeightConverter):
 
     def export_weight(self, weight):
         (layer_2,) = weight
-        w = layer_2[:]
-        return (w.reshape(self._config.experts, -1, w.shape[-1]).permute(0, 2, 1).contiguous(),)
+        return (layer_2.reshape(self._config.experts, -1, layer_2.shape[-1]).permute(0, 2, 1).contiguous(),)
 
     def import_weight(self, weight):
         (down_proj,) = weight
+        # `[:]` materializes the HF safetensors slice into a real tensor before permute/reshape.
         w = down_proj[:]
         return (w.permute(0, 2, 1).reshape(-1, w.shape[1]).contiguous(),)
 
@@ -572,9 +571,12 @@ class Gemma4EmbeddingsConverter(LlamaEmbeddingsConverter):
         }
 
     @classmethod
-    def export_config(cls, config: LanguageModelEmbeddingsConfig) -> dict:
+    def export_config(cls, config: LanguageModelEmbeddingsConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
         assert not config.position_embeddings.enabled
+        # Gemma 4 hard-codes embed_scale = hidden_size ** 0.5; reject divergent values rather than
+        # silently dropping them.
+        Assert.eq(config.embedding_scale, hidden_size**0.5)
         return {"vocab_size": config.vocab_size}
 
 
@@ -593,26 +595,6 @@ class Gemma4HeadConverter(LlamaHeadConverter):
             out["final_logit_softcapping"] = config.final_logit_softcap
         return out
 
-    @classmethod
-    def get_converters(
-        cls,
-        config: LanguageModelConfig,
-        exported_config: dict,
-    ) -> list[WeightConverter]:
-        return [
-            *LlamaNormalizationConverter.get_converters(
-                config.head.normalization,
-                "head.final_norm",
-                "model.norm",
-            ),
-            get_parameter_converter(
-                "head.output_weights",
-                "lm_head.weight",
-                drop_on_import=exported_config["tie_word_embeddings"],
-                drop_on_export=exported_config["tie_word_embeddings"],
-            ),
-        ]
-
 
 class Gemma4BaseModelConverter:
     decoder_converter_class: typing.ClassVar[type[Gemma4DecoderConverter]] = Gemma4DecoderConverter
@@ -621,7 +603,7 @@ class Gemma4BaseModelConverter:
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        if config.get("hidden_size_per_layer_input", 256):
+        if config.get("hidden_size_per_layer_input") not in (None, 0):
             raise NotImplementedError(
                 "Gemma 4 Per-Layer Embeddings (`hidden_size_per_layer_input != 0`) are not supported."
             )
@@ -647,7 +629,7 @@ class Gemma4BaseModelConverter:
     def export_config(cls, config: GPTBaseModelConfig) -> dict:
         Assert.custom(isinstance, config, GPTBaseModelConfig)
         return safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings),
+            cls.embeddings_converter_class.export_config(config.embeddings, config.hidden_size),
             cls.decoder_converter_class.export_config(config.decoder),
             cls.head_converter_class.export_config(config.head),
             {

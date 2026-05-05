@@ -253,7 +253,6 @@ _HF_ROUNDTRIP_CASES = [
             "num_experts": 4,
             "top_k_experts": 2,
             "vocab_size": 384,
-            "hidden_size_per_layer_input": 0,
             # use_bidirectional_attention="vision" in the real model is for multimodal vision tokens;
             # Fast-LLM is text-only so the converter exports None — reset source to match.
             "use_bidirectional_attention": None,

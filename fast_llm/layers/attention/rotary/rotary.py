@@ -307,6 +307,9 @@ class ProportionalRotary[ConfigType: ProportionalRotaryConfig](DefaultRotary[Con
         Assert.multiple(self._rotary_dims, 2)
 
     def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
+        # TODO: Run the rotary kernel only over rotary_dims and leave NoPE dims untouched;
+        # current implementation pads with zero scales (identity rotation) so NoPE dims still
+        # pay the same memory traffic and FLOPs as real rotary dims.
         rotary_pairs = self._rotary_dims // 2
         nope_pairs = head_size // 2 - rotary_pairs
         scales = super()._get_angle_scales(head_size, device)

@@ -26,6 +26,10 @@ class PostNormTestConfig:
     post_mixer_norm: bool = False
     post_mlp_norm: bool = False
     output_scale: float | None = None
+    # Per-position pre-norm override; when set, replaces the block's default `normalization`
+    # at that position (None means "inherit default"; `{"type": "none"}` disables the norm).
+    pre_mixer_normalization: dict | None = None
+    pre_mlp_normalization: dict | None = None
 
     def get_block_config(self) -> DecoderBlockConfig:
         config_dict: dict = {
@@ -48,6 +52,10 @@ class PostNormTestConfig:
             config_dict["post_mlp_normalization"] = {"type": "rms_norm"}
         if self.output_scale is not None:
             config_dict["output_scale"] = {"enabled": True}
+        if self.pre_mixer_normalization is not None:
+            config_dict["pre_mixer_normalization"] = self.pre_mixer_normalization
+        if self.pre_mlp_normalization is not None:
+            config_dict["pre_mlp_normalization"] = self.pre_mlp_normalization
         return DecoderBlockConfig.from_dict(config_dict)
 
     @functools.cached_property
@@ -82,6 +90,17 @@ _base_post_norm_cases = [
     ("post_mlp_norm", {"post_mlp_norm": True}),
     ("both_post_norms", {"post_mixer_norm": True, "post_mlp_norm": True}),
     ("output_scale", {"output_scale": 2.5}),
+    # `{"type": "none"}` disables the position-specific pre-norm. Gemma 4's MoE block path uses
+    # this to skip the pre-MLP norm (the routed branch owns its own pre/post norms).
+    ("pre_mixer_norm_disabled", {"pre_mixer_normalization": {"type": "none"}}),
+    ("pre_mlp_norm_disabled", {"pre_mlp_normalization": {"type": "none"}}),
+    (
+        "pre_norms_disabled",
+        {
+            "pre_mixer_normalization": {"type": "none"},
+            "pre_mlp_normalization": {"type": "none"},
+        },
+    ),
 ]
 
 _post_norm_test_configs = [PostNormTestConfig(name=name, **kwargs) for name, kwargs in _base_post_norm_cases]

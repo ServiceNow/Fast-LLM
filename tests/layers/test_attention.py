@@ -21,8 +21,17 @@ _KV_HEADS = 2
 _HEAD_SIZE = 16
 
 
-def _compute_rotary_freqs(seq_len: int, head_size: int, theta: float, device: torch.device) -> torch.Tensor:
+def _compute_rotary_freqs(
+    seq_len: int,
+    head_size: int,
+    theta: float,
+    device: torch.device,
+    partial_rotary_factor: float | None = None,
+) -> torch.Tensor:
     angle_scales = theta ** (-torch.arange(0, 1, 2 / head_size, dtype=torch.float64, device=device))
+    if partial_rotary_factor is not None:
+        rotary_pairs = round(head_size * partial_rotary_factor) // 2
+        angle_scales[rotary_pairs:] = 0
     positions = torch.arange(seq_len, dtype=torch.float64, device=device)
     angles = torch.outer(positions, angle_scales)
     freqs = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1).to(torch.float32)
@@ -50,6 +59,7 @@ class AttentionTestConfig:
     shared_key_value: bool = False
     rotary: bool = False
     rotary_theta: float = 10000.0
+    rotary_partial_rotary_factor: float | None = None
 
     @property
     def hidden_size(self) -> int:
@@ -79,7 +89,14 @@ class AttentionTestConfig:
         if self.shared_key_value:
             config["shared_key_value"] = True
         if self.rotary:
-            config["rotary"] = {"type": "default", "theta": self.rotary_theta}
+            if self.rotary_partial_rotary_factor is not None:
+                config["rotary"] = {
+                    "type": "proportional",
+                    "theta": self.rotary_theta,
+                    "partial_rotary_factor": self.rotary_partial_rotary_factor,
+                }
+            else:
+                config["rotary"] = {"type": "default", "theta": self.rotary_theta}
         return AttentionConfig.from_dict(config)
 
     def expected_output(
@@ -118,11 +135,16 @@ class AttentionTestConfig:
                 kv = torch.cat([kv[:, : self.kv_heads, :], value_normed], dim=1)
 
             if self.rotary:
-                freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, self.rotary_theta, input_.device)
+                freqs = _compute_rotary_freqs(
+                    input_.shape[0],
+                    self.head_size,
+                    self.rotary_theta,
+                    input_.device,
+                    partial_rotary_factor=self.rotary_partial_rotary_factor,
+                )
                 q = _apply_rotary(q, freqs)
                 k_rotated = _apply_rotary(kv[:, : self.kv_heads, :], freqs)
                 kv = torch.cat([k_rotated, kv[:, self.kv_heads :, :]], dim=1)
-
 
             k, v = kv[:, : self.kv_heads, :], kv[:, self.kv_heads :, :]
             scale = self.head_size**-0.5
@@ -177,6 +199,12 @@ _attention_norm_variants = [
 
 _attention_shared_key_value_cases = [
     ("shared_key_value", {"shared_key_value": True}),
+    ("shared_key_value_rotary", {"shared_key_value": True, "rotary": True}),
+    # Gemma 4's full-attention layer combines shared_key_value with ProportionalRotary.
+    (
+        "shared_key_value_proportional_rotary",
+        {"shared_key_value": True, "rotary": True, "rotary_partial_rotary_factor": 0.5},
+    ),
 ]
 
 _attention_shared_key_value_norm_variants = [

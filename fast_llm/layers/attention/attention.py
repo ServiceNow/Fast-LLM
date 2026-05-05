@@ -258,6 +258,28 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             softmax_scale=self._softmax_scale,
         )
 
+    def _apply_norm_with_grad_capture(
+        self, norm: typing.Callable, x: torch.Tensor
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        # Run `norm` and, in training, save (leaf, output) so backward can replay only the norm
+        # sub-graph between rotary's manual fwd/bwd. Eval shares the unified contiguous() call —
+        # RMSNormalization uses .view() internally and rejects non-contiguous inputs.
+        x = x.contiguous()
+        if self.training:
+            with torch.enable_grad():
+                leaf = x.detach().requires_grad_()
+                normed = norm(leaf)
+            return normed.detach(), (leaf, normed)
+        return norm(x), None
+
+    @staticmethod
+    def _backward_norm_capture(context: tuple[torch.Tensor, torch.Tensor] | None, grad: torch.Tensor) -> torch.Tensor:
+        if context is None:
+            return grad
+        leaf, normed = context
+        normed.backward(grad.contiguous())
+        return leaf.grad
+
     def _query_key_value_forward(
         self, input_: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, typing.Any]]:
@@ -283,40 +305,16 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         query_norm_context = None
         if self._config.query_norm is not None:
-            if self.training:
-                with torch.enable_grad():
-                    query_leaf = query_unflat.contiguous().detach().requires_grad_()
-                    query_normed = self.query_norm(query_leaf)
-                query_norm_context = (query_leaf, query_normed)
-                query_unflat = query_normed.detach()
-            else:
-                query_unflat = self.query_norm(query_unflat)
+            query_unflat, query_norm_context = self._apply_norm_with_grad_capture(self.query_norm, query_unflat)
 
         key_norm_context = None
         value_norm_context = None
         if self._config.key_norm is not None or self._config.value_norm is not None:
             key_unflat, value_unflat = kv_unflat.chunk(2, dim=1)
             if self._config.key_norm is not None:
-                # .contiguous() is required because RMSNormalization uses .view() internally.
-                key_unflat = key_unflat.contiguous()
-                if self.training:
-                    with torch.enable_grad():
-                        key_leaf = key_unflat.detach().requires_grad_()
-                        key_normed = self.key_norm(key_leaf)
-                    key_norm_context = (key_leaf, key_normed)
-                    key_unflat = key_normed.detach()
-                else:
-                    key_unflat = self.key_norm(key_unflat)
+                key_unflat, key_norm_context = self._apply_norm_with_grad_capture(self.key_norm, key_unflat)
             if self._config.value_norm is not None:
-                value_unflat = value_unflat.contiguous()
-                if self.training:
-                    with torch.enable_grad():
-                        value_leaf = value_unflat.detach().requires_grad_()
-                        value_normed = self.value_norm(value_leaf)
-                    value_norm_context = (value_leaf, value_normed)
-                    value_unflat = value_normed.detach()
-                else:
-                    value_unflat = self.value_norm(value_unflat)
+                value_unflat, value_norm_context = self._apply_norm_with_grad_capture(self.value_norm, value_unflat)
             kv_unflat = torch.cat([key_unflat, value_unflat], dim=1)
 
         query, key_value, rotary_context = self._rotary.forward_only(
@@ -355,10 +353,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         rotary_context = context.pop("rotary")
         query_grad, _ = self._rotary.backward(query_grad, None, rotary_context)
 
-        if (query_norm_context := context.pop("query_norm")) is not None:
-            query_leaf, query_normed = query_norm_context
-            query_normed.backward(query_grad)
-            query_grad = query_leaf.grad
+        query_grad = self._backward_norm_capture(context.pop("query_norm"), query_grad)
 
         # TODO: Overlap with both.
         input_grad = self.query.backward(query_grad.flatten(1), context.pop("query"))
@@ -372,14 +367,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         value_norm_context = context.pop("value_norm")
         if key_norm_context is not None or value_norm_context is not None:
             key_grad, value_grad = key_value_grad.chunk(2, dim=1)
-            if key_norm_context is not None:
-                key_leaf, key_normed = key_norm_context
-                key_normed.backward(key_grad.contiguous())
-                key_grad = key_leaf.grad
-            if value_norm_context is not None:
-                value_leaf, value_normed = value_norm_context
-                value_normed.backward(value_grad.contiguous())
-                value_grad = value_leaf.grad
+            key_grad = self._backward_norm_capture(key_norm_context, key_grad)
+            value_grad = self._backward_norm_capture(value_norm_context, value_grad)
             key_value_grad = torch.cat([key_grad, value_grad], dim=1)
 
         if self._config.shared_key_value:
