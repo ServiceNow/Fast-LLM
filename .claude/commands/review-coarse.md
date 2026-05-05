@@ -16,6 +16,8 @@ On a follow-up review after fixes have been pushed, run `git diff <last-reviewed
 - **Structure & consistency**: does new code match neighbor patterns and existing abstractions? Flag arbitrary divergences from existing conventions and parallel implementations of things the codebase already provides. New features should extend existing abstractions, not fork them for a specific use case.
 - **Simplification**: actively look for non-trivial refactoring opportunities — places where the change could be smaller, an abstraction could be reused, or a new abstraction isn't earning its keep.
 - **Test coverage**: new code paths should have tests; modified behavior should have updated tests. Untested control flow is a flag.
+- **Performance**: regressions on hot paths, accidental quadratic behavior, redundant work in inner loops, unnecessary allocations or device transfers, missed batching/fusion opportunities.
+- **Security**: untrusted input reaching `eval`/`exec`/shell/SQL/path-construction without sanitization, secrets in code or logs, deserialization of untrusted data, weak crypto, and any new attack surface introduced by the change.
 - **Scope**: features, abstractions, validation, fallbacks, or backwards-compat shims beyond what the task requires.
 
 ## Output
