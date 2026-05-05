@@ -38,9 +38,28 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self,
         config: ConfigType,
         distributed_config: DistributedConfig,
-        **kwargs,
+        *,
+        name: str,
+        prediction_distance: int = 1,
+        prediction_heads: int = 1,
+        vocab_parallel: bool = False,
+        num_splits: int = 1,
+        logits_scale_factor: float = 1.0,
+        weight: float = 1.0,
+        register_loss: bool = False,
     ):
-        super().__init__(config, distributed_config, **kwargs)
+        super().__init__(
+            config,
+            distributed_config,
+            name=name,
+            prediction_distance=prediction_distance,
+            prediction_heads=prediction_heads,
+            vocab_parallel=vocab_parallel,
+            num_splits=num_splits,
+            logits_scale_factor=logits_scale_factor,
+            weight=weight,
+            register_loss=register_loss,
+        )
         # MAX/MIN reductions are unsafe under pipeline parallelism: ranks without this loss layer
         # contribute a torch.zeros([1]) placeholder in LossDef.reduce, which corrupts the extremum
         # whenever the real value has the opposite sign.
@@ -89,6 +108,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
         )
 
+        # Skip the extra softmax pass when there is nothing to register.
         if losses is not None and self._config.metrics != GRPOMetricsLevel.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index)
 
@@ -98,14 +118,14 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self,
         logits: torch.Tensor,
         kwargs: dict[str, typing.Any],
-        losses: dict,
+        losses: dict[str, list[torch.Tensor]],
         split_index: int,
     ) -> None:
         metrics = compute_grpo_metrics(
             logits,
             self._get_labels(kwargs, split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
             self._config.epsilon_low,
             self._config.epsilon_high,
@@ -114,8 +134,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             compute_entropy=self._config.metrics == GRPOMetricsLevel.with_entropy,
         )
 
-        num_docs = kwargs[LanguageModelKwargs.num_documents_in_batch]
-        name = self._name
+        num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
 
         for attr in (
             "old_logprobs",
@@ -124,49 +143,51 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             "clipped_ratio_fraction",
             "advantage",
         ):
-            self._register_loss(f"{name}_{attr}", getattr(metrics, attr) / num_docs, losses)
+            self._register_loss(f"{self._name}_{attr}", getattr(metrics, attr) / num_documents, losses)
 
         for attr in (
             "ratio_new_old_sum",
             "ratio_new_old_squared_sum",
             "num_tokens",
         ):
-            self._register_loss(f"{name}_{attr}", getattr(metrics, attr), losses)
+            self._register_loss(f"{self._name}_{attr}", getattr(metrics, attr), losses)
 
         self._register_loss(
-            f"{name}_max_advantage",
+            f"{self._name}_max_advantage",
             metrics.max_advantage,
             losses,
             reduce_op=torch.distributed.ReduceOp.MAX,
         )
         self._register_loss(
-            f"{name}_min_advantage",
+            f"{self._name}_min_advantage",
             metrics.min_advantage,
             losses,
             reduce_op=torch.distributed.ReduceOp.MIN,
         )
 
         if metrics.entropy is not None:
-            self._register_loss(f"{name}_entropy", metrics.entropy / num_docs, losses)
+            self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
     def get_loss_definitions(self) -> list[LossDef]:
-        defs = super().get_loss_definitions() + [LossDef(self._logprob_metric_name)]
+        defs = super().get_loss_definitions()
+        defs.append(LossDef(self._logprob_metric_name))
         if self._config.metrics != GRPOMetricsLevel.none:
-            name = self._name
-            defs += [
-                LossDef(f"{name}_old_logprobs"),
-                LossDef(f"{name}_ratio_new_old"),
-                LossDef(f"{name}_ratio_new_old_sum"),
-                LossDef(f"{name}_ratio_new_old_squared_sum"),
-                LossDef(f"{name}_kl_new_old"),
-                LossDef(f"{name}_clipped_ratio_fraction"),
-                LossDef(f"{name}_advantage"),
-                LossDef(f"{name}_max_advantage", reduction=ReductionType.maximum),
-                LossDef(f"{name}_min_advantage", reduction=ReductionType.minimum),
-                LossDef(f"{name}_num_tokens"),
-            ]
+            defs.extend(
+                [
+                    LossDef(f"{self._name}_old_logprobs"),
+                    LossDef(f"{self._name}_ratio_new_old"),
+                    LossDef(f"{self._name}_ratio_new_old_sum"),
+                    LossDef(f"{self._name}_ratio_new_old_squared_sum"),
+                    LossDef(f"{self._name}_kl_new_old"),
+                    LossDef(f"{self._name}_clipped_ratio_fraction"),
+                    LossDef(f"{self._name}_advantage"),
+                    LossDef(f"{self._name}_max_advantage", reduction=ReductionType.maximum),
+                    LossDef(f"{self._name}_min_advantage", reduction=ReductionType.minimum),
+                    LossDef(f"{self._name}_num_tokens"),
+                ]
+            )
             if self._config.metrics == GRPOMetricsLevel.with_entropy:
-                defs.append(LossDef(f"{name}_entropy"))
+                defs.append(LossDef(f"{self._name}_entropy"))
         return defs
 
     def get_preprocessing_config(
@@ -179,23 +200,62 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         return f"{self._name}_new_logprobs"
 
 
-@torch.compile
 def compute_grpo_metrics(
     logits: torch.Tensor,  # (*batch, vocab_local)
     target: torch.Tensor,  # (*batch,)
-    old_log_probabilities: torch.Tensor,  # (*batch,)
     advantages: torch.Tensor,  # (*batch,)
+    old_log_probabilities: torch.Tensor,  # (*batch,)
     label_counts: torch.Tensor,  # (*batch,) — global per-sequence count broadcast per token
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+    group: torch.distributed.ProcessGroup | None = None,
+    compute_entropy: bool = False,
+) -> GRPOMetrics:
+    return GRPOMetrics(
+        *_compute_grpo_metrics(
+            logits,
+            target,
+            advantages,
+            old_log_probabilities,
+            label_counts,
+            epsilon_low,
+            epsilon_high,
+            logits_scale_factor,
+            group,
+            compute_entropy,
+        )
+    )
+
+
+@torch.compile
+def _compute_grpo_metrics(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    advantages: torch.Tensor,
+    old_log_probabilities: torch.Tensor,
+    label_counts: torch.Tensor,
     epsilon_low: float,
     epsilon_high: float,
     logits_scale_factor: float,
     group: torch.distributed.ProcessGroup | None,
     compute_entropy: bool,
-) -> GRPOMetrics:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+]:
     loss_mask = target >= 0
     mask = loss_mask.float()
-    denom = label_counts.float().clamp(min=1)
-    masked = mask / denom
+    masked = mask / label_counts.float().clamp(min=1)
 
     logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
     predicted_logits, _, _ = fused_predicted_logits_from_labels(logits_norm, target, loss_mask, group)
@@ -204,29 +264,29 @@ def compute_grpo_metrics(
     log_ratio = new_log_probs - old_log_probabilities
     ratio = log_ratio.exp()
     clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
-    # Schulman k3 KL approximation: exp(r) - r - 1
+    # k3
     kl = ratio - log_ratio - 1.0
 
     neg_inf = advantages.new_full((), float("-inf"))
     pos_inf = advantages.new_full((), float("inf"))
 
-    entropy = None
+    entropy: torch.Tensor | None = None
     if compute_entropy:
         entropy_per_token = sum_exp_logits.log() - (exp_logits * logits_norm).sum(-1) / sum_exp_logits
         entropy = (entropy_per_token * masked).sum()
 
-    return GRPOMetrics(
-        old_logprobs=(old_log_probabilities * masked).sum(),
-        ratio_new_old=(ratio * masked).sum(),
-        ratio_new_old_sum=(ratio * mask).sum(),
-        ratio_new_old_squared_sum=(ratio * ratio * mask).sum(),
-        kl_new_old=(kl * masked).sum(),
-        clipped_ratio_fraction=(clipped.float() * masked).sum(),
-        advantage=(advantages * masked).sum(),
-        max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
-        min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
-        num_tokens=mask.sum(),
-        entropy=entropy,
+    return (
+        (old_log_probabilities * masked).sum(),
+        (ratio * masked).sum(),
+        (ratio * mask).sum(),
+        (ratio * ratio * mask).sum(),
+        (kl * masked).sum(),
+        (clipped.float() * masked).sum(),
+        (advantages * masked).sum(),
+        torch.where(loss_mask, advantages, neg_inf).max(),
+        torch.where(loss_mask, advantages, pos_inf).min(),
+        mask.sum(),
+        entropy,
     )
 
 

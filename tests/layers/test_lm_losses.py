@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import random
 
@@ -16,7 +17,11 @@ from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
-from fast_llm.layers.language_model.loss.grpo import compute_grpo_metrics, fused_grpo_loss_forward_backward
+from fast_llm.layers.language_model.loss.grpo import (
+    GRPOMetrics,
+    compute_grpo_metrics,
+    fused_grpo_loss_forward_backward,
+)
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
 from fast_llm.utils import Assert
@@ -131,7 +136,7 @@ def reference_grpo_metrics(
     epsilon_high: float,
     logits_scale_factor: float,
     compute_entropy: bool,
-) -> dict[str, torch.Tensor]:
+) -> GRPOMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
     mask = loss_mask.float()
@@ -143,23 +148,24 @@ def reference_grpo_metrics(
     clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
     kl = ratio - log_ratio - 1.0
 
-    metrics = {
-        "old_logprobs": (old_log_probabilities.float() * masked).sum(),
-        "ratio_new_old": (ratio * masked).sum(),
-        "ratio_new_old_sum": (ratio * mask).sum(),
-        "ratio_new_old_squared_sum": (ratio * ratio * mask).sum(),
-        "kl_new_old": (kl * masked).sum(),
-        "clipped_ratio_fraction": (clipped.float() * masked).sum(),
-        "advantage": (advantages.float() * masked).sum(),
-        "max_advantage": advantages[loss_mask].max(),
-        "min_advantage": advantages[loss_mask].min(),
-        "num_tokens": mask.sum(),
-        "entropy": None,
-    }
+    entropy = None
     if compute_entropy:
         entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
-        metrics["entropy"] = (entropy_per_token * masked).sum()
-    return metrics
+        entropy = (entropy_per_token * masked).sum()
+
+    return GRPOMetrics(
+        old_logprobs=(old_log_probabilities.float() * masked).sum(),
+        ratio_new_old=(ratio * masked).sum(),
+        ratio_new_old_sum=(ratio * mask).sum(),
+        ratio_new_old_squared_sum=(ratio * ratio * mask).sum(),
+        kl_new_old=(kl * masked).sum(),
+        clipped_ratio_fraction=(clipped.float() * masked).sum(),
+        advantage=(advantages.float() * masked).sum(),
+        max_advantage=advantages[loss_mask].max(),
+        min_advantage=advantages[loss_mask].min(),
+        num_tokens=mask.sum(),
+        entropy=entropy,
+    )
 
 
 def reference_grpo_loss(
@@ -345,18 +351,26 @@ def _test_grpo_loss(
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
+def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:
+    for field in dataclasses.fields(GRPOMetrics):
+        ref_value = getattr(ref, field.name)
+        got_value = getattr(got, field.name)
+        if ref_value is None:
+            assert got_value is None, field.name
+        else:
+            Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
+
+
 def _test_grpo_metrics(
     batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, group=None
 ):
     logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
         num_columns, loss_masking, batch_shape, dtype
     )
-    num_labels = max(int((target >= 0).sum().item()), 1)
-    label_counts = torch.where(
-        target >= 0,
-        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
-        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
-    )
+    # Different denominators per position so the per-token-mean broadcasting is exercised.
+    label_counts = (torch.arange(target.numel(), device=target.device).reshape(target.shape) % 5 + 1).to(
+        torch.int32
+    ) * (target >= 0)
 
     ref = reference_grpo_metrics(
         logits,
@@ -372,8 +386,8 @@ def _test_grpo_metrics(
     got = compute_grpo_metrics(
         split_op(logits, group, -1).contiguous(),
         target,
-        old_log_probabilities,
         advantages,
+        old_log_probabilities,
         label_counts,
         epsilon_low=0.2,
         epsilon_high=0.2,
@@ -381,12 +395,7 @@ def _test_grpo_metrics(
         group=group,
         compute_entropy=compute_entropy,
     )
-    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
-    for key, ref_value in ref.items():
-        if ref_value is None:
-            assert getattr(got, key) is None
-        else:
-            Assert.rms_close_relative(getattr(got, key), ref_value, threshold, 1e-6)
+    _check_grpo_metrics(ref, got, threshold=1e-5 if dtype == DataType.float32 else 1e-4)
 
 
 def _test_z_loss(

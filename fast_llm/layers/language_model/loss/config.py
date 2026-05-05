@@ -216,8 +216,8 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         default=GRPOMetricsLevel.none,
         desc=(
             "Additional GRPO metrics to log. "
-            "`basic`: old_logprobs, ratio, KL(new||old), advantage stats, clipped fraction, token count. "
-            "`with_entropy`: also log per-token entropy (-Σ p log p). "
+            "`basic`: per-token ratio, KL, and advantage statistics. "
+            "`with_entropy`: also log per-token entropy. "
             "Not supported with pipeline_parallel > 1."
         ),
         hint=FieldHint.feature,
