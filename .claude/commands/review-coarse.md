@@ -29,6 +29,6 @@ Each numbered item must stand on its own as a concrete, actionable finding — a
 
 When an item refers to specific code, include a path from the repo root and the relevant line number(s), in the form `path/to/file.py:42` or `path/to/file.py:42-58`.
 
-Number every item (1, 2, 3...). Insert a literal blank line in the source between consecutive numbered items — `2.` must not begin on the line right after item `1.`'s last line — so the rendered output has visible vertical spacing and items don't run together. Don't use unnumbered bullets where ordinals would make items addressable.
+Format each item as a **standalone paragraph beginning with a bolded number**, e.g. `**1.** <finding>...`, *not* as a Markdown ordered list (`1. ...\n2. ...`) — terminal renderers collapse ordered lists to a tight layout regardless of source blank lines, but standalone paragraphs render with normal vertical spacing. Insert a blank line between items. Don't use unnumbered bullets where ordinals would make items addressable.
 
 Surrounding sections (overview, summary, framing) are fine. Put non-actionable observations — maintenance hazards, meta-comments, things you noticed but can't propose a concrete action for — in a `## Notes` section *after* the numbered list, not inside it.
