@@ -62,7 +62,7 @@ class MLPConfig(MLPBaseConfig):
     activation: ActivationType = Field(
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
-        hint=FieldHint.core,
+        hint=FieldHint.architecture,
     )
     # normalization_implementation: NormalizationImplementation = NormalizationImplementation.auto
     recompute_level: MLPRecomputeLevel = Field(
@@ -95,7 +95,7 @@ class MoEMLPConfig(MLPConfig):
     router: LinearConfig = Field(
         # TODO: Improve default?
         desc="Configuration for the MoE router.",
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     experts: int = Field(
         default=2,

@@ -78,10 +78,10 @@ class Llama3RotaryConfig(DefaultRotaryConfig):
     """
 
     # TODO: Add descriptions.
-    scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
-    low_frequency_factor: float = Field(default=1.0, hint=FieldHint.feature)
-    high_frequency_factor: float = Field(default=4.0, hint=FieldHint.feature)
-    original_context_length: int = Field(default=8192, hint=FieldHint.feature)
+    scale_factor: float = Field(default=8.0, hint=FieldHint.architecture)
+    low_frequency_factor: float = Field(default=1.0, hint=FieldHint.architecture)
+    high_frequency_factor: float = Field(default=4.0, hint=FieldHint.architecture)
+    original_context_length: int = Field(default=8192, hint=FieldHint.architecture)
 
     def _validate(self) -> None:
         super()._validate()
@@ -102,20 +102,20 @@ class YarnRotaryConfig(DefaultRotaryConfig):
     """
 
     # TODO: Add descriptions.
-    scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
+    scale_factor: float = Field(default=8.0, hint=FieldHint.architecture)
     attention_factor: None | float = Field(
         default=None,
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     beta_fast: float = Field(
         default=32.0,
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     beta_slow: float = Field(
         default=1.0,
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
-    original_context_length: int = Field(default=8192, hint=FieldHint.feature)
+    original_context_length: int = Field(default=8192, hint=FieldHint.architecture)
 
     def _validate(self) -> None:
         if self.attention_factor is None:

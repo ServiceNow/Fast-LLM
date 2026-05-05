@@ -156,7 +156,7 @@ class StochasticMixerConfig(MixerConfig):
         "Used for inference/eval, checkpoint loading (receives pretrained weights), "
         "and checkpoint saving (only this mixer is exported). "
         "If None, uses the first mixer in the dict.",
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
 
     seed_shift: int = Field(
