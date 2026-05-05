@@ -36,7 +36,7 @@ Make sure the following tasks are completed before submitting the PR:
 - [ ] 🎉 The functionality is complete, and I have tested the changes.
 - [ ] 📝 I have updated the documentation if needed.
 - [ ] ⚠️ The change does not introduce any new issues (e.g., runtime warnings, type checker errors, linting problems, unhandled edge cases).
-- [ ] 🧩 I have commented my code, especially in hard-to-understand areas.
+- [ ] 🧱 My change follows the project's [design principles](https://servicenow.github.io/Fast-LLM/contributing/contributing) (generalize over special-case, no overhead when unused, no deadweight, trust internal boundaries).
 - [ ] 🤖 I have run `/review-coarse` in [Claude Code](https://claude.com/claude-code), addressed its findings, and then run `/review-fine` on the updated branch (or knowingly dismissed findings from both passes).
 
 ### Dependencies and Configuration
