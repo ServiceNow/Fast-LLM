@@ -17,7 +17,11 @@ _HIDDEN_SIZE = 128
 _INTERMEDIATE_SIZE = 128
 _EXPERTS = 4
 
-_NORM = {"type": "rms_norm"}
+
+def _norm() -> dict:
+    # Fresh dict per call: `from_dict` consumes the `type` key during parsing, so a shared
+    # module-level dict would silently become `{}` (i.e. default `layer_norm`) on second use.
+    return {"type": "rms_norm"}
 
 
 @dataclasses.dataclass
@@ -46,28 +50,34 @@ class HybridMoEMLPTestConfig:
             "experts_per_token": self.experts_per_token,
         }
         if self.dense_pre_norm:
-            dense["pre_norm"] = _NORM
+            dense["pre_norm"] = _norm()
         if self.dense_post_norm:
-            dense["post_norm"] = _NORM
+            dense["post_norm"] = _norm()
         if self.routed_pre_norm:
-            routed["pre_norm"] = _NORM
+            routed["pre_norm"] = _norm()
         if self.routed_post_norm:
-            routed["post_norm"] = _NORM
+            routed["post_norm"] = _norm()
         wrapper: dict = {"dense": dense, "routed": routed}
         if self.wrapper_pre_norm:
-            wrapper["pre_norm"] = _NORM
+            wrapper["pre_norm"] = _norm()
         if self.wrapper_post_norm:
-            wrapper["post_norm"] = _NORM
+            wrapper["post_norm"] = _norm()
         return HybridMoEMLPConfig.from_dict(wrapper)
 
     def expected_output(self, hybrid: HybridMoEMLP, input_: torch.Tensor, kwargs: dict) -> torch.Tensor:
+        # Hybrid-assembly test. The dense and routed branches are treated as black boxes (covered
+        # by `MLP` and `MixtureOfExpertMLP` tests); pre/post norms are computed via
+        # `torch.rms_norm` so the wrapper's norms do not appear in their own reference.
+        def _rms_norm(x: torch.Tensor, norm_module) -> torch.Tensor:
+            return torch.rms_norm(x, x.shape[-1:], norm_module.weight, 1e-5)
+
         with torch.no_grad():
-            shared = hybrid.pre_norm(input_) if hybrid.pre_norm is not None else input_
+            shared = _rms_norm(input_, hybrid.pre_norm) if hybrid.pre_norm is not None else input_
             dense_out, _ = hybrid.dense(shared, kwargs)
             routed_out, _ = hybrid.routed(shared, kwargs)
             out = dense_out + routed_out
             if hybrid.post_norm is not None:
-                out = hybrid.post_norm(out)
+                out = _rms_norm(out, hybrid.post_norm)
             return out
 
 

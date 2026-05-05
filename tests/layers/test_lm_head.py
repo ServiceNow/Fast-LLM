@@ -256,6 +256,8 @@ _add_configs("bfloat16", compute_dtype=DataType.bfloat16)
 _add_configs("full_precision_residual", full_precision_residual=True)
 _add_configs("logit_scaling", logits_scale_factor=5.0)
 _add_configs("final_logit_softcap", final_logit_softcap=2.0)
+# Locks the softcap → scale ordering: scale * tanh(linear / cap) * cap, applied before softmax.
+_add_configs("softcap_and_logit_scaling", final_logit_softcap=2.0, logits_scale_factor=5.0)
 _add_configs("tied_embedding_weight", tied_embedding_weight=True)
 _add_configs("multi_token_prediction", prediction_heads=2)
 _add_configs("label_loss", label_loss=True)

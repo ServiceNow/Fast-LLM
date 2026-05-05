@@ -154,12 +154,8 @@ class ProportionalRotaryConfig(DefaultRotaryConfig):
         default=1.0,
         desc="Fraction of head dimensions to apply rotary embeddings to.",
         hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
+        valid=check_field(Assert.in_range_incl, 0, 1.0),
     )
-
-    def _validate(self) -> None:
-        super()._validate()
-        Assert.leq(self.partial_rotary_factor, 1.0)
 
     def _get_configurable_class(self) -> "type[ProportionalRotary]":
         from fast_llm.layers.attention.rotary.rotary import ProportionalRotary

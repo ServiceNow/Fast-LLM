@@ -248,6 +248,14 @@ class LlamaAttentionConverter:
     def export_config(cls, config: AttentionConfig) -> dict:
         cls._check_config(config)
         Assert.eq(config.softmax_scale_power, 0.5)
+        if config.query_norm is not None:
+            raise NotImplementedError(f"`query_norm` is not supported by `{cls.__name__}`.")
+        if config.key_norm is not None:
+            raise NotImplementedError(f"`key_norm` is not supported by `{cls.__name__}`.")
+        if config.value_norm is not None:
+            raise NotImplementedError(f"`value_norm` is not supported by `{cls.__name__}`.")
+        if config.shared_key_value:
+            raise NotImplementedError(f"`shared_key_value` is not supported by `{cls.__name__}`.")
         rope_parameters = {"rope_theta": config.rotary.theta}
         if type(config.rotary) is DefaultRotaryConfig:
             rope_parameters["rope_type"] = "default"
@@ -389,6 +397,14 @@ class LlamaBlockConverter:
         Assert.custom(isinstance, config, DecoderBlockConfig)
         if config.output_scale.enabled:
             raise NotImplementedError(f"`output_scale` is not supported by `{cls.__name__}`.")
+        if config.pre_mixer_normalization is not None:
+            raise NotImplementedError(f"`pre_mixer_normalization` is not supported by `{cls.__name__}`.")
+        if config.pre_mlp_normalization is not None:
+            raise NotImplementedError(f"`pre_mlp_normalization` is not supported by `{cls.__name__}`.")
+        if config.post_mixer_normalization is not None:
+            raise NotImplementedError(f"`post_mixer_normalization` is not supported by `{cls.__name__}`.")
+        if config.post_mlp_normalization is not None:
+            raise NotImplementedError(f"`post_mlp_normalization` is not supported by `{cls.__name__}`.")
         return safe_merge_dicts(
             cls.mixer_converter_class.export_config(config.mixer),
             cls.mlp_converter_class.export_config(config.mlp),
@@ -489,6 +505,7 @@ class LlamaEmbeddingsConverter:
     def export_config(cls, config: LanguageModelEmbeddingsConfig) -> dict:
         Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
         assert not config.position_embeddings.enabled
+        Assert.eq(config.embedding_scale, 1.0)
         return {"vocab_size": config.vocab_size}
 
     @classmethod
@@ -509,6 +526,8 @@ class LlamaHeadConverter:
     @classmethod
     def export_config(cls, config: LanguageModelHeadConfig) -> dict:
         Assert.custom(isinstance, config, LanguageModelHeadConfig)
+        if config.final_logit_softcap is not None:
+            raise NotImplementedError(f"`final_logit_softcap` is not supported by `{cls.__name__}`.")
         return cls.normalization_converter_class.export_config(config.normalization)
 
     @classmethod

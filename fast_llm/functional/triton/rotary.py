@@ -83,6 +83,9 @@ def triton_rotary_(
     if not inplace:
         out = torch.empty_like(input_)
         write = out
+        if is_key_value:
+            # The kernel only writes the key chunk; copy the value chunk so `out` is fully defined.
+            out.chunk(2, dim=-2)[1].copy_(input_.chunk(2, dim=-2)[1])
     if input_.ndim == 3:
         input_ = input_.unsqueeze(0)
         write = write.unsqueeze(0)

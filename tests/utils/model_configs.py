@@ -1058,7 +1058,13 @@ update_and_add_testing_config(
     },
     megatron_args=None,
     checkpoint_format=Gemma4CheckpointFormat,
-    compare_factor=8.0,  # init_1 on post_mlp_norm and routed.pre_norm makes their gradients tiny (~5e-6 / ~3e-5), hitting the fp16 rms_eps floor
+    # 8.0 trades two competing fp16/bf16 noise sources:
+    #   - init_1 on extra norms keeps the residual stream small (~0.35) and tiny norm gradients
+    #     (~5e-6 / ~3e-5) hit the fp16 rms_eps floor → would need ~8x slack.
+    #   - ones-init on the same norms grows the residual stream to ~1.5 per block, blowing up
+    #     bf16 absolute errors past compare_factor=2.
+    # Neither end works at compare_factor=2; init_1 + 8.0 is the working balance.
+    compare_factor=8.0,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,

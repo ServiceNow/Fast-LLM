@@ -8,6 +8,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.layers.common.normalization.normalization import NoNormalization
 from fast_llm.layers.decoder.block import DecoderBlock
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from tests.utils.utils import get_stage
@@ -63,19 +64,27 @@ class PostNormTestConfig:
         return 1e-5
 
     def expected_output(self, block: DecoderBlock, input_: torch.Tensor, kwargs: dict) -> torch.Tensor:
+        # Block-assembly test. The mixer and MLP are treated as black boxes (covered by
+        # `test_attention` and `test_mlp` respectively); norms/residual/output_scale are computed
+        # via `torch.rms_norm` so the assembly under test does not appear in its own reference.
+        def _rms_norm(x: torch.Tensor, norm_module) -> torch.Tensor:
+            if isinstance(norm_module, NoNormalization):
+                return x
+            return torch.rms_norm(x, x.shape[-1:], norm_module.weight, 1e-5)
+
         with torch.no_grad():
-            norm1_out = block.norm_1(input_)
+            norm1_out = _rms_norm(input_, block.norm_1)
             mixer_hidden, mixer_bias = block.mixer(norm1_out, kwargs)
             if block.post_mixer_norm is not None:
-                mixer_hidden = block.post_mixer_norm(mixer_hidden)
+                mixer_hidden = _rms_norm(mixer_hidden, block.post_mixer_norm)
             if mixer_bias is not None:
                 mixer_hidden = mixer_hidden + mixer_bias
             after_mixer = input_ + mixer_hidden
 
-            norm2_out = block.norm_2(after_mixer)
+            norm2_out = _rms_norm(after_mixer, block.norm_2)
             mlp_hidden, mlp_bias = block.mlp(norm2_out, kwargs)
             if block.post_mlp_norm is not None:
-                mlp_hidden = block.post_mlp_norm(mlp_hidden)
+                mlp_hidden = _rms_norm(mlp_hidden, block.post_mlp_norm)
             if mlp_bias is not None:
                 mlp_hidden = mlp_hidden + mlp_bias
             output = after_mixer + mlp_hidden

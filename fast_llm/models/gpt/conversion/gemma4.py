@@ -11,7 +11,7 @@ from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpoin
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, ProportionalRotaryConfig
-from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.block.config import PatternBlockSequenceConfig
 from fast_llm.layers.common.normalization.config import FixedRMSNormConfig, RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import HybridMoEMLPConfig, MLPConfig, MoEMLPConfig
@@ -49,7 +49,7 @@ class Gemma4MoELayer1Converter(WeightConverter):
 
     def import_weight(self, weight):
         (gate_up_proj,) = weight
-        # `[:]` materializes the HF safetensors slice into a real tensor before reshape.
+        # `[:]` materializes the HF safetensors slice into a real tensor; `reshape` rejects the slice.
         w = gate_up_proj[:]
         return (w.reshape(-1, w.shape[-1]),)
 
@@ -65,7 +65,7 @@ class Gemma4MoELayer2Converter(WeightConverter):
 
     def import_weight(self, weight):
         (down_proj,) = weight
-        # `[:]` materializes the HF safetensors slice into a real tensor before permute/reshape.
+        # `[:]` materializes the HF safetensors slice into a real tensor; `permute`/`reshape` reject the slice.
         w = down_proj[:]
         return (w.permute(0, 2, 1).reshape(-1, w.shape[1]).contiguous(),)
 
@@ -279,10 +279,16 @@ class Gemma4MoEMLPConverter:
         }
 
     @classmethod
-    def export_config(cls, config: MoEMLPConfig) -> dict:
+    def export_config(cls, config: MoEMLPConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, MoEMLPConfig)
         assert config.gated
         assert not config.add_linear_biases
+        # `import_config` hard-bakes the router preprocessing for Gemma 4; reject any divergence
+        # rather than silently emitting an HF checkpoint that would not load back identically.
+        Assert.custom(isinstance, config.router_normalization, FixedRMSNormConfig)
+        assert config.router_scale.enabled
+        Assert.eq(config.router_input_scale, hidden_size**-0.5)
+        assert config.router_per_expert_scale.enabled
         return {
             "num_experts": config.experts,
             "top_k_experts": config.experts_per_token,
@@ -357,11 +363,11 @@ class Gemma4HybridMoEMLPConverter:
         }
 
     @classmethod
-    def export_config(cls, config: HybridMoEMLPConfig) -> dict:
+    def export_config(cls, config: HybridMoEMLPConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, HybridMoEMLPConfig)
         return safe_merge_dicts(
             Gemma4MLPConverter.export_config(config.dense),
-            Gemma4MoEMLPConverter.export_config(config.routed),
+            Gemma4MoEMLPConverter.export_config(config.routed, hidden_size),
             {"enable_moe_block": True},
         )
 
@@ -424,7 +430,9 @@ class Gemma4BlockConverter:
         return out
 
     @classmethod
-    def export_config(cls, sliding_config: DecoderBlockConfig, full_config: DecoderBlockConfig) -> dict:
+    def export_config(
+        cls, sliding_config: DecoderBlockConfig, full_config: DecoderBlockConfig, hidden_size: int
+    ) -> dict:
         Assert.custom(isinstance, sliding_config, DecoderBlockConfig)
         norm_config = sliding_config.normalization
         Assert.custom(isinstance, norm_config, RMSNormalizationConfig)
@@ -434,7 +442,7 @@ class Gemma4BlockConverter:
             LlamaNormalizationConverter.export_config(norm_config),
         )
         if is_moe:
-            out = safe_merge_dicts(out, Gemma4HybridMoEMLPConverter.export_config(sliding_config.mlp))
+            out = safe_merge_dicts(out, Gemma4HybridMoEMLPConverter.export_config(sliding_config.mlp, hidden_size))
         else:
             out = safe_merge_dicts(out, Gemma4MLPConverter.export_config(sliding_config.mlp))
             out["enable_moe_block"] = False
@@ -526,7 +534,7 @@ class Gemma4DecoderConverter:
         }
 
     @classmethod
-    def export_config(cls, config: PatternBlockSequenceConfig | FixedBlockSequenceConfig) -> dict:
+    def export_config(cls, config: PatternBlockSequenceConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, PatternBlockSequenceConfig)
         Assert.incl(_SLIDING_ATTENTION, config.blocks)
         Assert.incl(_FULL_ATTENTION, config.blocks)
@@ -534,6 +542,7 @@ class Gemma4DecoderConverter:
             cls.block_converter_class.export_config(
                 config.blocks[_SLIDING_ATTENTION],
                 config.blocks[_FULL_ATTENTION],
+                hidden_size,
             ),
             {
                 "num_hidden_layers": config.num_blocks,
@@ -544,7 +553,7 @@ class Gemma4DecoderConverter:
     @classmethod
     def get_converters(
         cls,
-        config: PatternBlockSequenceConfig | FixedBlockSequenceConfig,
+        config: PatternBlockSequenceConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
@@ -630,7 +639,7 @@ class Gemma4BaseModelConverter:
         Assert.custom(isinstance, config, GPTBaseModelConfig)
         return safe_merge_dicts(
             cls.embeddings_converter_class.export_config(config.embeddings, config.hidden_size),
-            cls.decoder_converter_class.export_config(config.decoder),
+            cls.decoder_converter_class.export_config(config.decoder, config.hidden_size),
             cls.head_converter_class.export_config(config.head),
             {
                 "tie_word_embeddings": config.tied_embedding_weight,
