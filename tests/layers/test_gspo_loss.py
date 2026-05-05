@@ -433,8 +433,8 @@ def test_gradient_finite_diff():
 
 
 def test_extra_metrics_are_per_token():
-    """pg_metrics are per-token regardless of GSPO/GRPO — computed from token-level ratios."""
-    from fast_llm.layers.language_model.loss.pg_metrics import compute_policy_gradient_metrics
+    """Extra metrics are per-token regardless of GSPO/GRPO — computed from token-level ratios."""
+    from fast_llm.layers.language_model.loss.grpo import compute_grpo_metrics
 
     torch.manual_seed(7)
     n_tok, vocab = 10, 16
@@ -442,20 +442,19 @@ def test_extra_metrics_are_per_token():
     target = torch.randint(0, vocab, (n_tok,), device=device)
     advantages = torch.randn(n_tok, device=device)
     old_log_probs = torch.randn(n_tok, device=device)
-    label_counts = torch.full((n_tok,), n_tok, dtype=torch.float32, device=device)
+    label_counts = torch.full((n_tok,), n_tok, dtype=torch.int32, device=device)
 
-    metrics = compute_policy_gradient_metrics(
+    metrics = compute_grpo_metrics(
         logits,
         target,
-        old_log_probs,
         advantages,
+        old_log_probs,
         label_counts,
         epsilon_low=0.2,
         epsilon_high=0.2,
         logits_scale_factor=1.0,
-        vocab_parallel_group=None,
+        group=None,
     )
-    # Sanity: metrics are finite scalars
     for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "advantage"):
         val = getattr(metrics, attr)
         assert val.isfinite(), f"{attr} is not finite: {val}"
