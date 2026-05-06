@@ -236,30 +236,38 @@ class CustomConfigConverter(ConfigConverter):
 class NestedConfigConverter(ConfigConverter):
     """Recurse into a fixed-typed sub-config field via another section converter class.
 
-    Exists for Fast-LLM-side modularity: lets a parent converter delegate handling of a sub-config to its own
-    converter class. The HF side is assumed flat — the sub-converter's output is merged into the parent's HF dict.
-    For non-flat HF formats, use ``CustomConfigConverter``.
+    Default (``hf_path=None``): the HF side is flat-merged — the sub-converter's output becomes top-level keys
+    of the parent's HF dict, asserting any pre-existing keys agree.
+
+    With ``hf_path`` set: the sub-converter's output is placed under that nested key. Use this for HF formats
+    that mirror Fast-LLM's modular layout (e.g. Apriel2's ``"decoder": {...}`` and ``"head": {...}`` blocks).
     """
 
     def __init__(
         self,
         fast_llm_path: tuple[str, ...],
         converter_class: "type[ConfigSectionConverter]",
+        hf_path: tuple[str, ...] | None = None,
     ):
         self.fast_llm_paths = (fast_llm_path,)
         self._converter_class = converter_class
+        self._hf_path = hf_path
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         sub_config = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         sub_hf = self._converter_class.export_config(sub_config)
-        for key, value in sub_hf.items():
-            if key in hf_out:
-                Assert.eq(hf_out[key], value)
-            else:
-                hf_out[key] = value
+        if self._hf_path is None:
+            for key, value in sub_hf.items():
+                if key in hf_out:
+                    Assert.eq(hf_out[key], value)
+                else:
+                    hf_out[key] = value
+        else:
+            set_nested_dict_value(hf_out, self._hf_path, sub_hf)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        sub_fast_llm = self._converter_class.import_config(hf_dict)
+        sub_hf = _get_nested(hf_dict, self._hf_path) if self._hf_path is not None else hf_dict
+        sub_fast_llm = self._converter_class.import_config(sub_hf)
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
 
@@ -308,7 +316,79 @@ class DispatchConfigConverter(ConfigConverter):
                 f"No converter registered for HF discriminator {type_name!r} at " f"{'.'.join(self.fast_llm_paths[0])}"
             )
         sub_fast_llm = converter_class.import_config(sub_hf)
+        # Inject the Fast-LLM dynamic-type discriminator so the parent's `from_dict` dispatches to the
+        # correct subclass. Reads from the registered Config class rather than the HF discriminator so
+        # mismatched Fast-LLM/HF type names work too.
+        fast_llm_type = getattr(converter_class.fast_llm_config_class, "dynamic_type_name", None)
+        if fast_llm_type is not None:
+            sub_fast_llm = {"type": fast_llm_type, **sub_fast_llm}
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+
+
+class TypedDictContainerConfigConverter(ConfigConverter):
+    """Maps a Fast-LLM ``dict[str, Config]`` field to an HF ``dict[str, dict]`` where each entry is round-tripped
+    through a per-class section converter selected via the entry's runtime type (export) or HF discriminator (import).
+
+    Each entry's HF subdict carries a discriminator key (``"type"`` by default) populated from the converter's
+    ``hf_type_name``. For homogeneous dicts, register a single class with ``hf_type_name = None``; the discriminator
+    is then omitted on export and ignored on import.
+    """
+
+    def __init__(
+        self,
+        fast_llm_path: tuple[str, ...],
+        hf_path: tuple[str, ...],
+        registry: "dict[type[Config], type[ConfigSectionConverter]]",
+        hf_discriminator_key: str = "type",
+    ):
+        self.fast_llm_paths = (fast_llm_path,)
+        self.hf_paths = (hf_path,)
+        self._registry = registry
+        self._hf_discriminator_key = hf_discriminator_key
+        self._hf_to_class = {cls.hf_type_name: cls for cls in registry.values() if cls.hf_type_name is not None}
+        self._homogeneous = len(registry) == 1 and next(iter(registry.values())).hf_type_name is None
+        if self._homogeneous:
+            self._homogeneous_class = next(iter(registry.values()))
+
+    def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
+        sub_dict = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
+        out: dict = {}
+        for name, sub_config in sub_dict.items():
+            if self._homogeneous:
+                converter_class = self._homogeneous_class
+            else:
+                converter_class = self._registry.get(type(sub_config))
+                if converter_class is None:
+                    raise NotImplementedError(
+                        f"No converter registered for {type(sub_config).__name__} at "
+                        f"{'.'.join(self.fast_llm_paths[0])}[{name!r}]"
+                    )
+            sub_hf = converter_class.export_config(sub_config)
+            if converter_class.hf_type_name is not None:
+                sub_hf = {self._hf_discriminator_key: converter_class.hf_type_name, **sub_hf}
+            out[name] = sub_hf
+        set_nested_dict_value(hf_out, self.hf_paths[0], out)
+
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        sub_hf_dict = _get_nested(hf_dict, self.hf_paths[0])
+        out: dict = {}
+        for name, sub_hf in sub_hf_dict.items():
+            if self._homogeneous:
+                converter_class = self._homogeneous_class
+            else:
+                type_name = sub_hf.get(self._hf_discriminator_key)
+                converter_class = self._hf_to_class.get(type_name)
+                if converter_class is None:
+                    raise NotImplementedError(
+                        f"No converter registered for HF discriminator {type_name!r} at "
+                        f"{'.'.join(self.hf_paths[0])}[{name!r}]"
+                    )
+            sub_fast_llm = converter_class.import_config(sub_hf)
+            fast_llm_type = getattr(converter_class.fast_llm_config_class, "dynamic_type_name", None)
+            if fast_llm_type is not None:
+                sub_fast_llm = {"type": fast_llm_type, **sub_fast_llm}
+            out[name] = sub_fast_llm
+        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], out)
 
 
 # ============================================================
