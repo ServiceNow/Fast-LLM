@@ -1,8 +1,14 @@
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
-from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
+from fast_llm.engine.checkpoint.external import (
+    ConstantImportConfigConverter,
+    IgnoredConfigConverter,
+    RenameConfigConverter,
+    SplitWeightConverter,
+    WeightConverter,
+)
+from fast_llm.layers.decoder.mlp.config import MoEMLPConfig, RoutingType
 from fast_llm.models.gpt.conversion.config import MixtralCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter, MLPLayer2Converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
@@ -12,35 +18,32 @@ from fast_llm.models.gpt.conversion.mistral import (
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
-from fast_llm.utils import Assert, safe_merge_dicts
 
 
 class MixtralMLPConverter(LlamaMLPConverter):
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["mlp_bias"] = False
-        return safe_merge_dicts(
-            super().import_config(config),
-            {
-                "type": "moe",
-                "experts": config["num_local_experts"],
-                "experts_per_token": config["num_experts_per_tok"],
-            },
-        )
+    fast_llm_config_class = MoEMLPConfig
 
     @classmethod
-    def export_config(cls, config: MoEMLPConfig) -> dict:
-        Assert.custom(isinstance, config, MoEMLPConfig)
-        assert not config.add_linear_biases
-        out = super().export_config(config)
-        del out["mlp_bias"]
-        return safe_merge_dicts(
-            out,
-            {
-                "num_local_experts": config.experts,
-                "num_experts_per_tok": config.experts_per_token,
-            },
-        )
+    def _create_config_converters(cls) -> dict:
+        return {
+            **super()._create_config_converters(),
+            # Mixtral has no `mlp_bias` HF field; biases are always disabled.
+            "add_linear_biases": ConstantImportConfigConverter(("add_linear_biases",), False),
+            "experts": RenameConfigConverter(("experts",), ("num_local_experts",)),
+            "experts_per_token": RenameConfigConverter(("experts_per_token",), ("num_experts_per_tok",)),
+            # Mixtral has no shared experts and uses the topk default; assert on export, inject defaults on import.
+            "shared_experts": ConstantImportConfigConverter(("shared_experts",), 0),
+            "routing": ConstantImportConfigConverter(("routing",), RoutingType.topk),
+            # Mixtral's gate is a default LinearConfig (no bias); blanket-consume so coverage passes.
+            "router": IgnoredConfigConverter(("router",)),
+        }
+
+    @classmethod
+    def import_config(cls, hf_dict: dict) -> dict:
+        # Inject the Fast-LLM dynamic-type discriminator so `from_dict` instantiates `MoEMLPConfig`
+        # rather than the default `MLPConfig`. The MLP is wrapped via `NestedConfigConverter`, so
+        # there's no surrounding `DispatchConfigConverter` to inject this for us.
+        return {"type": "moe", **super().import_config(hf_dict)}
 
     @classmethod
     def get_converters(
