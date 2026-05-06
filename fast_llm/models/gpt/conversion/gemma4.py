@@ -449,6 +449,13 @@ class Gemma4BlockConverter:
         norm_config = sliding_config.normalization
         Assert.custom(isinstance, norm_config, RMSNormalizationConfig)
         is_moe = isinstance(sliding_config.mlp, HybridMoEMLPConfig)
+        Assert.eq(isinstance(full_config.mlp, HybridMoEMLPConfig), is_moe)
+        # The MoE block intentionally sets `pre_mlp_normalization=NoNorm` (routed branch owns its norms).
+        for block_config in (sliding_config, full_config):
+            if block_config.pre_mixer_normalization is not None:
+                Assert.eq(block_config.pre_mixer_normalization, block_config.normalization)
+            if not is_moe and block_config.pre_mlp_normalization is not None:
+                Assert.eq(block_config.pre_mlp_normalization, block_config.normalization)
         out = safe_merge_dicts(
             Gemma4AttentionConverter.export_config(sliding_config.mixer, full_config.mixer),
             LlamaNormalizationConverter.export_config(norm_config),

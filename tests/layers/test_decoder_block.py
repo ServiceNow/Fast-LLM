@@ -72,6 +72,9 @@ class PostNormTestConfig:
             norm1_out = _rms_norm(input_, block.norm_1)
             mixer_hidden, mixer_bias = block.mixer(norm1_out, kwargs)
             if block.post_mixer_norm is not None:
+                if mixer_bias is not None:
+                    mixer_hidden = mixer_hidden + mixer_bias
+                    mixer_bias = None
                 mixer_hidden = _rms_norm(mixer_hidden, block.post_mixer_norm)
             if mixer_bias is not None:
                 mixer_hidden = mixer_hidden + mixer_bias
@@ -80,6 +83,9 @@ class PostNormTestConfig:
             norm2_out = _rms_norm(after_mixer, block.norm_2)
             mlp_hidden, mlp_bias = block.mlp(norm2_out, kwargs)
             if block.post_mlp_norm is not None:
+                if mlp_bias is not None:
+                    mlp_hidden = mlp_hidden + mlp_bias
+                    mlp_bias = None
                 mlp_hidden = _rms_norm(mlp_hidden, block.post_mlp_norm)
             if mlp_bias is not None:
                 mlp_hidden = mlp_hidden + mlp_bias
