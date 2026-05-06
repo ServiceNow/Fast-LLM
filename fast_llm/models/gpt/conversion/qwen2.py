@@ -45,7 +45,7 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
         return out
 
     @classmethod
-    def _check_config(cls, config: AttentionConfig) -> None:
+    def _validate_export(cls, config: AttentionConfig) -> None:
         Assert.is_(type(config), AttentionConfig)
         # There are multiple ways to enable biases on QKV only
         if config.add_linear_biases:

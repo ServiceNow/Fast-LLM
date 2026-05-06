@@ -77,7 +77,7 @@ class ConfigConverter(abc.ABC):
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None: ...
 
     @abc.abstractmethod
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None: ...
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None: ...
 
 
 class RenameConfigConverter(ConfigConverter):
@@ -91,7 +91,7 @@ class RenameConfigConverter(ConfigConverter):
         value = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         value = _get_nested(hf_dict, self.hf_paths[0])
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
@@ -109,7 +109,7 @@ class ConstantExportConfigConverter(ConfigConverter):
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         set_nested_dict_value(hf_out, self.hf_paths[0], self._value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         if _has_nested(hf_dict, self.hf_paths[0]):
             actual = _get_nested(hf_dict, self.hf_paths[0])
             Assert.eq(actual, self._value)
@@ -129,7 +129,7 @@ class ConstantImportConfigConverter(ConfigConverter):
         actual = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         Assert.eq(actual, self._value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], self._value)
 
 
@@ -154,7 +154,7 @@ class DefaultConfigConverter(ConfigConverter):
         value = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         if _has_nested(hf_dict, self.hf_paths[0]):
             value = _get_nested(hf_dict, self.hf_paths[0])
         else:
@@ -178,7 +178,7 @@ class OptionalConfigConverter(ConfigConverter):
         if value != self._sentinel:
             set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         if _has_nested(hf_dict, self.hf_paths[0]):
             value = _get_nested(hf_dict, self.hf_paths[0])
             if value != self._sentinel:
@@ -199,26 +199,26 @@ class IgnoredConfigConverter(ConfigConverter):
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         return
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         return
 
 
 class CustomConfigConverter(ConfigConverter):
     """Escape hatch for cross-field transforms (e.g., rotary, where one HF blob ↔ several Fast-LLM fields).
 
-    The export/import callables receive the section's full config and return/produce arbitrary mappings within
-    the declared paths. Both ``fast_llm_paths`` and ``hf_paths`` are still declared so the coverage check works.
+    ``fast_llm_paths`` is declared so the coverage check sees the fields as consumed. The HF side is intentionally
+    not declared — there is no symmetric HF-side coverage check yet, so an ``hf_paths`` argument would be cosmetic.
+    Cross-field validators that produce nothing on the HF side belong on :py:meth:`ConfigSectionConverter._validate_export`
+    instead; this primitive is for shape-changing transforms.
     """
 
     def __init__(
         self,
         fast_llm_paths: tuple[tuple[str, ...], ...],
-        hf_paths: tuple[tuple[str, ...], ...],
         export_fn: typing.Callable[[Config], dict],
-        import_fn: typing.Callable[[dict, dict | None], dict],
+        import_fn: typing.Callable[[dict], dict],
     ):
         self.fast_llm_paths = fast_llm_paths
-        self.hf_paths = hf_paths
         self._export_fn = export_fn
         self._import_fn = import_fn
 
@@ -227,8 +227,8 @@ class CustomConfigConverter(ConfigConverter):
         for path, value in produced.items():
             set_nested_dict_value(hf_out, path, value)
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
-        produced = self._import_fn(hf_dict, parent_context)
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        produced = self._import_fn(hf_dict)
         for path, value in produced.items():
             set_nested_dict_value(fast_llm_out, path, value)
 
@@ -258,7 +258,7 @@ class NestedConfigConverter(ConfigConverter):
             else:
                 hf_out[key] = value
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_fast_llm = self._converter_class.import_config(hf_dict)
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
@@ -299,7 +299,7 @@ class DispatchConfigConverter(ConfigConverter):
             for key, value in sub_hf.items():
                 hf_out[key] = value
 
-    def import_to(self, hf_dict: dict, fast_llm_out: dict, parent_context: dict | None = None) -> None:
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_hf = _get_nested(hf_dict, self.hf_paths[0]) if self.hf_paths else hf_dict
         type_name = sub_hf.get(self._hf_discriminator_key)
         converter_class = self._hf_to_class.get(type_name)
@@ -319,8 +319,10 @@ class DispatchConfigConverter(ConfigConverter):
 class ConfigSectionConverter(abc.ABC):
     """Base class for converting one Fast-LLM ``Config`` class ↔ one HF dict subtree.
 
-    Subclasses declare the conversion via ``_create_config_converters`` (config side) and
-    ``_create_weight_converters`` (weight side; receives the live config).
+    Subclasses declare the conversion via ``_create_config_converters``. Format-specific cross-field
+    invariants go on the ``_validate_export`` hook. The weight side is still imperative (per-converter
+    ``get_converters`` classmethods on the concrete subclasses); a declarative weight-side primitive will be
+    added when the weight-converter migration lands.
 
     Subclasses that participate in :class:`DispatchConfigConverter` set ``hf_type_name`` to the discriminator value
     used by the HF format (e.g. ``"attention"``, ``"mamba"``).
@@ -335,17 +337,22 @@ class ConfigSectionConverter(abc.ABC):
         """Return declarations keyed by stable string name. Subclasses override entries by re-declaring the key."""
 
     @classmethod
-    def _create_weight_converters(
-        cls, config: Config, fast_llm_prefix: str, hf_prefix: str
-    ) -> dict[str, "WeightConverter"]:
-        """Return weight converters keyed by stable string name. Default is empty (no weights at this level)."""
-        return {}
+    def _validate_export(cls, config: Config) -> None:
+        """Hook for format-specific export-time validation. Default no-op.
+
+        Runs after the architecture-coverage check and before any declaration emits. Use this for cross-field
+        invariants the format imposes on the Fast-LLM config (e.g. per-layer biases must match a parent flag,
+        certain sub-configs must be at their default). Subclasses override; super-calls are not required when
+        the rule is fully replaced (e.g. Qwen2 vs Llama attention biases).
+        """
+        return
 
     @classmethod
     def export_config(cls, config: Config) -> dict:
         """Convert a Fast-LLM config object to an HF config dict via this section's declarations."""
         declarations = cls._create_config_converters()
         cls._check_architecture_coverage(config, declarations)
+        cls._validate_export(config)
         out: dict = {}
         for converter in declarations.values():
             converter.export_to(config, out)
@@ -371,10 +378,10 @@ class ConfigSectionConverter(abc.ABC):
         The check only runs when ``type(config)`` exactly matches ``cls.fast_llm_config_class`` — when the
         config is a strict subclass (e.g. ``MoEMLPConfig`` fed via ``super().export_config()`` from a yet-to-be-
         migrated ``MixtralMLPConverter``), the subclass converter is responsible for declaring the additional
-        fields and running its own check.
+        fields and running its own check. TODO: Once Mixtral/Apriel/Apriel2 migrate, the safety net for
+        ``MoEMLPConfig``/``MambaConfig``/etc. is gated on those migrations landing.
         """
-        declared_class = getattr(cls, "fast_llm_config_class", None)
-        if declared_class is None or type(config) is not declared_class:
+        if type(config) is not cls.fast_llm_config_class:
             return
         consumed: set[str] = set()
         for converter in declarations.values():

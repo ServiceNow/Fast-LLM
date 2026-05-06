@@ -210,7 +210,7 @@ def _llama_rotary_export(config: AttentionConfig) -> dict:
     return {("rope_parameters",): rope_parameters}
 
 
-def _llama_rotary_import(hf_dict: dict, _parent_context: dict | None) -> dict:
+def _llama_rotary_import(hf_dict: dict) -> dict:
     """Reverse of :func:`_llama_rotary_export`. Detects v4/v5 layout from the HF dict."""
     if "rope_parameters" in hf_dict:  # transformers v5
         rope_params = hf_dict["rope_parameters"]
@@ -243,45 +243,6 @@ def _llama_rotary_import(hf_dict: dict, _parent_context: dict | None) -> dict:
     else:
         raise NotImplementedError(f"Unsupported rotary type: {rope_type}")
     return {("rotary",): rotary_config}
-
-
-def _llama_attention_check_config(config: AttentionConfig) -> None:
-    """Default attention layer-bias check for Llama-style formats.
-
-    Subclasses that diverge (e.g. Qwen2 always-on Q/K/V biases with no dense bias) override
-    :py:meth:`LlamaAttentionConverter._check_config` rather than re-implementing the export function.
-    """
-    Assert.is_(type(config), AttentionConfig)
-    Assert.incl(config.query_layer.bias.enabled, (None, config.add_linear_biases))
-    Assert.incl(config.key_layer.bias.enabled, (None, config.add_linear_biases))
-    Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
-    Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
-
-
-def _llama_mlp_layers_export(config: MLPConfig) -> dict:
-    """Validate that MLP layer biases match the parent ``add_linear_biases`` flag and emit nothing.
-
-    Mirrors the attention-layer check: Llama does not expose per-layer bias overrides, so configurations
-    that disagree with the flat ``mlp_bias`` field are rejected rather than silently dropped.
-    """
-    Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
-    Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
-    return {}
-
-
-def _llama_position_embeddings_export(config: LanguageModelEmbeddingsConfig) -> dict:
-    Assert.incl(config.position_embeddings.enabled, (None, False))
-    return {}
-
-
-def _llama_peft_export(config: GPTBaseModelConfig) -> dict:
-    """Assert PEFT is at default (no PEFT). Llama format cannot represent PEFT — non-default values change
-    the parameter set and must fail loudly rather than be silently dropped on export.
-    """
-    from fast_llm.layers.common.peft.config import NoPeftConfig
-
-    Assert.custom(isinstance, config.peft, NoPeftConfig)
-    return {}
 
 
 class LlamaNormalizationConverter(ConfigSectionConverter):
@@ -331,18 +292,18 @@ class LlamaMLPConverter(ConfigSectionConverter):
             "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("mlp_bias",)),
             "activation": CustomConfigConverter(
                 fast_llm_paths=(("activation",),),
-                hf_paths=(("hidden_act",),),
                 export_fn=lambda c: {("hidden_act",): c.activation.hf_name},
-                import_fn=lambda hf, _ctx: {("activation",): ActivationType.from_hf_name(hf["hidden_act"])},
+                import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["hidden_act"])},
             ),
             "gated": ConstantImportConfigConverter(("gated",), True),
-            "layers": CustomConfigConverter(
-                fast_llm_paths=(("layer_1",), ("layer_2",)),
-                hf_paths=(),
-                export_fn=_llama_mlp_layers_export,
-                import_fn=lambda hf, _ctx: {},
-            ),
+            # Llama doesn't expose per-layer bias overrides; the bias-match check lives on _validate_export.
+            "layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
         }
+
+    @classmethod
+    def _validate_export(cls, config: MLPConfig) -> None:
+        Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
+        Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
     # --- weight side (imperative) ---
 
@@ -379,27 +340,15 @@ class LlamaAttentionConverter(ConfigSectionConverter):
       - ``head_dim`` is computed from ``hidden_size // num_attention_heads`` when missing on import.
       - Rotary handling is delegated to a :class:`CustomConfigConverter` because it spans v4/v5 transformers
         layouts and three rotary subtypes.
-      - Per-layer linear biases (query/key/value/dense) are validated to match ``add_linear_biases``; Llama
-        does not expose layer-level overrides, so the sub-config fields are blanket-consumed.
+      - Per-layer linear biases (query/key/value/dense) are validated to match ``add_linear_biases`` on
+        ``_validate_export``; Llama does not expose layer-level overrides, so the sub-config fields are
+        blanket-consumed via :class:`IgnoredConfigConverter`.
     """
 
     fast_llm_config_class = AttentionConfig
 
     @classmethod
-    def _check_config(cls, config: AttentionConfig) -> None:
-        """Hook for subclasses to enforce format-specific per-layer bias rules.
-
-        Default: Llama requires per-layer biases to be unset (``None``) or to match the parent
-        ``add_linear_biases``. Subclasses (e.g. Qwen2) override to relax or replace this rule.
-        """
-        _llama_attention_check_config(config)
-
-    @classmethod
     def _create_config_converters(cls) -> dict:
-        def _layers_export(config: AttentionConfig) -> dict:
-            cls._check_config(config)
-            return {}
-
         return {
             "heads": RenameConfigConverter(("heads",), ("num_attention_heads",)),
             "head_groups": RenameConfigConverter(("head_groups",), ("num_key_value_heads",)),
@@ -412,19 +361,27 @@ class LlamaAttentionConverter(ConfigSectionConverter):
             "dropout": RenameConfigConverter(("dropout",), ("attention_dropout",)),
             "causal": ConstantImportConfigConverter(("causal",), True),
             "softmax_scale_power": ConstantImportConfigConverter(("softmax_scale_power",), 0.5),
-            "linear_layers": CustomConfigConverter(
-                fast_llm_paths=(("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)),
-                hf_paths=(),
-                export_fn=_layers_export,
-                import_fn=lambda hf, _ctx: {},
+            "linear_layers": IgnoredConfigConverter(
+                ("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)
             ),
             "rotary": CustomConfigConverter(
                 fast_llm_paths=(("rotary",),),
-                hf_paths=(("rope_parameters",), ("rope_theta",), ("rope_scaling",)),
                 export_fn=_llama_rotary_export,
                 import_fn=_llama_rotary_import,
             ),
         }
+
+    @classmethod
+    def _validate_export(cls, config: AttentionConfig) -> None:
+        """Default: Llama requires per-layer biases to be unset (``None``) or to match ``add_linear_biases``.
+
+        Subclasses (e.g. Qwen2 with always-on Q/K/V biases and no dense bias) override.
+        """
+        Assert.is_(type(config), AttentionConfig)
+        Assert.incl(config.query_layer.bias.enabled, (None, config.add_linear_biases))
+        Assert.incl(config.key_layer.bias.enabled, (None, config.add_linear_biases))
+        Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
+        Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
     # --- weight side (imperative) ---
 
@@ -584,13 +541,12 @@ class LlamaEmbeddingsConverter(ConfigSectionConverter):
         return {
             "vocab_size": RenameConfigConverter(("vocab_size",), ("vocab_size",)),
             "word_embeddings": IgnoredConfigConverter(("word_embeddings",)),
-            "position_embeddings": CustomConfigConverter(
-                fast_llm_paths=(("position_embeddings",), ("num_position_embeddings",)),
-                hf_paths=(),
-                export_fn=_llama_position_embeddings_export,
-                import_fn=lambda hf, _ctx: {},
-            ),
+            "position_embeddings": IgnoredConfigConverter(("position_embeddings",), ("num_position_embeddings",)),
         }
+
+    @classmethod
+    def _validate_export(cls, config: LanguageModelEmbeddingsConfig) -> None:
+        Assert.incl(config.position_embeddings.enabled, (None, False))
 
     # --- weight side (imperative) ---
 
@@ -661,7 +617,7 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
         def _decoder_export(parent: Config) -> dict:
             return {(k,): v for k, v in decoder_converter_class.export_config(parent.decoder).items()}
 
-        def _decoder_import(hf_dict: dict, _parent_context: dict | None) -> dict:
+        def _decoder_import(hf_dict: dict) -> dict:
             return {("decoder",): decoder_converter_class.import_config(hf_dict)}
 
         return {
@@ -669,21 +625,21 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
             "head": NestedConfigConverter(("head",), cls.head_converter_class),
             "decoder": CustomConfigConverter(
                 fast_llm_paths=(("decoder",),),
-                hf_paths=(("num_hidden_layers",),),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
             ),
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
-            # Llama format does not represent PEFT. Strictly assert ``NoPeftConfig`` on export so a
-            # user-configured LoRA fails clearly rather than being silently dropped.
-            "peft": CustomConfigConverter(
-                fast_llm_paths=(("peft",),),
-                hf_paths=(),
-                export_fn=_llama_peft_export,
-                import_fn=lambda hf, _ctx: {},
-            ),
+            # Llama format cannot represent PEFT; the NoPeftConfig assertion lives on _validate_export so a
+            # user-configured LoRA fails clearly rather than being silently dropped on export.
+            "peft": IgnoredConfigConverter(("peft",)),
         }
+
+    @classmethod
+    def _validate_export(cls, config: GPTBaseModelConfig) -> None:
+        from fast_llm.layers.common.peft.config import NoPeftConfig
+
+        Assert.custom(isinstance, config.peft, NoPeftConfig)
 
     # --- weight side (imperative) ---
 

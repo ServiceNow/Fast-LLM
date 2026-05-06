@@ -35,7 +35,7 @@ class MistralAttentionConverter(LlamaAttentionConverter):
         return out
 
     @classmethod
-    def _check_config(cls, config: AttentionConfig) -> None:
+    def _validate_export(cls, config: AttentionConfig) -> None:
         # Mistral doesn't support biases.
         assert not config.add_linear_biases
 

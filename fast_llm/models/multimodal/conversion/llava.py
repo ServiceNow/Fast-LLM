@@ -60,7 +60,7 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
 
     @classmethod
     def export_config(cls, config: AttentionConfig) -> dict:
-        cls._check_config(config)
+        cls._validate_export(config)
         Assert.eq(config.softmax_scale_power, 0.5)
         Assert.is_(type(config.rotary), Rotary2DConfig)
         assert not config.add_linear_biases
