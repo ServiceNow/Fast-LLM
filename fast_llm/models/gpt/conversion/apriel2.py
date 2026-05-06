@@ -39,7 +39,6 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaEmbeddingsConverter,
     LlamaNormalizationConverter,
     MLPLayer2Converter,
-    QueryWeightConverter,
     SplitWeightConverter,
     get_parameter_converter,
     get_weight_and_bias_converters,
@@ -159,8 +158,6 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
                 f"{fast_llm_prefix}.query",
                 f"{hf_prefix}.q_proj",
                 q_bias,
-                QueryWeightConverter,
-                config,
                 drop_on_export=drop_on_export,
             ),
             *get_weight_and_bias_converters(

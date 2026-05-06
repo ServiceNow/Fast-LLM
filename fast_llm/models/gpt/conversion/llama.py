@@ -127,23 +127,6 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
-class QueryWeightConverter(WeightConverter):
-    # Hf uses the real format for rotary embeddings.
-    _config: AttentionConfig
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        (query,) = weight
-        return (query,)
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        (query,) = weight
-        return (query,)
-
-
 class KeyValueWeightConverter(WeightConverter):
     # Hf uses the real format for rotary embeddings, and keeps the key and value separate.
     _config: AttentionConfig
@@ -398,8 +381,6 @@ class LlamaAttentionConverter(ConfigSectionConverter):
                 f"{fast_llm_prefix}.query",
                 f"{hf_prefix}.q_proj",
                 config.add_linear_biases,
-                QueryWeightConverter,
-                config,
                 drop_on_export=drop_on_export,
             ),
             *get_weight_and_bias_converters(

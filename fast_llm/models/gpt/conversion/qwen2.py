@@ -19,7 +19,6 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     LlamaMLPConverter,
-    QueryWeightConverter,
     get_weight_and_bias_converters,
 )
 from fast_llm.utils import Assert, div
@@ -81,8 +80,6 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
                 f"{fast_llm_prefix}.query",
                 f"{hf_prefix}.q_proj",
                 True,
-                QueryWeightConverter,
-                config,
                 drop_on_export=drop_on_export,
             ),
             *get_weight_and_bias_converters(

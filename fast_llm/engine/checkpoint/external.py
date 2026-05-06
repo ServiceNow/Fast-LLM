@@ -542,18 +542,6 @@ class IgnoreExportWeightConverter(WeightConverter):
         )
 
 
-class CopyWeightConverter(WeightConverter):
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return weight[0], *[weight[0][:].clone() for _ in range(len(self.export_name) - 1)]
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return weight[0], *[weight[0][:].clone() for _ in range(len(self.fast_llm_name) - 1)]
-
-
 class SplitWeightConverter(WeightConverter):
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
