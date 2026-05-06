@@ -115,7 +115,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             preprocessing_config = self._multi_stage.get_preprocessing_config(
                 PhaseType.training, self._config.schedule.micro_batch_splits
             )
-            self._preprocessing_config = preprocessing_config
             self._single_mb_meta = preprocessing_config.get_input_meta(self._data.config.micro_batch_size)
             self._schedule_cache: dict[int, Schedule] = {}
             self._schedule = Schedule(

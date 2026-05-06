@@ -448,13 +448,14 @@ def fused_gspo_loss_forward_backward(
     # Step 3: Per-segment scatter_add (local contributions only)
     lrn_sum = log_ratio.new_zeros(n_segs)  # sum of log-ratios per segment
     adv_sum = advantages.new_zeros(n_segs).float()  # sum of advantages per segment
-    tok_sum = log_ratio.new_zeros(n_segs)  # token count per segment
 
     if loss_mask.any() and n_segs > 0:
         masked_doc_ids = document_index[loss_mask].long()
         lrn_sum.index_add_(0, masked_doc_ids, log_ratio[loss_mask])
         adv_sum.index_add_(0, masked_doc_ids, advantages[loss_mask].float())
-        tok_sum.index_add_(0, masked_doc_ids, torch.ones(masked_doc_ids.numel(), device=logits.device))
+        tok_sum = torch.bincount(masked_doc_ids, minlength=n_segs).to(log_ratio.dtype)
+    else:
+        tok_sum = log_ratio.new_zeros(n_segs)  # token count per segment
 
     # Step 4: SDP all-reduce so every rank has global per-segment sums
     if sdp_group is not None and n_segs > 0:

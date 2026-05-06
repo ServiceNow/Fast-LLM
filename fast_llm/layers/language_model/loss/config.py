@@ -231,8 +231,7 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         default=False,
         desc="Normalize the policy-gradient loss by the number of documents (rollouts) in the step "
         "rather than the number of tokens. Matches DeepSpeed's normalization where each token's "
-        "loss is divided by config.batch_size (total rollout count). "
-        "Set to True when using docs_per_step for full DS parity.",
+        "loss is divided by config.batch_size (total rollout count).",
         hint=FieldHint.feature,
     )
     temperature: float = Field(
