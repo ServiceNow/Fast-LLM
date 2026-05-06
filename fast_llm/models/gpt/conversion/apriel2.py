@@ -5,10 +5,32 @@ import typing
 from transformers import PretrainedConfig
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import WeightConverter
+from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
+    ConstantExportConfigConverter,
+    ConstantImportConfigConverter,
+    CustomConfigConverter,
+    DispatchConfigConverter,
+    IgnoredConfigConverter,
+    NestedConfigConverter,
+    OptionalConfigConverter,
+    RenameConfigConverter,
+    TypedDictContainerConfigConverter,
+    WeightConverter,
+)
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig, StochasticMixerSamplingStrategy
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.common.normalization.config import (
+    LayerNormalizationConfig,
+    NoNormalizationConfig,
+    RMSNormalizationConfig,
+)
+from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.layers.decoder.mlp.config import MLPConfig
+from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
@@ -25,82 +47,94 @@ from fast_llm.models.gpt.conversion.llama import (
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.utils import Assert, safe_merge_dicts
 
+# ============================================================
+# Helpers
+# ============================================================
 
-class Apriel2AttentionConverter:
+
+def _per_layer_bias_export(config, layer_names: tuple[str, ...]) -> dict:
+    """Emit per-layer ``{layer: {"bias": {"enabled": bool}}}`` only for layers whose bias is explicitly set."""
+    out: dict = {}
+    for layer_name in layer_names:
+        layer = getattr(config, layer_name)
+        if layer.bias.enabled is not None:
+            out[(layer_name,)] = {"bias": {"enabled": layer.bias.enabled}}
+    return out
+
+
+def _per_layer_bias_import(hf_dict: dict, layer_names: tuple[str, ...]) -> dict:
+    """Pass through HF ``{layer: {"bias": {...}}}`` entries to the Fast-LLM dict."""
+    out: dict = {}
+    for layer_name in layer_names:
+        if layer_name in hf_dict:
+            out[(layer_name,)] = hf_dict[layer_name]
+    return out
+
+
+# ============================================================
+# Mixer converters
+# ============================================================
+
+
+def _apriel2_attention_rotary_export(config: AttentionConfig) -> dict:
+    """Emit Apriel2's typed rotary subdict.
+
+    Asymmetric with the Fast-LLM type only for the default→``mistral_1d`` rename; ``llama3``/``yarn`` round-trip
+    by name. Mirrors current behavior: only ``type`` and ``theta`` are emitted (scale fields are dropped).
+    """
+    rotary = config.rotary
+    if type(rotary) is DefaultRotaryConfig:
+        rotary_type = "mistral_1d"
+    elif type(rotary) is Llama3RotaryConfig:
+        rotary_type = "llama3"
+    elif type(rotary) is YarnRotaryConfig:
+        rotary_type = "yarn"
+    else:
+        raise NotImplementedError(f"Unsupported rotary type: {type(rotary).__name__}")
+    return {("rotary",): {"type": rotary_type, "theta": rotary.theta}}
+
+
+def _apriel2_attention_rotary_import(hf_dict: dict) -> dict:
+    rotary = dict(hf_dict["rotary"])
+    if rotary.get("type") == "mistral_1d":
+        rotary["type"] = "default"
+    return {("rotary",): rotary}
+
+
+class Apriel2AttentionConverter(ConfigSectionConverter):
+    fast_llm_config_class = AttentionConfig
+    hf_type_name = "attention"
+
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        rotary = config["rotary"]
-        # Map Apriel2 HuggingFace rotary type to Fast-LLM internal type
-        if rotary.get("type") == "mistral_1d":
-            rotary = {**rotary, "type": "default"}
-        result = {
-            "type": "attention",
-            "heads": config["heads"],
-            "head_groups": config["head_groups"],
-            "head_size": config["head_size"],
-            "rotary": rotary,
+    def _create_config_converters(cls) -> dict:
+        layer_names = ("query_layer", "key_layer", "value_layer", "dense_layer")
+        return {
+            "heads": RenameConfigConverter(("heads",), ("heads",)),
+            "head_groups": RenameConfigConverter(("head_groups",), ("head_groups",)),
+            "head_size": RenameConfigConverter(("head_size",), ("head_size",)),
+            "rotary": CustomConfigConverter(
+                fast_llm_paths=(("rotary",),),
+                export_fn=_apriel2_attention_rotary_export,
+                import_fn=_apriel2_attention_rotary_import,
+            ),
+            # Apriel2 emits add_linear_biases only when False; the True default is implicit.
+            "add_linear_biases": OptionalConfigConverter(
+                ("add_linear_biases",), ("add_linear_biases",), sentinel=True
+            ),
+            "window_size": OptionalConfigConverter(("window_size",), ("window_size",)),
+            "linear_layers": CustomConfigConverter(
+                fast_llm_paths=tuple((name,) for name in layer_names),
+                export_fn=lambda c: _per_layer_bias_export(c, layer_names),
+                import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
+            ),
+            "causal": IgnoredConfigConverter(("causal",)),
+            "softmax_scale_power": IgnoredConfigConverter(("softmax_scale_power",)),
         }
-        # Per-layer bias configuration mirroring Fast-LLM structure
-        # If per-layer configs exist, use them; otherwise fall back to add_linear_biases
-        if "query_layer" in config:
-            result["query_layer"] = config["query_layer"]
-        if "key_layer" in config:
-            result["key_layer"] = config["key_layer"]
-        if "value_layer" in config:
-            result["value_layer"] = config["value_layer"]
-        if "dense_layer" in config:
-            result["dense_layer"] = config["dense_layer"]
-        # add_linear_biases serves as default for layers without explicit config
-        if "add_linear_biases" in config:
-            result["add_linear_biases"] = config["add_linear_biases"]
-        if "window_size" in config:
-            result["window_size"] = config["window_size"]
-        return result
 
-    @classmethod
-    def export_config(cls, config: AttentionConfig) -> dict:
-        from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
-
-        if type(config.rotary) is DefaultRotaryConfig:
-            rotary_type = "mistral_1d"
-        elif type(config.rotary) is Llama3RotaryConfig:
-            rotary_type = "llama3"
-        elif type(config.rotary) is YarnRotaryConfig:
-            rotary_type = "yarn"
-        else:
-            raise NotImplementedError(f"Unsupported rotary type: {type(config.rotary).__name__}")
-
-        result = {
-            "type": "attention",
-            "heads": config.heads,
-            "head_groups": config.head_groups,
-            "head_size": config.head_size,
-            "rotary": {
-                "type": rotary_type,
-                "theta": config.rotary.theta,
-            },
-        }
-        if config.window_size is not None:
-            result["window_size"] = config.window_size
-        # Export per-layer bias configuration
-        # Only include if explicitly set (not None)
-        if config.query_layer.bias.enabled is not None:
-            result["query_layer"] = {"bias": {"enabled": config.query_layer.bias.enabled}}
-        if config.key_layer.bias.enabled is not None:
-            result["key_layer"] = {"bias": {"enabled": config.key_layer.bias.enabled}}
-        if config.value_layer.bias.enabled is not None:
-            result["value_layer"] = {"bias": {"enabled": config.value_layer.bias.enabled}}
-        if config.dense_layer.bias.enabled is not None:
-            result["dense_layer"] = {"bias": {"enabled": config.dense_layer.bias.enabled}}
-        # add_linear_biases as fallback default; omit when True (the Fast-LLM default) to avoid
-        # round-trip inflation on configs that don't set it explicitly.
-        if not config.add_linear_biases:
-            result["add_linear_biases"] = config.add_linear_biases
-        return result
+    # --- weight side (imperative) ---
 
     @classmethod
     def _get_effective_bias(cls, layer_config, default: bool) -> bool:
-        """Get effective bias setting: use layer-specific if set, else default."""
         if layer_config.bias.enabled is not None:
             return layer_config.bias.enabled
         return default
@@ -113,13 +147,11 @@ class Apriel2AttentionConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        # Determine effective bias for each projection
         q_bias = cls._get_effective_bias(config.query_layer, config.add_linear_biases)
         k_bias = cls._get_effective_bias(config.key_layer, config.add_linear_biases)
         v_bias = cls._get_effective_bias(config.value_layer, config.add_linear_biases)
         o_bias = cls._get_effective_bias(config.dense_layer, config.add_linear_biases)
-        # For key_value, both k and v must have same bias setting
-        # (they're combined in Fast-LLM's key_value layer)
+        # k_proj and v_proj are merged in Fast-LLM's key_value layer; treat as biased only if both sides agree.
         kv_bias = k_bias and v_bias
 
         return [
@@ -148,40 +180,50 @@ class Apriel2AttentionConverter:
         ]
 
 
-class Apriel2MambaConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        result = {
-            "type": "mamba",
-            "state_size": config["state_size"],
-            "d_inner": config["d_inner"],
-            "add_linear_biases": config["add_linear_biases"],
-        }
-        if "d_xb" in config:
-            result["d_xb"] = config["d_xb"]
-        if "dt_rank" in config:
-            result["dt_rank"] = config["dt_rank"]
-        return result
+def _apriel2_mamba_aux_export(config: MambaConfig) -> dict:
+    """Emit Apriel2's mamba-specific HF auxiliaries (``d_conv`` from convolution kernel size, plus the
+    convolution and dt-projection effective bias flags). These have no flat Fast-LLM analogue."""
+    return {
+        ("d_conv",): config.convolution_layer.kernel_size,
+        ("conv_bias",): config.convolution_layer.bias.enabled,
+        ("dt_proj_bias",): config.dt_layer.bias.enabled,
+    }
+
+
+class Apriel2MambaConverter(ConfigSectionConverter):
+    fast_llm_config_class = MambaConfig
+    hf_type_name = "mamba"
 
     @classmethod
-    def export_config(cls, config: MambaConfig) -> dict:
-        exported = {
-            "type": "mamba",
-            "state_size": config.state_size,
-            "d_inner": config.d_inner,
-            "d_conv": config.convolution_layer.kernel_size,
-            "add_linear_biases": config.add_linear_biases,
-            "conv_bias": config.convolution_layer.bias.enabled,
-            "dt_proj_bias": config.dt_layer.bias.enabled,
+    def _create_config_converters(cls) -> dict:
+        return {
+            "state_size": RenameConfigConverter(("state_size",), ("state_size",)),
+            "d_inner": RenameConfigConverter(("d_inner",), ("d_inner",)),
+            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
+            "d_xb": OptionalConfigConverter(("d_xb",), ("d_xb",)),
+            "dt_rank": OptionalConfigConverter(("dt_rank",), ("dt_rank",)),
+            "aux": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("dt_layer",)),
+                export_fn=_apriel2_mamba_aux_export,
+                # The d_conv/conv_bias/dt_proj_bias HF fields are not reflected in the Fast-LLM mamba dict —
+                # current Apriel2 import simply ignores them and lets Fast-LLM use its own defaults.
+                import_fn=lambda hf: {},
+            ),
+            # Architecture fields with no HF counterpart; they round-trip at their Fast-LLM defaults.
+            "layers_unmapped": IgnoredConfigConverter(
+                ("z_layer",),
+                ("x_layer",),
+                ("b_layer",),
+                ("c_layer",),
+                ("output_layer",),
+                ("dt_input_layer",),
+                ("a_log_weight",),
+                ("d_weight",),
+                ("repeat_kv_before_conv",),
+            ),
         }
 
-        if config.d_xb is not None:
-            exported["d_xb"] = config.d_xb
-
-        if config.dt_rank != "auto":
-            exported["dt_rank"] = config.dt_rank
-
-        return exported
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -235,32 +277,36 @@ class Apriel2MambaConverter:
         ]
 
 
-class Apriel2GatedDeltaNetConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        result = {
-            "type": "gdn",
-            "value_heads": config["value_heads"],
-            "key_heads": config["key_heads"],
-            "key_head_dim": config["key_head_dim"],
-            "value_head_dim": config["value_head_dim"],
-        }
-        if "convolution_layer" in config:
-            result["convolution_layer"] = config["convolution_layer"]
-        return result
+class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
+    fast_llm_config_class = GatedDeltaNetConfig
+    hf_type_name = "gdn"
 
     @classmethod
-    def export_config(cls, config: GatedDeltaNetConfig) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "type": "gdn",
-            "value_heads": config.value_heads,
-            "key_heads": config.key_heads,
-            "key_head_dim": config.key_head_dim,
-            "value_head_dim": config.value_head_dim,
-            "convolution_layer": {
-                "kernel_size": config.convolution_layer.kernel_size,
-            },
+            "value_heads": RenameConfigConverter(("value_heads",), ("value_heads",)),
+            "key_heads": RenameConfigConverter(("key_heads",), ("key_heads",)),
+            "key_head_dim": RenameConfigConverter(("key_head_dim",), ("key_head_dim",)),
+            "value_head_dim": RenameConfigConverter(("value_head_dim",), ("value_head_dim",)),
+            "convolution_layer": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",),),
+                export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
+                import_fn=lambda hf: (
+                    {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
+                ),
+            ),
+            # Architecture fields not surfaced in HF; round-trip at default.
+            "layers_unmapped": IgnoredConfigConverter(
+                ("normalization",),
+                ("qkv_projection_layer",),
+                ("ba_projection_layer",),
+                ("output_layer",),
+                ("dt_bias_weight",),
+                ("a_log_weight",),
+            ),
         }
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -314,33 +360,44 @@ class Apriel2GatedDeltaNetConverter:
         ]
 
 
-class Apriel2KimiDeltaAttentionConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        result = {
-            "type": "kda",
-            "heads": config["heads"],
-            "head_dim": config["head_dim"],
-        }
-        if "convolution_layer" in config:
-            result["convolution_layer"] = config["convolution_layer"]
-        if "normalization" in config:
-            result["normalization"] = config["normalization"]
-        return result
+class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
+    fast_llm_config_class = KimiDeltaAttentionConfig
+    hf_type_name = "kda"
 
     @classmethod
-    def export_config(cls, config: KimiDeltaAttentionConfig) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "type": "kda",
-            "heads": config.heads,
-            "head_dim": config.head_dim,
-            "convolution_layer": {
-                "kernel_size": config.convolution_layer.kernel_size,
-            },
-            "normalization": {
-                "epsilon": config.normalization.epsilon,
-            },
+            "heads": RenameConfigConverter(("heads",), ("heads",)),
+            "head_dim": RenameConfigConverter(("head_dim",), ("head_dim",)),
+            "convolution_layer": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",),),
+                export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
+                import_fn=lambda hf: (
+                    {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
+                ),
+            ),
+            "normalization": CustomConfigConverter(
+                fast_llm_paths=(("normalization",),),
+                export_fn=lambda c: {("normalization",): {"epsilon": c.normalization.epsilon}},
+                import_fn=lambda hf: ({("normalization",): hf["normalization"]} if "normalization" in hf else {}),
+            ),
+            # Architecture fields not surfaced in HF; round-trip at default.
+            "layers_unmapped": IgnoredConfigConverter(
+                ("q_projection_layer",),
+                ("k_projection_layer",),
+                ("v_projection_layer",),
+                ("f_a_projection_layer",),
+                ("f_b_projection_layer",),
+                ("g_a_projection_layer",),
+                ("g_b_projection_layer",),
+                ("beta_projection_layer",),
+                ("output_projection_layer",),
+                ("dt_bias_weight",),
+                ("a_log_weight",),
+            ),
         }
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -350,11 +407,7 @@ class Apriel2KimiDeltaAttentionConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        # Fast-LLM KDA uses abbreviated names matching the external module:
-        # q_proj, k_proj, v_proj, q_conv, k_conv, v_conv, f_a_proj, f_b_proj,
-        # g_a_proj, g_b_proj, beta_proj, o_proj, A_log, dt_bias, norm
         return [
-            # Q/K/V projections
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.q_proj",
                 f"{hf_prefix}.q_proj",
@@ -373,7 +426,6 @@ class Apriel2KimiDeltaAttentionConverter:
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # Convolutions (Q, K, V)
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.q_conv",
                 f"{hf_prefix}.q_conv",
@@ -392,7 +444,6 @@ class Apriel2KimiDeltaAttentionConverter:
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # Gate projections (f_a, f_b, g_a, g_b)
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.f_a_proj",
                 f"{hf_prefix}.f_a_proj",
@@ -417,21 +468,18 @@ class Apriel2KimiDeltaAttentionConverter:
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # Beta projection
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.beta_proj",
                 f"{hf_prefix}.beta_proj",
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # Output projection
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.o_proj",
                 f"{hf_prefix}.o_proj",
                 False,
                 drop_on_export=drop_on_export,
             ),
-            # Learnable parameters
             get_parameter_converter(
                 f"{fast_llm_prefix}.A_log",
                 f"{hf_prefix}.A_log",
@@ -442,7 +490,6 @@ class Apriel2KimiDeltaAttentionConverter:
                 f"{hf_prefix}.dt_bias",
                 drop_on_export=drop_on_export,
             ),
-            # Normalization
             *LlamaNormalizationConverter.get_converters(
                 config.normalization,
                 f"{fast_llm_prefix}.norm",
@@ -452,56 +499,38 @@ class Apriel2KimiDeltaAttentionConverter:
         ]
 
 
-class Apriel2StochasticMixerConverter:
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        mixers = {}
-        for name, sub_mixer_config in config["mixers"].items():
-            mixer_type = sub_mixer_config["type"]
-            if mixer_type == "attention":
-                mixers[name] = Apriel2AttentionConverter.import_config(sub_mixer_config)
-            elif mixer_type == "mamba":
-                mixers[name] = Apriel2MambaConverter.import_config(sub_mixer_config)
-            elif mixer_type == "gdn":
-                mixers[name] = Apriel2GatedDeltaNetConverter.import_config(sub_mixer_config)
-            elif mixer_type == "kda":
-                mixers[name] = Apriel2KimiDeltaAttentionConverter.import_config(sub_mixer_config)
-            else:
-                raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
+# Mixer dispatch registry — used inside StochasticMixer (no nested-stochastic) and at the block level.
+APRIEL2_LEAF_MIXER_REGISTRY: dict = {
+    AttentionConfig: Apriel2AttentionConverter,
+    MambaConfig: Apriel2MambaConverter,
+    GatedDeltaNetConfig: Apriel2GatedDeltaNetConverter,
+    KimiDeltaAttentionConfig: Apriel2KimiDeltaAttentionConverter,
+}
 
-        result = {
-            "type": "stochastic",
-            "mixers": mixers,
-            "main_mixer_name": config["main_mixer_name"],
-        }
-        if "sampling_strategy" in config:
-            result["sampling_strategy"] = config["sampling_strategy"]
-        return result
+
+class Apriel2StochasticMixerConverter(ConfigSectionConverter):
+    fast_llm_config_class = StochasticMixerConfig
+    hf_type_name = "stochastic"
 
     @classmethod
-    def export_config(cls, config: StochasticMixerConfig) -> dict:
-        mixers = {}
-        for name, sub_mixer in config.mixers.items():
-            mixer_type = type(sub_mixer)
-            if mixer_type is AttentionConfig:
-                mixers[name] = Apriel2AttentionConverter.export_config(sub_mixer)
-            elif mixer_type is MambaConfig:
-                mixers[name] = Apriel2MambaConverter.export_config(sub_mixer)
-            elif mixer_type is GatedDeltaNetConfig:
-                mixers[name] = Apriel2GatedDeltaNetConverter.export_config(sub_mixer)
-            elif mixer_type is KimiDeltaAttentionConfig:
-                mixers[name] = Apriel2KimiDeltaAttentionConverter.export_config(sub_mixer)
-            else:
-                raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
+    def _create_config_converters(cls) -> dict:
+        from fast_llm.layers.decoder.config import StochasticMixerSamplingStrategy
 
-        result = {
-            "type": "stochastic",
-            "mixers": mixers,
-            "main_mixer_name": config.main_mixer_name,
+        return {
+            "mixers": TypedDictContainerConfigConverter(
+                fast_llm_path=("mixers",),
+                hf_path=("mixers",),
+                registry=APRIEL2_LEAF_MIXER_REGISTRY,
+            ),
+            "main_mixer_name": RenameConfigConverter(("main_mixer_name",), ("main_mixer_name",)),
+            "sampling_strategy": OptionalConfigConverter(
+                ("sampling_strategy",),
+                ("sampling_strategy",),
+                sentinel=StochasticMixerSamplingStrategy.uniform,
+            ),
         }
-        if config.sampling_strategy != StochasticMixerSamplingStrategy.uniform:
-            result["sampling_strategy"] = config.sampling_strategy.value
-        return result
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -513,135 +542,127 @@ class Apriel2StochasticMixerConverter:
     ) -> list[WeightConverter]:
         converters = []
         for name, sub_mixer in config.mixers.items():
-            mixer_type = type(sub_mixer)
-            if mixer_type is AttentionConfig:
-                converter_class = Apriel2AttentionConverter
-                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
-            elif mixer_type is MambaConfig:
-                converter_class = Apriel2MambaConverter
-                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
-            elif mixer_type is GatedDeltaNetConfig:
-                converter_class = Apriel2GatedDeltaNetConverter
-                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
-            elif mixer_type is KimiDeltaAttentionConfig:
-                converter_class = Apriel2KimiDeltaAttentionConverter
-                hf_sub_mixer_prefix = f"{hf_prefix}.mixers.{name}"
-            else:
-                raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
+            converter_class = APRIEL2_LEAF_MIXER_REGISTRY.get(type(sub_mixer))
+            if converter_class is None:
+                raise ValueError(f"Unknown sub-mixer type: {type(sub_mixer)}")
             converters.extend(
                 converter_class.get_converters(
                     sub_mixer,
                     f"{fast_llm_prefix}.mixers.{name}",
-                    hf_sub_mixer_prefix,
+                    f"{hf_prefix}.mixers.{name}",
                     drop_on_export=drop_on_export,
                 )
             )
-
         return converters
 
 
-class Apriel2BlockConverter:
-    @classmethod
-    def import_config(cls, config: dict, block_config: dict) -> dict:
-        mixer_config = block_config["mixer"]
-        mixer_type = mixer_config["type"]
+# Block-level mixer registry includes StochasticMixer (which can wrap leaf mixers).
+APRIEL2_BLOCK_MIXER_REGISTRY: dict = {
+    **APRIEL2_LEAF_MIXER_REGISTRY,
+    StochasticMixerConfig: Apriel2StochasticMixerConverter,
+}
 
-        if mixer_type == "attention":
-            mixer = Apriel2AttentionConverter.import_config(mixer_config)
-        elif mixer_type == "mamba":
-            mixer = Apriel2MambaConverter.import_config(mixer_config)
-        elif mixer_type == "stochastic":
-            mixer = Apriel2StochasticMixerConverter.import_config(mixer_config)
-        elif mixer_type == "gdn":
-            mixer = Apriel2GatedDeltaNetConverter.import_config(mixer_config)
-        elif mixer_type == "kda":
-            mixer = Apriel2KimiDeltaAttentionConverter.import_config(mixer_config)
-        else:
-            raise ValueError(f"Unknown mixer type: {mixer_type}")
 
-        from fast_llm.functional.config import ActivationType
+# ============================================================
+# Normalization converters
+# ============================================================
 
-        mlp_config = block_config["mlp"]
-        mlp = {
-            "type": "mlp",
-            "intermediate_size": mlp_config["intermediate_size"],
-            "activation": ActivationType.from_hf_name(mlp_config["activation"]),
-            "gated": mlp_config["gated"],
-            "add_linear_biases": mlp_config["add_linear_biases"],
-        }
-        # Import per-layer MLP bias settings (layer_1, layer_2)
-        for layer_name in ("layer_1", "layer_2"):
-            if layer_name in mlp_config:
-                layer_cfg = mlp_config[layer_name]
-                if "bias" in layer_cfg:
-                    mlp[layer_name] = {"bias": layer_cfg["bias"]}
 
-        normalization = block_config["normalization"]
-
-        return {
-            "mixer": mixer,
-            "mlp": mlp,
-            "normalization": normalization,
-        }
+class Apriel2RMSNormConverter(ConfigSectionConverter):
+    fast_llm_config_class = RMSNormalizationConfig
+    hf_type_name = "rms_norm"
 
     @classmethod
-    def export_config(cls, config: DecoderBlockConfig) -> dict:
-        from fast_llm.layers.common.normalization.config import (
-            LayerNormalizationConfig,
-            NoNormalizationConfig,
-            RMSNormalizationConfig,
-        )
-
-        mixer_type = type(config.mixer)
-
-        if mixer_type is AttentionConfig:
-            mixer = Apriel2AttentionConverter.export_config(config.mixer)
-        elif mixer_type is MambaConfig:
-            mixer = Apriel2MambaConverter.export_config(config.mixer)
-        elif mixer_type is StochasticMixerConfig:
-            mixer = Apriel2StochasticMixerConverter.export_config(config.mixer)
-        elif mixer_type is GatedDeltaNetConfig:
-            mixer = Apriel2GatedDeltaNetConverter.export_config(config.mixer)
-        elif mixer_type is KimiDeltaAttentionConfig:
-            mixer = Apriel2KimiDeltaAttentionConverter.export_config(config.mixer)
-        else:
-            raise ValueError(f"Unknown mixer type: {mixer_type}")
-
-        norm_type = type(config.normalization)
-        if norm_type is RMSNormalizationConfig:
-            norm_type_str = "rms_norm"
-        elif norm_type is LayerNormalizationConfig:
-            norm_type_str = "layer_norm"
-        elif norm_type is NoNormalizationConfig:
-            norm_type_str = "none"
-        else:
-            raise ValueError(f"Unknown normalization type: {norm_type}")
-
-        from fast_llm.layers.decoder.mlp.config import MLPConfig
-
-        if not isinstance(config.mlp, MLPConfig):
-            raise ValueError(f"Unsupported MLP type: {type(config.mlp)}")
-
-        mlp = {
-            "type": "mlp",
-            "intermediate_size": config.mlp.intermediate_size,
-            "activation": config.mlp.activation.value,
-            "gated": config.mlp.gated,
-            "add_linear_biases": config.mlp.add_linear_biases,
-        }
-        # Export per-layer MLP bias settings (layer_1, layer_2)
-        if config.mlp.layer_1.bias.enabled is not None:
-            mlp["layer_1"] = {"bias": {"enabled": config.mlp.layer_1.bias.enabled}}
-        if config.mlp.layer_2.bias.enabled is not None:
-            mlp["layer_2"] = {"bias": {"enabled": config.mlp.layer_2.bias.enabled}}
-
-        normalization = {"type": norm_type_str, "epsilon": config.normalization.epsilon}
-
+    def _create_config_converters(cls) -> dict:
         return {
-            "mixer": mixer,
-            "mlp": mlp,
-            "normalization": normalization,
+            "epsilon": RenameConfigConverter(("epsilon",), ("epsilon",)),
+            "weight": IgnoredConfigConverter(("weight",)),
+            "zero_centered": ConstantImportConfigConverter(("zero_centered",), False),
         }
+
+
+class Apriel2LayerNormConverter(ConfigSectionConverter):
+    fast_llm_config_class = LayerNormalizationConfig
+    hf_type_name = "layer_norm"
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "epsilon": RenameConfigConverter(("epsilon",), ("epsilon",)),
+            "weight": IgnoredConfigConverter(("weight",)),
+            "bias": IgnoredConfigConverter(("bias",)),
+            "zero_centered": ConstantImportConfigConverter(("zero_centered",), False),
+        }
+
+
+class Apriel2NoNormConverter(ConfigSectionConverter):
+    fast_llm_config_class = NoNormalizationConfig
+    hf_type_name = "none"
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {}
+
+
+APRIEL2_NORM_REGISTRY: dict = {
+    RMSNormalizationConfig: Apriel2RMSNormConverter,
+    LayerNormalizationConfig: Apriel2LayerNormConverter,
+    NoNormalizationConfig: Apriel2NoNormConverter,
+}
+
+
+# ============================================================
+# MLP, Block, Decoder, Head
+# ============================================================
+
+
+class Apriel2MLPConverter(ConfigSectionConverter):
+    fast_llm_config_class = MLPConfig
+    hf_type_name = "mlp"
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        layer_names = ("layer_1", "layer_2")
+        return {
+            # MLP is wrapped via NestedConfigConverter (no Dispatch discriminator), so emit the HF
+            # ``"type": "mlp"`` discriminator from inside this converter.
+            "hf_type": ConstantExportConfigConverter(("type",), "mlp"),
+            "intermediate_size": RenameConfigConverter(("intermediate_size",), ("intermediate_size",)),
+            "gated": RenameConfigConverter(("gated",), ("gated",)),
+            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
+            "activation": CustomConfigConverter(
+                fast_llm_paths=(("activation",),),
+                export_fn=lambda c: {("activation",): c.activation.hf_name},
+                import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
+            ),
+            "layers": CustomConfigConverter(
+                fast_llm_paths=tuple((name,) for name in layer_names),
+                export_fn=lambda c: _per_layer_bias_export(c, layer_names),
+                import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
+            ),
+        }
+
+
+class Apriel2BlockConverter(ConfigSectionConverter):
+    fast_llm_config_class = DecoderBlockConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "mixer": DispatchConfigConverter(
+                fast_llm_path=("mixer",),
+                hf_path=("mixer",),
+                registry=APRIEL2_BLOCK_MIXER_REGISTRY,
+            ),
+            "mlp": NestedConfigConverter(("mlp",), Apriel2MLPConverter, hf_path=("mlp",)),
+            "normalization": DispatchConfigConverter(
+                fast_llm_path=("normalization",),
+                hf_path=("normalization",),
+                registry=APRIEL2_NORM_REGISTRY,
+            ),
+        }
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -651,46 +672,30 @@ class Apriel2BlockConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        converters = []
-        mixer_type = type(config.mixer)
-        if mixer_type is AttentionConfig:
-            converter_class = Apriel2AttentionConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer"
-        elif mixer_type is MambaConfig:
-            converter_class = Apriel2MambaConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer"
-        elif mixer_type is StochasticMixerConfig:
-            converter_class = Apriel2StochasticMixerConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer"
-        elif mixer_type is GatedDeltaNetConfig:
-            converter_class = Apriel2GatedDeltaNetConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer"
-        elif mixer_type is KimiDeltaAttentionConfig:
-            converter_class = Apriel2KimiDeltaAttentionConverter
-            hf_mixer_prefix = f"{hf_prefix}.mixer"
-        else:
-            raise ValueError(f"Unknown mixer type: {mixer_type}")
-
-        converters.extend(
+        converter_class = APRIEL2_BLOCK_MIXER_REGISTRY.get(type(config.mixer))
+        if converter_class is None:
+            raise ValueError(f"Unknown mixer type: {type(config.mixer)}")
+        converters: list[WeightConverter] = list(
             converter_class.get_converters(
                 config.mixer,
                 f"{fast_llm_prefix}.mixer",
-                hf_mixer_prefix,
+                f"{hf_prefix}.mixer",
                 drop_on_export=drop_on_export,
             )
         )
 
-        # Per-layer MLP bias: use layer-specific setting if set, else default
-        def get_mlp_layer_bias(layer_config, default: bool) -> bool:
-            if layer_config.bias.enabled is not None:
-                return layer_config.bias.enabled
-            return default
-
-        layer_1_bias = get_mlp_layer_bias(config.mlp.layer_1, config.mlp.add_linear_biases)
-        layer_2_bias = get_mlp_layer_bias(config.mlp.layer_2, config.mlp.add_linear_biases)
+        layer_1_bias = (
+            config.mlp.layer_1.bias.enabled
+            if config.mlp.layer_1.bias.enabled is not None
+            else config.mlp.add_linear_biases
+        )
+        layer_2_bias = (
+            config.mlp.layer_2.bias.enabled
+            if config.mlp.layer_2.bias.enabled is not None
+            else config.mlp.add_linear_biases
+        )
 
         if config.mlp.gated:
-            # Gated MLP: gate_proj + up_proj -> layer_1 (split), down_proj -> layer_2
             converters.extend(
                 [
                     *get_weight_and_bias_converters(
@@ -710,8 +715,6 @@ class Apriel2BlockConverter:
                 ]
             )
         else:
-            # Non-gated MLP: up_proj -> layer_1, down_proj -> layer_2
-            # Note: layer_2 still needs MLPLayer2Converter for the transpose
             converters.extend(
                 [
                     *get_weight_and_bias_converters(
@@ -747,73 +750,52 @@ class Apriel2BlockConverter:
                 ),
             ]
         )
-
         return converters
 
 
+class Apriel2FixedDecoderConverter(ConfigSectionConverter):
+    fast_llm_config_class = FixedBlockSequenceConfig
+    hf_type_name = "fixed"
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "num_blocks": RenameConfigConverter(("num_blocks",), ("num_blocks",)),
+            "block": NestedConfigConverter(("block",), Apriel2BlockConverter, hf_path=("block",)),
+        }
+
+
+class Apriel2PatternDecoderConverter(ConfigSectionConverter):
+    fast_llm_config_class = PatternBlockSequenceConfig
+    hf_type_name = "pattern"
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {
+            "num_blocks": RenameConfigConverter(("num_blocks",), ("num_blocks",)),
+            "pattern": RenameConfigConverter(("pattern",), ("pattern",)),
+            "blocks": TypedDictContainerConfigConverter(
+                fast_llm_path=("blocks",),
+                hf_path=("blocks",),
+                registry={DecoderBlockConfig: Apriel2BlockConverter},
+            ),
+        }
+
+
+APRIEL2_DECODER_REGISTRY: dict = {
+    FixedBlockSequenceConfig: Apriel2FixedDecoderConverter,
+    PatternBlockSequenceConfig: Apriel2PatternDecoderConverter,
+}
+
+
 class Apriel2DecoderConverter:
+    """Imperative decoder dispatcher kept for the weight side.
+
+    Config-side conversion is handled declaratively via :class:`Apriel2FixedDecoderConverter` and
+    :class:`Apriel2PatternDecoderConverter`, dispatched at the base-model level.
+    """
+
     block_converter_class: typing.ClassVar[type[Apriel2BlockConverter]] = Apriel2BlockConverter
-
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        decoder_config = config["decoder"]
-        decoder_type = decoder_config["type"]
-
-        if decoder_type == "fixed":
-            block_config = decoder_config["block"]
-            imported_block = cls.block_converter_class.import_config(config, block_config)
-
-            return {
-                "type": "fixed",
-                "num_blocks": decoder_config["num_blocks"],
-                "block": imported_block,
-            }
-
-        elif decoder_type == "pattern":
-            blocks = {}
-            for name, block_config in decoder_config["blocks"].items():
-                blocks[name] = cls.block_converter_class.import_config(config, block_config)
-
-            return {
-                "type": "pattern",
-                "blocks": blocks,
-                "pattern": decoder_config["pattern"],
-                "num_blocks": decoder_config["num_blocks"],
-            }
-
-        else:
-            raise ValueError(f"Unknown decoder type: {decoder_type}")
-
-    @classmethod
-    def export_config(cls, config) -> dict:
-        from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
-
-        if isinstance(config, FixedBlockSequenceConfig):
-            block_config = cls.block_converter_class.export_config(config.block)
-            return {
-                "decoder": {
-                    "type": "fixed",
-                    "num_blocks": config.num_blocks,
-                    "block": block_config,
-                }
-            }
-
-        elif isinstance(config, PatternBlockSequenceConfig):
-            blocks = {}
-            for name, block_config in config.blocks.items():
-                blocks[name] = cls.block_converter_class.export_config(block_config)
-
-            return {
-                "decoder": {
-                    "type": "pattern",
-                    "blocks": blocks,
-                    "pattern": config.pattern,
-                    "num_blocks": config.num_blocks,
-                }
-            }
-
-        else:
-            raise ValueError(f"Unknown decoder config type: {type(config)}")
 
     @classmethod
     def get_converters(
@@ -823,9 +805,7 @@ class Apriel2DecoderConverter:
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
-
-        converters = []
+        converters: list[WeightConverter] = []
         if type(config) is FixedBlockSequenceConfig:
             for block_index in range(config.num_blocks):
                 converters += cls.block_converter_class.get_converters(
@@ -848,27 +828,24 @@ class Apriel2DecoderConverter:
         return converters
 
 
-class Apriel2HeadConverter:
+class Apriel2HeadConverter(ConfigSectionConverter):
+    fast_llm_config_class = LanguageModelHeadConfig
+
     normalization_converter_class: typing.ClassVar[type[LlamaNormalizationConverter]] = LlamaNormalizationConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        norm_config = config["head"]["normalization"]
-        return {"normalization": {"type": "rms_norm", "epsilon": norm_config["epsilon"]}}
-
-    @classmethod
-    def export_config(cls, config) -> dict:
-        from fast_llm.layers.language_model.config import LanguageModelHeadConfig
-
-        Assert.custom(isinstance, config, LanguageModelHeadConfig)
+    def _create_config_converters(cls) -> dict:
         return {
-            "head": {
-                "normalization": {
-                    "type": "rms_norm",
-                    "epsilon": config.normalization.epsilon,
-                }
-            }
+            "normalization": DispatchConfigConverter(
+                fast_llm_path=("normalization",),
+                hf_path=("normalization",),
+                registry=APRIEL2_NORM_REGISTRY,
+            ),
+            "output_weight": IgnoredConfigConverter(("output_weight",)),
+            "prediction_heads": IgnoredConfigConverter(("prediction_heads",)),
         }
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -892,33 +869,35 @@ class Apriel2HeadConverter:
         ]
 
 
-class Apriel2BaseModelConverter:
+class Apriel2BaseModelConverter(ConfigSectionConverter):
+    fast_llm_config_class = GPTBaseModelConfig
+
     decoder_converter_class: typing.ClassVar[type[Apriel2DecoderConverter]] = Apriel2DecoderConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
     head_converter_class: typing.ClassVar[type[Apriel2HeadConverter]] = Apriel2HeadConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "embeddings": cls.embeddings_converter_class.import_config(config),
-            "decoder": cls.decoder_converter_class.import_config(config),
-            "head": cls.head_converter_class.import_config(config),
-            "hidden_size": config["hidden_size"],
-            "tied_embedding_weight": config["tie_word_embeddings"],
+            "embeddings": NestedConfigConverter(("embeddings",), cls.embeddings_converter_class),
+            "decoder": DispatchConfigConverter(
+                fast_llm_path=("decoder",),
+                hf_path=("decoder",),
+                registry=APRIEL2_DECODER_REGISTRY,
+            ),
+            "head": NestedConfigConverter(("head",), cls.head_converter_class, hf_path=("head",)),
+            "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
+            "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
+            "peft": IgnoredConfigConverter(("peft",)),
         }
 
     @classmethod
-    def export_config(cls, config: GPTBaseModelConfig) -> dict:
-        Assert.custom(isinstance, config, GPTBaseModelConfig)
-        return safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings),
-            cls.decoder_converter_class.export_config(config.decoder),
-            cls.head_converter_class.export_config(config.head),
-            {
-                "tie_word_embeddings": config.tied_embedding_weight,
-                "hidden_size": config.hidden_size,
-            },
-        )
+    def _validate_export(cls, config: GPTBaseModelConfig) -> None:
+        from fast_llm.layers.common.peft.config import NoPeftConfig
+
+        Assert.custom(isinstance, config.peft, NoPeftConfig)
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
@@ -955,7 +934,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
     @classmethod
     def _export_config(cls, config: GPTModelConfig) -> dict[str, typing.Any]:
         base_model = config.base_model
-        exported = safe_merge_dicts(
+        return safe_merge_dicts(
             cls.base_model_converter_class.export_config(base_model),
             {
                 "architectures": [cls.architecture],
@@ -967,7 +946,6 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
                 },
             },
         )
-        return exported
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
