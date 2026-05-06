@@ -1,10 +1,13 @@
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import WeightConverter
+from fast_llm.engine.checkpoint.external import (
+    ConstantImportConfigConverter,
+    CustomConfigConverter,
+    WeightConverter,
+)
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
-from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.conversion.config import Qwen2CheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
@@ -19,35 +22,41 @@ from fast_llm.models.gpt.conversion.llama import (
     QueryWeightConverter,
     get_weight_and_bias_converters,
 )
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, div
 
 
 class Qwen2AttentionConverter(LlamaAttentionConverter):
     # TODO: Support sliding window with max_window_layers (need 2 kinds of block?)
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["attention_bias"] = False
-        out = super().import_config(config)
-        out["query_layer"] = {"bias": {"enabled": True}}
-        out["key_layer"] = {"bias": {"enabled": True}}
-        out["value_layer"] = {"bias": {"enabled": True}}
-        out["dense_layer"] = {"bias": {"enabled": False}}
-        return out
-
-    @classmethod
-    def export_config(cls, config: AttentionConfig) -> dict:
-        out = super().export_config(config)
-        del out["attention_bias"]
-        # Qwen2Config does not have head_dim as a standard field; it is always
-        # derivable as hidden_size // num_attention_heads.
-        del out["head_dim"]
+    def _create_config_converters(cls) -> dict:
+        out = super()._create_config_converters()
+        # Qwen2 has no `attention_bias` HF field; the model always has Q/K/V biases enabled and no dense bias.
+        out["add_linear_biases"] = ConstantImportConfigConverter(("add_linear_biases",), False)
+        # Qwen2Config does not have `head_dim`; it is always derivable as `hidden_size // num_attention_heads`.
+        out["head_size"] = CustomConfigConverter(
+            fast_llm_paths=(("head_size",),),
+            export_fn=lambda config: {},
+            import_fn=lambda hf: {("head_size",): div(hf["hidden_size"], hf["num_attention_heads"])},
+        )
+        # Override Llama's blanket per-layer bias ignore with Qwen2's hardcoded layer biases.
+        # On export the per-layer biases must be compatible with `add_linear_biases`; see ``_validate_export``.
+        out["linear_layers"] = CustomConfigConverter(
+            fast_llm_paths=(("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)),
+            export_fn=lambda config: {},
+            import_fn=lambda hf: {
+                ("query_layer",): {"bias": {"enabled": True}},
+                ("key_layer",): {"bias": {"enabled": True}},
+                ("value_layer",): {"bias": {"enabled": True}},
+                ("dense_layer",): {"bias": {"enabled": False}},
+            },
+        )
         return out
 
     @classmethod
     def _validate_export(cls, config: AttentionConfig) -> None:
         Assert.is_(type(config), AttentionConfig)
-        # There are multiple ways to enable biases on QKV only
+        # There are multiple ways to enable biases on QKV only.
         if config.add_linear_biases:
             Assert.incl(config.query_layer.bias.enabled, (None, True))
             Assert.incl(config.key_layer.bias.enabled, (None, True))
@@ -95,15 +104,12 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
 
 class Qwen2MLPConverter(LlamaMLPConverter):
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["mlp_bias"] = False
-        return super().import_config(config)
-
-    @classmethod
-    def export_config(cls, config: MLPConfig) -> dict:
-        out = super().export_config(config)
-        del out["mlp_bias"]
-        return out
+    def _create_config_converters(cls) -> dict:
+        return {
+            **super()._create_config_converters(),
+            # Qwen2 has no `mlp_bias` HF field; biases are always disabled.
+            "add_linear_biases": ConstantImportConfigConverter(("add_linear_biases",), False),
+        }
 
 
 class Qwen2BlockConverter(LlamaBlockConverter):
@@ -124,12 +130,13 @@ class Qwen2BaseModelConverter(LlamaBaseModelConverter):
     head_converter_class: typing.ClassVar[type[Qwen2HeadConverter]] = Qwen2HeadConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        assert config.get("use_mrope") is not True, "MRoPE (use_mrope=True) is not supported by the Qwen2 converter"
-        return super().import_config(config)
+    def import_config(cls, hf_dict: dict) -> dict:
+        assert hf_dict.get("use_mrope") is not True, "MRoPE (use_mrope=True) is not supported by the Qwen2 converter"
+        return super().import_config(hf_dict)
 
     @classmethod
-    def export_config(cls, config: GPTBaseModelConfig) -> dict:
+    def _validate_export(cls, config: GPTBaseModelConfig) -> None:
+        super()._validate_export(config)
         block = (
             config.decoder.block
             if isinstance(config.decoder, FixedBlockSequenceConfig)
@@ -141,7 +148,6 @@ class Qwen2BaseModelConverter(LlamaBaseModelConverter):
                 config.hidden_size,
                 msg="Qwen2 format omits head_dim; requires heads * head_size == hidden_size",
             )
-        return super().export_config(config)
 
 
 class Qwen2HuggingfaceCheckpointHandler(LlamaHuggingfaceCheckpointHandler):
