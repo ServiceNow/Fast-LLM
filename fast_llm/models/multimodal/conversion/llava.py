@@ -3,13 +3,21 @@ import typing
 import torch
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import WeightConverter
+from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
+    ConstantExportConfigConverter,
+    ConstantImportConfigConverter,
+    CustomConfigConverter,
+    IgnoredConfigConverter,
+    NestedConfigConverter,
+    RenameConfigConverter,
+    WeightConverter,
+)
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
-from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
@@ -31,21 +39,15 @@ from fast_llm.utils import Assert, div, safe_merge_dicts
 
 
 class PixtralNormalizationConverter(LlamaNormalizationConverter):
-    """
-    epsilon hard-coded to 1e-5.
-    """
+    """RMS norm with HF-side hardcoded epsilon=1e-5 (Pixtral's HF format omits the field)."""
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {"type": "rms_norm", "epsilon": 1e-5}
-
-    @classmethod
-    def export_config(cls, config: RMSNormalizationConfig) -> dict:
-        Assert.custom(isinstance, config, RMSNormalizationConfig)
-        assert not config.zero_centered
-        # TODO: Too strict?
-        Assert.eq(config.epsilon, 1e-5)
-        return {}
+    def _create_config_converters(cls) -> dict:
+        return {
+            **super()._create_config_converters(),
+            # Pin epsilon to 1e-5: assert on export, inject on import. No HF write/read.
+            "epsilon": ConstantImportConfigConverter(("epsilon",), 1e-5),
+        }
 
 
 class PixtralAttentionConverter(LlamaAttentionConverter):
@@ -117,31 +119,38 @@ class PatchEmbeddingWeightConverter(WeightConverter):
         )
 
 
-class PixtralEmbeddingsConverter:
+class PixtralEmbeddingsConverter(ConfigSectionConverter):
+    """Converts ``PatchEmbeddingsConfig`` <-> Pixtral HF flat fields (``patch_size`` / ``num_channels``).
+
+    Pixtral's HF ``vision_config`` carries a single ``patch_size`` field (height == width); the converter
+    expands it to both Fast-LLM dimensions on import and validates equality on export.
+    """
+
+    fast_llm_config_class = PatchEmbeddingsConfig
     normalization_converter_class: typing.ClassVar[type[PixtralNormalizationConverter]] = PixtralNormalizationConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        Assert.eq(config["num_channels"], 3)
+    def _create_config_converters(cls) -> dict:
         return {
-            "normalization": cls.normalization_converter_class.import_config(config),
-            "patch_height": config["patch_size"],
-            "patch_width": config["patch_size"],
+            "patch_height": RenameConfigConverter(("patch_height",), ("patch_size",)),
+            # Pixtral has one `patch_size`; mirror it to `patch_width` on import and validate equality on export.
+            "patch_width": CustomConfigConverter(
+                fast_llm_paths=(("patch_width",),),
+                export_fn=lambda c: {},
+                import_fn=lambda hf: {("patch_width",): hf["patch_size"]},
+            ),
+            # `input_channels` is a derived cached_property pinned to 3; assert on import, emit on export.
+            "num_channels": ConstantExportConfigConverter(("num_channels",), 3),
+            # PixtralNormalizationConverter exports {} (epsilon pinned), so flat-merge is a no-op on export.
+            "normalization": NestedConfigConverter(("normalization",), cls.normalization_converter_class),
+            # patch_embeddings (the AffineLinearConfig) has no HF representation; bias presence validated below.
+            "patch_embeddings": IgnoredConfigConverter(("patch_embeddings",)),
         }
 
     @classmethod
-    def export_config(cls, config: PatchEmbeddingsConfig) -> dict:
-        Assert.custom(isinstance, config, PatchEmbeddingsConfig)
+    def _validate_export(cls, config: PatchEmbeddingsConfig) -> None:
         Assert.eq(config.patch_height, config.patch_width)
         Assert.incl(config.patch_embeddings.bias.enabled, (None, False))
-
-        return safe_merge_dicts(
-            {
-                "patch_size": config.patch_height,
-                "num_channels": config.input_channels,
-            },
-            cls.normalization_converter_class.export_config(config.normalization),
-        )
 
     @classmethod
     def get_converters(
