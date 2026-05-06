@@ -135,7 +135,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         router_input = (
             self.router_normalization(hidden_states) if self.router_normalization is not None else hidden_states
         )
-        router_input = self._scale_router_input(router_input, self.router_scale, self._router_input_scale)
+        if self.router_scale is not None or self._router_input_scale != 1.0:
+            router_input = self._scale_router_input(router_input, self.router_scale, self._router_input_scale)
         logits = self.router(router_input)
         hidden_token_dim = kwargs[BlockKwargs.hidden_token_dim]
         logit_dims = (hidden_token_dim, self._top_expert_dim)

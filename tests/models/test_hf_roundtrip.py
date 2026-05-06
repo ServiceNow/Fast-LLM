@@ -69,15 +69,17 @@ class HFRoundtripCase:
     # Keys to delete from the config after from_pretrained (e.g. model-version-specific extras
     # that the converter does not preserve and that have no equivalent class default).
     delete_config_keys: tuple[str, ...] = ()
+    # When True, set `head_dim = hidden_size // num_attention_heads` so the source config's
+    # head_dim matches the shrunk dims. Disable for models where head_dim is independent of
+    # hidden_size (e.g. Gemma 4) and is set explicitly via `dim_overrides`.
+    derive_head_dim_from_hidden: bool = True
 
     def make_model(self) -> PreTrainedModel:
         config = self.config_class.from_pretrained(self.hf_model_name)
         for key, value in self.dim_overrides.items():
             setattr(config, key, value)
         config.max_position_embeddings = self.max_position_embeddings
-        # head_dim must match hidden_size // num_attention_heads; the converter exports
-        # it explicitly for Llama/Mistral, so source must agree.
-        if hasattr(config, "head_dim"):
+        if self.derive_head_dim_from_hidden and hasattr(config, "head_dim"):
             config.head_dim = config.hidden_size // config.num_attention_heads
         # layer_types length must equal num_hidden_layers (Qwen2 validates this).
         if getattr(config, "layer_types", None) is not None:
@@ -102,25 +104,6 @@ class AprielRoundtripCase(HFRoundtripCase):
         if self.surgery_spec is not None:
             converted_config = compose_configs(converted_config, self.surgery_spec)
         return self.model_class(self.config_class(**converted_config))
-
-
-@dataclasses.dataclass(frozen=True)
-class Gemma4RoundtripCase(HFRoundtripCase):
-    """Gemma4: apply dim overrides directly without deriving head_dim from hidden_size."""
-
-    def make_model(self) -> PreTrainedModel:
-        config = self.config_class.from_pretrained(self.hf_model_name)
-        for key, value in self.dim_overrides.items():
-            setattr(config, key, value)
-        config.max_position_embeddings = self.max_position_embeddings
-        if getattr(config, "layer_types", None) is not None:
-            n = config.num_hidden_layers
-            lt = config.layer_types
-            config.layer_types = (lt * ((n // len(lt)) + 1))[:n]
-        for key in self.delete_config_keys:
-            if hasattr(config, key):
-                delattr(config, key)
-        return self.model_class(config)
 
 
 _TINY_DIMS = {
@@ -234,12 +217,13 @@ _HF_ROUNDTRIP_CASES = [
             },
         },
     ),
-    Gemma4RoundtripCase(
+    HFRoundtripCase(
         name="gemma4",
         hf_model_name="google/gemma-4-26B-A4B",
         checkpoint_format=Gemma4CheckpointFormat,
         model_class=Gemma4ForCausalLM,
         config_class=Gemma4TextConfig,
+        derive_head_dim_from_hidden=False,
         dim_overrides={
             "hidden_size": 256,
             "num_hidden_layers": 6,  # 5 sliding + 1 full from real layer_types pattern

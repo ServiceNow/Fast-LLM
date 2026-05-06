@@ -179,10 +179,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             hidden_states = self._activation_distillation_loss(hidden_states, kwargs, losses, metrics)
 
         if self.post_mixer_norm is not None:
-            # Bias is added after `post_mixer_norm` (inside `_bias_dropout_add`); known users
-            # (Gemma 4) run with `add_linear_biases=False` so this path is exercised with bias=None.
-            # Mirror MLP `post_norm` (which folds bias before the norm) if a real biased mixer ever
-            # combines with `post_mixer_normalization`.
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
             hidden_states = self.post_mixer_norm(hidden_states)
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
@@ -191,6 +190,9 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self._debug(hidden_states, "norm_2", hidden_dims, kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
         if self.post_mlp_norm is not None:
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
             hidden_states = self.post_mlp_norm(hidden_states)
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_, self.output_scale)

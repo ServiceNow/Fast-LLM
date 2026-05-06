@@ -281,14 +281,25 @@ class Gemma4MoEMLPConverter:
     @classmethod
     def export_config(cls, config: MoEMLPConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, MoEMLPConfig)
-        assert config.gated
-        assert not config.add_linear_biases
-        # `import_config` hard-bakes the router preprocessing for Gemma 4; reject any divergence
-        # rather than silently emitting an HF checkpoint that would not load back identically.
-        Assert.custom(isinstance, config.router_normalization, FixedRMSNormConfig)
-        assert config.router_scale.enabled
-        Assert.eq(config.router_input_scale, hidden_size**-0.5)
-        assert config.router_per_expert_scale.enabled
+        if not config.gated:
+            raise NotImplementedError(f"`gated=False` is not supported by `{cls.__name__}`.")
+        if config.add_linear_biases:
+            raise NotImplementedError(f"`add_linear_biases=True` is not supported by `{cls.__name__}`.")
+        if not isinstance(config.router_normalization, FixedRMSNormConfig):
+            raise NotImplementedError(
+                f"`router_normalization` must be `FixedRMSNormConfig` for `{cls.__name__}`,"
+                f" got `{type(config.router_normalization).__name__}`."
+            )
+        if not config.router_scale.enabled:
+            raise NotImplementedError(f"`router_scale` must be enabled for `{cls.__name__}`.")
+        expected_input_scale = hidden_size**-0.5
+        if config.router_input_scale != expected_input_scale:
+            raise NotImplementedError(
+                f"`router_input_scale` must be `hidden_size ** -0.5` (= {expected_input_scale}) for"
+                f" `{cls.__name__}`, got {config.router_input_scale}."
+            )
+        if not config.router_per_expert_scale.enabled:
+            raise NotImplementedError(f"`router_per_expert_scale` must be enabled for `{cls.__name__}`.")
         return {
             "num_experts": config.experts,
             "top_k_experts": config.experts_per_token,
