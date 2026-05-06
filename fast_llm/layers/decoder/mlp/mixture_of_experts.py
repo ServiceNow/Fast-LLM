@@ -91,7 +91,6 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        self._router_input_scale = self._config.router_input_scale
         self.router_per_expert_scale = self._config.router_per_expert_scale.get_parameter(
             (TensorDim("experts", self._config.experts),),
             default_initialization=init_ones_,
@@ -135,8 +134,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         router_input = (
             self.router_normalization(hidden_states) if self.router_normalization is not None else hidden_states
         )
-        if self.router_scale is not None or self._router_input_scale != 1.0:
-            router_input = self._scale_router_input(router_input, self.router_scale, self._router_input_scale)
+        if self.router_scale is not None or self._config.router_input_scale != 1.0:
+            router_input = self._scale_router_input(router_input, self.router_scale, self._config.router_input_scale)
         logits = self.router(router_input)
         hidden_token_dim = kwargs[BlockKwargs.hidden_token_dim]
         logit_dims = (hidden_token_dim, self._top_expert_dim)
@@ -363,12 +362,7 @@ class HybridMoEMLP[ConfigType: HybridMoEMLPConfig](BlockWithBias[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if isinstance(input_, TensorMeta):
-            return (
-                TensorMeta.from_dims(
-                    input_.dims[:-1] + (self._output_dim,), tensor_name="MLP output", dtype=input_.dtype
-                ),
-                None,
-            )
+            return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         if self.pre_norm is not None:
             input_ = self.pre_norm(input_)
         dense_out, dense_bias = self.dense(input_, kwargs, losses, metrics)

@@ -113,9 +113,10 @@ class Gemma4AttentionConverter:
     def export_config(cls, sliding_config: AttentionConfig, full_config: AttentionConfig) -> dict:
         Assert.custom(isinstance, sliding_config, AttentionConfig)
         Assert.custom(isinstance, full_config, AttentionConfig)
-        assert not sliding_config.add_linear_biases
-        assert isinstance(sliding_config.rotary, DefaultRotaryConfig)
-        assert isinstance(full_config.rotary, ProportionalRotaryConfig)
+        if sliding_config.add_linear_biases:
+            raise NotImplementedError(f"`add_linear_biases=True` is not supported by `{cls.__name__}`.")
+        Assert.custom(isinstance, sliding_config.rotary, DefaultRotaryConfig)
+        Assert.custom(isinstance, full_config.rotary, ProportionalRotaryConfig)
         Assert.custom(isinstance, sliding_config.query_norm, RMSNormalizationConfig)
         Assert.custom(isinstance, sliding_config.key_norm, RMSNormalizationConfig)
         Assert.custom(isinstance, sliding_config.value_norm, FixedRMSNormConfig)
@@ -209,24 +210,21 @@ class Gemma4AttentionConverter:
 
 class Gemma4MLPConverter:
     @classmethod
-    def import_config(cls, config: dict, with_norms: bool = False) -> dict:
-        out = {
+    def import_config(cls, config: dict) -> dict:
+        return {
             "intermediate_size": config["intermediate_size"],
             "add_linear_biases": False,
             "activation": ActivationType.from_hf_name(config["hidden_activation"]),
             "gated": True,
         }
-        if with_norms:
-            eps = config["rms_norm_eps"]
-            out["pre_norm"] = {"type": "rms_norm", "epsilon": eps}
-            out["post_norm"] = {"type": "rms_norm", "epsilon": eps}
-        return out
 
     @classmethod
     def export_config(cls, config: MLPConfig) -> dict:
         Assert.custom(isinstance, config, MLPConfig)
-        assert config.gated
-        assert not config.add_linear_biases
+        if not config.gated:
+            raise NotImplementedError(f"`gated=False` is not supported by `{cls.__name__}`.")
+        if config.add_linear_biases:
+            raise NotImplementedError(f"`add_linear_biases=True` is not supported by `{cls.__name__}`.")
         return {
             "intermediate_size": config.intermediate_size,
             "hidden_activation": config.activation.hf_name,
@@ -270,8 +268,6 @@ class Gemma4MoEMLPConverter:
             "gated": True,
             "experts": config["num_experts"],
             "experts_per_token": config["top_k_experts"],
-            "pre_norm": {"type": "rms_norm", "epsilon": eps},
-            "post_norm": {"type": "rms_norm", "epsilon": eps},
             "router_normalization": {"type": "fixed_rms_norm", "epsilon": eps},
             "router_scale": {"enabled": True},
             "router_input_scale": config["hidden_size"] ** -0.5,
@@ -346,20 +342,6 @@ class Gemma4MoEMLPConverter:
                 drop_on_export=drop_on_export,
             ),
         ]
-        if config.pre_norm is not None:
-            converters += LlamaNormalizationConverter.get_converters(
-                config.pre_norm,
-                f"{fast_llm_prefix}.pre_norm",
-                f"{hf_prefix}.pre_feedforward_layernorm_2",
-                drop_on_export=drop_on_export,
-            )
-        if config.post_norm is not None:
-            converters += LlamaNormalizationConverter.get_converters(
-                config.post_norm,
-                f"{fast_llm_prefix}.post_norm",
-                f"{hf_prefix}.post_feedforward_layernorm_2",
-                drop_on_export=drop_on_export,
-            )
         # router.norm is FixedRMSNorm — no learnable weight to convert.
         return converters
 
@@ -367,11 +349,18 @@ class Gemma4MoEMLPConverter:
 class Gemma4HybridMoEMLPConverter:
     @classmethod
     def import_config(cls, config: dict) -> dict:
-        return {
-            "type": "hybrid_moe",
-            "dense": Gemma4MLPConverter.import_config(config, with_norms=True),
-            "routed": Gemma4MoEMLPConverter.import_config(config),
-        }
+        eps = config["rms_norm_eps"]
+
+        def make_norm() -> dict:
+            return {"type": "rms_norm", "epsilon": eps}
+
+        dense = Gemma4MLPConverter.import_config(config)
+        dense["pre_norm"] = make_norm()
+        dense["post_norm"] = make_norm()
+        routed = Gemma4MoEMLPConverter.import_config(config)
+        routed["pre_norm"] = make_norm()
+        routed["post_norm"] = make_norm()
+        return {"type": "hybrid_moe", "dense": dense, "routed": routed}
 
     @classmethod
     def export_config(cls, config: HybridMoEMLPConfig, hidden_size: int) -> dict:
@@ -413,6 +402,18 @@ class Gemma4HybridMoEMLPConverter:
                 config.dense.post_norm,
                 f"{fast_llm_prefix}.dense.post_norm",
                 f"{hf_prefix}.post_feedforward_layernorm_1",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                config.routed.pre_norm,
+                f"{fast_llm_prefix}.routed.pre_norm",
+                f"{hf_prefix}.pre_feedforward_layernorm_2",
+                drop_on_export=drop_on_export,
+            ),
+            *LlamaNormalizationConverter.get_converters(
+                config.routed.post_norm,
+                f"{fast_llm_prefix}.routed.post_norm",
+                f"{hf_prefix}.post_feedforward_layernorm_2",
                 drop_on_export=drop_on_export,
             ),
         ]
@@ -593,7 +594,8 @@ class Gemma4EmbeddingsConverter(LlamaEmbeddingsConverter):
     @classmethod
     def export_config(cls, config: LanguageModelEmbeddingsConfig, hidden_size: int) -> dict:
         Assert.custom(isinstance, config, LanguageModelEmbeddingsConfig)
-        assert not config.position_embeddings.enabled
+        if config.position_embeddings.enabled:
+            raise NotImplementedError(f"`position_embeddings` is not supported by `{cls.__name__}`.")
         # Gemma 4 hard-codes embed_scale = hidden_size ** 0.5; reject divergent values rather than
         # silently dropping them.
         Assert.eq(config.embedding_scale, hidden_size**0.5)

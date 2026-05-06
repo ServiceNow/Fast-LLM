@@ -1,5 +1,4 @@
 import dataclasses
-import functools
 
 import pytest
 import torch
@@ -19,6 +18,7 @@ _HEADS = 4
 _KV_HEADS = 2
 _HEAD_SIZE = 16
 _INTERMEDIATE_SIZE = 128
+_TOLERANCE = 1e-5
 
 
 @dataclasses.dataclass
@@ -58,10 +58,6 @@ class PostNormTestConfig:
         if self.pre_mlp_normalization is not None:
             config_dict["pre_mlp_normalization"] = self.pre_mlp_normalization
         return DecoderBlockConfig.from_dict(config_dict)
-
-    @functools.cached_property
-    def threshold(self) -> float:
-        return 1e-5
 
     def expected_output(self, block: DecoderBlock, input_: torch.Tensor, kwargs: dict) -> torch.Tensor:
         # Block-assembly test. The mixer and MLP are treated as black boxes (covered by
@@ -152,4 +148,4 @@ def test_post_norms(test_config: PostNormTestConfig):
         output = block(input_, kwargs)
 
     expected = test_config.expected_output(block, input_, kwargs)
-    torch.testing.assert_close(output, expected, rtol=test_config.threshold, atol=test_config.threshold)
+    torch.testing.assert_close(output, expected, rtol=_TOLERANCE, atol=_TOLERANCE)

@@ -259,11 +259,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         )
 
     def _apply_norm_with_grad_capture(
-        self, norm: typing.Callable, x: torch.Tensor
+        self, norm: torch.nn.Module, x: torch.Tensor
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-        # Run `norm` and, in training, save (leaf, output) so backward can replay only the norm
-        # sub-graph between rotary's manual fwd/bwd. Eval shares the unified contiguous() call —
-        # RMSNormalization uses .view() internally and rejects non-contiguous inputs.
+        # Capture (leaf, normed) in training so backward can replay the norm between rotary's
+        # manual fwd/bwd; .contiguous() is required because RMSNormalization uses .view().
         x = x.contiguous()
         if self.training:
             with torch.enable_grad():
