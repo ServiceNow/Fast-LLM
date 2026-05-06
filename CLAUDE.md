@@ -70,7 +70,12 @@ fast-llm train gpt --config examples/mistral-4-node-benchmark.yaml
 
 ## Design principles
 
+<!-- Sync with docs/contributing/contributing.md → ## 🧱 Design principles. Bullet titles and bodies must stay byte-identical (modulo prose-vs-list markdown punctuation: `**Title.**` here vs `**Title**:` in contributing.md). When you change one, update the other in the same commit. -->
+
 - **Generalize rather than special-case.** New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
+- **No overhead when unused.** A new feature must add no measurable cost on the disabled path: no new kernel launches, GPU sync points, or slower GPU code paths; no CPU work added to training hot loops (forward/backward, schedule loop, per-step dataloader path); no cost that scales with model size, sequence length, batch size, or step count. Trivial additions outside hot loops — a config-flag branch, a one-shot validation in `__init__` — are fine. Gate new behavior behind a config flag that short-circuits cheaply when off.
+- **No deadweight.** Don't add modules, classes, abstractions, or code paths that don't pull their weight, or config options that don't toggle meaningful behavior. If a new helper ends up with one caller, inline it; if a new branch has no real consumer, drop it. Three similar lines beats a premature abstraction.
+- **Trust internal boundaries.** Validate at system boundaries (user input, external APIs, file formats); trust internal callers and framework invariants. Don't add `try/except`, input validation, fallbacks, or "can't happen" guards on code you control — let it crash so the bug surfaces clearly.
 
 ## Architecture
 
@@ -167,7 +172,7 @@ Tests live in `tests/`. The following patterns work well in this codebase.
 
 ## Code Style
 
-- **Comments**: Write no comments by default. Only add one when the WHY is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug, behavior that would surprise a reader. Never restate what the code already says; well-named identifiers do that.
+- **Comments**: Write no comments by default. Only add one when the *why* is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug, behavior that would surprise a reader. Never restate what the code already says; well-named identifiers do that.
 - **Imports**: Third-party → `import package.module` (keep fully qualified). First-party → `from fast_llm.module import Thing`. No relative imports. Optional/slow imports inside methods or under `if typing.TYPE_CHECKING:`.
 - **Naming**: No abbreviations (use `batch_size` not `bs`). Private members get a single `_` prefix; never use `__`. Keep public interfaces lean.
 - **Types**: Always type-hint public interfaces. Use modern syntax (`X | Y`, `list[T]` not `List[T]`, PEP 695 generics like `class X[T: Bound]:` instead of `typing.TypeVar`).
@@ -178,15 +183,3 @@ Tests live in `tests/`. The following patterns work well in this codebase.
 - **Conditionals**: Avoid double negations — prefer `b if x else a` over `a if not x else b`.
 - **Paths**: Use `pathlib.Path`, not `os.path`.
 - **Python version**: 3.12+.
-
-## PR review focus
-
-When reviewing PRs (`/review` reads this section as part of its checklist):
-
-- **Consistency** with the rest of the codebase. New code should match neighbor patterns; flag arbitrary divergences from existing conventions.
-- **Necessity**: flag anything that doesn't pull its weight — dead code, unused parameters, abstractions that aren't reused, comments that restate obvious code.
-- **Simplification**: actively look for non-trivial simplifications and refactoring opportunities, not just style nitpicks.
-- **Correctness**: edge cases, off-by-ones, error handling, race conditions. Read the code; don't trust comments.
-- **Test coverage**: new code paths should have tests; modified behavior should have updated tests. Untested control flow is a flag.
-- **Diff discipline**: don't substitute commit messages or `git --stat` for reading the code. On a follow-up review after fixes, read `git diff <last-reviewed-sha>..HEAD` in full before claiming an item is "verified" or "fixed". Never put ✅ on items whose diff you haven't read.
-- **Numbering**: number every review item (1, 2, 3...) so the user can reference them by number when responding (`fix 2 and 4`, `ignore 5`). Don't use unnumbered bullets where ordinals would make items addressable.
