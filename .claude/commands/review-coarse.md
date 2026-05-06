@@ -26,7 +26,11 @@ On a follow-up review after fixes have been pushed, run `git diff <last-reviewed
 
 ## Output
 
-Each numbered item must stand on its own as a concrete, actionable finding — a specific change to make or a clear problem to fix, phrased so `fix N` is a complete instruction. Prefer a single recommendation; only present alternatives ("either X or Y") when both are genuinely viable and you can't justify picking one. Keep items concise by default; add context (rationale, alternatives considered) only when it's needed for the contributor to act.
+Each numbered item must stand on its own as a concrete, actionable finding — a specific change to make or a clear problem to fix, phrased so `fix N` is a complete instruction. Prefer a single recommendation; only present alternatives ("either X or Y") when both are genuinely viable and you can't justify picking one.
+
+Keep each item's lead to **1–3 sentences**: location, what's wrong, what to do. Trust the reader to read the code — don't explain how the bug would manifest, walk through the data flow, justify why the current code is wrong beyond a brief phrase, or compare fix options inside the lead.
+
+If a finding genuinely needs more — a cross-file invariant the reader couldn't infer locally, a non-obvious failure mode, an alternative worth weighing — add it as a *separate paragraph* below the lead. Use this sparingly; the lead must remain a short, scannable paragraph on its own.
 
 When an item refers to specific code, include a path from the repo root and the relevant line number(s), in the form `path/to/file.py:42` or `path/to/file.py:42-58`. Verify line numbers by reading the relevant file section with the `Read` tool — diff hunk headers (`@@`) are easy to miscount and must not be used as the sole source.
 
