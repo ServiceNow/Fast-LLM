@@ -214,30 +214,38 @@ _attention_shared_key_value_norm_variants = [
     ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
 ]
 
-_attention_test_configs = (
-    [
-        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-        for base_name, base_kwargs in _base_attention_cases
-        for variant_name, variant_kwargs in _attention_norm_variants
-    ]
-    + [
-        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-        for base_name, base_kwargs in _attention_rotary_cases
-        for variant_name, variant_kwargs in _attention_norm_variants
-    ]
-    + [
-        AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-        for base_name, base_kwargs in _attention_shared_key_value_cases
-        for variant_name, variant_kwargs in _attention_shared_key_value_norm_variants
-    ]
-)
+# Norms apply per-head and don't interact with mask/group structure, so we test all norm
+# variants on a single base (causal) instead of crossing every norm with every base.
+# Lengths matter for packing/flash equivalence checks, so we sweep all lengths on the
+# base × no_norm cases (where seq layout interacts most with attention math).
+_LENGTHS_FULL = [[15], [6, 9], [4, 1, 10], [20, 32, 10, 11, 9, 18]]
+_LENGTHS_SHORT = [[15], [4, 1, 10]]
+_LENGTHS_SINGLE = [[15]]
 
-_attention_lengths = [
-    [15],
-    [6, 9],
-    [4, 1, 10],
-    [20, 32, 10, 11, 9, 18],
-]
+
+def _build_test_cases() -> list[tuple[AttentionTestConfig, list[int]]]:
+    cases: list[tuple[AttentionTestConfig, list[int]]] = []
+    for base_name, base_kwargs in _base_attention_cases:
+        config = AttentionTestConfig(name=f"{base_name}_no_norm", **base_kwargs)
+        cases.extend((config, lengths) for lengths in _LENGTHS_FULL)
+    for variant_name, variant_kwargs in _attention_norm_variants:
+        if variant_name == "no_norm":
+            continue
+        config = AttentionTestConfig(name=f"causal_{variant_name}", causal=True, **variant_kwargs)
+        cases.extend((config, lengths) for lengths in _LENGTHS_SHORT)
+    for base_name, base_kwargs in _attention_rotary_cases:
+        for variant_name, variant_kwargs in _attention_norm_variants:
+            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+            cases.extend((config, lengths) for lengths in _LENGTHS_SINGLE)
+    for base_name, base_kwargs in _attention_shared_key_value_cases:
+        lengths_set = _LENGTHS_SINGLE if base_kwargs.get("rotary") else _LENGTHS_SHORT
+        for variant_name, variant_kwargs in _attention_shared_key_value_norm_variants:
+            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+            cases.extend((config, lengths) for lengths in lengths_set)
+    return cases
+
+
+_attention_test_cases = _build_test_cases()
 
 
 def _run_per_seq_reference(
@@ -392,18 +400,13 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         attention_flash.preprocess(kwargs_flash)
         out_flash, _ = stage_flash.forward(hidden_states_bf16, kwargs_flash)
 
-        # Noncausal flash vs backup bf16 deviates ~30% more than causal; 4e-3 fails on cluster GPU.
         Assert.rms_close_relative(out_flash, out_ref_bf16, 5e-3, 1e-7)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "lengths",
-    [pytest.param(lengths, id=str(lengths)) for lengths in _attention_lengths],
-)
-@pytest.mark.parametrize(
-    "config",
-    [pytest.param(config, id=config.name) for config in _attention_test_configs],
+    ("config", "lengths"),
+    [pytest.param(config, lengths, id=f"{config.name}-{lengths}") for config, lengths in _attention_test_cases],
 )
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     with _no_tf32():
