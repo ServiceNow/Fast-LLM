@@ -1,3 +1,4 @@
+import abc
 import functools
 import typing
 
@@ -13,7 +14,9 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import (
     GRPOMetricsLevel,
     LanguageModelGRPOLossConfig,
+    LanguageModelGSPOLossConfig,
     LanguageModelLossKwargs,
+    LanguageModelPolicyGradientLossConfig,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 from fast_llm.utils import Assert
@@ -33,7 +36,15 @@ class GRPOMetrics(typing.NamedTuple):
     entropy: torch.Tensor | None
 
 
-class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelLoss[ConfigType]):
+class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLossConfig](
+    LanguageModelLoss[ConfigType]
+):
+    """Shared scaffolding for policy-gradient losses (GRPO, GSPO).
+
+    Subclasses provide a per-algorithm kernel call via `_call_kernel`. Everything else —
+    divisor selection (token vs document), per-token metrics, loss registration — is shared.
+    """
+
     def __init__(
         self,
         config: ConfigType,
@@ -97,54 +108,25 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         else:
             divisor = self._get_label_count(kwargs)
             grad_divisor = None  # use divisor (default behavior)
-        if self._config.policy_loss == "gspo":
-            loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
-                logits,
-                self._get_labels(kwargs, split_index),
-                self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
-                self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
-                self._prepare_target(kwargs[LanguageModelKwargs.document_index], split_index),
-                grad_logits=grad_logits,
-                grad_output=self._get_grad_output(kwargs),
-                group=self._parallel_dim.group if self._vocab_parallel else None,
-                epsilon_low=self._config.epsilon_low,
-                epsilon_high=self._config.epsilon_high,
-                logits_scale_factor=self._effective_logits_scale,
-                num_labels_in_seq=(
-                    None
-                    if losses is None
-                    else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-                ),
-                divisor=divisor,
-                grad_divisor=grad_divisor,
-                sdp_group=self._sdp_dim.group if self._sdp_active else None,
-            )
-        else:
-            if TritonConfig.enabled(logits.device, self._config.use_triton):
-                from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
-
-                fn = triton_grpo_loss_forward_backward
-            else:
-                fn = fused_grpo_loss_forward_backward
-            loss, grad, new_logprobs_mean = fn(
-                logits,
-                self._get_labels(kwargs, split_index),
-                self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
-                self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
-                grad_logits=grad_logits,
-                grad_output=self._get_grad_output(kwargs),
-                group=self._parallel_dim.group if self._vocab_parallel else None,
-                epsilon_low=self._config.epsilon_low,
-                epsilon_high=self._config.epsilon_high,
-                logits_scale_factor=self._effective_logits_scale,
-                num_labels_in_seq=(
-                    None
-                    if losses is None
-                    else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-                ),
-                divisor=divisor,
-                grad_divisor=grad_divisor,
-            )
+        loss, grad, new_logprobs_mean = self._call_kernel(
+            logits=logits,
+            target=self._get_labels(kwargs, split_index),
+            advantages=self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            old_log_probabilities=self._prepare_target(
+                kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index
+            ),
+            kwargs=kwargs,
+            split_index=split_index,
+            grad_logits=grad_logits,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=divisor,
+            grad_divisor=grad_divisor,
+            num_labels_in_seq=(
+                None
+                if losses is None
+                else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+            ),
+        )
 
         if new_logprobs_mean is not None:
             new_logprobs_mean = new_logprobs_mean / kwargs[LanguageModelKwargs.num_documents_in_batch]
@@ -157,6 +139,24 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._register_extra_metrics(logits, kwargs, losses, split_index)
 
         return loss, grad
+
+    @abc.abstractmethod
+    def _call_kernel(
+        self,
+        *,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        advantages: torch.Tensor,
+        old_log_probabilities: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+        grad_output: float | None,
+        divisor: float,
+        grad_divisor: float | None,
+        num_labels_in_seq: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Run the algorithm-specific forward+backward kernel and return (loss, grad_logits, new_logprobs_mean)."""
 
     def _register_extra_metrics(
         self,
@@ -234,13 +234,8 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                 defs.append(LossDef(f"{self._name}_entropy"))
         return defs
 
-    def get_preprocessing_config(
-        self,
-    ) -> dict[str, typing.Any]:
-        config = {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
-        if self._config.policy_loss == "gspo":
-            config["return_document_index"] = True
-        return config
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
 
     @functools.cached_property
     def _effective_logits_scale(self) -> float:
@@ -249,6 +244,87 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
     @functools.cached_property
     def _logprob_metric_name(self) -> str:
         return f"{self._name}_new_logprobs"
+
+
+class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
+    """GRPO: per-token IS-ratio clipping."""
+
+    def _call_kernel(
+        self,
+        *,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        advantages: torch.Tensor,
+        old_log_probabilities: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+        grad_output: float | None,
+        divisor: float,
+        grad_divisor: float | None,
+        num_labels_in_seq: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
+
+            fn = triton_grpo_loss_forward_backward
+        else:
+            fn = fused_grpo_loss_forward_backward
+        return fn(
+            logits,
+            target,
+            advantages,
+            old_log_probabilities,
+            grad_logits=grad_logits,
+            grad_output=grad_output,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
+            epsilon_low=self._config.epsilon_low,
+            epsilon_high=self._config.epsilon_high,
+            logits_scale_factor=self._effective_logits_scale,
+            num_labels_in_seq=num_labels_in_seq,
+            divisor=divisor,
+            grad_divisor=grad_divisor,
+        )
+
+
+class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
+    """GSPO: sequence-level geometric-mean IS-ratio clipping."""
+
+    def _call_kernel(
+        self,
+        *,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        advantages: torch.Tensor,
+        old_log_probabilities: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+        grad_output: float | None,
+        divisor: float,
+        grad_divisor: float | None,
+        num_labels_in_seq: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        return fused_gspo_loss_forward_backward(
+            logits,
+            target,
+            advantages,
+            old_log_probabilities,
+            self._prepare_target(kwargs[LanguageModelKwargs.document_index], split_index),
+            grad_logits=grad_logits,
+            grad_output=grad_output,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
+            epsilon_low=self._config.epsilon_low,
+            epsilon_high=self._config.epsilon_high,
+            logits_scale_factor=self._effective_logits_scale,
+            num_labels_in_seq=num_labels_in_seq,
+            divisor=divisor,
+            grad_divisor=grad_divisor,
+            sdp_group=self._sdp_dim.group if self._sdp_active else None,
+        )
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return super().get_preprocessing_config() | {"return_document_index": True}
 
 
 @torch.compile

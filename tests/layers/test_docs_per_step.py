@@ -3,7 +3,7 @@ Unit tests for docs_per_step / normalize_by_documents features.
 
 Covers:
   1. Divisor scaling in fused_grpo_loss_forward_backward and fused_gspo_loss_forward_backward
-  2. normalize_by_documents flag in LanguageModelGRPOLoss (GRPO and GSPO policy_loss)
+  2. normalize_by_documents flag in policy-gradient losses (GRPO and GSPO)
   3. Schedule._eff_depth_first / _eff_sequential_micro_batches / _eff_num_inputs properties
   4. Trainer._prefetch_to_doc_target accumulation logic
 """
@@ -17,7 +17,11 @@ import torch
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import (
+    LanguageModelGRPOLossConfig,
+    LanguageModelGSPOLossConfig,
+    LanguageModelLossKwargs,
+)
 from fast_llm.layers.language_model.loss.grpo import (
     fused_grpo_loss_forward_backward,
     fused_gspo_loss_forward_backward,
@@ -78,25 +82,26 @@ def test_gspo_divisor_scales_loss():
 
 
 # ---------------------------------------------------------------------------
-# 2. normalize_by_documents flag in LanguageModelGRPOLoss
+# 2. normalize_by_documents flag in policy-gradient losses
 # ---------------------------------------------------------------------------
 
 
-def _make_grpo_loss(normalize_by_documents: bool, policy_loss: str = "grpo"):
-    """Instantiate a LanguageModelGRPOLoss with minimal (single-GPU) DistributedConfig."""
+def _make_policy_gradient_loss(normalize_by_documents: bool, policy_loss: str = "grpo"):
+    """Instantiate a GRPO or GSPO loss with minimal (single-GPU) DistributedConfig."""
     from fast_llm.engine.distributed.config import DistributedConfig
-    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
+    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss, LanguageModelGSPOLoss
 
-    dist_cfg = DistributedConfig()
-    cfg = LanguageModelGRPOLossConfig(
-        normalize_by_documents=normalize_by_documents,
-        policy_loss=policy_loss,
-    )
-    return LanguageModelGRPOLoss(cfg, dist_cfg, name="grpo", prediction_distance=1, prediction_heads=1)
+    if policy_loss == "gspo":
+        cfg = LanguageModelGSPOLossConfig(normalize_by_documents=normalize_by_documents)
+        loss_cls = LanguageModelGSPOLoss
+    else:
+        cfg = LanguageModelGRPOLossConfig(normalize_by_documents=normalize_by_documents)
+        loss_cls = LanguageModelGRPOLoss
+    return loss_cls(cfg, DistributedConfig(), name=policy_loss, prediction_distance=1, prediction_heads=1)
 
 
 def _make_grpo_kwargs(logits, target, advantages, old_lp, doc_idx, n_labels, n_docs):
-    """Build the kwargs dict expected by LanguageModelGRPOLoss._forward_backward."""
+    """Build the kwargs dict expected by LanguageModelPolicyGradientLoss._forward_backward."""
     return {
         LanguageModelLossKwargs.labels: [target],
         LanguageModelLossKwargs.advantages: [advantages],
@@ -125,8 +130,8 @@ def test_normalize_by_documents_grpo():
 
     kwargs = _make_grpo_kwargs(logits, target, advantages, old_lp, doc_idx, n_labels, n_docs)
 
-    loss_by_tokens, _ = _make_grpo_loss(normalize_by_documents=False)._forward_backward(logits, kwargs)
-    loss_by_docs, _ = _make_grpo_loss(normalize_by_documents=True)._forward_backward(logits, kwargs)
+    loss_by_tokens, _ = _make_policy_gradient_loss(normalize_by_documents=False)._forward_backward(logits, kwargs)
+    loss_by_docs, _ = _make_policy_gradient_loss(normalize_by_documents=True)._forward_backward(logits, kwargs)
 
     expected_ratio = float(n_labels) / float(n_docs)
     actual_ratio = loss_by_docs.item() / loss_by_tokens.item()
@@ -136,7 +141,7 @@ def test_normalize_by_documents_grpo():
 
 
 def test_normalize_by_documents_gspo():
-    """Same test for GSPO policy_loss."""
+    """Same test for the GSPO loss."""
     torch.manual_seed(21)
     n_tok, vocab = 12, 16
     n_docs, n_labels = 3, n_tok
@@ -150,10 +155,10 @@ def test_normalize_by_documents_gspo():
 
     kwargs = _make_grpo_kwargs(logits, target, advantages, old_lp, doc_idx, n_labels, n_docs)
 
-    loss_by_tokens, _ = _make_grpo_loss(normalize_by_documents=False, policy_loss="gspo")._forward_backward(
+    loss_by_tokens, _ = _make_policy_gradient_loss(normalize_by_documents=False, policy_loss="gspo")._forward_backward(
         logits, kwargs
     )
-    loss_by_docs, _ = _make_grpo_loss(normalize_by_documents=True, policy_loss="gspo")._forward_backward(
+    loss_by_docs, _ = _make_policy_gradient_loss(normalize_by_documents=True, policy_loss="gspo")._forward_backward(
         logits, kwargs
     )
 

@@ -428,7 +428,7 @@ def test_gradient_finite_diff():
 
 
 # ---------------------------------------------------------------------------
-# Test 8: extra metrics unchanged by policy_loss choice
+# Test 8: extra metrics are per-token regardless of GRPO/GSPO
 # ---------------------------------------------------------------------------
 
 
