@@ -456,10 +456,9 @@ class ConfigSectionConverter(abc.ABC):
         check to the nested section's own converter.
 
         The check only runs when ``type(config)`` exactly matches ``cls.fast_llm_config_class`` — when the
-        config is a strict subclass (e.g. ``MoEMLPConfig`` fed via ``super().export_config()`` from a yet-to-be-
-        migrated ``MixtralMLPConverter``), the subclass converter is responsible for declaring the additional
-        fields and running its own check. TODO: Once Mixtral/Apriel/Apriel2 migrate, the safety net for
-        ``MoEMLPConfig``/``MambaConfig``/etc. is gated on those migrations landing.
+        config is a strict subclass (e.g. ``MoEMLPConfig`` fed through ``LlamaMLPConverter`` declarations
+        before the dispatching ``MixtralMLPConverter`` overrides ``fast_llm_config_class``), the subclass
+        converter is responsible for declaring the additional fields and running its own check.
         """
         if type(config) is not cls.fast_llm_config_class:
             return

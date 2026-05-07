@@ -28,7 +28,7 @@ from fast_llm.layers.common.normalization.config import (
     NoNormalizationConfig,
     RMSNormalizationConfig,
 )
-from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig, StochasticMixerSamplingStrategy
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
@@ -187,6 +187,21 @@ def _apriel2_mamba_aux_export(config: MambaConfig) -> dict:
     }
 
 
+def _apriel2_mamba_aux_import(hf_dict: dict) -> dict:
+    """Reverse of :func:`_apriel2_mamba_aux_export`. ``conv_bias`` / ``dt_proj_bias`` can diverge from the
+    mixer-wide ``add_linear_biases`` flag, so they must populate the per-layer ``bias.enabled`` directly;
+    dropping them on import would silently mask HF bias weights when the weight loader checks the
+    per-layer flag."""
+    out: dict = {}
+    if "d_conv" in hf_dict:
+        out[("convolution_layer", "kernel_size")] = hf_dict["d_conv"]
+    if "conv_bias" in hf_dict:
+        out[("convolution_layer", "bias", "enabled")] = hf_dict["conv_bias"]
+    if "dt_proj_bias" in hf_dict:
+        out[("dt_layer", "bias", "enabled")] = hf_dict["dt_proj_bias"]
+    return out
+
+
 class Apriel2MambaConverter(ConfigSectionConverter):
     fast_llm_config_class = MambaConfig
     hf_type_name = "mamba"
@@ -202,9 +217,7 @@ class Apriel2MambaConverter(ConfigSectionConverter):
             "aux": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("dt_layer",)),
                 export_fn=_apriel2_mamba_aux_export,
-                # The d_conv/conv_bias/dt_proj_bias HF fields are not reflected in the Fast-LLM mamba dict —
-                # current Apriel2 import simply ignores them and lets Fast-LLM use its own defaults.
-                import_fn=lambda hf: {},
+                import_fn=_apriel2_mamba_aux_import,
             ),
             # Architecture fields with no HF counterpart; they round-trip at their Fast-LLM defaults.
             "layers_unmapped": IgnoredConfigConverter(
@@ -511,8 +524,6 @@ class Apriel2StochasticMixerConverter(ConfigSectionConverter):
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        from fast_llm.layers.decoder.config import StochasticMixerSamplingStrategy
-
         return {
             "mixers": TypedDictContainerConfigConverter(
                 fast_llm_path=("mixers",),
