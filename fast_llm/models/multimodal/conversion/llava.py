@@ -9,6 +9,7 @@ from fast_llm.engine.checkpoint.external import (
     ConstantImportConfigConverter,
     CustomConfigConverter,
     IgnoredConfigConverter,
+    ImportOnlyConfigConverter,
     NestedConfigConverter,
     RenameConfigConverter,
     WeightConverter,
@@ -22,6 +23,7 @@ from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
+    _TRANSFORMERS_V4,
     LlamaAttentionConverter,
     LlamaBlockConverter,
     LlamaDecoderConverter,
@@ -50,31 +52,49 @@ class PixtralNormalizationConverter(LlamaNormalizationConverter):
         }
 
 
+def _pixtral_rotary_export(config: AttentionConfig) -> dict:
+    if _TRANSFORMERS_V4:
+        return {("rope_theta",): config.rotary.theta}
+    return {("rope_parameters",): {"rope_theta": config.rotary.theta, "rope_type": "default"}}
+
+
+def _pixtral_rotary_import(hf_dict: dict) -> dict:
+    if "rope_parameters" in hf_dict:
+        theta = hf_dict["rope_parameters"]["rope_theta"]
+    else:
+        theta = hf_dict["rope_theta"]
+    return {("rotary",): {"type": "default_2d", "theta": theta}}
+
+
 class PixtralAttentionConverter(LlamaAttentionConverter):
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["num_key_value_heads"] = config["num_attention_heads"]
-        config["attention_bias"] = False
-        out = super().import_config(config)
-        out["rotary"]["type"] = "default_2d"
-        out["causal"] = False
+    def _create_config_converters(cls) -> dict:
+        out = super()._create_config_converters()
+        # PixtralConfig hardcodes Q/K/V/O biases off and does not surface ``attention_bias``.
+        out["add_linear_biases"] = ConstantImportConfigConverter(("add_linear_biases",), False)
+        # Pixtral attention is non-causal (vision encoder).
+        out["causal"] = ConstantImportConfigConverter(("causal",), False)
+        # No GQA in Pixtral; ``head_groups`` derives from ``num_attention_heads`` on import and is redundant
+        # on export (``_validate_export`` enforces equality with ``heads``).
+        out["head_groups"] = ImportOnlyConfigConverter(
+            fast_llm_paths=(("head_groups",),),
+            import_fn=lambda hf: {("head_groups",): hf["num_attention_heads"]},
+        )
+        # Pixtral always uses 2D rotary; only ``theta`` round-trips. The flat (v4) vs ``rope_parameters`` (v5)
+        # layout follows the active transformers major version, mirroring the Llama parent.
+        out["rotary"] = CustomConfigConverter(
+            fast_llm_paths=(("rotary",),),
+            export_fn=_pixtral_rotary_export,
+            import_fn=_pixtral_rotary_import,
+            recurses=True,
+        )
         return out
 
     @classmethod
-    def export_config(cls, config: AttentionConfig) -> dict:
-        cls._validate_export(config)
-        Assert.eq(config.softmax_scale_power, 0.5)
+    def _validate_export(cls, config: AttentionConfig) -> None:
+        super()._validate_export(config)
         Assert.is_(type(config.rotary), Rotary2DConfig)
-        assert not config.add_linear_biases
-        assert not config.causal
         Assert.eq(config.head_groups, config.heads)
-        return {
-            "num_attention_heads": config.heads,
-            "attention_dropout": config.dropout,
-            "rope_theta": config.rotary.theta,
-            # Not in PixtralConfig, but needed for consistency check in LlavaVisionModelConverter.
-            "head_dim": config.head_size,
-        }
 
 
 class PixtralBlockConverter(LlamaBlockConverter):
@@ -134,9 +154,8 @@ class PixtralEmbeddingsConverter(ConfigSectionConverter):
         return {
             "patch_height": RenameConfigConverter(("patch_height",), ("patch_size",)),
             # Pixtral has one `patch_size`; mirror it to `patch_width` on import and validate equality on export.
-            "patch_width": CustomConfigConverter(
+            "patch_width": ImportOnlyConfigConverter(
                 fast_llm_paths=(("patch_width",),),
-                export_fn=lambda c: {},
                 import_fn=lambda hf: {("patch_width",): hf["patch_size"]},
             ),
             # `input_channels` is a derived cached_property pinned to 3; assert on import, emit on export.

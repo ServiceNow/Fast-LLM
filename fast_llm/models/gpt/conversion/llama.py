@@ -45,6 +45,14 @@ _TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
 logger = logging.getLogger(__name__)
 
 
+def assert_no_peft(config: GPTBaseModelConfig) -> None:
+    """Reject any non-trivial PEFT config: HuggingFace formats serialize the base weights only,
+    so a configured LoRA (or other adapter) would be silently dropped on export."""
+    from fast_llm.layers.common.peft.config import NoPeftConfig
+
+    Assert.custom(isinstance, config.peft, NoPeftConfig)
+
+
 # ============================================================
 # Weight converters (imperative — kept as-is during config migration)
 # ============================================================
@@ -351,6 +359,7 @@ class LlamaAttentionConverter(ConfigSectionConverter):
                 fast_llm_paths=(("rotary",),),
                 export_fn=_llama_rotary_export,
                 import_fn=_llama_rotary_import,
+                recurses=True,
             ),
         }
 
@@ -608,6 +617,7 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
                 fast_llm_paths=(("decoder",),),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
+                recurses=True,
             ),
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
@@ -618,9 +628,7 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
 
     @classmethod
     def _validate_export(cls, config: GPTBaseModelConfig) -> None:
-        from fast_llm.layers.common.peft.config import NoPeftConfig
-
-        Assert.custom(isinstance, config.peft, NoPeftConfig)
+        assert_no_peft(config)
 
     # --- weight side (imperative) ---
 

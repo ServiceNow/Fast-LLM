@@ -86,6 +86,7 @@ class AprielMambaConverter(ConfigSectionConverter):
                 import_fn=lambda hf: {
                     ("convolution_layer", "bias", "enabled"): hf.get("ssm_cfg", {}).get("conv_bias", True)
                 },
+                recurses=True,
             ),
             "dt_layer": CustomConfigConverter(
                 fast_llm_paths=(("dt_layer",),),
@@ -95,6 +96,7 @@ class AprielMambaConverter(ConfigSectionConverter):
                 import_fn=lambda hf: {
                     ("dt_layer", "bias", "enabled"): hf.get("ssm_cfg", {}).get("dt_proj_bias", True)
                 },
+                recurses=True,
             ),
             # Per-layer biases that must round-trip implicitly via add_linear_biases (validated below).
             "linear_layers": IgnoredConfigConverter(

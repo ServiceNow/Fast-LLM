@@ -11,8 +11,8 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.apriel2 import (
+    APRIEL2_DECODER_REGISTRY,
     Apriel2BaseModelConverter,
-    Apriel2DecoderConverter,
     Apriel2HeadConverter,
 )
 from fast_llm.models.gpt.conversion.llama import (
@@ -318,7 +318,6 @@ class Apriel2MultimodalHeadConverter(Apriel2HeadConverter):
 
 class Apriel2MultimodalBaseModelConverter:
     vision_model_converter_class: typing.ClassVar[type[Apriel2VisionModelConverter]] = Apriel2VisionModelConverter
-    decoder_converter_class: typing.ClassVar[type[Apriel2DecoderConverter]] = Apriel2DecoderConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
     head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
 
@@ -352,13 +351,14 @@ class Apriel2MultimodalBaseModelConverter:
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        decoder_converter_class = APRIEL2_DECODER_REGISTRY.get(type(config.decoder))
+        if decoder_converter_class is None:
+            raise NotImplementedError(f"Unsupported decoder type: {type(config.decoder).__name__}")
         converters = []
         if config.vision_encoder is not None:
             converters.extend(cls.vision_model_converter_class.get_converters(config.vision_encoder))
         converters.extend(cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"))
-        converters.extend(
-            cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.decoder.blocks")
-        )
+        converters.extend(decoder_converter_class.get_converters(config.decoder, "decoder", "model.decoder.blocks"))
         converters.extend(cls.head_converter_class.get_converters(config.head, exported_config, "head"))
 
         return converters

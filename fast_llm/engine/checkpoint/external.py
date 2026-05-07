@@ -7,7 +7,7 @@ import typing
 import torch
 
 from fast_llm import __version__
-from fast_llm.config import Config, FieldHint, set_nested_dict_value
+from fast_llm.config import Config, FieldHint, get_nested_dict_value, set_nested_dict_value
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
@@ -19,34 +19,35 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-_MISSING = object()
-
-
-def _get_nested(d: dict, path: tuple[str, ...], default=_MISSING):
-    cur = d
-    for key in path:
-        if not isinstance(cur, dict) or key not in cur:
-            if default is _MISSING:
-                raise KeyError(f"Missing key {'.'.join(path)} in HF config dict")
-            return default
-        cur = cur[key]
-    return cur
-
-
-def _has_nested(d: dict, path: tuple[str, ...]) -> bool:
-    cur = d
-    for key in path:
-        if not isinstance(cur, dict) or key not in cur:
-            return False
-        cur = cur[key]
-    return True
-
-
 def _get_attr_path(config: Config, path: tuple[str, ...]) -> typing.Any:
     cur = config
     for name in path:
         cur = getattr(cur, name)
     return cur
+
+
+def _collect_architecture_paths(config: Config) -> list[tuple[str, ...]]:
+    """Walk ``config`` and return every architecture-hint field path reachable from it.
+
+    Descends into any field whose runtime value is itself a :class:`Config`, so the path list reflects the
+    actual instance (e.g. only ``Llama3RotaryConfig`` fields when ``config.rotary`` is one). The caller uses
+    the list to verify each path is claimed by some declaration.
+    """
+    paths: list[tuple[str, ...]] = []
+
+    def walk(node: Config, prefix: tuple[str, ...]) -> None:
+        for name, field in type(node).fields():
+            if field._field_type != dataclasses._FIELD or not field.init:
+                continue
+            full = prefix + (name,)
+            if field.hint == FieldHint.architecture:
+                paths.append(full)
+            value = getattr(node, name)
+            if isinstance(value, Config):
+                walk(value, full)
+
+    walk(config, ())
+    return paths
 
 
 # ============================================================
@@ -60,18 +61,21 @@ class ConfigConverter(abc.ABC):
     Each primitive owns a set of ``fast_llm_paths`` (tuples of attribute names rooted at the section's config) and
     ``hf_paths`` (tuples of dict keys rooted at the section's HF subdict). The walker calls ``export_to`` to produce
     HF entries from a Fast-LLM config object, and ``import_to`` to produce a Fast-LLM config dict from an HF dict.
+
+    ``recurses`` controls how :meth:`ConfigSectionConverter._check_architecture_coverage` interprets the paths:
+
+    * ``recurses = False`` (default) — paths are exact-match leaves. Every architecture-hint field at every depth
+      under the section's config class must be exactly listed by some declaration.
+    * ``recurses = True`` — paths are recursive prefixes covering the entire subtree. Used by primitives that
+      delegate to a sub-converter that runs its own coverage check (Nested/Dispatch/TypedDictContainer), by
+      :class:`IgnoredConfigConverter` (the format intentionally does not represent the subtree), and by
+      :class:`CustomConfigConverter` when its author opts in (escape hatch for cases like rotary that don't
+      decompose into per-leaf renames).
     """
 
     fast_llm_paths: tuple[tuple[str, ...], ...] = ()
     hf_paths: tuple[tuple[str, ...], ...] = ()
-
-    @property
-    def consumed_fast_llm_fields(self) -> set[str]:
-        """Top-level Fast-LLM field names this primitive consumes at the current section level.
-
-        Used by the section walker for the architecture-hint coverage check.
-        """
-        return {path[0] for path in self.fast_llm_paths if path}
+    recurses: typing.ClassVar[bool] = False
 
     @abc.abstractmethod
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None: ...
@@ -92,7 +96,7 @@ class RenameConfigConverter(ConfigConverter):
         set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        value = _get_nested(hf_dict, self.hf_paths[0])
+        value = get_nested_dict_value(hf_dict, self.hf_paths[0])
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
 
@@ -110,9 +114,11 @@ class ConstantExportConfigConverter(ConfigConverter):
         set_nested_dict_value(hf_out, self.hf_paths[0], self._value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        if _has_nested(hf_dict, self.hf_paths[0]):
-            actual = _get_nested(hf_dict, self.hf_paths[0])
-            Assert.eq(actual, self._value)
+        try:
+            actual = get_nested_dict_value(hf_dict, self.hf_paths[0])
+        except KeyError:
+            return
+        Assert.eq(actual, self._value)
 
 
 class ConstantImportConfigConverter(ConfigConverter):
@@ -155,9 +161,9 @@ class DefaultConfigConverter(ConfigConverter):
         set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        if _has_nested(hf_dict, self.hf_paths[0]):
-            value = _get_nested(hf_dict, self.hf_paths[0])
-        else:
+        try:
+            value = get_nested_dict_value(hf_dict, self.hf_paths[0])
+        except KeyError:
             value = self._hf_default_fn(hf_dict)
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
@@ -179,18 +185,24 @@ class OptionalConfigConverter(ConfigConverter):
             set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        if _has_nested(hf_dict, self.hf_paths[0]):
-            value = _get_nested(hf_dict, self.hf_paths[0])
-            if value != self._sentinel:
-                set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
+        try:
+            value = get_nested_dict_value(hf_dict, self.hf_paths[0])
+        except KeyError:
+            return
+        if value != self._sentinel:
+            set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
 
 class IgnoredConfigConverter(ConfigConverter):
     """Declares Fast-LLM architecture fields as intentionally not converted by this format.
 
     Use when the HF format has no representation for the field and the Fast-LLM default round-trips correctly.
-    Acts as a no-op on both directions while satisfying the architecture-coverage check.
+    Acts as a no-op on both directions while satisfying the architecture-coverage check. The claim covers the
+    entire subtree under each listed path: deeper architecture fields are also implicitly ignored, on the
+    assumption that a format which does not represent the parent likewise does not represent its children.
     """
+
+    recurses: typing.ClassVar[bool] = True
 
     def __init__(self, *fast_llm_paths: tuple[str, ...]):
         self.fast_llm_paths = fast_llm_paths
@@ -210,6 +222,11 @@ class CustomConfigConverter(ConfigConverter):
     not declared — there is no symmetric HF-side coverage check yet, so an ``hf_paths`` argument would be cosmetic.
     Cross-field validators that produce nothing on the HF side belong on :py:meth:`ConfigSectionConverter._validate_export`
     instead; this primitive is for shape-changing transforms.
+
+    Pass ``recurses=True`` when the converter genuinely owns a sub-config subtree (e.g. rotary, per-layer biases) —
+    the listed paths then act as recursive prefixes and the architecture-coverage check stops at them. The author
+    is trusted to handle every architecture field of the claimed subtree; prefer Nested/Dispatch primitives when
+    the subtree decomposes cleanly.
     """
 
     def __init__(
@@ -217,15 +234,52 @@ class CustomConfigConverter(ConfigConverter):
         fast_llm_paths: tuple[tuple[str, ...], ...],
         export_fn: typing.Callable[[Config], dict],
         import_fn: typing.Callable[[dict], dict],
+        recurses: bool = False,
     ):
         self.fast_llm_paths = fast_llm_paths
         self._export_fn = export_fn
         self._import_fn = import_fn
+        self.recurses = recurses
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         produced = self._export_fn(fast_llm_config)
         for path, value in produced.items():
             set_nested_dict_value(hf_out, path, value)
+
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        produced = self._import_fn(hf_dict)
+        for path, value in produced.items():
+            set_nested_dict_value(fast_llm_out, path, value)
+
+
+class ImportOnlyConfigConverter(ConfigConverter):
+    """One-way mapping that runs only on import; emits nothing on export.
+
+    Used when the HF format derives a Fast-LLM field from sibling fields (e.g. ``head_size`` from
+    ``hidden_size // num_attention_heads`` in Qwen2) or implies a value the Fast-LLM side stores
+    explicitly (e.g. Qwen2's hardcoded Q/K/V biases, Pixtral's mirrored ``patch_size`` ↔ ``patch_width``).
+    On export the field is redundant and validated through ``_validate_export``; on import the
+    ``import_fn`` produces the Fast-LLM dict entries. The fast_llm_paths still register as consumed
+    for the architecture-coverage check.
+
+    Pass ``recurses=True`` when the converter populates a sub-config subtree (e.g. Qwen2's per-layer
+    biases that target ``query_layer``/``key_layer``/...). Same trade-off as
+    :class:`CustomConfigConverter`: the listed paths become recursive prefixes and the framework no
+    longer enforces leaf coverage under them.
+    """
+
+    def __init__(
+        self,
+        fast_llm_paths: tuple[tuple[str, ...], ...],
+        import_fn: typing.Callable[[dict], dict],
+        recurses: bool = False,
+    ):
+        self.fast_llm_paths = fast_llm_paths
+        self._import_fn = import_fn
+        self.recurses = recurses
+
+    def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
+        return
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         produced = self._import_fn(hf_dict)
@@ -242,6 +296,8 @@ class NestedConfigConverter(ConfigConverter):
     With ``hf_path`` set: the sub-converter's output is placed under that nested key. Use this for HF formats
     that mirror Fast-LLM's modular layout (e.g. Apriel2's ``"decoder": {...}`` and ``"head": {...}`` blocks).
     """
+
+    recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -266,7 +322,7 @@ class NestedConfigConverter(ConfigConverter):
             set_nested_dict_value(hf_out, self._hf_path, sub_hf)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        sub_hf = _get_nested(hf_dict, self._hf_path) if self._hf_path is not None else hf_dict
+        sub_hf = get_nested_dict_value(hf_dict, self._hf_path) if self._hf_path is not None else hf_dict
         sub_fast_llm = self._converter_class.import_config(sub_hf)
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
@@ -277,6 +333,8 @@ class DispatchConfigConverter(ConfigConverter):
     The Fast-LLM field's runtime type selects the section converter; the HF format selects via a ``type`` discriminator.
     Both registries (Fast-LLM type → converter class, HF discriminator → converter class) must agree at runtime.
     """
+
+    recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -308,7 +366,7 @@ class DispatchConfigConverter(ConfigConverter):
                 hf_out[key] = value
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        sub_hf = _get_nested(hf_dict, self.hf_paths[0]) if self.hf_paths else hf_dict
+        sub_hf = get_nested_dict_value(hf_dict, self.hf_paths[0]) if self.hf_paths else hf_dict
         type_name = sub_hf.get(self._hf_discriminator_key)
         converter_class = self._hf_to_class.get(type_name)
         if converter_class is None:
@@ -333,6 +391,8 @@ class TypedDictContainerConfigConverter(ConfigConverter):
     ``hf_type_name``. For homogeneous dicts, register a single class with ``hf_type_name = None``; the discriminator
     is then omitted on export and ignored on import.
     """
+
+    recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -370,7 +430,7 @@ class TypedDictContainerConfigConverter(ConfigConverter):
         set_nested_dict_value(hf_out, self.hf_paths[0], out)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        sub_hf_dict = _get_nested(hf_dict, self.hf_paths[0])
+        sub_hf_dict = get_nested_dict_value(hf_dict, self.hf_paths[0])
         out: dict = {}
         for name, sub_hf in sub_hf_dict.items():
             if self._homogeneous:
@@ -448,12 +508,19 @@ class ConfigSectionConverter(abc.ABC):
 
     @classmethod
     def _check_architecture_coverage(cls, config: Config, declarations: dict[str, ConfigConverter]) -> None:
-        """Raise if any architecture-hint field on the section's declared config class is not consumed.
+        """Raise if any architecture-hint field reachable from the section's config (recursively) is not consumed.
 
-        Coverage is structural (based on field hints), not value-based: every architecture field must be
-        explicitly accounted for, even if it currently holds its Fast-LLM default. Sub-config fields are
-        consumed by ``NestedConfigConverter``/``DispatchConfigConverter``, which delegate the deeper coverage
-        check to the nested section's own converter.
+        Coverage is structural (based on field hints), not value-based: every architecture field at every depth
+        must be accounted for, even when it currently holds its Fast-LLM default. The walker descends into any
+        field whose runtime value is a :class:`Config`, collecting an architecture-leaf list, and matches each
+        leaf against the section's declarations:
+
+        * Recursive declarations (``recurses = True`` — Nested/Dispatch/TypedDictContainer/Ignored, plus Custom
+          when its author opts in) cover the entire subtree under each listed prefix. Nested/Dispatch/TypedDict
+          delegate to a sub-converter that runs its own coverage check; Ignored and recursive Custom assume the
+          author has handled the subtree.
+        * Non-recursive declarations (Rename, ConstantImport/Export, Default, Optional, ImportOnly, Custom by
+          default) must list every architecture leaf they consume by exact path.
 
         The check only runs when ``type(config)`` exactly matches ``cls.fast_llm_config_class`` — when the
         config is a strict subclass (e.g. ``MoEMLPConfig`` fed through ``LlamaMLPConverter`` declarations
@@ -462,20 +529,20 @@ class ConfigSectionConverter(abc.ABC):
         """
         if type(config) is not cls.fast_llm_config_class:
             return
-        consumed: set[str] = set()
+        explicit_paths: set[tuple[str, ...]] = set()
+        recursive_prefixes: list[tuple[str, ...]] = []
         for converter in declarations.values():
-            consumed |= converter.consumed_fast_llm_fields
+            if converter.recurses:
+                recursive_prefixes.extend(converter.fast_llm_paths)
+            else:
+                explicit_paths.update(converter.fast_llm_paths)
         missing: list[str] = []
-        for name, field in type(config).fields():
-            if field._field_type != dataclasses._FIELD:
+        for path in _collect_architecture_paths(config):
+            if path in explicit_paths:
                 continue
-            if not field.init:
+            if any(len(prefix) <= len(path) and path[: len(prefix)] == prefix for prefix in recursive_prefixes):
                 continue
-            if field.hint != FieldHint.architecture:
-                continue
-            if name in consumed:
-                continue
-            missing.append(name)
+            missing.append(".".join(path))
         if missing:
             raise ValueError(
                 f"{cls.__name__}: architecture-hint fields on {type(config).__name__} "
