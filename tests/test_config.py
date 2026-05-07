@@ -1,6 +1,7 @@
 import collections
 import pathlib
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -18,7 +19,7 @@ def run_without_import(cmd: str):
     # Run the test in a separate process since lots of things are already imported in this one.
     repo_path = pathlib.Path(__file__).parents[1].resolve()
     command = [
-        "python3",
+        sys.executable,
         "-c",
         "\n".join(
             [

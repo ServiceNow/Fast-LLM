@@ -10,6 +10,7 @@ from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
+    ProportionalRotaryConfig,
     Rotary2DConfig,
     RotaryConfig,
     YarnRotaryConfig,
@@ -77,6 +78,8 @@ class RotaryTestConfig:
     head_size: int
     rotary_type: str = "default"
     theta: float = 10000.0
+    # proportional
+    partial_rotary_factor: float = 1.0
     # llama3 and yarn
     scale_factor: float = 8.0
     original_context_length: int = 8192
@@ -96,6 +99,8 @@ class RotaryTestConfig:
     def get_rotary_config(self) -> RotaryConfig:
         if self.rotary_type == "default":
             return DefaultRotaryConfig(theta=self.theta)
+        if self.rotary_type == "proportional":
+            return ProportionalRotaryConfig(theta=self.theta, partial_rotary_factor=self.partial_rotary_factor)
         if self.rotary_type == "llama3":
             return Llama3RotaryConfig(
                 theta=self.theta,
@@ -121,6 +126,12 @@ class RotaryTestConfig:
         base = self.theta ** -torch.arange(0, 1, 2 / self.head_size, dtype=torch.float64)
         if self.rotary_type in ("default", "2d"):
             return base
+        if self.rotary_type == "proportional":
+            rotary_pairs = round(self.head_size * self.partial_rotary_factor) // 2
+            nope_pairs = self.head_size // 2 - rotary_pairs
+            if nope_pairs == 0:
+                return base
+            return torch.cat([base[:rotary_pairs], base.new_zeros(nope_pairs)])
         if self.rotary_type == "llama3":
             high_freq_wavelength = self.original_context_length / self.high_frequency_factor
             low_freq_wavelength = self.original_context_length / self.low_frequency_factor
@@ -199,6 +210,18 @@ _rotary_test_configs = [
     for name, kwargs in _rotary_type_specs
     for head_size in _head_sizes
 ]
+
+for _head_size in _head_sizes:
+    for _factor in [0.25, 0.5, 0.75, 1.0]:
+        if round(_head_size * _factor) % 2 == 0 and round(_head_size * _factor) > 0:
+            _rotary_test_configs.append(
+                RotaryTestConfig(
+                    name=f"proportional_{int(_factor * 100)}pct_h{_head_size}",
+                    head_size=_head_size,
+                    rotary_type="proportional",
+                    partial_rotary_factor=_factor,
+                )
+            )
 
 _sequence_lengths = [8, 24]
 

@@ -42,6 +42,16 @@ class MLPBase[ConfigType: MLPConfig](BlockWithBias[ConfigType]):
         self._output_dim = self._hidden_dim if output_dim is None else output_dim
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, self._intermediate_2_dim = self._get_intermediate_dims()
+        self.pre_norm = (
+            self._config.pre_norm.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.pre_norm is not None
+            else None
+        )
+        self.post_norm = (
+            self._config.post_norm.get_layer(self._output_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.post_norm is not None
+            else None
+        )
 
         self._activation_fn = (
             triton_mlp_activation_autograd if TritonConfig.enabled(torch.device("cuda")) else torch_mlp_activation
@@ -116,6 +126,8 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 ),
                 None,
             )
+        if self.pre_norm is not None:
+            input_ = self.pre_norm(input_)
         out = mlp_autograd(
             input_,
             None,
@@ -132,6 +144,11 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             transposed_layer_2_weight=self.layer_2.transposed_weight,
         )
         bias = self.layer_2.bias if self._parallel_dim.group else None
+        if self.post_norm is not None:
+            if bias is not None:
+                out = out + bias
+                bias = None
+            out = self.post_norm(out)
         # Use None for dims when output_dim differs from hidden_dim (e.g., adapter projections)
         # to let _debug infer dims from actual tensor shape
         self._debug(out, None, (kwargs.get(BlockKwargs.hidden_token_dim), self._hidden_dim), kwargs, bias=bias)

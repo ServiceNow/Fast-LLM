@@ -51,3 +51,7 @@ class AprielHybridSSMCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class Apriel2TextCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel2_text"
+
+
+class Gemma4CheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "gemma4"

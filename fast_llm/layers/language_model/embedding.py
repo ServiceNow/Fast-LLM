@@ -79,6 +79,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
         position_ids: torch.Tensor | None,
         mask_inputs: bool,
         embedding_map: torch.Tensor,
+        embedding_scale: float,
     ) -> torch.Tensor:
         group = self._parallel_dim.group
         if self._vocab_parallel:
@@ -132,6 +133,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
                         (embedding_map,), input_[: embedding_map.size(0)], accumulate=True
                     )
 
+        if embedding_scale != 1.0:
+            embeddings = embeddings * embedding_scale
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         ):
@@ -162,6 +165,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelEmbeddingsConfig](Block[Co
             # Masking is needed with image tokens or padding.
             input_ is not None or kwargs[LanguageModelKwargs.num_tokens] < kwargs[LanguageModelKwargs.token_dim].size,
             embedding_map,
+            self._config.embedding_scale,
         )
         self._debug(out, None, (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._hidden_dim), kwargs)
         return out
