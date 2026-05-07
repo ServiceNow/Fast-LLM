@@ -89,13 +89,15 @@ def test_gspo_divisor_scales_loss():
 def _make_policy_gradient_loss(normalize_by_documents: bool, policy_loss: str = "grpo"):
     """Instantiate a GRPO or GSPO loss with minimal (single-GPU) DistributedConfig."""
     from fast_llm.engine.distributed.config import DistributedConfig
-    from fast_llm.layers.language_model.loss.grpo import LanguageModelPolicyGradientLoss
+    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss, LanguageModelGSPOLoss
 
-    cfg_cls = LanguageModelGSPOLossConfig if policy_loss == "gspo" else LanguageModelGRPOLossConfig
-    cfg = cfg_cls(normalize_by_documents=normalize_by_documents)
-    return LanguageModelPolicyGradientLoss(
-        cfg, DistributedConfig(), name=policy_loss, prediction_distance=1, prediction_heads=1
-    )
+    if policy_loss == "gspo":
+        cfg = LanguageModelGSPOLossConfig(normalize_by_documents=normalize_by_documents)
+        loss_cls = LanguageModelGSPOLoss
+    else:
+        cfg = LanguageModelGRPOLossConfig(normalize_by_documents=normalize_by_documents)
+        loss_cls = LanguageModelGRPOLoss
+    return loss_cls(cfg, DistributedConfig(), name=policy_loss, prediction_distance=1, prediction_heads=1)
 
 
 def _make_grpo_kwargs(logits, target, advantages, old_lp, doc_idx, n_labels, n_docs):
