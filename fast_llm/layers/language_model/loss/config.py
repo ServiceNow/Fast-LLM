@@ -16,11 +16,7 @@ if typing.TYPE_CHECKING:
         LanguageModelDistillationLoss,
         LanguageModelLabelEntropyLoss,
     )
-    from fast_llm.layers.language_model.loss.grpo import (
-        LanguageModelGRPOLoss,
-        LanguageModelGSPOLoss,
-        LanguageModelPolicyGradientLoss,
-    )
+    from fast_llm.layers.language_model.loss.grpo import LanguageModelPolicyGradientLoss
     from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
     from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
@@ -255,10 +251,10 @@ class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
     )
 
     @property
-    def loss_class(self) -> "type[LanguageModelGRPOLoss]":
-        from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
+    def loss_class(self) -> "type[LanguageModelPolicyGradientLoss]":
+        from fast_llm.layers.language_model.loss.grpo import LanguageModelPolicyGradientLoss
 
-        return LanguageModelGRPOLoss
+        return LanguageModelPolicyGradientLoss
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "gspo"})
@@ -268,7 +264,7 @@ class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig):
     _abstract: typing.ClassVar[bool] = False
 
     @property
-    def loss_class(self) -> "type[LanguageModelGSPOLoss]":
-        from fast_llm.layers.language_model.loss.grpo import LanguageModelGSPOLoss
+    def loss_class(self) -> "type[LanguageModelPolicyGradientLoss]":
+        from fast_llm.layers.language_model.loss.grpo import LanguageModelPolicyGradientLoss
 
-        return LanguageModelGSPOLoss
+        return LanguageModelPolicyGradientLoss
