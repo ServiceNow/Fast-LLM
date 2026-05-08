@@ -87,11 +87,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 and self._config.head_size <= 256
             ):
                 self._implementation = AttentionImplementation.flash
-            elif self._config.window_size is not None:
-                # SDPA path doesn't support sliding window; backup is the only fallback that does.
-                self._implementation = AttentionImplementation.backup
-            else:
+            elif self._distributed_config.use_cuda and self._config.window_size is None:
+                # SDPA's EFFICIENT backend handles every dtype on CUDA; on CPU the
+                # nested + is_causal path has no viable backend, and SDPA does not
+                # support sliding window so windowed runs need backup either way.
                 self._implementation = AttentionImplementation.sdpa
+            else:
+                self._implementation = AttentionImplementation.backup
         if self._implementation == AttentionImplementation.sdpa:
             assert self._config.window_size is None, "SDPA implementation does not support sliding window."
 
