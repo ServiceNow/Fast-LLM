@@ -29,6 +29,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         self._audio = self._config.audio.get_reader(buffer)
         self._advantages = self._config.advantages.get_reader(buffer)
         self._old_log_probabilities = self._config.old_log_probabilities.get_reader(buffer)
+        self._teacher = self._config.teacher.get_reader(buffer) if self._config.has_teacher else None
 
     @property
     def num_tokens(self) -> int:
@@ -37,6 +38,12 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
     def get_document(self, index: int, begin: int, end: int) -> LanguageModelDocument:
         image_patches = self._image_patches.get_document(index, begin, end)
         audio = self._audio.get_document(index, begin, end)
+        teacher = (
+            self._teacher.get_document(index, 0, self._teacher.get_document_size(index))
+            if self._teacher is not None
+            else None
+        )
+
         return LanguageModelDocument(
             **dataclasses.asdict(self._tokens.get_document(index, begin, end)),
             loss_masking_spans=self._loss_masking_spans.get_document(index, begin, end),
@@ -46,6 +53,7 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
             audio=audio,
             advantages=self._advantages.get_document(index, begin, end),
             old_log_probabilities=self._old_log_probabilities.get_document(index, begin, end),
+            teacher=teacher,
         )
 
     def get_document_sizes(self) -> torch.Tensor:
@@ -72,6 +80,16 @@ class LanguageModelReader[ConfigType: LanguageModelReaderConfig](MemmapIndexedDa
         if self._config.has_grpo_data:
             metadata["advantages"] = self._advantages.get_split(begin_index, end_index)
             metadata["old_log_probabilities"] = self._old_log_probabilities.get_split(begin_index, end_index)
+        if self._config.has_teacher:
+            # TODO: teacher dataset splitting requires an index-based get_split on
+            # LanguageModelReader (the existing one is ratio-based and would compute
+            # different document boundaries on the teacher's differently-sized
+            # tokens).  Until then, splitting a shard with teacher data is not
+            # supported -- fail loudly rather than dropping the teacher silently.
+            raise NotImplementedError(
+                "Splitting/blending of shards with parallel teacher streams is not yet supported. "
+                "Use unsplit shards for audio distillation."
+            )
         return begin_index, end_index, metadata
 
 
@@ -81,6 +99,7 @@ class LanguageModelWriter(MemmapWriter):
     _use_image_patches: bool
     _use_audio: bool
     _use_grpo_data: bool
+    _use_teacher: bool
 
     def __enter__(self):
         super().__enter__()
@@ -95,6 +114,10 @@ class LanguageModelWriter(MemmapWriter):
         self._audio_writer = AudioWriter(self._path.joinpath("audio")).__enter__()
         self._advantages_writer = TokenDataWriter(self._path.joinpath("advantages")).__enter__()
         self._old_log_probabilities_writer = TokenDataWriter(self._path.joinpath("old_log_probabilities")).__enter__()
+        # The recursive teacher writer is created lazily on the first document
+        # that carries one (see `write`).  Eager creation would recurse forever
+        # since the teacher writer itself is a LanguageModelWriter.
+        self._teacher_writer: "LanguageModelWriter | None" = None
         return self
 
     def write(self, document: LanguageModelDocument):
@@ -107,18 +130,21 @@ class LanguageModelWriter(MemmapWriter):
         use_image_patches = document.image_patches is not None
         use_audio = document.audio is not None
         use_grpo_data = document.advantages is not None
+        use_teacher = document.teacher is not None
         if hasattr(self, "_use_loss_masking_spans"):
             Assert.eq(self._use_loss_masking_spans, use_loss_masking_spans)
             Assert.eq(self._use_preference_spans, use_preference_spans)
             Assert.eq(self._use_image_patches, use_image_patches)
             Assert.eq(self._use_audio, use_audio)
             Assert.eq(self._use_grpo_data, use_grpo_data)
+            Assert.eq(self._use_teacher, use_teacher)
         else:
             self._use_loss_masking_spans = use_loss_masking_spans
             self._use_preference_spans = use_preference_spans
             self._use_image_patches = use_image_patches
             self._use_audio = use_audio
             self._use_grpo_data = use_grpo_data
+            self._use_teacher = use_teacher
 
         # Write loss masking spans.
         if use_loss_masking_spans:
@@ -144,6 +170,15 @@ class LanguageModelWriter(MemmapWriter):
             self._advantages_writer.write(document.advantages)
             self._old_log_probabilities_writer.write(document.old_log_probabilities)
 
+        # Write the teacher document recursively.
+        if use_teacher:
+            assert (
+                document.teacher.teacher is None
+            ), "Nested teacher streams are not supported (teacher documents must not have their own teachers)."
+            if self._teacher_writer is None:
+                self._teacher_writer = LanguageModelWriter(self._path.joinpath("teacher")).__enter__()
+            self._teacher_writer.write(document.teacher)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._token_writer.__exit__(exc_type, exc_val, exc_tb)
         self._loss_masking_span_writer.__exit__(exc_type, exc_val, exc_tb)
@@ -153,6 +188,8 @@ class LanguageModelWriter(MemmapWriter):
         self._audio_writer.__exit__(exc_type, exc_val, exc_tb)
         self._advantages_writer.__exit__(exc_type, exc_val, exc_tb)
         self._old_log_probabilities_writer.__exit__(exc_type, exc_val, exc_tb)
+        if self._teacher_writer is not None:
+            self._teacher_writer.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
             # A dummy config so we can verify the begin and end offsets.
@@ -207,6 +244,13 @@ class LanguageModelWriter(MemmapWriter):
                     config.old_log_probabilities.begin,
                     config.old_log_probabilities.end,
                 )
+            if self._use_teacher:
+                _copy_chunked(
+                    self._path.joinpath("teacher"),
+                    self._stream,
+                    config.teacher.begin,
+                    config.teacher.end,
+                )
         self._directory.cleanup()
         super().__exit__(exc_type, exc_val, exc_tb)
 
@@ -248,6 +292,11 @@ class LanguageModelWriter(MemmapWriter):
         else:
             advantages = NullReaderConfig()
             old_log_probabilities = NullReaderConfig()
+        if self._use_teacher:
+            teacher = self._teacher_writer.get_config(offset)
+            offset = teacher.end
+        else:
+            teacher = NullReaderConfig()
         if end is None:
             end = offset + len(LanguageModelReaderConfig.footer)
 
@@ -262,6 +311,7 @@ class LanguageModelWriter(MemmapWriter):
             audio=audio,
             advantages=advantages,
             old_log_probabilities=old_log_probabilities,
+            teacher=teacher,
         )
 
 

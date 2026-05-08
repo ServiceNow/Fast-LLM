@@ -431,6 +431,10 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     audio: MemmapReaderBaseConfig = Field()
     advantages: MemmapReaderBaseConfig = Field()
     old_log_probabilities: MemmapReaderBaseConfig = Field()
+    # Parallel teacher stream (audio distillation): a recursive LanguageModelReaderConfig
+    # holding the text-only teacher's tokens / loss-masking spans (different total length
+    # from the student).  NullReaderConfig when absent -> shard works as label-CE-only data.
+    teacher: MemmapReaderBaseConfig = Field()
 
     def _validate(self) -> None:
         super()._validate()
@@ -466,6 +470,10 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         return has_grpo_data
 
     @functools.cached_property
+    def has_teacher(self) -> bool:
+        return isinstance(self.teacher, LanguageModelReaderConfig)
+
+    @functools.cached_property
     def patch_shape(self) -> tuple[int, int, int]:
         assert self.has_image_patches
         return self.image_patches.patch_shape
@@ -497,6 +505,7 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.audio.expected_buffer_size
             + self.advantages.expected_buffer_size
             + self.old_log_probabilities.expected_buffer_size
+            + self.teacher.expected_buffer_size
         )
 
     def get_metadata(self) -> dict[str, typing.Any]:
@@ -514,6 +523,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         if self.has_grpo_data:
             out["advantages"] = self.advantages.get_metadata()
             out["old_log_probabilities"] = self.old_log_probabilities.get_metadata()
+        if self.has_teacher:
+            out["teacher"] = self.teacher.get_metadata()
         return out
 
     @classmethod
@@ -546,6 +557,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["old_log_probabilities"] = TokenDataReaderConfig.blend_metadata(
                 [metadata_["old_log_probabilities"] for metadata_ in metadata]
             )
+        if "teacher" in metadata[0]:
+            out["teacher"] = LanguageModelReaderConfig.blend_metadata([metadata_["teacher"] for metadata_ in metadata])
         return out
 
 

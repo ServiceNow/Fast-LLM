@@ -131,11 +131,29 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         preprocess: bool = True,
     ) -> list[LanguageModelInput] | LanguageModelBatch:
         documents = [document for documents_ in documents for document in documents_]
+        preprocessing_config = self._preprocessing[dataset_name]
+        predicted_tokens = preprocessing_config.predicted_tokens
+
+        teacher_pad_to_size: int | None = None
+        if any(d.teacher is not None for d in documents):
+            distributed = preprocessing_config.distributed
+            alignment = (
+                distributed.tensor_parallel
+                * distributed.sequence_data_parallel
+                * preprocessing_config.micro_batch_splits
+            )
+            teacher_unpadded = sum(len(d.teacher) for d in documents)
+            input_part = max(teacher_unpadded - predicted_tokens, 0)
+            aligned_input = ((input_part + alignment - 1) // alignment) * alignment
+            teacher_pad_to_size = aligned_input + predicted_tokens
+
         batch = LanguageModelBatch.from_documents(
-            documents, self._config.micro_batch_size + self._preprocessing[dataset_name].predicted_tokens
+            documents,
+            pad_to_size=self._config.micro_batch_size + predicted_tokens,
+            teacher_pad_to_size=teacher_pad_to_size,
         )
 
         if preprocess:
-            return batch.get_model_inputs(self._preprocessing[dataset_name])
+            return batch.get_model_inputs(preprocessing_config)
         else:
             return batch

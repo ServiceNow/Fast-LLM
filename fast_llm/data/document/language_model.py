@@ -28,6 +28,11 @@ class LanguageModelDocument(TokenDocument):
     audio: AudioDocument | None = None
     advantages: TokenDataDocument | None = None
     old_log_probabilities: TokenDataDocument | None = None
+    # Parallel teacher-side document used for audio distillation: 
+    # Total length and the absolute positions of `loss_masking_spans` differ from
+    # the student's, but the *unmasked* region — the assistant response — has the
+    # same number of byte-identical tokens on both sides.
+    teacher: "LanguageModelDocument | None" = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -58,6 +63,13 @@ class LanguageModelInput(TokenModelInput):
     targets: list[LanguageModelTargetInput] = dataclasses.field(default_factory=list)
     image_patches: PatchModelInput | None = None
     audio: AudioBatch | None = None
+    # Parallel teacher input for audio distillation.  When present, holds a
+    # fully-formed `LanguageModelInput` for the text-only teacher (different
+    # tokens / lengths / attention kwargs).  `preprocess_batch` runs the
+    # reference model on it and the loss path consumes
+    # `LanguageModelKwargs.teacher_loss_mask` (emitted from the teacher's
+    # targets here).  None on the teacher itself.
+    teacher: "LanguageModelInput | None" = None
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[LanguageModelInput]", distributed: "Distributed"):
@@ -68,6 +80,8 @@ class LanguageModelInput(TokenModelInput):
             model_inputs[0].image_patches.share_batch_data(
                 [model_input.image_patches for model_input in model_inputs], distributed
             )
+        if model_inputs[0].teacher is not None:
+            cls.share_batch_data([m.teacher for m in model_inputs], distributed)
 
     def set_children_attributes(self) -> None:
         if self.image_patches is not None:
@@ -94,12 +108,16 @@ class LanguageModelInput(TokenModelInput):
             out[LanguageModelKwargs.token_ids] = self.tokens
         if self.audio is not None:
             out.update(self.audio.to_kwargs())
+        if self.teacher is not None:
+            out[LanguageModelKwargs.teacher_loss_mask] = [target.mask for target in self.teacher.targets]
         return out
 
     def to_device_(self, device: "torch.device") -> typing.Self:
         super().to_device_(device)
         for target in self.targets:
             target.to_device_(device)
+        if self.teacher is not None:
+            self.teacher.to_device_(device)
         return self
 
 
@@ -111,10 +129,14 @@ class LanguageModelBatch(TokenBatch):
     audio: AudioBatch | None = None
     advantages: TokenDataBatch | None = None
     old_log_probabilities: TokenDataBatch | None = None
+    teacher: "LanguageModelBatch | None" = None
 
     @classmethod
     def from_documents(
-        cls, documents: typing.Sequence[LanguageModelDocument], pad_to_size: int | None = None
+        cls,
+        documents: typing.Sequence[LanguageModelDocument],
+        pad_to_size: int | None = None,
+        teacher_pad_to_size: int | None = None,
     ) -> typing.Self:
         batch = super().from_documents(documents, pad_to_size)
         # We don't want to use `batch.lengths` because it may include a padding length.
@@ -130,9 +152,23 @@ class LanguageModelBatch(TokenBatch):
         batch.old_log_probabilities = TokenDataBatch.from_documents(
             [document.old_log_probabilities for document in documents], lengths, pad_to_size
         )
+        if any(document.teacher is not None for document in documents):
+            assert all(
+                document.teacher is not None for document in documents
+            ), "Teacher stream must be present on all documents in a batch or none."
+            batch.teacher = cls.from_documents(
+                [document.teacher for document in documents],
+                pad_to_size=teacher_pad_to_size,
+            )
         return batch
 
     def get_model_inputs(self, config: LanguageModelBatchPreprocessingConfig) -> list[LanguageModelInput]:
+        if self.teacher is not None:
+            assert config.micro_batch_splits == 1, (
+                "Parallel teacher stream requires schedule.micro_batch_splits == 1: "
+                "student token-axis slices have no positional mapping into the teacher's "
+                "differently-sized sequence.  Reduce micro_batch_splits or disable distillation."
+            )
         total_input_length = len(self.tokens) - config.num_labels
         input_length = div(total_input_length, config.micro_batch_splits)
 
@@ -165,6 +201,20 @@ class LanguageModelBatch(TokenBatch):
             model_inputs.append(model_input)
 
         self._set_target_inputs(model_inputs, config)
+
+        if self.teacher is not None:
+            # Token-axis slicing of the student batch (`micro_batch_splits > 1`) is incompatible
+            # because the student boundary in teacher coordinates is undefined when per-doc
+            # lengths differ; force one model input per batch on both streams.
+            assert config.micro_batch_splits == 1, (
+                "Parallel teacher stream requires schedule.micro_batch_splits == 1: "
+                "student token-axis slices have no positional mapping into the teacher's "
+                "differently-sized sequence.  Reduce micro_batch_splits or disable distillation."
+            )
+            teacher_inputs = self.teacher.get_model_inputs(config)
+            assert len(teacher_inputs) == 1
+            teacher_inputs[0].audio = None
+            model_inputs[0].teacher = teacher_inputs[0]
 
         return model_inputs
 

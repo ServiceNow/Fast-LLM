@@ -383,6 +383,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 positions=torch.tensor(audio_token_positions, dtype=torch.int32),
             )
 
+        # Audio-distillation parallel text-only teacher stream: 
+        # The unmasked region must cover the same response tokens on both sides for alignment
+        teacher_doc: LanguageModelDocument | None = None
+        if (
+            isinstance(self._source_schema, DocumentSourceConfig)
+            and self._source_schema.has_teacher
+        ):
+            teacher_text = sample[self._source_schema.teacher_text]
+            teacher_text_spans = _sort_spans(
+                (SpanType.loss_masking, (begin, last + 1))
+                for begin, last in np.array(
+                    sample[self._source_schema.teacher_loss_masking_spans], dtype=np.int32
+                )
+                .reshape(-1, 2)
+                .tolist()
+            )
+            _, teacher_spans_only = zip(*teacher_text_spans) if teacher_text_spans else ([], [])
+            teacher_tokens, teacher_token_spans = self._tokenizer.tokenize_with_spans(
+                teacher_text,
+                True,
+                True,
+                text_spans=list(teacher_spans_only),
+                data_type=self._data_type,
+            )
+            teacher_doc = LanguageModelDocument(
+                tokens=teacher_tokens,
+                loss_masking_spans=(
+                    RangeDocument(ranges=list(teacher_token_spans)) if teacher_token_spans else None
+                ),
+            )
+
         return LanguageModelDocument(
             tokens=tokens,
             loss_masking_spans=(
@@ -416,6 +447,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             old_log_probabilities=(
                 TokenDataDocument(data=old_log_probabilities) if self._source_schema.has_grpo_data else None
             ),
+            teacher=teacher_doc,
         )
 
     def generate_config_yaml_for_sharded_dst(
