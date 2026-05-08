@@ -274,43 +274,38 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             key = key.repeat_interleave(self._local_heads_per_group, dim=1)
             value = value.repeat_interleave(self._local_heads_per_group, dim=1)
 
+        sdpa_args: dict[str, typing.Any] = {
+            "dropout_p": self._config.dropout if self.training else 0.0,
+            "scale": self._softmax_scale,
+        }
         if query.is_cuda and self._config.window_size is None:
-            # Most-efficient path: nested-jagged + is_causal lets EFFICIENT skip materializing
-            # the attention mask. Document boundaries are encoded by the per-doc batch elements.
+            # Wrap each document as its own batch element via nested-jagged so cross-doc masking
+            # is structural and EFFICIENT skips materializing the attention mask.
             cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
             cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
-            query_nested = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
-            key_nested = torch.nested.nested_tensor_from_jagged(key, cu_seqlens_k)
-            value_nested = torch.nested.nested_tensor_from_jagged(value, cu_seqlens_k)
-            with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION):
-                output_nested = torch.nn.functional.scaled_dot_product_attention(
-                    query_nested.transpose(1, 2),
-                    key_nested.transpose(1, 2),
-                    value_nested.transpose(1, 2),
-                    is_causal=self._config.causal,
-                    dropout_p=self._config.dropout if self.training else 0.0,
-                    scale=self._softmax_scale,
-                ).transpose(1, 2)
-            return output_nested.values()
+            query = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
+            key = torch.nested.nested_tensor_from_jagged(key, cu_seqlens_k)
+            value = torch.nested.nested_tensor_from_jagged(value, cu_seqlens_k)
+            sdpa_args["is_causal"] = self._config.causal
+        else:
+            # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
+            # nested + is_causal) and on CUDA with sliding window (the nested path can't express
+            # it). Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
+            attention_mask = kwargs[AttentionKwargs.attention_mask]
+            if attention_mask is not None:
+                attention_mask = attention_mask.transpose(1, 2)
+            query = query.unsqueeze(0)
+            key = key.unsqueeze(0)
+            value = value.unsqueeze(0)
+            sdpa_args["attn_mask"] = attention_mask
 
-        # CPU MATH rejects nested + is_causal, and the nested path can't express sliding window.
-        # Both fall back on the same dense + attn_mask form, reusing backup's preprocessed mask.
-        # Backup builds it as (1, sq, 1, sk) for its head-grouped layout; SDPA wants (B, H, sq, sk).
-        attention_mask = kwargs[AttentionKwargs.attention_mask]
-        if attention_mask is not None:
-            attention_mask = attention_mask.transpose(1, 2)
-        return (
-            torch.nn.functional.scaled_dot_product_attention(
-                query.unsqueeze(0).transpose(1, 2),
-                key.unsqueeze(0).transpose(1, 2),
-                value.unsqueeze(0).transpose(1, 2),
-                attn_mask=attention_mask,
-                dropout_p=self._config.dropout if self.training else 0.0,
-                scale=self._softmax_scale,
-            )
-            .transpose(1, 2)
-            .squeeze(0)
-        )
+        output = torch.nn.functional.scaled_dot_product_attention(
+            query.transpose(1, 2),
+            key.transpose(1, 2),
+            value.transpose(1, 2),
+            **sdpa_args,
+        ).transpose(1, 2)
+        return output.values() if output.is_nested else output.squeeze(0)
 
     def _apply_norm_with_grad_capture(
         self, norm: torch.nn.Module, x: torch.Tensor
