@@ -429,8 +429,7 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
 
     if _flash_available and config.head_size <= 256:
         _check_packed("flash")
-    if config.window_size is None:
-        _check_packed("sdpa")
+    _check_packed("sdpa")
 
 
 @pytest.mark.slow

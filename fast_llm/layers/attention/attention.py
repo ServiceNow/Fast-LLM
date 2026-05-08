@@ -87,15 +87,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 and self._config.head_size <= 256
             ):
                 self._implementation = AttentionImplementation.flash
-            elif self._distributed_config.use_cuda and self._config.window_size is None:
-                # SDPA's EFFICIENT backend handles every dtype on CUDA; on CPU the
-                # nested + is_causal path has no viable backend, and SDPA does not
-                # support sliding window so windowed runs need backup either way.
-                self._implementation = AttentionImplementation.sdpa
             else:
-                self._implementation = AttentionImplementation.backup
-        if self._implementation == AttentionImplementation.sdpa:
-            assert self._config.window_size is None, "SDPA implementation does not support sliding window."
+                self._implementation = AttentionImplementation.sdpa
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         self._sequence_data_parallel_dim = self._distributed_config.get_distributed_dim(
@@ -276,30 +269,48 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         value: torch.Tensor,  # total_k, head_groups, head_size
         kwargs: dict[str, typing.Any],
     ) -> torch.Tensor:  # total_q, heads, head_size
-        # SDPA's EFFICIENT backend (the only one that supports head_size > 256) requires
-        # Q/K/V to have the same num_heads, so we materialize K/V across query heads.
-        # Wrap as nested-jagged to give SDPA the per-document mask via batch elements,
-        # avoiding the pack→pad→gather dance.
+        # SDPA's fused kernels require Q/K/V to share heads, so we expand K/V across query heads.
         if self._local_heads_per_group > 1:
             key = key.repeat_interleave(self._local_heads_per_group, dim=1)
             value = value.repeat_interleave(self._local_heads_per_group, dim=1)
-        cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
-        cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
-        query_nested = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
-        key_nested = torch.nested.nested_tensor_from_jagged(key, cu_seqlens_k)
-        value_nested = torch.nested.nested_tensor_from_jagged(value, cu_seqlens_k)
 
-        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION):
-            output_nested = torch.nn.functional.scaled_dot_product_attention(
-                query_nested.transpose(1, 2),
-                key_nested.transpose(1, 2),
-                value_nested.transpose(1, 2),
-                is_causal=self._config.causal,
+        if query.is_cuda and self._config.window_size is None:
+            # Most-efficient path: nested-jagged + is_causal lets EFFICIENT skip materializing
+            # the attention mask. Document boundaries are encoded by the per-doc batch elements.
+            cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
+            cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
+            query_nested = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
+            key_nested = torch.nested.nested_tensor_from_jagged(key, cu_seqlens_k)
+            value_nested = torch.nested.nested_tensor_from_jagged(value, cu_seqlens_k)
+            with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION):
+                output_nested = torch.nn.functional.scaled_dot_product_attention(
+                    query_nested.transpose(1, 2),
+                    key_nested.transpose(1, 2),
+                    value_nested.transpose(1, 2),
+                    is_causal=self._config.causal,
+                    dropout_p=self._config.dropout if self.training else 0.0,
+                    scale=self._softmax_scale,
+                ).transpose(1, 2)
+            return output_nested.values()
+
+        # CPU MATH rejects nested + is_causal, and the nested path can't express sliding window.
+        # Both fall back on the same dense + attn_mask form, reusing backup's preprocessed mask.
+        # Backup builds it as (1, sq, 1, sk) for its head-grouped layout; SDPA wants (B, H, sq, sk).
+        attention_mask = kwargs[AttentionKwargs.attention_mask]
+        if attention_mask is not None:
+            attention_mask = attention_mask.transpose(1, 2)
+        return (
+            torch.nn.functional.scaled_dot_product_attention(
+                query.unsqueeze(0).transpose(1, 2),
+                key.unsqueeze(0).transpose(1, 2),
+                value.unsqueeze(0).transpose(1, 2),
+                attn_mask=attention_mask,
                 dropout_p=self._config.dropout if self.training else 0.0,
                 scale=self._softmax_scale,
-            ).transpose(1, 2)
-
-        return output_nested.values()
+            )
+            .transpose(1, 2)
+            .squeeze(0)
+        )
 
     def _apply_norm_with_grad_capture(
         self, norm: torch.nn.Module, x: torch.Tensor
@@ -552,16 +563,23 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 "return_max_sequence_lengths": True,
                 "causal": self._config.causal,
             }
-        elif self._implementation == AttentionImplementation.sdpa:
+        elif (
+            self._implementation == AttentionImplementation.sdpa
+            and self._distributed_config.use_cuda
+            and self._config.window_size is None
+        ):
             return {"return_cumulative_sequence_lengths": True, "causal": self._config.causal}
-        elif self._implementation == AttentionImplementation.backup:
+        elif self._implementation in (AttentionImplementation.sdpa, AttentionImplementation.backup):
             return {"return_document_index": True, "causal": self._config.causal}
         else:
             raise NotImplementedError(self._implementation)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._rotary.preprocess(kwargs)
-        if self._implementation == AttentionImplementation.backup:
+        if self._implementation == AttentionImplementation.backup or (
+            self._implementation == AttentionImplementation.sdpa
+            and (not self._distributed_config.use_cuda or self._config.window_size is not None)
+        ):
             self._preprocess_for_backup_attention(kwargs)
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
