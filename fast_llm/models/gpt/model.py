@@ -69,8 +69,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
                     # TODO: Get the actual names
                     output_hidden_states.add(re.compile(r"decoder\.\d+\.mixer_output$"))
                 assert len(output_hidden_states) >= 1
+                # Audio-distillation parallel teacher stream: if the batch carries a
+                # pre-built teacher input (different sequence length, text-only),
+                # run the reference model on it instead of the student input.  The
+                # loss path picks up `teacher_loss_mask` from kwargs and uses
+                # gather-then-KL.
+                base_input = model_input.teacher if model_input.teacher is not None else model_input
                 reference_model_input = dataclasses.replace(
-                    model_input,
+                    base_input,
                     output_hidden_states=output_hidden_states,
                     hidden_states={},
                 )

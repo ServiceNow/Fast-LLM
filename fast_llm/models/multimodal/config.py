@@ -87,8 +87,13 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    # Reference models can be either text-only (`PretrainedGPTModelConfig`) or
+    # multi-modal (`PretrainedMultiModalModelConfig`, a subtype).  Typing the
+    # field as the GPT supertype lets users plug in either shape:
+    #   - default: text-only LM (e.g. rc8 Llama for audio distillation)
+    #   - opt-in:  multi-modal teacher via `model.type: multimodal` in the YAML
     # TODO: Use dynamic model type?
-    reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldOverride()
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldOverride()
 
     @classmethod
     def get_trainer_class(cls) -> type["MultiModalTrainer"]:
