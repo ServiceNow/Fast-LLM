@@ -280,14 +280,29 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         }
         if query.is_cuda and self._config.window_size is None:
             # Wrap each document as its own batch element via nested-jagged so cross-doc masking
-            # is structural and EFFICIENT skips materializing the attention mask. SDPA's nested
-            # dispatch reads `max_seqlen`/`min_seqlen` to host (5 cudaMemcpyAsync DtoH per call),
-            # which floors per-call wall at ~6 ms; still much faster than dense+mask in varlen.
+            # is structural and EFFICIENT skips materializing the attention mask. The dispatch
+            # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
+            # explicitly keeps the path sync-free.
             cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
             cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
-            query = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
-            key = torch.nested.nested_tensor_from_jagged(key, cu_seqlens_k)
-            value = torch.nested.nested_tensor_from_jagged(value, cu_seqlens_k)
+            query = torch.nested.nested_tensor_from_jagged(
+                query,
+                cu_seqlens_q,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_q],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_q],
+            )
+            key = torch.nested.nested_tensor_from_jagged(
+                key,
+                cu_seqlens_k,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
+            )
+            value = torch.nested.nested_tensor_from_jagged(
+                value,
+                cu_seqlens_k,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
+            )
             sdpa_args["is_causal"] = self._config.causal
         else:
             # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
@@ -565,7 +580,12 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             and self._distributed_config.use_cuda
             and self._config.window_size is None
         ):
-            return {"return_cumulative_sequence_lengths": True, "causal": self._config.causal}
+            return {
+                "return_cumulative_sequence_lengths": True,
+                "return_max_sequence_lengths": True,
+                "return_min_sequence_lengths": True,
+                "causal": self._config.causal,
+            }
         elif self._implementation in (AttentionImplementation.sdpa, AttentionImplementation.backup):
             return {"return_document_index": True, "causal": self._config.causal}
         else:

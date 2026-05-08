@@ -25,6 +25,7 @@ class LengthPreprocessingConfig(BatchPreprocessingConfig):
     distributed: DistributedConfig = Field()
     return_cumulative_sequence_lengths: bool = Field(default=False)
     return_max_sequence_lengths: bool = Field(default=False)
+    return_min_sequence_lengths: bool = Field(default=False)
     return_document_index: bool = Field(default=False)
     return_position_index: bool = Field(default=False)
 

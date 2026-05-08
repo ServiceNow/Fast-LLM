@@ -24,8 +24,10 @@ class BlockModelInput(ModelInput):
     lengths: list[int] = None
     cumulative_lengths_q: torch.Tensor | None = None
     cumulative_lengths_k: torch.Tensor | None = None
-    max_length_q: torch.Tensor | None = None
-    max_length_k: torch.Tensor | None = None
+    max_length_q: int | None = None
+    max_length_k: int | None = None
+    min_length_q: int | None = None
+    min_length_k: int | None = None
     document_index_q: torch.Tensor | None = None
     document_index_k: torch.Tensor | None = None
     position_index: torch.Tensor | None = None
@@ -44,6 +46,8 @@ class BlockModelInput(ModelInput):
             AttentionKwargs.cu_seqlens_k: self.cumulative_lengths_k,
             AttentionKwargs.max_seqlen_q: self.max_length_q,
             AttentionKwargs.max_seqlen_k: self.max_length_k,
+            AttentionKwargs.min_seqlen_q: self.min_length_q,
+            AttentionKwargs.min_seqlen_k: self.min_length_k,
             AttentionKwargs.document_index_q: self.document_index_q,
             AttentionKwargs.document_index_k: self.document_index_k,
             LanguageModelKwargs.position_ids: self.position_index,
@@ -101,6 +105,8 @@ class LengthModelInputPreprocessor:
             model_input.cumulative_lengths_q, model_input.cumulative_lengths_k = self.cumulative_lengths
         if config.return_max_sequence_lengths or config.return_document_index:
             model_input.max_length_q, model_input.max_length_k = self.max_lengths
+        if config.return_min_sequence_lengths:
+            model_input.min_length_q, model_input.min_length_k = self.min_lengths
         if config.return_document_index:
             model_input.document_index_q, model_input.document_index_k = self.document_index
         if config.return_position_index:
@@ -118,13 +124,18 @@ class LengthModelInputPreprocessor:
         return cumulative_lengths_q, cumulative_lengths_k
 
     @functools.cached_property
-    def max_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def max_lengths(self) -> tuple[int, int]:
         max_length_q = max(self.lengths)
         max_length_k = max(max_length_q, self.sequence_k_past + self.lengths[0] - self.first_document_begin)
-        return (
-            torch.full((1,), max_length_q, dtype=torch.int32, device=self.device),
-            torch.full((1,), max_length_k, dtype=torch.int32, device=self.device),
-        )
+        return max_length_q, max_length_k
+
+    @functools.cached_property
+    def min_lengths(self) -> tuple[int, int]:
+        min_length_q = min(self.lengths)
+        # First doc's K-side length includes the past KV prefix; remaining docs match q-side.
+        first_length_k = self.sequence_k_past + self.lengths[0] - self.first_document_begin
+        min_length_k = min(first_length_k, *self.lengths[1:]) if len(self.lengths) > 1 else first_length_k
+        return min_length_q, min_length_k
 
     @functools.cached_property
     def document_index(self) -> tuple[torch.Tensor, torch.Tensor]:
