@@ -280,7 +280,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         }
         if query.is_cuda and self._config.window_size is None:
             # Wrap each document as its own batch element via nested-jagged so cross-doc masking
-            # is structural and EFFICIENT skips materializing the attention mask.
+            # is structural and EFFICIENT skips materializing the attention mask. SDPA's nested
+            # dispatch reads `max_seqlen`/`min_seqlen` to host (5 cudaMemcpyAsync DtoH per call),
+            # which floors per-call wall at ~6 ms; still much faster than dense+mask in varlen.
             cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
             cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
             query = torch.nested.nested_tensor_from_jagged(query, cu_seqlens_q)
