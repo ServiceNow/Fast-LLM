@@ -18,7 +18,11 @@ from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import get_parameter_converter, get_weight_and_bias_converters
+from fast_llm.models.gpt.conversion.llama import (
+    effective_bias,
+    get_parameter_converter,
+    get_weight_and_bias_converters,
+)
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
@@ -27,11 +31,6 @@ from fast_llm.models.gpt.conversion.mistral import (
     MistralHuggingfaceCheckpointHandler,
 )
 from fast_llm.utils import Assert, safe_merge_dicts
-
-
-def _resolve_bias_enabled(layer_bias_enabled: bool | None, add_linear_biases: bool) -> bool:
-    """Per-layer bias falls back to the mixer-wide flag when unset, matching the imperative behaviour."""
-    return add_linear_biases if layer_bias_enabled is None else layer_bias_enabled
 
 
 class AprielMambaConverter(ConfigSectionConverter):
@@ -76,28 +75,31 @@ class AprielMambaConverter(ConfigSectionConverter):
                 ("ssm_cfg", "repeat_kv_before_conv"),
                 hf_default_fn=lambda hf: True,
             ),
-            "convolution_layer": CustomConfigConverter(
-                fast_llm_paths=(("convolution_layer",),),
+            "convolution_layer_bias": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "bias")),
                 export_fn=lambda c: {
-                    ("ssm_cfg", "conv_bias"): _resolve_bias_enabled(
-                        c.convolution_layer.bias.enabled, c.add_linear_biases
-                    )
+                    ("ssm_cfg", "conv_bias"): effective_bias(c.convolution_layer, c.add_linear_biases)
                 },
                 import_fn=lambda hf: {
                     ("convolution_layer", "bias", "enabled"): hf.get("ssm_cfg", {}).get("conv_bias", True)
                 },
-                recurses=True,
             ),
-            "dt_layer": CustomConfigConverter(
-                fast_llm_paths=(("dt_layer",),),
-                export_fn=lambda c: {
-                    ("ssm_cfg", "dt_proj_bias"): _resolve_bias_enabled(c.dt_layer.bias.enabled, c.add_linear_biases)
-                },
+            # CausalConv1dConfig fields not represented in Apriel HF: weight rides the tensor side via
+            # ``conv1d.weight``; kernel_size/activation round-trip implicitly at the Fast-LLM defaults.
+            "convolution_layer_unmapped": IgnoredConfigConverter(
+                ("convolution_layer", "weight"),
+                ("convolution_layer", "kernel_size"),
+                ("convolution_layer", "activation"),
+            ),
+            "dt_layer_bias": CustomConfigConverter(
+                fast_llm_paths=(("dt_layer",), ("dt_layer", "bias")),
+                export_fn=lambda c: {("ssm_cfg", "dt_proj_bias"): effective_bias(c.dt_layer, c.add_linear_biases)},
                 import_fn=lambda hf: {
                     ("dt_layer", "bias", "enabled"): hf.get("ssm_cfg", {}).get("dt_proj_bias", True)
                 },
-                recurses=True,
             ),
+            # AffineLinearConfig.weight rides the tensor side via ``dt_proj.weight``.
+            "dt_layer_unmapped": IgnoredConfigConverter(("dt_layer", "weight")),
             # Per-layer biases that must round-trip implicitly via add_linear_biases (validated below).
             "linear_layers": IgnoredConfigConverter(
                 ("z_layer",),
@@ -152,13 +154,13 @@ class AprielMambaConverter(ConfigSectionConverter):
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.dt_proj",
                 f"{hf_prefix}.dt_proj",
-                _resolve_bias_enabled(config.dt_layer.bias.enabled, config.add_linear_biases),
+                effective_bias(config.dt_layer, config.add_linear_biases),
                 drop_on_export=drop_on_export,
             ),
             *get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.convolution",
                 f"{hf_prefix}.conv1d",
-                _resolve_bias_enabled(config.convolution_layer.bias.enabled, config.add_linear_biases),
+                effective_bias(config.convolution_layer, config.add_linear_biases),
                 drop_on_export=drop_on_export,
             ),
             get_parameter_converter(

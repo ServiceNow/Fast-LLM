@@ -53,6 +53,11 @@ def assert_no_peft(config: GPTBaseModelConfig) -> None:
     Assert.custom(isinstance, config.peft, NoPeftConfig)
 
 
+def effective_bias(layer_config, default: bool) -> bool:
+    """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default."""
+    return default if layer_config.bias.enabled is None else layer_config.bias.enabled
+
+
 # ============================================================
 # Weight converters (imperative — kept as-is during config migration)
 # ============================================================

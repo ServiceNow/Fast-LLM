@@ -41,6 +41,7 @@ from fast_llm.models.gpt.conversion.llama import (
     MLPLayer2Converter,
     SplitWeightConverter,
     assert_no_peft,
+    effective_bias,
     get_parameter_converter,
     get_weight_and_bias_converters,
 )
@@ -154,12 +155,6 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
     # --- weight side (imperative) ---
 
     @classmethod
-    def _get_effective_bias(cls, layer_config, default: bool) -> bool:
-        if layer_config.bias.enabled is not None:
-            return layer_config.bias.enabled
-        return default
-
-    @classmethod
     def get_converters(
         cls,
         config: AttentionConfig,
@@ -167,10 +162,10 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        q_bias = cls._get_effective_bias(config.query_layer, config.add_linear_biases)
-        k_bias = cls._get_effective_bias(config.key_layer, config.add_linear_biases)
-        v_bias = cls._get_effective_bias(config.value_layer, config.add_linear_biases)
-        o_bias = cls._get_effective_bias(config.dense_layer, config.add_linear_biases)
+        q_bias = effective_bias(config.query_layer, config.add_linear_biases)
+        k_bias = effective_bias(config.key_layer, config.add_linear_biases)
+        v_bias = effective_bias(config.value_layer, config.add_linear_biases)
+        o_bias = effective_bias(config.dense_layer, config.add_linear_biases)
         # k_proj and v_proj are merged in Fast-LLM's key_value layer; treat as biased only if both sides agree.
         kv_bias = k_bias and v_bias
 
@@ -320,13 +315,19 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
             "key_heads": RenameConfigConverter(("key_heads",), ("key_heads",)),
             "key_head_dim": RenameConfigConverter(("key_head_dim",), ("key_head_dim",)),
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("value_head_dim",)),
-            "convolution_layer": CustomConfigConverter(
-                fast_llm_paths=(("convolution_layer",),),
+            "convolution_layer_kernel": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
                 export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
                 import_fn=lambda hf: (
                     {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
                 ),
-                recurses=True,
+            ),
+            # CausalConv1dConfig sub-fields the Apriel2 HF format does not surface (weight rides the tensor
+            # side; bias/activation round-trip at their Fast-LLM defaults).
+            "convolution_layer_unmapped": IgnoredConfigConverter(
+                ("convolution_layer", "weight"),
+                ("convolution_layer", "bias"),
+                ("convolution_layer", "activation"),
             ),
             # Architecture fields not surfaced in HF; round-trip at default.
             "layers_unmapped": IgnoredConfigConverter(
@@ -402,19 +403,28 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
         return {
             "heads": RenameConfigConverter(("heads",), ("heads",)),
             "head_dim": RenameConfigConverter(("head_dim",), ("head_dim",)),
-            "convolution_layer": CustomConfigConverter(
-                fast_llm_paths=(("convolution_layer",),),
+            "convolution_layer_kernel": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
                 export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
                 import_fn=lambda hf: (
                     {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
                 ),
-                recurses=True,
             ),
-            "normalization": CustomConfigConverter(
-                fast_llm_paths=(("normalization",),),
+            # CausalConv1dConfig sub-fields not surfaced in HF (same as :class:`Apriel2GatedDeltaNetConverter`).
+            "convolution_layer_unmapped": IgnoredConfigConverter(
+                ("convolution_layer", "weight"),
+                ("convolution_layer", "bias"),
+                ("convolution_layer", "activation"),
+            ),
+            "normalization_epsilon": CustomConfigConverter(
+                fast_llm_paths=(("normalization",), ("normalization", "epsilon")),
                 export_fn=lambda c: {("normalization",): {"epsilon": c.normalization.epsilon}},
                 import_fn=lambda hf: ({("normalization",): hf["normalization"]} if "normalization" in hf else {}),
-                recurses=True,
+            ),
+            # Other GatedRMSNormalizationConfig architecture fields are dropped on the HF side.
+            "normalization_unmapped": IgnoredConfigConverter(
+                ("normalization", "weight"),
+                ("normalization", "zero_centered"),
             ),
             # Architecture fields not surfaced in HF; round-trip at default.
             "layers_unmapped": IgnoredConfigConverter(
@@ -684,12 +694,8 @@ class Apriel2MLPConverter(ConfigSectionConverter):
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        layer_1_bias = (
-            config.layer_1.bias.enabled if config.layer_1.bias.enabled is not None else config.add_linear_biases
-        )
-        layer_2_bias = (
-            config.layer_2.bias.enabled if config.layer_2.bias.enabled is not None else config.add_linear_biases
-        )
+        layer_1_bias = effective_bias(config.layer_1, config.add_linear_biases)
+        layer_2_bias = effective_bias(config.layer_2, config.add_linear_biases)
         if config.gated:
             return [
                 *get_weight_and_bias_converters(
@@ -864,6 +870,14 @@ APRIEL2_DECODER_REGISTRY: dict = {
 }
 
 
+def get_apriel2_decoder_converter(decoder_config) -> "type[ConfigSectionConverter]":
+    """Look up the Apriel2 per-shape decoder converter for a given decoder config instance."""
+    converter_class = APRIEL2_DECODER_REGISTRY.get(type(decoder_config))
+    if converter_class is None:
+        raise NotImplementedError(f"Unsupported decoder type: {type(decoder_config).__name__}")
+    return converter_class
+
+
 class Apriel2HeadConverter(ConfigSectionConverter):
     fast_llm_config_class = LanguageModelHeadConfig
 
@@ -934,12 +948,11 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        decoder_converter_class = APRIEL2_DECODER_REGISTRY.get(type(config.decoder))
-        if decoder_converter_class is None:
-            raise NotImplementedError(f"Unsupported decoder type: {type(config.decoder).__name__}")
         return [
             *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
-            *decoder_converter_class.get_converters(config.decoder, "decoder", "model.decoder.blocks"),
+            *get_apriel2_decoder_converter(config.decoder).get_converters(
+                config.decoder, "decoder", "model.decoder.blocks"
+            ),
             *cls.head_converter_class.get_converters(config.head, exported_config, "head"),
         ]
 

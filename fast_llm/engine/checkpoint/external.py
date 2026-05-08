@@ -29,11 +29,21 @@ def _get_attr_path(config: Config, path: tuple[str, ...]) -> typing.Any:
 def _collect_architecture_paths(config: Config) -> list[tuple[str, ...]]:
     """Walk ``config`` and return every architecture-hint field path reachable from it.
 
-    Descends into any field whose runtime value is itself a :class:`Config`, so the path list reflects the
-    actual instance (e.g. only ``Llama3RotaryConfig`` fields when ``config.rotary`` is one). The caller uses
-    the list to verify each path is claimed by some declaration.
+    Descends into any field whose runtime value is a :class:`Config`, a ``dict[str, Config]``
+    (paths are extended with the entry's string key), or a ``list[Config]`` (paths are extended
+    with the entry's index as a string), so the path list reflects the actual instance.
     """
     paths: list[tuple[str, ...]] = []
+
+    def descend(value: typing.Any, prefix: tuple[str, ...]) -> None:
+        if isinstance(value, Config):
+            walk(value, prefix)
+        elif isinstance(value, dict):
+            for key, sub in value.items():
+                descend(sub, prefix + (str(key),))
+        elif isinstance(value, (list, tuple)):
+            for index, sub in enumerate(value):
+                descend(sub, prefix + (str(index),))
 
     def walk(node: Config, prefix: tuple[str, ...]) -> None:
         for name, field in type(node).fields():
@@ -42,9 +52,7 @@ def _collect_architecture_paths(config: Config) -> list[tuple[str, ...]]:
             full = prefix + (name,)
             if field.hint == FieldHint.architecture:
                 paths.append(full)
-            value = getattr(node, name)
-            if isinstance(value, Config):
-                walk(value, full)
+            descend(getattr(node, name), full)
 
     walk(config, ())
     return paths
@@ -536,17 +544,28 @@ class ConfigSectionConverter(abc.ABC):
                 recursive_prefixes.extend(converter.fast_llm_paths)
             else:
                 explicit_paths.update(converter.fast_llm_paths)
-        missing: list[str] = []
+        missing: list[tuple[str, ...]] = []
         for path in _collect_architecture_paths(config):
             if path in explicit_paths:
                 continue
             if any(len(prefix) <= len(path) and path[: len(prefix)] == prefix for prefix in recursive_prefixes):
                 continue
-            missing.append(".".join(path))
+            missing.append(path)
         if missing:
+            # If every missing path shares a top-level prefix that IS claimed (just non-recursively),
+            # the contributor likely needs a recursive primitive there — surface that as a hint.
+            shared_prefixes = {path[:1] for path in missing if path[:1] in explicit_paths}
+            hint = ""
+            if shared_prefixes:
+                names = sorted(prefix[0] for prefix in shared_prefixes)
+                hint = (
+                    f" (declarations for {names} claim the parent path non-recursively; "
+                    f"either list every architecture sub-field or switch to Nested/Dispatch — "
+                    f"or pass ``recurses=True`` to a Custom/ImportOnly converter when claiming the whole subtree)"
+                )
             raise ValueError(
                 f"{cls.__name__}: architecture-hint fields on {type(config).__name__} "
-                f"have no converter declaration: {missing}"
+                f"have no converter declaration: {[ '.'.join(p) for p in missing ]}{hint}"
             )
 
 
