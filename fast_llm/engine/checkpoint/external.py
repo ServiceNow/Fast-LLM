@@ -1,5 +1,6 @@
 import abc
 import dataclasses
+import functools
 import logging
 import pathlib
 import typing
@@ -303,6 +304,10 @@ class NestedConfigConverter(ConfigConverter):
 
     With ``hf_path`` set: the sub-converter's output is placed under that nested key. Use this for HF formats
     that mirror Fast-LLM's modular layout (e.g. Apriel2's ``"decoder": {...}`` and ``"head": {...}`` blocks).
+
+    When the target ``converter_class`` declares ``hf_type_name``, an HF discriminator (``"type"`` by default)
+    is auto-injected on export and validated/stripped on import — matching DispatchConfigConverter's behavior
+    for homogeneous (single-target) cases.
     """
 
     recurses: typing.ClassVar[bool] = True
@@ -312,14 +317,18 @@ class NestedConfigConverter(ConfigConverter):
         fast_llm_path: tuple[str, ...],
         converter_class: "type[ConfigSectionConverter]",
         hf_path: tuple[str, ...] | None = None,
+        hf_discriminator_key: str = "type",
     ):
         self.fast_llm_paths = (fast_llm_path,)
         self._converter_class = converter_class
         self._hf_path = hf_path
+        self._hf_discriminator_key = hf_discriminator_key
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         sub_config = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         sub_hf = self._converter_class.export_config(sub_config)
+        if self._converter_class.hf_type_name is not None:
+            sub_hf = {self._hf_discriminator_key: self._converter_class.hf_type_name, **sub_hf}
         if self._hf_path is None:
             for key, value in sub_hf.items():
                 if key in hf_out:
@@ -331,6 +340,9 @@ class NestedConfigConverter(ConfigConverter):
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_hf = get_nested_dict_value(hf_dict, self._hf_path) if self._hf_path is not None else hf_dict
+        if self._converter_class.hf_type_name is not None and self._hf_discriminator_key in sub_hf:
+            Assert.eq(sub_hf[self._hf_discriminator_key], self._converter_class.hf_type_name)
+            sub_hf = {key: value for key, value in sub_hf.items() if key != self._hf_discriminator_key}
         sub_fast_llm = self._converter_class.import_config(sub_hf)
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
@@ -480,9 +492,13 @@ class ConfigSectionConverter(abc.ABC):
     hf_type_name: typing.ClassVar[str | None] = None
 
     @classmethod
-    @abc.abstractmethod
+    @functools.cache
     def _create_config_converters(cls) -> dict[str, ConfigConverter]:
-        """Return declarations keyed by stable string name. Subclasses override entries by re-declaring the key."""
+        """Return declarations keyed by stable string name. Subclasses override entries by re-declaring the key.
+
+        Cached per class — declarations are immutable and depend only on ``cls``.
+        """
+        raise NotImplementedError
 
     @classmethod
     def _validate_export(cls, config: Config) -> None:
@@ -498,11 +514,9 @@ class ConfigSectionConverter(abc.ABC):
     @classmethod
     def export_config(cls, config: Config) -> dict:
         """Convert a Fast-LLM config object to an HF config dict via this section's declarations."""
-        declarations = cls._create_config_converters()
-        cls._check_architecture_coverage(config, declarations)
         cls._validate_export(config)
         out: dict = {}
-        for converter in declarations.values():
+        for converter in cls._create_config_converters().values():
             converter.export_to(config, out)
         return out
 
@@ -515,7 +529,7 @@ class ConfigSectionConverter(abc.ABC):
         return out
 
     @classmethod
-    def _check_architecture_coverage(cls, config: Config, declarations: dict[str, ConfigConverter]) -> None:
+    def check_architecture_coverage(cls, config: Config) -> None:
         """Raise if any architecture-hint field reachable from the section's config (recursively) is not consumed.
 
         Coverage is structural (based on field hints), not value-based: every architecture field at every depth
@@ -530,13 +544,12 @@ class ConfigSectionConverter(abc.ABC):
         * Non-recursive declarations (Rename, ConstantImport/Export, Default, Optional, ImportOnly, Custom by
           default) must list every architecture leaf they consume by exact path.
 
-        The check only runs when ``type(config)`` exactly matches ``cls.fast_llm_config_class`` — when the
-        config is a strict subclass (e.g. ``MoEMLPConfig`` fed through ``LlamaMLPConverter`` declarations
-        before the dispatching ``MixtralMLPConverter`` overrides ``fast_llm_config_class``), the subclass
-        converter is responsible for declaring the additional fields and running its own check.
+        Invoked from a test fixture (``tests/models/test_converters.py``) — not from the production
+        export/import paths. Architecture coverage is a structural invariant of the converter declarations,
+        so it only needs to hold once per (converter, config-class) pair, not on every save.
         """
-        if type(config) is not cls.fast_llm_config_class:
-            return
+        Assert.is_(type(config), cls.fast_llm_config_class)
+        declarations = cls._create_config_converters()
         explicit_paths: set[tuple[str, ...]] = set()
         recursive_prefixes: list[tuple[str, ...]] = []
         for converter in declarations.values():

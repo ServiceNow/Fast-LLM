@@ -194,9 +194,19 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
             "key_heads": RenameConfigConverter(("key_heads",), ("linear_attn_config", "gdn_num_key_heads")),
             "key_head_dim": RenameConfigConverter(("key_head_dim",), ("linear_attn_config", "gdn_key_head_dim")),
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("linear_attn_config", "gdn_value_head_dim")),
-            "convolution_kernel_size": RenameConfigConverter(
-                ("convolution_layer", "kernel_size"),
-                ("linear_attn_config", "gdn_linear_conv_kernel_size"),
+            "convolution_layer_kernel": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                export_fn=lambda c: {
+                    ("linear_attn_config", "gdn_linear_conv_kernel_size"): c.convolution_layer.kernel_size
+                },
+                import_fn=lambda hf: {
+                    ("convolution_layer", "kernel_size"): hf["linear_attn_config"]["gdn_linear_conv_kernel_size"]
+                },
+            ),
+            "convolution_layer_unmapped": IgnoredConfigConverter(
+                ("convolution_layer", "weight"),
+                ("convolution_layer", "bias"),
+                ("convolution_layer", "activation"),
             ),
             # Sub-configs without HF representation; coverage-only.
             "sub_configs": IgnoredConfigConverter(
@@ -275,9 +285,19 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
         return {
             "head_dim": RenameConfigConverter(("head_dim",), ("linear_attn_config", "head_dim")),
             "heads": RenameConfigConverter(("heads",), ("linear_attn_config", "num_heads")),
-            "convolution_kernel_size": RenameConfigConverter(
-                ("convolution_layer", "kernel_size"),
-                ("linear_attn_config", "short_conv_kernel_size"),
+            "convolution_layer_kernel": CustomConfigConverter(
+                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                export_fn=lambda c: {
+                    ("linear_attn_config", "short_conv_kernel_size"): c.convolution_layer.kernel_size
+                },
+                import_fn=lambda hf: {
+                    ("convolution_layer", "kernel_size"): hf["linear_attn_config"]["short_conv_kernel_size"]
+                },
+            ),
+            "convolution_layer_unmapped": IgnoredConfigConverter(
+                ("convolution_layer", "weight"),
+                ("convolution_layer", "bias"),
+                ("convolution_layer", "activation"),
             ),
             # Sub-configs without HF representation; coverage-only.
             "sub_configs": IgnoredConfigConverter(

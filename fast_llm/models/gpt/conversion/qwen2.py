@@ -29,27 +29,28 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        out = super()._create_config_converters()
-        # Qwen2 has no `attention_bias` HF field; the model always has Q/K/V biases enabled and no dense bias.
-        out["add_linear_biases"] = ConstantImportConfigConverter(("add_linear_biases",), False)
-        # Qwen2Config does not have `head_dim`; it is always derivable as `hidden_size // num_attention_heads`.
-        out["head_size"] = ImportOnlyConfigConverter(
-            fast_llm_paths=(("head_size",),),
-            import_fn=lambda hf: {("head_size",): div(hf["hidden_size"], hf["num_attention_heads"])},
-        )
-        # Override Llama's blanket per-layer bias ignore with Qwen2's hardcoded layer biases.
-        # On export the per-layer biases must be compatible with `add_linear_biases`; see ``_validate_export``.
-        out["linear_layers"] = ImportOnlyConfigConverter(
-            fast_llm_paths=(("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)),
-            import_fn=lambda hf: {
-                ("query_layer",): {"bias": {"enabled": True}},
-                ("key_layer",): {"bias": {"enabled": True}},
-                ("value_layer",): {"bias": {"enabled": True}},
-                ("dense_layer",): {"bias": {"enabled": False}},
-            },
-            recurses=True,
-        )
-        return out
+        return {
+            **super()._create_config_converters(),
+            # Qwen2 has no `attention_bias` HF field; the model always has Q/K/V biases enabled and no dense bias.
+            "add_linear_biases": ConstantImportConfigConverter(("add_linear_biases",), False),
+            # Qwen2Config does not have `head_dim`; it is always derivable as `hidden_size // num_attention_heads`.
+            "head_size": ImportOnlyConfigConverter(
+                fast_llm_paths=(("head_size",),),
+                import_fn=lambda hf: {("head_size",): div(hf["hidden_size"], hf["num_attention_heads"])},
+            ),
+            # Override Llama's blanket per-layer bias ignore with Qwen2's hardcoded layer biases.
+            # On export the per-layer biases must be compatible with `add_linear_biases`; see ``_validate_export``.
+            "linear_layers": ImportOnlyConfigConverter(
+                fast_llm_paths=(("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)),
+                import_fn=lambda hf: {
+                    ("query_layer",): {"bias": {"enabled": True}},
+                    ("key_layer",): {"bias": {"enabled": True}},
+                    ("value_layer",): {"bias": {"enabled": True}},
+                    ("dense_layer",): {"bias": {"enabled": False}},
+                },
+                recurses=True,
+            ),
+        }
 
     @classmethod
     def _validate_export(cls, config: AttentionConfig) -> None:

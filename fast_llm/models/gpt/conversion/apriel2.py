@@ -7,7 +7,6 @@ from transformers import PretrainedConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
-    ConstantExportConfigConverter,
     ConstantImportConfigConverter,
     CustomConfigConverter,
     DispatchConfigConverter,
@@ -228,8 +227,8 @@ class Apriel2MambaConverter(ConfigSectionConverter):
             "state_size": RenameConfigConverter(("state_size",), ("state_size",)),
             "d_inner": RenameConfigConverter(("d_inner",), ("d_inner",)),
             "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
-            "d_xb": OptionalConfigConverter(("d_xb",), ("d_xb",)),
-            "dt_rank": OptionalConfigConverter(("dt_rank",), ("dt_rank",)),
+            "d_xb": RenameConfigConverter(("d_xb",), ("d_xb",)),
+            "dt_rank": RenameConfigConverter(("dt_rank",), ("dt_rank",)),
             "aux": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("dt_layer",)),
                 export_fn=_apriel2_mamba_aux_export,
@@ -667,9 +666,6 @@ class Apriel2MLPConverter(ConfigSectionConverter):
     def _create_config_converters(cls) -> dict:
         layer_names = ("layer_1", "layer_2")
         return {
-            # MLP is wrapped via NestedConfigConverter (no Dispatch discriminator), so emit the HF
-            # ``"type": "mlp"`` discriminator from inside this converter.
-            "hf_type": ConstantExportConfigConverter(("type",), "mlp"),
             "intermediate_size": RenameConfigConverter(("intermediate_size",), ("intermediate_size",)),
             "gated": RenameConfigConverter(("gated",), ("gated",)),
             "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
@@ -801,12 +797,13 @@ class Apriel2BlockConverter(ConfigSectionConverter):
 class Apriel2FixedDecoderConverter(ConfigSectionConverter):
     fast_llm_config_class = FixedBlockSequenceConfig
     hf_type_name = "fixed"
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
         return {
             "num_blocks": RenameConfigConverter(("num_blocks",), ("num_blocks",)),
-            "block": NestedConfigConverter(("block",), Apriel2BlockConverter, hf_path=("block",)),
+            "block": NestedConfigConverter(("block",), cls.block_converter_class, hf_path=("block",)),
         }
 
     @classmethod
@@ -819,7 +816,7 @@ class Apriel2FixedDecoderConverter(ConfigSectionConverter):
     ) -> list[WeightConverter]:
         converters: list[WeightConverter] = []
         for block_index in range(config.num_blocks):
-            converters += Apriel2BlockConverter.get_converters(
+            converters += cls.block_converter_class.get_converters(
                 config.block,
                 f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
@@ -831,6 +828,7 @@ class Apriel2FixedDecoderConverter(ConfigSectionConverter):
 class Apriel2PatternDecoderConverter(ConfigSectionConverter):
     fast_llm_config_class = PatternBlockSequenceConfig
     hf_type_name = "pattern"
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
@@ -840,7 +838,7 @@ class Apriel2PatternDecoderConverter(ConfigSectionConverter):
             "blocks": TypedDictContainerConfigConverter(
                 fast_llm_path=("blocks",),
                 hf_path=("blocks",),
-                registry={DecoderBlockConfig: Apriel2BlockConverter},
+                registry={DecoderBlockConfig: cls.block_converter_class},
             ),
         }
 
@@ -855,7 +853,7 @@ class Apriel2PatternDecoderConverter(ConfigSectionConverter):
         converters: list[WeightConverter] = []
         for block_index in range(config.num_blocks):
             block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
-            converters += Apriel2BlockConverter.get_converters(
+            converters += cls.block_converter_class.get_converters(
                 block_config,
                 f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",

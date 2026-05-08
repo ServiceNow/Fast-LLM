@@ -69,26 +69,27 @@ def _pixtral_rotary_import(hf_dict: dict) -> dict:
 class PixtralAttentionConverter(LlamaAttentionConverter):
     @classmethod
     def _create_config_converters(cls) -> dict:
-        out = super()._create_config_converters()
-        # PixtralConfig hardcodes Q/K/V/O biases off and does not surface ``attention_bias``.
-        out["add_linear_biases"] = ConstantImportConfigConverter(("add_linear_biases",), False)
-        # Pixtral attention is non-causal (vision encoder).
-        out["causal"] = ConstantImportConfigConverter(("causal",), False)
-        # No GQA in Pixtral; ``head_groups`` derives from ``num_attention_heads`` on import and is redundant
-        # on export (``_validate_export`` enforces equality with ``heads``).
-        out["head_groups"] = ImportOnlyConfigConverter(
-            fast_llm_paths=(("head_groups",),),
-            import_fn=lambda hf: {("head_groups",): hf["num_attention_heads"]},
-        )
-        # Pixtral always uses 2D rotary; only ``theta`` round-trips. The flat (v4) vs ``rope_parameters`` (v5)
-        # layout follows the active transformers major version, mirroring the Llama parent.
-        out["rotary"] = CustomConfigConverter(
-            fast_llm_paths=(("rotary",),),
-            export_fn=_pixtral_rotary_export,
-            import_fn=_pixtral_rotary_import,
-            recurses=True,
-        )
-        return out
+        return {
+            **super()._create_config_converters(),
+            # PixtralConfig hardcodes Q/K/V/O biases off and does not surface ``attention_bias``.
+            "add_linear_biases": ConstantImportConfigConverter(("add_linear_biases",), False),
+            # Pixtral attention is non-causal (vision encoder).
+            "causal": ConstantImportConfigConverter(("causal",), False),
+            # No GQA in Pixtral; ``head_groups`` derives from ``num_attention_heads`` on import and is redundant
+            # on export (``_validate_export`` enforces equality with ``heads``).
+            "head_groups": ImportOnlyConfigConverter(
+                fast_llm_paths=(("head_groups",),),
+                import_fn=lambda hf: {("head_groups",): hf["num_attention_heads"]},
+            ),
+            # Pixtral always uses 2D rotary; only ``theta`` round-trips. The flat (v4) vs ``rope_parameters`` (v5)
+            # layout follows the active transformers major version, mirroring the Llama parent.
+            "rotary": CustomConfigConverter(
+                fast_llm_paths=(("rotary",),),
+                export_fn=_pixtral_rotary_export,
+                import_fn=_pixtral_rotary_import,
+                recurses=True,
+            ),
+        }
 
     @classmethod
     def _validate_export(cls, config: AttentionConfig) -> None:
