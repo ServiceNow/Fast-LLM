@@ -559,3 +559,93 @@ def test_lm_loss_distributed(
         2,
         use_cuda=False,
     )
+
+
+# Validates the parallel-teacher-stream distillation contract: student and
+# teacher sequences may have different total lengths, but data prep guarantees
+# the masked region (assistant response) is byte-identical on each side. The
+# KL loss is therefore computed on exactly N response tokens regardless of how
+# much prefix surrounds them.
+@pytest.mark.parametrize(
+    ("L_student", "L_teacher"),
+    [
+        pytest.param(96, 96, id="equal_length"),
+        pytest.param(96, 130, id="teacher_longer"),
+        pytest.param(130, 96, id="teacher_shorter"),
+    ],
+)
+@pytest.mark.parametrize("entropy_loss_type", (EntropyLossType.forward_kl, EntropyLossType.reverse_kl))
+@pytest.mark.parametrize("dtype", (DataType.float32, DataType.bfloat16))
+def test_distillation_gather_then_kl_parallel_stream(entropy_loss_type, dtype, L_student, L_teacher):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    V = 200
+    n_response = 35
+    divisor = float(n_response)
+
+    response_seed_state = torch.Generator(device=device).manual_seed(0)
+    response_student = torch.randn(n_response, V, dtype=dtype.torch, device=device, generator=response_seed_state) / 3
+    response_teacher = torch.randn(n_response, V, dtype=dtype.torch, device=device, generator=response_seed_state)
+
+    prefix_seed_state = torch.Generator(device=device).manual_seed(1)
+    prefix_student = torch.randn(
+        L_student - n_response, V, dtype=dtype.torch, device=device, generator=prefix_seed_state
+    )
+    prefix_teacher = torch.randn(
+        L_teacher - n_response, V, dtype=dtype.torch, device=device, generator=prefix_seed_state
+    )
+
+    student_logits = torch.cat([prefix_student, response_student], dim=0)
+    teacher_logits = torch.cat([prefix_teacher, response_teacher], dim=0)
+
+    student_mask = torch.zeros(L_student, dtype=torch.bool, device=device)
+    student_mask[L_student - n_response :] = True
+    teacher_mask = torch.zeros(L_teacher, dtype=torch.bool, device=device)
+    teacher_mask[L_teacher - n_response :] = True
+
+    student_flat = student_logits[student_mask]
+    teacher_flat = teacher_logits[teacher_mask]
+    # Both sides gather to the same number of tokens regardless of L_student / L_teacher.
+    Assert.eq(student_flat.shape[0], n_response)
+    Assert.eq(teacher_flat.shape[0], n_response)
+    # And those tokens are the byte-identical response logits across all three regimes.
+    Assert.eq((student_flat - response_student).abs().sum().item(), 0.0)
+    Assert.eq((teacher_flat - response_teacher).abs().sum().item(), 0.0)
+
+    new_loss, new_grad_flat = fused_entropy_loss_forward_backward(
+        student_flat,
+        teacher_flat,
+        None,
+        grad_output=1.0,
+        target_format=TargetFormat.logits,
+        entropy_loss_type=entropy_loss_type,
+        divisor=divisor,
+    )
+
+    # Reference: pytorch KL on the gathered tensors with autograd.
+    s_ref = student_flat.detach().float().requires_grad_(True)
+    t_ref = teacher_flat.detach().float()
+    s_logp = torch.nn.functional.log_softmax(s_ref, dim=-1)
+    t_logp = torch.nn.functional.log_softmax(t_ref, dim=-1)
+    if entropy_loss_type == EntropyLossType.forward_kl:
+        per_sample = torch.nn.functional.kl_div(s_logp, t_logp, reduction="none", log_target=True).sum(-1)
+    else:
+        per_sample = torch.nn.functional.kl_div(t_logp, s_logp, reduction="none", log_target=True).sum(-1)
+    ref_loss = per_sample.sum() / divisor
+    ref_loss.backward()
+    ref_grad_flat = s_ref.grad
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-3
+    Assert.rms_close_relative(new_loss, ref_loss, threshold, 1e-6)
+    Assert.rms_close_relative(
+        new_grad_flat.float(), ref_grad_flat, threshold, 1e-8 if dtype == DataType.float32 else 1e-6
+    )
+
+    # Verify the scatter-back step that `_forward_backward_parallel_stream`
+    # uses to match the chunked logits shape expected by the head: the grad
+    # appears at masked positions, zeros elsewhere.
+    grad_scattered = torch.zeros_like(student_logits)
+    grad_scattered[student_mask] = new_grad_flat
+    Assert.eq(grad_scattered[~student_mask].abs().sum().item(), 0.0)
+    Assert.rms_close_relative(
+        grad_scattered[student_mask].float(), ref_grad_flat, threshold, 1e-8 if dtype == DataType.float32 else 1e-6
+    )

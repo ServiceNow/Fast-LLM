@@ -30,6 +30,13 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     tokens = "tokens"
     phase = "phase"
     loss_mask = "loss_mask"
+    # Loss mask for the parallel teacher token stream used in audio-distillation.
+    # Shape matches `loss_mask` (`[num_pred_distances, L_teacher]`) but uses the
+    # teacher's sequence length, which differs from the student's. Presence of this
+    # kwarg switches `LanguageModelDistillationLoss` into the gather-then-KL path
+    # and makes the per-position teacher logits in `reference_*_hidden_states`
+    # consumable despite the length mismatch.
+    teacher_loss_mask = "teacher_loss_mask"
 
 
 LM_HEAD_LOSS_NAME = "lm_head_loss"
