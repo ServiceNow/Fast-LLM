@@ -10,7 +10,8 @@ from fast_llm.utils import set_global_variables
 
 # Directory for all test data and results.
 # Cannot be a fixture because it's used outside testing environment (ex. distributed scripts).
-TEST_RESULTS_PATH = pathlib.Path("/tmp/fast_llm_tests")
+# Override via FAST_LLM_TEST_RESULTS_PATH to redirect to a non-ephemeral location (e.g. /mnt/workspace).
+TEST_RESULTS_PATH = pathlib.Path(os.environ.get("FAST_LLM_TEST_RESULTS_PATH", "/tmp/fast_llm_tests"))
 
 WORKER_NAME = os.environ.get("PYTEST_XDIST_WORKER")
 GPUS = os.environ.get("CUDA_VISIBLE_DEVICES")

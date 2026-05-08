@@ -14,26 +14,36 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
     num_text_layers = llava_config.get("text_config", {}).get("num_hidden_layers", 0)
     num_vision_layers = llava_config.get("vision_config", {}).get("num_hidden_layers", 0)
 
+    # Checkpoint key structure (same for both transformers 4.x and 5.x):
+    # save_pretrained() always serializes with the 4.x naming convention,
+    # regardless of the in-memory attribute layout used in 5.x.
+    text_model_prefix = ("language_model", "model")
+    vision_tower_prefix = ("vision_tower",)
+    projector_prefix = ("multi_modal_projector",)
+
     # Static mappings
     static_mappings = [
-        (W("language_model", "model", "embed_tokens", "weight"), W("model", "embed_tokens", "weight")),
+        (W(*text_model_prefix, "embed_tokens", "weight"), W("model", "embed_tokens", "weight")),
         (W("language_model", "lm_head", "weight"), W("lm_head", "weight")),
-        (W("language_model", "model", "norm", "weight"), W("model", "norm", "weight")),
+        (W(*text_model_prefix, "norm", "weight"), W("model", "norm", "weight")),
         (
-            W("vision_tower", "patch_conv", "weight"),
+            W(*vision_tower_prefix, "patch_conv", "weight"),
             W("model", "vision_encoder", "embeddings", "patch_embeddings", "weight"),
         ),
-        (W("vision_tower", "ln_pre", "weight"), W("model", "vision_encoder", "embeddings", "normalization", "weight")),
         (
-            W("multi_modal_projector", "linear_1", "weight"),
+            W(*vision_tower_prefix, "ln_pre", "weight"),
+            W("model", "vision_encoder", "embeddings", "normalization", "weight"),
+        ),
+        (
+            W(*projector_prefix, "linear_1", "weight"),
             W("model", "vision_encoder", "adapter", "linear_1", "weight"),
         ),
-        (W("multi_modal_projector", "linear_1", "bias"), W("model", "vision_encoder", "adapter", "linear_1", "bias")),
+        (W(*projector_prefix, "linear_1", "bias"), W("model", "vision_encoder", "adapter", "linear_1", "bias")),
         (
-            W("multi_modal_projector", "linear_2", "weight"),
+            W(*projector_prefix, "linear_2", "weight"),
             W("model", "vision_encoder", "adapter", "linear_2", "weight"),
         ),
-        (W("multi_modal_projector", "linear_2", "bias"), W("model", "vision_encoder", "adapter", "linear_2", "bias")),
+        (W(*projector_prefix, "linear_2", "bias"), W("model", "vision_encoder", "adapter", "linear_2", "bias")),
     ]
 
     for src, tgt in static_mappings:
@@ -41,7 +51,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
 
     # Text decoder layers
     for layer in range(num_text_layers):
-        llava_layer = W("language_model", "model", "layers", layer)
+        llava_layer = W(*text_model_prefix, "layers", layer)
         apriel_layer = W("model", "decoder", "blocks", layer)
 
         # Attention projections
@@ -64,7 +74,7 @@ def plan_llava_to_apriel2(llava_config: dict) -> ExprPlan:
 
     # Vision encoder layers
     for layer in range(num_vision_layers):
-        llava_layer = W("vision_tower", "transformer", "layers", layer)
+        llava_layer = W(*vision_tower_prefix, "transformer", "layers", layer)
         apriel_layer = W("model", "vision_encoder", "encoder", "blocks", layer)
 
         # Attention projections

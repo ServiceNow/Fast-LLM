@@ -35,6 +35,17 @@ Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/
 5.  **Push to Your Fork**: Push the branch to your GitHub fork.
 6.  **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
 
+## 🧱 Design principles
+
+<!-- Sync with CLAUDE.md → ## Design principles. Bullet titles and bodies must stay byte-identical (modulo list-vs-prose markdown punctuation: `**Title**:` here vs `**Title.**` in CLAUDE.md). When you change one, update the other in the same commit. -->
+
+These apply to every change. Internalize them before writing non-trivial code, not just before opening a PR.
+
+-   **Generalize rather than special-case**: New features should extend existing abstractions, not create parallel ones for a specific use case. If `Attention` doesn't cover a new model variant, extend its config rather than introducing `MyModelAttention`. Same principle for losses, MLP variants, normalization layers — prefer parameterizing the existing module over forking it.
+-   **No overhead when unused**: A new feature must add no measurable cost on the disabled path: no new kernel launches, GPU sync points, or slower GPU code paths; no CPU work added to training hot loops (forward/backward, schedule loop, per-step dataloader path); no cost that scales with model size, sequence length, batch size, or step count. Trivial additions outside hot loops — a config-flag branch, a one-shot validation in `__init__` — are fine. Gate new behavior behind a config flag that short-circuits cheaply when off.
+-   **No deadweight**: Don't add modules, classes, abstractions, or code paths that don't pull their weight, or config options that don't toggle meaningful behavior. If a new helper ends up with one caller, inline it; if a new branch has no real consumer, drop it. Three similar lines beats a premature abstraction.
+-   **Trust internal boundaries**: Validate at system boundaries (user input, external APIs, file formats); trust internal callers and framework invariants. Don't add `try/except`, input validation, fallbacks, or "can't happen" guards on code you control — let it crash so the bug surfaces clearly.
+
 ## 🏆 Guidelines for a Successful Pull Request
 
 Here are some tips to ensure your pull request gets reviewed and merged promptly:
@@ -44,11 +55,12 @@ Here are some tips to ensure your pull request gets reviewed and merged promptly
 -   **Test on GPUs and real-world workloads**: Since Fast-LLM is all about training large language models, make sure your changes work smoothly in GPU environments and on typical training setups.
 -   **Run benchmarks and performance tests**: Make sure your changes don't slow things down. If there's any impact on performance, provide benchmark results to back it up.
 -   **Avoid introducing new issues**: Check that there are no new runtime warnings, type checker errors, linting problems, or unhandled edge cases.
--   **Comment non-trivial code**: Make your code easy to understand for others.
+-   **Default to no comments**: Only add a comment when the *why* is non-obvious — a hidden constraint, subtle invariant, or workaround for a specific bug. Well-named identifiers should carry the rest.
 -   **Keep sensitive data out**: Make sure your code or commit messages don't expose private or proprietary information.
--   **Use a clear and descriptive title**: The PR title should summarize the key change or feature introduced. Avoid vague titles like "Fix bug" or "Update code." Start with a keyword like `[feat]`, `[fix]`, `[docs]`, etc. to categorize the change. Reference the issue number if applicable (e.g., `[fix] resolve #123 memory leak in training loop`). This title will become the commit message for the squashed merge.
+-   **Use a clear and descriptive title**: The PR title should summarize the key change or feature introduced. Avoid vague titles like "Fix bug" or "Update code." Start with a title-case action verb (e.g., `Fix`, `Add`, `Refactor`, `Improve`). Reference the issue number if applicable. This title will become the commit message for the squashed merge.
+-   **Self-review in two passes before requesting human review**: Do a coarse pass (correctness, structure, simplification, necessity, test coverage, performance, security), address its findings, push, and only then do a fine pass (naming, comments, dead code, redundancy, style). Splitting matters — coarse-pass fixes routinely invalidate fine-pass feedback, so doing both at once wastes effort. We recommend [Claude Code](https://claude.com/claude-code)'s `/review-coarse` and `/review-fine` for the two passes; an equivalent manual two-pass review is fine if you don't use Claude Code. Address (or knowingly dismiss) findings from both passes before pinging a reviewer.
 -   **Use the [PR template](https://github.com/ServiceNow/Fast-LLM/blob/main/.github/PULL_REQUEST_TEMPLATE.md)**: Complete the checklist to make sure everything is in order before hitting submit.
--   **Make sure all tests pass before merging**: Run the tests with `pytest tests/ -v -ra -n 10`, and fix any failure before merging. If possible, please run the test in an environment with at least 4 GPUs. See our [testing guide](https://servicenow.github.io/Fast-LLM/contributing/testing) for more details on testing and debugging.
+-   **Make sure all tests pass before merging**: Run the tests with `pytest tests/ -v -ra -n 6` (adjust `-n` to your hardware), and fix any failure before merging. If possible, please run the test in an environment with at least 4 GPUs. See our [testing guide](https://servicenow.github.io/Fast-LLM/contributing/testing) for more details on testing and debugging.
 
 ## 🆘 Seeking Help or Clarification
 

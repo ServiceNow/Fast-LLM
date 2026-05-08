@@ -11,12 +11,18 @@ import transformers.utils.generic
 from fast_llm.core.distributed import broadcast, broadcast_object, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.inference.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.config import _TRANSFORMERS_V4, HuggingfaceModelConfig
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.utils import Assert
+
+if _TRANSFORMERS_V4:
+    from transformers.modeling_utils import no_init_weights as transformers_no_init_weights
+else:
+    from transformers.initialization import no_init_weights as transformers_no_init_weights
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +44,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         **kwargs,
     ):
         if config is None:
-            config = self.config_class(fast_llm_model.config)
+            config = self.config_class(fast_llm_config=fast_llm_model.config)
 
         assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
@@ -70,7 +76,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
 
-        with transformers.modeling_utils.no_init_weights():
+        with transformers_no_init_weights():
             self.post_init()
 
         if fast_llm_model.config.multi_stage.zero_stage == 3:

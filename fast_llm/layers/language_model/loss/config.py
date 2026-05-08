@@ -1,3 +1,4 @@
+import enum
 import typing
 import warnings
 
@@ -193,6 +194,12 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         return LanguageModelZLoss
 
 
+class GRPOMetricsLevel(enum.StrEnum):
+    none = "none"
+    basic = "basic"
+    with_entropy = "with_entropy"
+
+
 @config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
 class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
@@ -204,6 +211,16 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
         default=None,
         desc="Enable triton implementation. Default: use if available.",
         hint=FieldHint.expert,
+    )
+    metrics: GRPOMetricsLevel = Field(
+        default=GRPOMetricsLevel.none,
+        desc=(
+            "Additional GRPO metrics to log. "
+            "`basic`: per-token ratio, KL, and advantage statistics. "
+            "`with_entropy`: also log per-token entropy. "
+            "Not supported with pipeline_parallel > 1."
+        ),
+        hint=FieldHint.feature,
     )
 
     @property

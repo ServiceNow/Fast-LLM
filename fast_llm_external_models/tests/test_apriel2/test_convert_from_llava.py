@@ -129,7 +129,8 @@ class TestPlanConversion:
         apriel2_weights = execute(plan, source_weights, seed=0)
 
         # Check specific weights are identical
-        source_embed = source_weights["language_model.model.embed_tokens.weight"]
+        source_embed_key = "language_model.model.embed_tokens.weight"
+        source_embed = source_weights[source_embed_key]
         target_embed = apriel2_weights["model.embed_tokens.weight"]
         assert torch.equal(source_embed, target_embed)
 

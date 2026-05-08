@@ -2,9 +2,8 @@ import dataclasses
 
 import torch
 
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig
-from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, tl_zeros, triton, triton_jit
 from fast_llm.functional.utils import wrap_forward_backward
 
 
@@ -41,7 +40,7 @@ def copy_dense_to_sparse_kernel(
     out = tl.load(input_ptr + dense_row * num_columns + offsets, mask=mask)
     # Write to each expert.
     for top_index in range(num_experts_per_token):
-        sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index)
+        sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index).to(tl.int32)
         out_scaled = (
             out
             if scores_ptr is None
@@ -80,10 +79,10 @@ def copy_sparse_to_dense_kernel(
     dense_row = tl.program_id(0)
     offsets = tl_arange(0, block_size) + block_size * tl.program_id(1)
     mask = None if num_columns % block_size == 0 else offsets < num_columns
-    out = tl.zeros((block_size,), tl.float32)
+    out = tl_zeros((block_size,), tl.float32)
     # Sum over experts.
     for top_index in range(num_experts_per_token):
-        sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index)
+        sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index).to(tl.int32)
         input_ = tl.load(input_ptr + sparse_row * num_columns + offsets, mask=mask)
         if scores_ptr is not None:
             input_ *= tl.load(scores_ptr + dense_row * num_experts_per_token + top_index).to(tl.float32)
@@ -121,7 +120,7 @@ def copy_sparse_to_dense_grad_score_kernel(
 ):
     dense_row = tl.program_id(0)
     top_index = tl.program_id(1)
-    sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index)
+    sparse_row = tl.load(sparse_rows_ptr + dense_row * num_experts_per_token + top_index).to(tl.int32)
 
     grad_output_ptr += dense_row * num_columns
     input_ptr += sparse_row * num_columns
@@ -199,82 +198,27 @@ copy_sparse_to_dense_autograd = wrap_forward_backward(copy_sparse_to_dense_forwa
 
 
 @triton_jit()
-def sparse_map_kernel(
+def sparse_histogram_kernel(
     top_experts_ptr,
-    expert_ends_ptr,
-    expert_pad_begins_ptr,
-    sparse_rows_ptr,
-    num_sparse_rows: tl_constexpr,
+    expert_counts_ptr,
+    num_rows,
     num_experts: tl_constexpr,
-    pad_to_multiple: tl_constexpr,
     block_size: tl_constexpr,
-    block_size_expert: tl_constexpr,
-    dtype: tl_constexpr,
+    block_size_experts: tl_constexpr,
 ):
     """
-    Since the methods we want (histogram, argsort) are not readily available in triton,
-    we use a one-hot representation to get the quantities we want.
-    TODO: Next triton release will support tl.histogram, maybe argsort.
+    Accumulate per-expert token counts using tl.histogram + tl.atomic_add.
+    `block_size_experts` must equal next_power_of_2(num_experts + 1) so the sentinel value
+    `num_experts` (used for out-of-bounds positions in the last block) always falls in a valid
+    but ignored histogram bin, regardless of whether num_experts is itself a power of 2.
     """
-    block_range = tl_arange(0, block_size)
-    expert_range = tl_arange(0, block_size_expert)
-    expert_mask = None if block_size_expert == num_experts else expert_range < num_experts
-
-    if num_sparse_rows >= block_size:
-        expert_index = tl.load(top_experts_ptr + block_range)
-    else:
-        # Mask outside the expert range so the masked values never contribute to the expert counts.
-        expert_index = tl.load(top_experts_ptr + block_range, mask=block_range < num_sparse_rows, other=num_experts)
-
-    # Count the number of tokens per expert for each block (tl.histogram), and sum over blocks.
-    expert_counts = tl.sum((expert_index[:, None] == expert_range[None, :]).to(dtype), 0)  # noqa
-    for i in range(1, tl.cdiv(num_sparse_rows, block_size)):
-        block_range += block_size
-        if num_sparse_rows % block_size == 0:
-            expert_index = tl.load(top_experts_ptr + block_range)
-        else:
-            expert_index = tl.load(
-                top_experts_ptr + block_range, mask=block_range < num_sparse_rows, other=num_experts
-            )
-        expert_counts += tl.sum((expert_index[:, None] == expert_range[None, :]).to(dtype), 0)  # noqa
-
-    if pad_to_multiple is None:
-        expert_counts_padded = expert_counts
-    else:
-        # Round up to the next multiple.
-        expert_counts_padded = (expert_counts + pad_to_multiple - 1) // pad_to_multiple * pad_to_multiple
-
-    expert_ends = tl.cumsum(expert_counts_padded)
-    expert_begins = expert_ends - expert_counts_padded
-
-    if expert_ends_ptr is not None:
-        tl.store(expert_ends_ptr + expert_range, expert_ends, mask=expert_mask)
-
-    if expert_pad_begins_ptr is not None:
-        tl.store(expert_pad_begins_ptr + expert_range, expert_begins + expert_counts, mask=expert_mask)
-
-    if sparse_rows_ptr is not None:
-        # Assign a new unique index to each row so that it lies in the range (expert_begin, expert_end)
-        # for its assigned expert.
-        block_range = tl_arange(0, block_size)
-        for i in range(tl.cdiv(num_sparse_rows, block_size)):
-            if num_sparse_rows % block_size == 0:
-                mask = None
-                expert_index = tl.load(top_experts_ptr + block_range)
-            else:
-                mask = block_range < num_sparse_rows
-                expert_index = tl.load(top_experts_ptr + block_range, mask=mask, other=num_experts)
-            expert_one_hot = (expert_index[:, None] == expert_range[None, :]).to(dtype)  # noqa
-            # Use a cumsum and add block begins so that ones in each row become consecutive integers (starting at 1),
-            # then shift these ranges to the expert ranges using the begins as offsets,
-            # and filter out the relevant values by multiplying by the one-hot matrix.
-            expert_offsets = (tl.cumsum(expert_one_hot, 0) + expert_begins[None, :]) * expert_one_hot
-            # At this point each column contains exactly one non-zero value corresponding to the sparse row index +1,
-            # which we recover with a sum.
-            tl.store(sparse_rows_ptr + block_range, tl.sum(expert_offsets, 1) - 1, mask=mask)
-            # Advance the expert begins so that we don't reuse the same indices in the next block.
-            expert_begins += tl.sum(expert_one_hot, 0)
-            block_range += block_size
+    block_start = tl.program_id(0) * block_size
+    offsets = block_start + tl_arange(0, block_size)
+    mask = offsets < num_rows
+    expert_indices = tl.load(top_experts_ptr + offsets, mask=mask, other=num_experts).to(tl.int32)
+    hist = tl.histogram(expert_indices, block_size_experts)
+    # All block_size_experts addresses are valid (caller allocates that many elements).
+    tl.atomic_add(expert_counts_ptr + tl_arange(0, block_size_experts), hist.to(tl.int32))
 
 
 def sparse_map_pytorch(
@@ -294,6 +238,23 @@ def sparse_map_pytorch(
     return expert_ends, expert_pad_begins, sparse_rows
 
 
+@torch.compile
+def _compute_expert_layout(
+    top_experts: torch.Tensor, expert_counts: torch.Tensor, pad_to_multiple: int, dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    padded_expert_counts = (expert_counts + pad_to_multiple - 1) // pad_to_multiple * pad_to_multiple
+    expert_ends = padded_expert_counts.cumsum(0).to(dtype)
+    expert_begins = expert_ends - padded_expert_counts.to(dtype)
+    expert_pad_begins = expert_begins + expert_counts.to(dtype)
+    # Deterministic rank assignment: same ordering as sparse_map_pytorch.
+    unpadded_ranks = top_experts.flatten().sort(stable=True)[1].sort()[1].view_as(top_experts)
+    expert_begins_unpadded = expert_counts.cumsum(0) - expert_counts
+    sparse_rows = (
+        unpadded_ranks - expert_begins_unpadded[top_experts] + expert_begins.to(torch.int64)[top_experts]
+    ).to(dtype)
+    return expert_ends, expert_pad_begins, sparse_rows
+
+
 def get_sparse_map(
     top_experts: torch.Tensor,
     num_experts: int,
@@ -309,19 +270,21 @@ def get_sparse_map(
     dtype = torch.int16 if max_rows < 32768 else torch.int32
 
     if TritonConfig.enabled(top_experts.device, use_triton):
-        expert_ends, expert_pad_begins = top_experts.new_empty((2 * num_experts,), dtype=dtype).chunk(2)
-        sparse_rows = expert_ends.new_empty(num_rows_dense, num_experts_per_token)
-        sparse_map_kernel[(triton.cdiv(num_rows_dense, block_size),)](
+        grid = (triton.cdiv(num_rows_unpadded, block_size),)
+        block_size_experts = triton.next_power_of_2(num_experts + 1)
+        # Allocate block_size_experts elements so all atomic_add addresses in the kernel are in bounds.
+        # Bins [num_experts, block_size_experts) collect the sentinel counts; we ignore them.
+        expert_counts = torch.zeros(block_size_experts, dtype=torch.int32, device=top_experts.device)
+        sparse_histogram_kernel[grid](
             top_experts,
-            expert_ends,
-            expert_pad_begins,
-            sparse_rows,
+            expert_counts,
             num_rows_unpadded,
             num_experts,  # noqa
-            pad_to_multiple,  # noqa
             block_size,
-            triton.next_power_of_2(num_experts),
-            DataType.from_torch(dtype).triton,
+            block_size_experts,  # noqa
+        )
+        expert_ends, expert_pad_begins, sparse_rows = _compute_expert_layout(
+            top_experts, expert_counts[:num_experts], pad_to_multiple, dtype
         )
     else:
         expert_ends, expert_pad_begins, sparse_rows = sparse_map_pytorch(top_experts, num_experts, pad_to_multiple)

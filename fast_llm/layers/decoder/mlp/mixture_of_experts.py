@@ -5,20 +5,32 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
+from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.functional.utils import AuxiliaryLoss
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.decoder.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
+from fast_llm.layers.decoder.block import BlockWithBias
+from fast_llm.layers.decoder.mlp.config import (
+    HybridMoEMLPConfig,
+    MLPLossNames,
+    MoEImplementation,
+    MoEMLPConfig,
+    RoutingType,
+)
 from fast_llm.layers.decoder.mlp.mlp import MLPBase
 from fast_llm.layers.language_model.loss.z_loss import z_loss
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +80,32 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        dropless_moe = self._config.dropless
-        if dropless_moe and self._sequence_parallel:
-            warnings.warn(
-                "Dropless MoE not supported for sequence-tensor-parallel, falling back to looped implementation."
-            )
-            dropless_moe = False
-        self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
+        self.router_normalization = (
+            self._config.router_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.router_normalization is not None
+            else None
+        )
+        self.router_scale = self._config.router_scale.get_parameter(
+            (self._hidden_dim,),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        self.router_per_expert_scale = self._config.router_per_expert_scale.get_parameter(
+            (TensorDim("experts", self._config.experts),),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+        implementation = self._config.implementation
+        if implementation == MoEImplementation.auto:
+            implementation = MoEImplementation.dropless if triton_available else MoEImplementation.looped
+        if implementation == MoEImplementation.dropless and not triton_available:
+            warnings.warn("Dropless MoE not available without Triton, falling back to looped implementation.")
+            implementation = MoEImplementation.looped
+        self._mlp_forward = (
+            self._forward_dropless if implementation == MoEImplementation.dropless else self._forward_looped
+        )
 
         self._top_expert_dim = TensorDim("top_experts", self._config.experts_per_token)
 
@@ -86,13 +117,26 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
             CompositeTensorDim("moe_intermediate_2", (experts_dim, intermediate_2_dim)),
         )
 
+    @torch.compile
+    def _scale_router_input(self, x: torch.Tensor, scale: torch.Tensor | None, input_scale: float) -> torch.Tensor:
+        if scale is not None:
+            x = x * scale
+        if input_scale != 1.0:
+            x = x * input_scale
+        return x
+
     def _forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> tuple[torch.Tensor, None]:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
         hidden_states = input_.flatten(0, -2)
-        logits = self.router(hidden_states)
+        router_input = (
+            self.router_normalization(hidden_states) if self.router_normalization is not None else hidden_states
+        )
+        if self.router_scale is not None or self._config.router_input_scale != 1.0:
+            router_input = self._scale_router_input(router_input, self.router_scale, self._config.router_input_scale)
+        logits = self.router(router_input)
         hidden_token_dim = kwargs[BlockKwargs.hidden_token_dim]
         logit_dims = (hidden_token_dim, self._top_expert_dim)
         self._debug(logits, "Router logits", logit_dims, kwargs)
@@ -122,19 +166,30 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         else:
             raise NotImplementedError(self._config.routing)
 
+        if self.router_per_expert_scale is not None:
+            scores = scores * self.router_per_expert_scale[top_experts]
+
         self._debug(scores, "router_scores", logit_dims, kwargs)
         self._debug(top_experts, "router_top_experts", logit_dims, kwargs)
 
-        out = self._mlp_forward(hidden_states, scores, top_experts).view_as(input_)  # noqa
+        expert_input = self.pre_norm(hidden_states) if self.pre_norm is not None else hidden_states
+        out = self._mlp_forward(expert_input, scores, top_experts).view_as(input_)  # noqa
+        if self.post_norm is not None:
+            out = self.post_norm(out)
         self._debug(out, None, (hidden_token_dim, self._hidden_dim), kwargs)
         return out, None
 
     def _forward_dropless(
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> torch.Tensor:
-        # Compute token counts and the sparse mapping (dense_row, top_index) -> sparse_row.
+        # With STP the hidden states are sequence-parallel (local slice per rank). The sparse map
+        # must be built from the global top_experts so the expert buffers span the full sequence.
+        if self._sequence_parallel:
+            top_experts_for_map = gather_op(top_experts, self._parallel_dim.group, dim=0)
+        else:
+            top_experts_for_map = top_experts
         sparse_map = get_sparse_map(
-            top_experts, self._config.experts, dynamic_shape=self._config.dropless_dynamic_shape
+            top_experts_for_map, self._config.experts, dynamic_shape=self._config.dropless_dynamic_shape
         )
 
         # Sparse MLP
@@ -207,7 +262,8 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
     def _add_shared_experts(
         self, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Add the shared experts (last ones) to the top experts.
+        # Shared experts are appended to top_experts as the last routing slots with score 1,
+        # rather than a parallel dense branch. Keeps everything on the sparse MoE path.
         shared_experts = torch.arange(
             self._config.unshared_experts,
             self._config.experts,
@@ -254,6 +310,78 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         if self._config.z_loss_coefficient:
             loss_definitions.append(LossDef(name=MLPLossNames.router_z_loss))
         return loss_definitions
+
+
+class HybridMoEMLP[ConfigType: HybridMoEMLPConfig](BlockWithBias[ConfigType]):
+    """
+    MoE MLP that runs an always-active dense MLP alongside top-K routed experts and sums their outputs.
+    """
+
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        hidden_dim: TensorDim,
+        output_dim: TensorDim | None = None,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+        return_bias: bool = True,
+    ):
+        super().__init__(
+            config, distributed_config, hidden_dim=hidden_dim, lr_scale=lr_scale, peft=peft, return_bias=return_bias
+        )
+        self._output_dim = self._hidden_dim if output_dim is None else output_dim
+        self.dense = config.dense.get_layer(
+            distributed_config, hidden_dim, output_dim=output_dim, lr_scale=lr_scale, peft=peft, return_bias=True
+        )
+        self.routed = config.routed.get_layer(
+            distributed_config, hidden_dim, output_dim=output_dim, lr_scale=lr_scale, peft=peft, return_bias=True
+        )
+        self.pre_norm = (
+            config.pre_norm.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if config.pre_norm is not None
+            else None
+        )
+        self.post_norm = (
+            config.post_norm.get_layer(self._output_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if config.post_norm is not None
+            else None
+        )
+
+    def setup(self, distributed: "Distributed") -> None:
+        super().setup(distributed)
+        self.dense.setup(distributed)
+        self.routed.setup(distributed)
+
+    def _forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if isinstance(input_, TensorMeta):
+            return TensorMeta.from_dims(input_.dims[:-1] + (self._output_dim,), "MLP output"), None
+        if self.pre_norm is not None:
+            input_ = self.pre_norm(input_)
+        dense_out, dense_bias = self.dense(input_, kwargs, losses, metrics)
+        routed_out, _ = self.routed(input_, kwargs, losses, metrics)
+        out = dense_out + routed_out
+        if self.post_norm is not None:
+            if dense_bias is not None:
+                out = out + dense_bias
+                dense_bias = None
+            out = self.post_norm(out)
+        return out, dense_bias
+
+    def get_loss_definitions(self) -> list[LossDef]:
+        return self.routed.get_loss_definitions()
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        return self.dense.get_compute_usage(input_, kwargs, config) + self.routed.get_compute_usage(
+            input_, kwargs, config
+        )
 
 
 def sinkhorn(cost: torch.Tensor, tolerance: float = 1e-5, eps=1e-9) -> torch.Tensor:

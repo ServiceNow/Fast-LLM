@@ -8,7 +8,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig, StochasticMixerSamplingStrategy
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import Apriel2TextCheckpointFormat
@@ -79,8 +79,9 @@ class Apriel2AttentionConverter:
                 "type": rotary_type,
                 "theta": config.rotary.theta,
             },
-            "window_size": config.window_size,
         }
+        if config.window_size is not None:
+            result["window_size"] = config.window_size
         # Export per-layer bias configuration
         # Only include if explicitly set (not None)
         if config.query_layer.bias.enabled is not None:
@@ -91,8 +92,10 @@ class Apriel2AttentionConverter:
             result["value_layer"] = {"bias": {"enabled": config.value_layer.bias.enabled}}
         if config.dense_layer.bias.enabled is not None:
             result["dense_layer"] = {"bias": {"enabled": config.dense_layer.bias.enabled}}
-        # add_linear_biases as fallback default
-        result["add_linear_biases"] = config.add_linear_biases
+        # add_linear_biases as fallback default; omit when True (the Fast-LLM default) to avoid
+        # round-trip inflation on configs that don't set it explicitly.
+        if not config.add_linear_biases:
+            result["add_linear_biases"] = config.add_linear_biases
         return result
 
     @classmethod
@@ -491,12 +494,14 @@ class Apriel2StochasticMixerConverter:
             else:
                 raise ValueError(f"Unknown sub-mixer type: {mixer_type}")
 
-        return {
+        result = {
             "type": "stochastic",
             "mixers": mixers,
             "main_mixer_name": config.main_mixer_name,
-            "sampling_strategy": config.sampling_strategy.value,
         }
+        if config.sampling_strategy != StochasticMixerSamplingStrategy.uniform:
+            result["sampling_strategy"] = config.sampling_strategy.value
+        return result
 
     @classmethod
     def get_converters(

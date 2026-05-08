@@ -3,7 +3,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import _BIG_PRIMES, DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
@@ -59,6 +59,17 @@ class MLPBaseConfig(BlockWithBiasConfig):
     """Abstract base configuration for MLP (feedforward) layers. Use `type: mlp` or `type: moe` to select a variant."""
 
     _abstract = True
+
+    pre_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP input.",
+        hint=FieldHint.architecture,
+    )
+    post_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output.",
+        hint=FieldHint.architecture,
+    )
 
     def get_layer(
         self,
@@ -247,7 +258,32 @@ class DecoderBlockConfig(BlockConfig):
     )
     # TODO: Review names
     normalization: NormalizationConfig = Field(
-        desc="Configuration for the block normalization layers.",
+        desc="Configuration for the block normalization layers. Used as default for `pre_mixer_normalization` and `pre_mlp_normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the mixer. Defaults to `normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the MLP. Defaults to `normalization` when not set."
+        " Set to `{type: none}` to disable independently of the pre-mixer norm.",
+        hint=FieldHint.architecture,
+    )
+    post_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the mixer output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    post_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    output_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable scalar multiplied into the block output (after the MLP residual add).",
         hint=FieldHint.architecture,
     )
     # TODO: Review names

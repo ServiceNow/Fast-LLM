@@ -3,7 +3,9 @@ import typing
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import WeightConverter
 from fast_llm.layers.attention.config import AttentionConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.conversion.config import Qwen2CheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     KeyValueWeightConverter,
@@ -37,6 +39,9 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
     def export_config(cls, config: AttentionConfig) -> dict:
         out = super().export_config(config)
         del out["attention_bias"]
+        # Qwen2Config does not have head_dim as a standard field; it is always
+        # derivable as hidden_size // num_attention_heads.
+        del out["head_dim"]
         return out
 
     @classmethod
@@ -117,6 +122,26 @@ class Qwen2HeadConverter(LlamaHeadConverter):
 class Qwen2BaseModelConverter(LlamaBaseModelConverter):
     decoder_converter_class: typing.ClassVar[type[Qwen2DecoderConverter]] = Qwen2DecoderConverter
     head_converter_class: typing.ClassVar[type[Qwen2HeadConverter]] = Qwen2HeadConverter
+
+    @classmethod
+    def import_config(cls, config: dict) -> dict:
+        assert config.get("use_mrope") is not True, "MRoPE (use_mrope=True) is not supported by the Qwen2 converter"
+        return super().import_config(config)
+
+    @classmethod
+    def export_config(cls, config: GPTBaseModelConfig) -> dict:
+        block = (
+            config.decoder.block
+            if isinstance(config.decoder, FixedBlockSequenceConfig)
+            else next(iter(config.decoder.blocks.values()))
+        )
+        if isinstance(block.mixer, AttentionConfig):
+            Assert.eq(
+                block.mixer.heads * block.mixer.head_size,
+                config.hidden_size,
+                msg="Qwen2 format omits head_dim; requires heads * head_size == hidden_size",
+            )
+        return super().export_config(config)
 
 
 class Qwen2HuggingfaceCheckpointHandler(LlamaHuggingfaceCheckpointHandler):

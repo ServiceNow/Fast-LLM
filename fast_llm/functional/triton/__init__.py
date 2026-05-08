@@ -26,6 +26,7 @@ triton_autotune = try_decorate(lambda: triton.autotune)
 if not triton_available:
     tl_arange = None
     tl_full = None
+    tl_zeros = None
 elif triton_interpret:
     # Workaround for a triton interpreter bug: constexpr int arguments to device functions
     # arrive as 1-d numpy arrays rather than scalars. The interpreter's _patch_lang_tensor sets
@@ -49,6 +50,11 @@ elif triton_interpret:
     def tl_full(shape, value, dtype):
         return tl.full(tuple(int(x) for x in shape), value, dtype)
 
+    @triton_jit
+    def tl_zeros(shape, dtype):
+        return tl.zeros(tuple(int(x) for x in shape), dtype)
+
 else:
     tl_arange = tl.arange
     tl_full = tl.full
+    tl_zeros = tl.zeros

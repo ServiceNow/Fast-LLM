@@ -90,6 +90,8 @@ tokenizer:
 
 Save it as `./prep-stack-tutorial/the-stack-prepare.yaml`
 
+Some HuggingFace datasets ship custom Python loaders that run on download. The `trust_remote_code: true` field above only takes effect when you also pass `--trust-remote-code` on the `fast-llm prepare` command line; the field alone is intentionally a no-op so that opening someone else's config can never trigger remote-code execution. Both opt-ins are required (`--trust-remote-code` is the master switch and `trust_remote_code: true` enables it for that specific call). If you would rather opt in once for every call in the run, pass `--trust-all-remote-code` instead.
+
 ## 🚀 Step 3: Launch data preparation job
 
 Fast-LLM's prepare command processes the dataset by tokenizing and saving it in Fast-LLM's memory-mapped indexed dataset format.
@@ -99,7 +101,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
     ```bash
     docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
         -v ./prep-stack-tutorial:/app/prep-stack-tutorial \
-        fast-llm prepare gpt_memmap --config /app/prep-stack-tutorial/the-stack-prepare.yaml
+        fast-llm prepare gpt_memmap --trust-remote-code --config /app/prep-stack-tutorial/the-stack-prepare.yaml
     ```
 
 === "Custom Installation"
@@ -109,7 +111,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
     Then, run the following command:
 
     ```bash
-    fast-llm prepare gpt_memmap --config ./prep-stack-tutorial/the-stack-prepare.yaml
+    fast-llm prepare gpt_memmap --trust-remote-code --config ./prep-stack-tutorial/the-stack-prepare.yaml
     ```
 
 === "Slurm"
@@ -145,6 +147,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
                      --rdzv_conf=timeout=3600 \
                      --no_python \
                      fast-llm prepare gpt_memmap \
+                     --trust-remote-code \
                      --config /app/prep-stack-tutorial/the-stack-prepare.yaml"
     EOF
     ```
@@ -251,6 +254,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
                                --rdzv_conf=timeout=3600 \
                                --no_python \
                                fast-llm prepare gpt_memmap \
+                               --trust-remote-code \
                                --config prep-stack-tutorial/the-stack-prepare.yaml
                   env:
                     - name: PYTHONHASHSEED
@@ -306,6 +310,7 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
                                --rdzv_conf=timeout=3600 \
                                --no_python \
                                fast-llm prepare gpt_memmap \
+                               --trust-remote-code \
                                --config prep-stack-tutorial/the-stack-prepare.yaml
                   env:
                     - name: PYTHONHASHSEED

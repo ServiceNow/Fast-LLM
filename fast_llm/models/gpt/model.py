@@ -58,16 +58,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](LanguageModel[ConfigType], Ba
             Assert.empty(kwargs.keys() & extra_kwargs.keys())
             kwargs.update(extra_kwargs)
         if phase == PhaseType.inference:
-            kwargs[BlockKwargs.output_hidden_states].add(re.compile(r"head\..*logits.*$"))
+            kwargs[BlockKwargs.output_hidden_states].add(re.compile(r"(?:.*\.)?logits.*$"))
 
         if not model_input.is_meta:
             for name, reference_model in self._reference_models.items():
                 output_hidden_states = set()
                 if name in self._head_reference_models:
-                    output_hidden_states.add(re.compile(r"head\..*logits.*$"))
+                    output_hidden_states.add(re.compile(r"(?:.*\.)?logits.*$"))
                 if name in self._decoder_reference_models:
                     # TODO: Get the actual names
-                    output_hidden_states.add(re.compile(r"decoder\.\d+\.mixer_output$"))
+                    output_hidden_states.add(re.compile(r"(?:.*\.)?decoder\.\d+\.mixer_output$"))
                 assert len(output_hidden_states) >= 1
                 reference_model_input = dataclasses.replace(
                     model_input,

@@ -60,7 +60,7 @@ class CompareConfig:
             for p in rank_path.iterdir():
                 if p.name.startswith(_TENSOR_LOG_PREFIX) and p.suffix == ".pt":
                     step_name = p.stem[len(_TENSOR_LOG_PREFIX) :]
-                    for step_log in torch.load(p):
+                    for step_log in torch.load(p, weights_only=True):
                         tensor_name = step_log["name"]
                         sub_config = self._get_sub_config(step_name, tensor_name)
                         if not sub_config.ignore_tensors:

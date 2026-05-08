@@ -18,6 +18,7 @@ def triton_normalization_forward_kernel(
     n_cols,
     eps,
     has_bias: tl_constexpr,
+    has_weight: tl_constexpr,
     zero_centered: tl_constexpr,
     block_size: tl_constexpr,
 ):
@@ -40,11 +41,13 @@ def triton_normalization_forward_kernel(
     tl.store(inv_var_ptr + row, inv_var)
 
     # Weight
-    weight = tl.load(weight_ptr + cols, mask=mask)
-    if zero_centered:
-        weight += 1
-
-    output = input_ * inv_var * weight
+    if has_weight:
+        weight = tl.load(weight_ptr + cols, mask=mask)
+        if zero_centered:
+            weight += 1
+        output = input_ * inv_var * weight
+    else:
+        output = input_ * inv_var
 
     # Bias
     if has_bias:
@@ -69,6 +72,7 @@ def triton_normalization_backward_kernel_1(
     n_rows,
     eps,
     has_bias: tl_constexpr,
+    has_weight: tl_constexpr,
     parameter_grad: tl_constexpr,
     zero_centered: tl_constexpr,
     block_size: tl_constexpr,
@@ -87,10 +91,6 @@ def triton_normalization_backward_kernel_1(
     # Load data
     output = tl.load(output_ptr + offsets, mask=mask, other=0).to(tl.float32)
     grad_output = tl.load(grad_output_ptr + offsets, mask=mask, other=0).to(tl.float32)
-    weight = tl.load(weight_ptr + cols, mask=col_mask).to(tl.float32)
-    if zero_centered:
-        weight += 1
-
     inv_var = tl.load(inv_var_ptr + rows, mask=row_mask)
 
     # Bias
@@ -99,9 +99,18 @@ def triton_normalization_backward_kernel_1(
         output = output - bias
 
     # Input grad
-    weight_regularised = tl.where(weight >= 0, tl.maximum(weight, eps), tl.minimum(weight, -eps))
-    input_normalized = tl.where(mask, output / weight_regularised, 0.0)
-    weight_grad_output = tl.where(mask, weight * grad_output * inv_var, 0.0)
+    if has_weight:
+        weight = tl.load(weight_ptr + cols, mask=col_mask).to(tl.float32)
+        if zero_centered:
+            weight += 1
+        weight_regularised = tl.where(weight >= 0, tl.maximum(weight, eps), tl.minimum(weight, -eps))
+        input_normalized = tl.where(mask, output / weight_regularised, 0.0)
+        weight_grad_output = tl.where(mask, weight * grad_output * inv_var, 0.0)
+    else:
+        # weight == 1 everywhere: forward output = input * inv_var, so input_normalized = output
+        input_normalized = tl.where(mask, output, 0.0)
+        weight_grad_output = tl.where(mask, grad_output * inv_var, 0.0)
+
     grad_input = weight_grad_output - input_normalized * (
         tl.sum(input_normalized * weight_grad_output, axis=1)[:, None] / n_cols
     )
@@ -170,7 +179,7 @@ def triton_normalization_backward_kernel_2(
 
 def triton_normalization_forward(
     input_: torch.Tensor,
-    weight: torch.Tensor,
+    weight: torch.Tensor | None,
     bias: torch.Tensor | None,
     eps: float,
     training: bool,
@@ -179,14 +188,15 @@ def triton_normalization_forward(
     # Note: Converting input automatically to training dtype to match Apex behaviour,
     #  needed for full precision residual.
     # TODO: Review this?
-    assert weight.shape == input_.shape[-1:]
-    if bias is not None:
-        assert weight.shape == bias.shape
+    if weight is not None:
+        assert weight.shape == input_.shape[-1:]
+        if bias is not None:
+            assert weight.shape == bias.shape
     assert input_.is_contiguous()
     n_rows = input_.shape[:-1].numel()
-    n_cols = weight.numel()
+    n_cols = input_.shape[-1]
 
-    output = torch.empty_like(input_, dtype=weight.dtype)
+    output = torch.empty_like(input_, dtype=weight.dtype if weight is not None else input_.dtype)
     inv_var = torch.empty(n_rows, dtype=torch.float32, device=input_.device)
 
     block_size = triton.next_power_of_2(n_cols)
@@ -202,6 +212,7 @@ def triton_normalization_forward(
         n_cols,
         eps,
         bias is not None,
+        weight is not None,
         zero_centered,
         block_size,
         num_warps=num_warps,
@@ -217,16 +228,18 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
     # We delete the context to prevent a memory leak
     context.clear()
     has_bias = bias is not None
+    has_weight = weight is not None
 
-    parameter_grad = weight.requires_grad
-    assert parameter_grad == hasattr(weight, "grad_buffer")
+    parameter_grad = weight.requires_grad if has_weight else False
+    if has_weight:
+        assert parameter_grad == hasattr(weight, "grad_buffer")
     if has_bias:
         assert parameter_grad == bias.requires_grad
 
     grad_output = grad_output.contiguous()
 
     n_rows = grad_output.shape[:-1].numel()
-    n_cols = weight.numel()
+    n_cols = grad_output.shape[-1]
     # TODO: Improve heuristics
     #   The ones from triton tutorial (32, 128) are terrible.
     #   These seem to match torch compile heuristics and were near-optimal for A100 tests with [8192, 4096], bf16.
@@ -274,6 +287,7 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         n_rows,
         eps,
         has_bias,
+        has_weight,
         parameter_grad,
         zero_centered,
         block_size,
