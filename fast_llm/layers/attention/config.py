@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 class MixerKwargs(BlockKwargs):
     cu_seqlens_q = "cu_seqlens_q"
     cu_seqlens_k = "cu_seqlens_k"
+    sequence_k_offset = "sequence_k_offset"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
     min_seqlen_q = "min_seqlen_q"

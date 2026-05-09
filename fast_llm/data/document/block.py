@@ -24,6 +24,7 @@ class BlockModelInput(ModelInput):
     lengths: list[int] = None
     cumulative_lengths_q: torch.Tensor | None = None
     cumulative_lengths_k: torch.Tensor | None = None
+    sequence_k_offset: int = 0
     max_length_q: int | None = None
     max_length_k: int | None = None
     min_length_q: int | None = None
@@ -44,6 +45,7 @@ class BlockModelInput(ModelInput):
             LanguageModelKwargs.lengths: self.lengths,
             AttentionKwargs.cu_seqlens_q: self.cumulative_lengths_q,
             AttentionKwargs.cu_seqlens_k: self.cumulative_lengths_k,
+            AttentionKwargs.sequence_k_offset: self.sequence_k_offset,
             AttentionKwargs.max_seqlen_q: self.max_length_q,
             AttentionKwargs.max_seqlen_k: self.max_length_k,
             AttentionKwargs.min_seqlen_q: self.min_length_q,
@@ -103,6 +105,7 @@ class LengthModelInputPreprocessor:
 
         if config.return_cumulative_sequence_lengths:
             model_input.cumulative_lengths_q, model_input.cumulative_lengths_k = self.cumulative_lengths
+            model_input.sequence_k_offset = self.first_document_begin
         if config.return_max_sequence_lengths or config.return_document_index:
             model_input.max_length_q, model_input.max_length_k = self.max_lengths
         if config.return_min_sequence_lengths:

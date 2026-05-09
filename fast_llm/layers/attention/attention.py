@@ -24,6 +24,9 @@ try:
 except ImportError:
     _flash_available = False
 
+_SDPA_MASK_NONE = 0
+_SDPA_MASK_CAUSAL_LOWER_RIGHT = 2  # torch.nn.attention.bias.CausalVariant.LOWER_RIGHT
+
 
 class AttachGrad(torch.autograd.Function):
     """
@@ -248,12 +251,17 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> torch.Tensor:
         assert _flash_available
+        cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k]
+        if sequence_k_offset := kwargs.get(AttentionKwargs.sequence_k_offset, 0):
+            key = key.narrow(0, sequence_k_offset, key.size(0) - sequence_k_offset)
+            value = value.narrow(0, sequence_k_offset, value.size(0) - sequence_k_offset)
+            cu_seqlens_k = cu_seqlens_k - sequence_k_offset
         return _flash_attn_varlen_func(
             query,
             key,
             value,
             kwargs[AttentionKwargs.cu_seqlens_q],
-            kwargs[AttentionKwargs.cu_seqlens_k],
+            cu_seqlens_k,
             kwargs[AttentionKwargs.max_seqlen_q],
             kwargs[AttentionKwargs.max_seqlen_k],
             dropout_p=self._config.dropout if self.training else 0.0,
@@ -269,60 +277,59 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         value: torch.Tensor,  # total_k, head_groups, head_size
         kwargs: dict[str, typing.Any],
     ) -> torch.Tensor:  # total_q, heads, head_size
-        # SDPA's fused kernels require Q/K/V to share heads, so we expand K/V across query heads.
-        if self._local_heads_per_group > 1:
-            key = key.repeat_interleave(self._local_heads_per_group, dim=1)
-            value = value.repeat_interleave(self._local_heads_per_group, dim=1)
-
-        sdpa_args: dict[str, typing.Any] = {
-            "dropout_p": self._config.dropout if self.training else 0.0,
-            "scale": self._softmax_scale,
-        }
         if query.is_cuda and self._config.window_size is None:
-            # Wrap each document as its own batch element via nested-jagged so cross-doc masking
-            # is structural and EFFICIENT skips materializing the attention mask. The dispatch
-            # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
-            # explicitly keeps the path sync-free.
-            cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
-            cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
-            query = torch.nested.nested_tensor_from_jagged(
-                query,
-                cu_seqlens_q,
-                min_seqlen=kwargs[AttentionKwargs.min_seqlen_q],
-                max_seqlen=kwargs[AttentionKwargs.max_seqlen_q],
-            )
-            key = torch.nested.nested_tensor_from_jagged(
-                key,
+            # EFFICIENT attention expects varlen offsets to be relative to the
+            # provided K/V buffer. Compact away any unused prefix so backward
+            # does not write gradients outside valid K/V rows.
+            cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k]
+            if sequence_k_offset := kwargs.get(AttentionKwargs.sequence_k_offset, 0):
+                key = key.narrow(0, sequence_k_offset, key.size(0) - sequence_k_offset)
+                value = value.narrow(0, sequence_k_offset, value.size(0) - sequence_k_offset)
+                cu_seqlens_k = cu_seqlens_k - sequence_k_offset
+
+            # SDPA's EFFICIENT backend requires Q/K/V to have the same num_heads.
+            if self._local_heads_per_group > 1:
+                key = key.repeat_interleave(self._local_heads_per_group, dim=1)
+                value = value.repeat_interleave(self._local_heads_per_group, dim=1)
+
+            mask_type = _SDPA_MASK_CAUSAL_LOWER_RIGHT if self._config.causal else _SDPA_MASK_NONE
+            output = torch.ops.aten._efficient_attention_forward(
+                query.unsqueeze(0),
+                key.unsqueeze(0),
+                value.unsqueeze(0),
+                None,
+                kwargs[AttentionKwargs.cu_seqlens_q],
                 cu_seqlens_k,
-                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
-                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
-            )
-            value = torch.nested.nested_tensor_from_jagged(
-                value,
-                cu_seqlens_k,
-                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
-                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
-            )
-            sdpa_args["is_causal"] = self._config.causal
+                kwargs[AttentionKwargs.max_seqlen_q],
+                kwargs[AttentionKwargs.max_seqlen_k],
+                self._config.dropout if self.training else 0.0,
+                mask_type,
+                query.requires_grad or key.requires_grad or value.requires_grad,
+                scale=self._softmax_scale,
+            )[0]
+            return output.squeeze(0)
         else:
             # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
             # nested + is_causal) and on CUDA with sliding window (the nested path can't express
             # it). Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
+            if self._local_heads_per_group > 1:
+                key = key.repeat_interleave(self._local_heads_per_group, dim=1)
+                value = value.repeat_interleave(self._local_heads_per_group, dim=1)
             attention_mask = kwargs[AttentionKwargs.attention_mask]
             if attention_mask is not None:
                 attention_mask = attention_mask.transpose(1, 2)
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
-            sdpa_args["attn_mask"] = attention_mask
-
-        output = torch.nn.functional.scaled_dot_product_attention(
-            query.transpose(1, 2),
-            key.transpose(1, 2),
-            value.transpose(1, 2),
-            **sdpa_args,
-        ).transpose(1, 2)
-        return output.values() if output.is_nested else output.squeeze(0)
+            output = torch.nn.functional.scaled_dot_product_attention(
+                query.transpose(1, 2),
+                key.transpose(1, 2),
+                value.transpose(1, 2),
+                attn_mask=attention_mask,
+                dropout_p=self._config.dropout if self.training else 0.0,
+                scale=self._softmax_scale,
+            ).transpose(1, 2)
+            return output.squeeze(0)
 
     def _apply_norm_with_grad_capture(
         self, norm: torch.nn.Module, x: torch.Tensor
