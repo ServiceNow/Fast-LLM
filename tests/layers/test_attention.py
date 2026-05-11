@@ -264,8 +264,8 @@ for base_name, base_kwargs, variants, length_set in (
 
 # head_size > 256 — exercises the SDPA-only regime (flash caps at 256).
 for name, kwargs in (
-    ("large_head_causal", {"causal": True, "head_size": 320}),
-    ("large_head_mqa", {"causal": True, "head_size": 320, "kv_heads": 1}),
+    ("large_head_causal_no_norm", {"causal": True, "head_size": 320}),
+    ("large_head_mqa_no_norm", {"causal": True, "head_size": 320, "kv_heads": 1}),
 ):
     for lengths in _LENGTHS_SHORT:
         _attention_test_cases.append((AttentionTestConfig(name=name, **kwargs), lengths))
@@ -278,7 +278,6 @@ def _run_per_seq_reference(
     hidden_states: torch.Tensor,
     lengths: list[int],
     device: torch.device,
-    with_backward: bool = True,
 ) -> torch.Tensor:
     out_refs = []
     for length, hidden_slice in zip(lengths, torch.split(hidden_states, lengths, dim=0), strict=True):
@@ -294,8 +293,7 @@ def _run_per_seq_reference(
         kwargs = model_input.to_kwargs()
         attention.preprocess(kwargs)
         out, context = stage.forward(hidden_slice, kwargs)
-        if with_backward:
-            stage.backward(torch.ones_like(out), context)
+        stage.backward(torch.ones_like(out), context)
         out_refs.append(out.detach())
     return torch.cat(out_refs, dim=0)
 
@@ -420,8 +418,8 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
 
     # Flash and SDPA equivalence checks: each implementation's packed bfloat16 output and parameter
     # gradients must match a per-sequence bfloat16 backup reference. Backward grad tolerance is
-    # looser than forward — bf16 reduction-order noise compounds through the backward pass, and
-    # the same-kernel sdpa_dense path itself diverges from per-seq backup by ~7e-3 at bf16.
+    # looser than forward — bf16 reduction-order noise compounds through the backward pass, with
+    # even the sdpa_dense path diverging from the per-seq backup reference by ~7e-3 at bf16.
     if not torch.cuda.is_available():
         return
 
