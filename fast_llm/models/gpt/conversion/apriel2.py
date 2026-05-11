@@ -4,6 +4,7 @@ import typing
 
 from transformers import PretrainedConfig
 
+from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
@@ -52,7 +53,7 @@ from fast_llm.utils import Assert, safe_merge_dicts
 # ============================================================
 
 
-def _per_layer_bias_export(config, layer_names: tuple[str, ...]) -> dict:
+def _per_layer_bias_export(config: Config, layer_names: tuple[str, ...]) -> dict:
     """Emit per-layer ``{layer: {"bias": {"enabled": bool}}}`` only for layers whose bias is explicitly set."""
     out: dict = {}
     for layer_name in layer_names:
@@ -883,7 +884,9 @@ APRIEL2_DECODER_REGISTRY: dict = {
 }
 
 
-def get_apriel2_decoder_converter(decoder_config) -> "type[ConfigSectionConverter]":
+def get_apriel2_decoder_converter(
+    decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
+) -> type[ConfigSectionConverter]:
     """Look up the Apriel2 per-shape decoder converter for a given decoder config instance."""
     converter_class = APRIEL2_DECODER_REGISTRY.get(type(decoder_config))
     if converter_class is None:

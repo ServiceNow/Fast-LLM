@@ -34,7 +34,7 @@ from fast_llm.utils import Assert, safe_merge_dicts
 
 
 class AprielMambaConverter(ConfigSectionConverter):
-    """Converts ``MambaConfig`` <-> Apriel hybrid SSM HF dict (``ssm_cfg`` subdict + root-level fallbacks).
+    """Converts ``MambaConfig`` ↔ Apriel hybrid SSM HF dict (``ssm_cfg`` subdict + root-level fallbacks).
 
     A few of MambaConfig's defaults are derived from the HF root's ``hidden_size`` (``d_inner`` defaults
     to ``hidden_size * expand``, ``d_xb`` defaults to ``hidden_size``, ``dt_rank="auto"`` resolves to
@@ -186,7 +186,7 @@ class AprielMambaConverter(ConfigSectionConverter):
 
 
 class GatedDeltaNetConverter(ConfigSectionConverter):
-    """Converts ``GatedDeltaNetConfig`` <-> Apriel HF ``linear_attn_config`` subdict."""
+    """Converts ``GatedDeltaNetConfig`` ↔ Apriel HF ``linear_attn_config`` subdict."""
 
     fast_llm_config_class = GatedDeltaNetConfig
 
@@ -280,7 +280,7 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
 
 
 class KimiDeltaAttentionConverter(ConfigSectionConverter):
-    """Converts ``KimiDeltaAttentionConfig`` <-> Apriel HF ``linear_attn_config`` subdict."""
+    """Converts ``KimiDeltaAttentionConfig`` ↔ Apriel HF ``linear_attn_config`` subdict."""
 
     fast_llm_config_class = KimiDeltaAttentionConfig
 

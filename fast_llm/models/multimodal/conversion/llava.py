@@ -142,7 +142,7 @@ class PatchEmbeddingWeightConverter(WeightConverter):
 
 
 class PixtralEmbeddingsConverter(ConfigSectionConverter):
-    """Converts ``PatchEmbeddingsConfig`` <-> Pixtral HF flat fields (``patch_size`` / ``num_channels``).
+    """Converts ``PatchEmbeddingsConfig`` ↔ Pixtral HF flat fields (``patch_size`` / ``num_channels``).
 
     Pixtral's HF ``vision_config`` carries a single ``patch_size`` field (height == width); the converter
     expands it to both Fast-LLM dimensions on import and validates equality on export.

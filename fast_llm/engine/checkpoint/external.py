@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 def _get_attr_path(config: Config, path: tuple[str, ...]) -> typing.Any:
-    cur = config
+    current = config
     for name in path:
-        cur = getattr(cur, name)
-    return cur
+        current = getattr(current, name)
+    return current
 
 
 def _collect_architecture_paths(config: Config) -> list[tuple[str, ...]]:
@@ -219,10 +219,10 @@ class IgnoredConfigConverter(ConfigConverter):
         self.hf_paths = hf_paths
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
-        return
+        pass
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        return
+        pass
 
 
 class CustomConfigConverter(ConfigConverter):
@@ -292,7 +292,7 @@ class ImportOnlyConfigConverter(ConfigConverter):
         self.recurses = recurses
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
-        return
+        pass
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         produced = self._import_fn(hf_dict)
@@ -395,7 +395,7 @@ class DispatchConfigConverter(ConfigConverter):
         converter_class = self._hf_to_class.get(type_name)
         if converter_class is None:
             raise NotImplementedError(
-                f"No converter registered for HF discriminator {type_name!r} at " f"{'.'.join(self.fast_llm_paths[0])}"
+                f"No converter registered for HF discriminator {type_name!r} at {'.'.join(self.fast_llm_paths[0])}"
             )
         sub_fast_llm = converter_class.import_config(sub_hf)
         # Inject the Fast-LLM dynamic-type discriminator so the parent's `from_dict` dispatches to the
