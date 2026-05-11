@@ -271,6 +271,44 @@ for name, kwargs in (
         _attention_test_cases.append((AttentionTestConfig(name=name, **kwargs), lengths))
 
 
+def _check_packed(
+    implementation: str,
+    config: AttentionTestConfig,
+    hidden_dim: TensorDim,
+    lengths: list[int],
+    attention_f32: Attention,
+    distributed_config: DistributedConfig,
+    distributed: Distributed,
+    hidden_states: torch.Tensor,
+    out_ref: torch.Tensor,
+    grads_ref: list[torch.Tensor],
+    out_rtol: float,
+    grad_rtol: float,
+) -> None:
+    attention_impl: Attention = config.get_attention_config(implementation).get_layer(
+        distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False
+    )
+    stage_impl = get_stage([attention_impl], distributed)
+    for param_impl, param_f32 in zip(attention_impl.parameters(), attention_f32.parameters(), strict=True):
+        param_impl.data.copy_(param_f32.data)
+    (model_input,) = LanguageModelBatch(
+        tokens=torch.empty(sum(lengths), dtype=torch.int64, device=hidden_states.device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **attention_impl.get_preprocessing_config(),
+        )
+    )
+    kwargs_impl = model_input.to_kwargs()
+    attention_impl.preprocess(kwargs_impl)
+    out_impl, context = stage_impl.forward(hidden_states, kwargs_impl)
+    stage_impl.backward(torch.ones_like(out_impl), context)
+    Assert.rms_close_relative(out_impl, out_ref, out_rtol, 1e-7)
+    for param_impl, grad_ref in zip(attention_impl.parameters(), grads_ref, strict=True):
+        Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, grad_rtol, 1e-7, msg=implementation)
+
+
 def _run_per_seq_reference(
     attention: Attention,
     stage,
@@ -378,48 +416,21 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         Assert.rms_close_relative(param.grad_buffer, grad_ref, 1e-5, 1e-7, msg=name)
     stage.reset_gradients()
 
-    def _check_packed(
-        implementation: str,
-        distributed_config_check: DistributedConfig,
-        distributed_check: Distributed,
-        hidden_states_check: torch.Tensor,
-        out_ref_check: torch.Tensor,
-        grads_ref_check: list[torch.Tensor],
-        out_rtol: float,
-        grad_rtol: float,
-    ) -> None:
-        attention_impl: Attention = config.get_attention_config(implementation).get_layer(
-            distributed_config_check, hidden_dim, lr_scale=None, peft=None, return_bias=False
-        )
-        stage_impl = get_stage([attention_impl], distributed_check)
-        for param_impl, param_f32 in zip(attention_impl.parameters(), attention.parameters(), strict=True):
-            param_impl.data.copy_(param_f32.data)
-        (model_input,) = LanguageModelBatch(
-            tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
-        ).get_model_inputs(
-            LanguageModelBatchPreprocessingConfig(
-                distributed=distributed_config_check,
-                predicted_tokens=0,
-                **attention_impl.get_preprocessing_config(),
-            )
-        )
-        kwargs_impl = model_input.to_kwargs()
-        attention_impl.preprocess(kwargs_impl)
-        out_impl, context = stage_impl.forward(hidden_states_check, kwargs_impl)
-        stage_impl.backward(torch.ones_like(out_impl), context)
-        Assert.rms_close_relative(out_impl, out_ref_check, out_rtol, 1e-7)
-        for param_impl, grad_ref in zip(attention_impl.parameters(), grads_ref_check, strict=True):
-            Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, grad_rtol, 1e-7, msg=implementation)
+    _check_packed(
+        "sdpa_dense",
+        config,
+        hidden_dim,
+        lengths,
+        attention,
+        distributed_config,
+        distributed,
+        hidden_states,
+        out_ref,
+        grads_ref,
+        1e-5,
+        1e-5,
+    )
 
-    # SDPA-dense equivalence check: sdpa_dense reuses backup's mask, so its packed fp32 output
-    # and parameter gradients must match the per-sequence backup reference. This is the only SDPA
-    # branch that runs on CPU (sdpa_nested needs CUDA), so the check is unconditional.
-    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states, out_ref, grads_ref, 1e-5, 1e-5)
-
-    # Flash and SDPA equivalence checks: each implementation's packed bfloat16 output and parameter
-    # gradients must match a per-sequence bfloat16 backup reference. Backward grad tolerance is
-    # looser than forward — bf16 reduction-order noise compounds through the backward pass, with
-    # even the sdpa_dense path diverging from the per-seq backup reference by ~7e-3 at bf16.
     if not torch.cuda.is_available():
         return
 
@@ -439,30 +450,18 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     )
     grads_ref_bf16 = [param.grad_buffer.clone() for param in attention_backup_bf16.parameters()]
 
-    _check_packed(
-        "sdpa_dense",
-        distributed_config_bf16,
-        distributed_bf16,
-        hidden_states_bf16,
-        out_ref_bf16,
-        grads_ref_bf16,
-        5e-3,
-        1.5e-2,
-    )
-    if _flash_available and config.head_size <= 256:
+    # bf16 grad rtol is looser than forward: reduction-order noise compounds through backward.
+    for implementation in ("sdpa_dense", "flash", "sdpa_nested"):
+        if implementation == "flash" and (not _flash_available or config.head_size > 256):
+            continue
+        if implementation == "sdpa_nested" and config.window_size is not None:
+            continue
         _check_packed(
-            "flash",
-            distributed_config_bf16,
-            distributed_bf16,
-            hidden_states_bf16,
-            out_ref_bf16,
-            grads_ref_bf16,
-            5e-3,
-            1.5e-2,
-        )
-    if config.window_size is None:
-        _check_packed(
-            "sdpa_nested",
+            implementation,
+            config,
+            hidden_dim,
+            lengths,
+            attention,
             distributed_config_bf16,
             distributed_bf16,
             hidden_states_bf16,
