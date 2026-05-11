@@ -10,7 +10,12 @@ from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.utils import wrap_forward_backward
-from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
+from fast_llm.layers.attention.config import (
+    _FLASH_MAX_HEAD_SIZE,
+    AttentionConfig,
+    AttentionImplementation,
+    AttentionKwargs,
+)
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
@@ -79,12 +84,13 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             peft=peft,
             return_bias=return_bias,
         )
+        # Two-stage resolution so callers can set `implementation=sdpa` to get the auto-picked SDPA flavor.
         self._implementation = self._config.implementation
         if self._implementation == AttentionImplementation.auto:
             if (
                 _flash_available
                 and self._distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
-                and self._config.head_size <= 256
+                and self._config.head_size <= _FLASH_MAX_HEAD_SIZE
             ):
                 self._implementation = AttentionImplementation.flash
             else:
@@ -270,8 +276,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
     def _attn_sdpa(
         self,
         query: torch.Tensor,  # total_q, heads, head_size
-        key: torch.Tensor,  # total_k, head_groups, head_size
-        value: torch.Tensor,  # total_k, head_groups, head_size
+        key: torch.Tensor,  # total_k, head_groups, head_size (pre-GQA-expansion)
+        value: torch.Tensor,  # total_k, head_groups, head_size (pre-GQA-expansion)
         kwargs: dict[str, typing.Any],
     ) -> torch.Tensor:  # total_q, heads, head_size
         # SDPA's fused kernels require Q/K/V to share heads, so we expand K/V across query heads.
@@ -291,6 +297,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # is structural and EFFICIENT skips materializing the attention mask. The dispatch
             # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
             # explicitly keeps the path sync-free.
+            # `nested_tensor_from_jagged` requires int64 offsets.
             cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
             cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
             query = torch.nested.nested_tensor_from_jagged(

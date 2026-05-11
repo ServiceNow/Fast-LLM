@@ -37,6 +37,9 @@ class AttentionKwargs(MixerKwargs):
     past_key_values = "past_key_values"
 
 
+_FLASH_MAX_HEAD_SIZE = 256
+
+
 class AttentionImplementation(enum.StrEnum):
     auto = "auto"
     flash = "flash"
@@ -161,7 +164,7 @@ class AttentionConfig(MixerConfig):
             assert self.window_size is None, "Non-causal windowed attention is not supported."
 
         if self.implementation == AttentionImplementation.flash:
-            Assert.leq(self.head_size, 256)
+            Assert.leq(self.head_size, _FLASH_MAX_HEAD_SIZE)
 
         if self.implementation == AttentionImplementation.sdpa_nested:
             assert (
