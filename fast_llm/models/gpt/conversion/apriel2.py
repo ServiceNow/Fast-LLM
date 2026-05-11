@@ -45,7 +45,7 @@ from fast_llm.models.gpt.conversion.llama import (
     get_weight_and_bias_converters,
 )
 from fast_llm.models.gpt.model import GPTModel
-from fast_llm.utils import safe_merge_dicts
+from fast_llm.utils import Assert, safe_merge_dicts
 
 # ============================================================
 # Helpers
@@ -754,6 +754,13 @@ class Apriel2BlockConverter(ConfigSectionConverter):
             ),
         }
 
+    @classmethod
+    def _validate_export(cls, config: DecoderBlockConfig) -> None:
+        # Apriel2 HF format only represents plain MLP. ``NestedConfigConverter`` dispatches by fixed class
+        # (``Apriel2MLPConverter`` registered against ``MLPConfig``) and would silently descend into a
+        # ``MoEMLPConfig`` via MRO, dropping every MoE-specific architecture field.
+        Assert.is_(type(config.mlp), MLPConfig)
+
     # --- weight side (imperative) ---
 
     @classmethod
@@ -898,7 +905,9 @@ class Apriel2HeadConverter(ConfigSectionConverter):
                 registry=APRIEL2_NORM_REGISTRY,
             ),
             "output_weight": IgnoredConfigConverter(("output_weight",)),
-            "prediction_heads": IgnoredConfigConverter(("prediction_heads",)),
+            # Apriel2 HF format does not support multi-token prediction; pin to 1 so any non-default value
+            # fails on export instead of silently round-tripping.
+            "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
         }
 
     # --- weight side (imperative) ---
@@ -944,11 +953,13 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
             "peft": IgnoredConfigConverter(("peft",)),
-            # ``Apriel2TextConfig`` default-injects an ``embeddings`` HF subdict
-            # (``{"max_position_embeddings": 2048}``) the Fast-LLM converter doesn't use — vocab_size
-            # rides at top level via the flat-merged ``LlamaEmbeddingsConverter``. Claim the injected
-            # subdict so the HF coverage check doesn't flag it.
-            "embeddings_subdict_unmapped": IgnoredConfigConverter(hf_paths=(("embeddings",),)),
+            # ``Apriel2TextConfig`` default-injects ``{"embeddings": {"max_position_embeddings": 2048}}``
+            # the Fast-LLM converter doesn't use — vocab_size rides at top level via the flat-merged
+            # ``LlamaEmbeddingsConverter``. Claim only the specific injected leaf so any future field
+            # transformers adds to the same subdict trips the HF coverage check.
+            "embeddings_subdict_unmapped": IgnoredConfigConverter(
+                hf_paths=(("embeddings", "max_position_embeddings"),)
+            ),
         }
 
     @classmethod

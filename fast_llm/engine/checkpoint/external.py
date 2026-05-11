@@ -500,7 +500,9 @@ class ConfigSectionConverter(abc.ABC):
     def _create_config_converters(cls) -> dict[str, ConfigConverter]:
         """Return declarations keyed by stable string name. Subclasses override entries by re-declaring the key.
 
-        Cached per class — declarations are immutable and depend only on ``cls``.
+        Cached per class — declarations are immutable and depend only on ``cls``. Subclasses must build
+        and return a *fresh* dict (idiomatically ``{**super()._create_config_converters(), ...}``); mutating
+        the returned dict in place would corrupt the parent's cache entry for every subsequent caller.
         """
         raise NotImplementedError
 
@@ -535,31 +537,47 @@ class ConfigSectionConverter(abc.ABC):
     @classmethod
     @functools.cache
     def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
-        """Set of HF dict path prefixes consumed by this section's declaration tree.
+        """Set of HF dict paths consumed by this section's declaration tree.
 
-        Each entry is a tuple-of-keys from the section's HF subdict root. The
-        :meth:`check_hf_coverage` walker treats every entry as a *recursive prefix* — once an input
-        path matches any prefix, descent into deeper sub-dicts stops.
+        Each entry is a tuple-of-keys from the section's HF subdict root. The :meth:`check_hf_coverage`
+        walker treats every entry as a *recursive prefix* — once an input path matches any prefix,
+        descent into deeper sub-dicts stops.
 
-        Recurses through:
-        * :class:`NestedConfigConverter` with ``hf_path=None`` (flat-merge): the sub-converter shares
-          the parent's HF namespace, so its claims are pulled up to this level.
-        * :class:`DispatchConfigConverter` with ``hf_paths=()`` (flat-merge): every registered class
-          contributes its claims at this level (the union covers all possible runtime types).
-        Otherwise the primitive's own ``hf_paths`` are used.
+        Nested sub-converters (``NestedConfigConverter``/``DispatchConfigConverter`` with ``hf_path``
+        set) expand their sub-converter's claims under the nested prefix instead of contributing the
+        bare prefix, so the walker descends into the subdict and flags unknown keys inside it (e.g.
+        ``head.normalization.surprise_field``).
+
+        :class:`TypedDictContainerConfigConverter` keeps a blanket prefix because its per-entry sub-dicts
+        are user-named (pattern keys); we can't statically enumerate which entries will appear or what
+        keys those entries should claim.
         """
         paths: set[tuple[str, ...]] = set()
         for declaration in cls._create_config_converters().values():
             if isinstance(declaration, NestedConfigConverter):
+                sub_class = declaration._converter_class
                 if declaration._hf_path is None:
-                    paths |= declaration._converter_class._consumed_hf_paths()
-                    if declaration._converter_class.hf_type_name is not None:
+                    # Flat-merge: sub-converter shares the parent's HF namespace.
+                    paths |= sub_class._consumed_hf_paths()
+                    if sub_class.hf_type_name is not None:
                         paths.add((declaration._hf_discriminator_key,))
                 else:
-                    paths.add(declaration._hf_path)
+                    # Nested: prepend hf_path to each sub-claim so the walker recurses into the subdict.
+                    prefix = declaration._hf_path
+                    for sub_path in sub_class._consumed_hf_paths():
+                        paths.add(prefix + sub_path)
+                    if sub_class.hf_type_name is not None:
+                        paths.add(prefix + (declaration._hf_discriminator_key,))
             elif isinstance(declaration, DispatchConfigConverter):
                 if declaration.hf_paths:
-                    paths.add(declaration.hf_paths[0])
+                    # Nested dispatch: union of all registered sub-classes' claims under the shared
+                    # hf_path prefix. At runtime only one sub-class fires; the static union is a safe
+                    # over-claim (we only need to *not* flag known keys, never to flag missing ones).
+                    prefix = declaration.hf_paths[0]
+                    paths.add(prefix + (declaration._hf_discriminator_key,))
+                    for sub_class in declaration._registry.values():
+                        for sub_path in sub_class._consumed_hf_paths():
+                            paths.add(prefix + sub_path)
                 else:
                     paths.add((declaration._hf_discriminator_key,))
                     for sub_class in declaration._registry.values():

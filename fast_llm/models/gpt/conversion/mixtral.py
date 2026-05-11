@@ -34,7 +34,11 @@ class MixtralMLPConverter(LlamaMLPConverter):
             # Mixtral has no shared experts and uses the topk default; assert on export, inject defaults on import.
             "shared_experts": ConstantImportConfigConverter(("shared_experts",), 0),
             "routing": ConstantImportConfigConverter(("routing",), RoutingType.topk),
-            # Mixtral's gate is a default LinearConfig (no bias); blanket-consume so coverage passes.
+            # Mixtral has no HF representation for the router sub-config. The blanket consume satisfies
+            # architecture coverage; non-architecture fields (lr_scale, apply_peft, weight.initialization,
+            # weight.lr_scale) cannot round-trip through the HF format by design — Fast-LLM keeps them on
+            # the in-memory config independently. The only architecture-hint sub-field is ``router.weight``,
+            # a ParameterConfig with no architecture sub-fields, so the blanket carries no real risk.
             "router": IgnoredConfigConverter(("router",)),
             # Router / inference toggles surfaced by HF but not consumed by Fast-LLM's MoEMLPConfig
             # (auxiliary_loss_coefficient and jitter_eps are FieldHint.feature, not architecture).

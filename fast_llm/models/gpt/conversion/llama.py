@@ -568,10 +568,11 @@ class LlamaHeadConverter(ConfigSectionConverter):
         return {
             "normalization": NestedConfigConverter(("normalization",), cls.normalization_converter_class),
             "output_weight": IgnoredConfigConverter(("output_weight",)),
-            # ``prediction_heads`` is architecture (>1 enables multi-token prediction); Llama HF format does
-            # not represent it. We don't pin it to 1 here so MTP-Llama (a Llama-derived format) can override
-            # the declaration with a Rename without first hitting an assertion in the inherited path.
-            "prediction_heads": IgnoredConfigConverter(("prediction_heads",)),
+            # Llama HF format does not represent ``prediction_heads``; pin to 1 so any non-default value
+            # fails on export instead of silently round-tripping. MTP-Llama overrides this entry with a
+            # ``RenameConfigConverter`` (the override replaces the parent's declaration in the returned
+            # dict, so this ConstantImport never fires for MTP-Llama configs).
+            "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
         }
 
     # --- weight side (imperative) ---
