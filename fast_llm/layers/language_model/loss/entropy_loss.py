@@ -112,10 +112,14 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             divisor=self._get_label_count(kwargs),
         )
 
+        del student_flat, teacher_flat
+
         if grad_flat is not None:
             if grad_logits is None:
                 grad_logits = torch.zeros_like(logits)
-            grad_logits[student_mask_chunk] += grad_flat
+
+            mask_indices = student_mask_chunk.nonzero().squeeze(-1)
+            grad_logits.index_add_(0, mask_indices, grad_flat)
 
         return loss, grad_logits
 
