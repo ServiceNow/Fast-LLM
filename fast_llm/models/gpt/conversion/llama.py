@@ -288,6 +288,7 @@ class LlamaMLPConverter(ConfigSectionConverter):
             "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("mlp_bias",)),
             "activation": CustomConfigConverter(
                 fast_llm_paths=(("activation",),),
+                hf_paths=(("hidden_act",),),
                 export_fn=lambda c: {("hidden_act",): c.activation.hf_name},
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["hidden_act"])},
             ),
@@ -362,6 +363,7 @@ class LlamaAttentionConverter(ConfigSectionConverter):
             ),
             "rotary": CustomConfigConverter(
                 fast_llm_paths=(("rotary",),),
+                hf_paths=(("rope_theta",), ("rope_scaling",), ("rope_parameters",)),
                 export_fn=_llama_rotary_export,
                 import_fn=_llama_rotary_import,
                 recurses=True,
@@ -620,6 +622,15 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
             "head": NestedConfigConverter(("head",), cls.head_converter_class),
             "decoder": CustomConfigConverter(
                 fast_llm_paths=(("decoder",),),
+                # The Custom wraps the imperative LlamaDecoderConverter, which delegates to
+                # cls.decoder_converter_class.block_converter_class (a ConfigSectionConverter). The
+                # block converter's flat-merge declarations claim all per-block top-level keys; pull
+                # them up here so the HF coverage check sees them as covered. ``num_hidden_layers``
+                # is consumed by LlamaDecoderConverter itself.
+                hf_paths=(
+                    ("num_hidden_layers",),
+                    *cls.decoder_converter_class.block_converter_class._consumed_hf_paths(),
+                ),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
                 recurses=True,

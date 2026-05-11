@@ -60,6 +60,7 @@ class AprielMambaConverter(ConfigSectionConverter):
             ),
             "dt_rank": CustomConfigConverter(
                 fast_llm_paths=(("dt_rank",),),
+                hf_paths=(("ssm_cfg", "dt_rank"),),
                 export_fn=lambda c: {("ssm_cfg", "dt_rank"): c.dt_rank},
                 import_fn=lambda hf: {
                     ("dt_rank",): (
@@ -77,6 +78,7 @@ class AprielMambaConverter(ConfigSectionConverter):
             ),
             "convolution_layer_bias": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("convolution_layer", "bias")),
+                hf_paths=(("ssm_cfg", "conv_bias"),),
                 export_fn=lambda c: {
                     ("ssm_cfg", "conv_bias"): effective_bias(c.convolution_layer, c.add_linear_biases)
                 },
@@ -93,6 +95,7 @@ class AprielMambaConverter(ConfigSectionConverter):
             ),
             "dt_layer_bias": CustomConfigConverter(
                 fast_llm_paths=(("dt_layer",), ("dt_layer", "bias")),
+                hf_paths=(("ssm_cfg", "dt_proj_bias"),),
                 export_fn=lambda c: {("ssm_cfg", "dt_proj_bias"): effective_bias(c.dt_layer, c.add_linear_biases)},
                 import_fn=lambda hf: {
                     ("dt_layer", "bias", "enabled"): hf.get("ssm_cfg", {}).get("dt_proj_bias", True)
@@ -196,6 +199,7 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("linear_attn_config", "gdn_value_head_dim")),
             "convolution_layer_kernel": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                hf_paths=(("linear_attn_config", "gdn_linear_conv_kernel_size"),),
                 export_fn=lambda c: {
                     ("linear_attn_config", "gdn_linear_conv_kernel_size"): c.convolution_layer.kernel_size
                 },
@@ -287,6 +291,7 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
             "heads": RenameConfigConverter(("heads",), ("linear_attn_config", "num_heads")),
             "convolution_layer_kernel": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                hf_paths=(("linear_attn_config", "short_conv_kernel_size"),),
                 export_fn=lambda c: {
                     ("linear_attn_config", "short_conv_kernel_size"): c.convolution_layer.kernel_size
                 },
@@ -461,6 +466,15 @@ class AprielBlockConverter:
     @classmethod
     def export_config(cls, config) -> dict:
         return cls._converter_classes[type(config.mixer)].export_config(config)
+
+    @classmethod
+    def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
+        """Union of consumed HF paths across every per-mixer-type block converter — used by the parent's
+        decoder Custom to pre-claim Apriel's flat top-level keys for the HF coverage check."""
+        paths: set[tuple[str, ...]] = set()
+        for sub in cls._converter_classes.values():
+            paths |= sub._consumed_hf_paths()
+        return frozenset(paths)
 
     @classmethod
     def get_converters(

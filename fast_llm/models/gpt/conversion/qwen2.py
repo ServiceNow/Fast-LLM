@@ -3,6 +3,7 @@ import typing
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantImportConfigConverter,
+    IgnoredConfigConverter,
     ImportOnlyConfigConverter,
     WeightConverter,
 )
@@ -49,6 +50,10 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
                     ("dense_layer",): {"bias": {"enabled": False}},
                 },
                 recurses=True,
+            ),
+            # Sliding-window machinery surfaced by Qwen2 HF but not yet supported here (see TODO above).
+            "sliding_window_unsupported": IgnoredConfigConverter(
+                hf_paths=(("sliding_window",), ("use_sliding_window",), ("max_window_layers",), ("layer_types",)),
             ),
         }
 

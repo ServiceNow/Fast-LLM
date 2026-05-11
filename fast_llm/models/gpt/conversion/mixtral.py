@@ -36,6 +36,11 @@ class MixtralMLPConverter(LlamaMLPConverter):
             "routing": ConstantImportConfigConverter(("routing",), RoutingType.topk),
             # Mixtral's gate is a default LinearConfig (no bias); blanket-consume so coverage passes.
             "router": IgnoredConfigConverter(("router",)),
+            # Router / inference toggles surfaced by HF but not consumed by Fast-LLM's MoEMLPConfig
+            # (auxiliary_loss_coefficient and jitter_eps are FieldHint.feature, not architecture).
+            "router_runtime_unsupported": IgnoredConfigConverter(
+                hf_paths=(("router_aux_loss_coef",), ("router_jitter_noise",), ("output_router_logits",)),
+            ),
         }
 
     @classmethod

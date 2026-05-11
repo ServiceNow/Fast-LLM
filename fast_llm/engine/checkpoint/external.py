@@ -203,19 +203,20 @@ class OptionalConfigConverter(ConfigConverter):
 
 
 class IgnoredConfigConverter(ConfigConverter):
-    """Declares Fast-LLM architecture fields as intentionally not converted by this format.
+    """Declares Fast-LLM architecture fields and/or HF dict keys as intentionally not converted by this format.
 
-    Use when the HF format has no representation for the field and the Fast-LLM default round-trips correctly.
-    Acts as a no-op on both directions while satisfying the architecture-coverage check. The claim covers the
-    entire subtree under each listed path: deeper architecture fields are also implicitly ignored, on the
-    assumption that a format which does not represent the parent likewise does not represent its children.
+    Use ``fast_llm_paths`` (positional) when Fast-LLM has architecture fields with no HF representation; the
+    Fast-LLM default round-trips. Use ``hf_paths`` (kw-only) when the HF format carries fields Fast-LLM does
+    not consume (generation-only toggles like Mixtral's ``router_aux_loss_coef``, Qwen2's ``sliding_window``).
+    Both kinds of claim are no-ops at conversion time and serve only the per-side coverage checks. The claim
+    covers the entire subtree under each listed path on the side it applies to.
     """
 
     recurses: typing.ClassVar[bool] = True
 
-    def __init__(self, *fast_llm_paths: tuple[str, ...]):
+    def __init__(self, *fast_llm_paths: tuple[str, ...], hf_paths: tuple[tuple[str, ...], ...] = ()):
         self.fast_llm_paths = fast_llm_paths
-        self.hf_paths = ()
+        self.hf_paths = hf_paths
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         return
@@ -227,8 +228,7 @@ class IgnoredConfigConverter(ConfigConverter):
 class CustomConfigConverter(ConfigConverter):
     """Escape hatch for cross-field transforms (e.g., rotary, where one HF blob ↔ several Fast-LLM fields).
 
-    ``fast_llm_paths`` is declared so the coverage check sees the fields as consumed. The HF side is intentionally
-    not declared — there is no symmetric HF-side coverage check yet, so an ``hf_paths`` argument would be cosmetic.
+    ``fast_llm_paths`` and ``hf_paths`` are declared so the per-side coverage checks see the fields as consumed.
     Cross-field validators that produce nothing on the HF side belong on :py:meth:`ConfigSectionConverter._validate_export`
     instead; this primitive is for shape-changing transforms.
 
@@ -243,9 +243,11 @@ class CustomConfigConverter(ConfigConverter):
         fast_llm_paths: tuple[tuple[str, ...], ...],
         export_fn: typing.Callable[[Config], dict],
         import_fn: typing.Callable[[dict], dict],
+        hf_paths: tuple[tuple[str, ...], ...] = (),
         recurses: bool = False,
     ):
         self.fast_llm_paths = fast_llm_paths
+        self.hf_paths = hf_paths
         self._export_fn = export_fn
         self._import_fn = import_fn
         self.recurses = recurses
@@ -268,8 +270,8 @@ class ImportOnlyConfigConverter(ConfigConverter):
     ``hidden_size // num_attention_heads`` in Qwen2) or implies a value the Fast-LLM side stores
     explicitly (e.g. Qwen2's hardcoded Q/K/V biases, Pixtral's mirrored ``patch_size`` ↔ ``patch_width``).
     On export the field is redundant and validated through ``_validate_export``; on import the
-    ``import_fn`` produces the Fast-LLM dict entries. The fast_llm_paths still register as consumed
-    for the architecture-coverage check.
+    ``import_fn`` produces the Fast-LLM dict entries. The fast_llm_paths register as consumed for the
+    architecture-coverage check; ``hf_paths`` register as consumed for the HF-side check.
 
     Pass ``recurses=True`` when the converter populates a sub-config subtree (e.g. Qwen2's per-layer
     biases that target ``query_layer``/``key_layer``/...). Same trade-off as
@@ -281,9 +283,11 @@ class ImportOnlyConfigConverter(ConfigConverter):
         self,
         fast_llm_paths: tuple[tuple[str, ...], ...],
         import_fn: typing.Callable[[dict], dict],
+        hf_paths: tuple[tuple[str, ...], ...] = (),
         recurses: bool = False,
     ):
         self.fast_llm_paths = fast_llm_paths
+        self.hf_paths = hf_paths
         self._import_fn = import_fn
         self.recurses = recurses
 
@@ -527,6 +531,78 @@ class ConfigSectionConverter(abc.ABC):
         for converter in cls._create_config_converters().values():
             converter.import_to(hf_dict, out)
         return out
+
+    @classmethod
+    @functools.cache
+    def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
+        """Set of HF dict path prefixes consumed by this section's declaration tree.
+
+        Each entry is a tuple-of-keys from the section's HF subdict root. The
+        :meth:`check_hf_coverage` walker treats every entry as a *recursive prefix* — once an input
+        path matches any prefix, descent into deeper sub-dicts stops.
+
+        Recurses through:
+        * :class:`NestedConfigConverter` with ``hf_path=None`` (flat-merge): the sub-converter shares
+          the parent's HF namespace, so its claims are pulled up to this level.
+        * :class:`DispatchConfigConverter` with ``hf_paths=()`` (flat-merge): every registered class
+          contributes its claims at this level (the union covers all possible runtime types).
+        Otherwise the primitive's own ``hf_paths`` are used.
+        """
+        paths: set[tuple[str, ...]] = set()
+        for declaration in cls._create_config_converters().values():
+            if isinstance(declaration, NestedConfigConverter):
+                if declaration._hf_path is None:
+                    paths |= declaration._converter_class._consumed_hf_paths()
+                    if declaration._converter_class.hf_type_name is not None:
+                        paths.add((declaration._hf_discriminator_key,))
+                else:
+                    paths.add(declaration._hf_path)
+            elif isinstance(declaration, DispatchConfigConverter):
+                if declaration.hf_paths:
+                    paths.add(declaration.hf_paths[0])
+                else:
+                    paths.add((declaration._hf_discriminator_key,))
+                    for sub_class in declaration._registry.values():
+                        paths |= sub_class._consumed_hf_paths()
+            elif isinstance(declaration, TypedDictContainerConfigConverter):
+                paths.add(declaration.hf_paths[0])
+            else:
+                for path in declaration.hf_paths:
+                    if path:
+                        paths.add(path)
+        return frozenset(paths)
+
+    @classmethod
+    def check_hf_coverage(cls, hf_dict: dict, *, allowlist: frozenset[str] = frozenset()) -> None:
+        """Raise :class:`ValueError` if the input HF dict carries keys not consumed by any declaration.
+
+        Walks ``hf_dict`` recursively. A path is considered covered if it (or any of its prefixes) is in
+        :meth:`_consumed_hf_paths`, or — for top-level keys — appears in ``allowlist``. Uncovered leaves
+        raise; uncovered sub-dicts trigger descent into their entries to surface the offending leaf path.
+
+        Catches transformers-version drift, manual edits, and corrupted configs at the import boundary —
+        the symmetric counterpart to the architecture-coverage check (which is statically verified by
+        ``tests/models/test_converters.py``).
+        """
+        prefixes = cls._consumed_hf_paths()
+
+        def walk(value: typing.Any, path: tuple[str, ...]) -> None:
+            for length in range(1, len(path) + 1):
+                if path[:length] in prefixes:
+                    return
+            if len(path) == 1 and path[0] in allowlist:
+                return
+            if isinstance(value, dict):
+                for key, sub in value.items():
+                    walk(sub, path + (key,))
+                return
+            raise ValueError(
+                f"{cls.__name__}: HF config has unknown key '{'.'.join(path)}' (value: {value!r}). "
+                "Possible transformers-version mismatch, manual edit, or corrupted config."
+            )
+
+        for key, value in hf_dict.items():
+            walk(value, (key,))
 
     @classmethod
     def check_architecture_coverage(cls, config: Config) -> None:

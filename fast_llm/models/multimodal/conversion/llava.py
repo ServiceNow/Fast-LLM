@@ -85,6 +85,7 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
             # layout follows the active transformers major version, mirroring the Llama parent.
             "rotary": CustomConfigConverter(
                 fast_llm_paths=(("rotary",),),
+                hf_paths=(("rope_theta",), ("rope_parameters",)),
                 export_fn=_pixtral_rotary_export,
                 import_fn=_pixtral_rotary_import,
                 recurses=True,

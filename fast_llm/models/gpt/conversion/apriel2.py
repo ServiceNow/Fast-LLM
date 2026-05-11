@@ -132,6 +132,7 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
             "head_size": RenameConfigConverter(("head_size",), ("head_size",)),
             "rotary": CustomConfigConverter(
                 fast_llm_paths=(("rotary",),),
+                hf_paths=(("rotary",),),
                 export_fn=_apriel2_attention_rotary_export,
                 import_fn=_apriel2_attention_rotary_import,
                 recurses=True,
@@ -143,6 +144,7 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
             "window_size": OptionalConfigConverter(("window_size",), ("window_size",)),
             "linear_layers": CustomConfigConverter(
                 fast_llm_paths=tuple((name,) for name in layer_names),
+                hf_paths=tuple((name,) for name in layer_names),
                 export_fn=lambda c: _per_layer_bias_export(c, layer_names),
                 import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
                 recurses=True,
@@ -231,6 +233,7 @@ class Apriel2MambaConverter(ConfigSectionConverter):
             "dt_rank": RenameConfigConverter(("dt_rank",), ("dt_rank",)),
             "aux": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("dt_layer",)),
+                hf_paths=(("d_conv",), ("conv_bias",), ("dt_proj_bias",)),
                 export_fn=_apriel2_mamba_aux_export,
                 import_fn=_apriel2_mamba_aux_import,
                 recurses=True,
@@ -316,6 +319,7 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("value_head_dim",)),
             "convolution_layer_kernel": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                hf_paths=(("convolution_layer",),),
                 export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
                 import_fn=lambda hf: (
                     {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
@@ -404,6 +408,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
             "head_dim": RenameConfigConverter(("head_dim",), ("head_dim",)),
             "convolution_layer_kernel": CustomConfigConverter(
                 fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+                hf_paths=(("convolution_layer",),),
                 export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
                 import_fn=lambda hf: (
                     {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
@@ -417,6 +422,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
             ),
             "normalization_epsilon": CustomConfigConverter(
                 fast_llm_paths=(("normalization",), ("normalization", "epsilon")),
+                hf_paths=(("normalization",),),
                 export_fn=lambda c: {("normalization",): {"epsilon": c.normalization.epsilon}},
                 import_fn=lambda hf: ({("normalization",): hf["normalization"]} if "normalization" in hf else {}),
             ),
@@ -671,11 +677,13 @@ class Apriel2MLPConverter(ConfigSectionConverter):
             "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
             "activation": CustomConfigConverter(
                 fast_llm_paths=(("activation",),),
+                hf_paths=(("activation",),),
                 export_fn=lambda c: {("activation",): c.activation.hf_name},
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
             ),
             "layers": CustomConfigConverter(
                 fast_llm_paths=tuple((name,) for name in layer_names),
+                hf_paths=tuple((name,) for name in layer_names),
                 export_fn=lambda c: _per_layer_bias_export(c, layer_names),
                 import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
                 recurses=True,
@@ -936,6 +944,11 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
             "peft": IgnoredConfigConverter(("peft",)),
+            # ``Apriel2TextConfig`` default-injects an ``embeddings`` HF subdict
+            # (``{"max_position_embeddings": 2048}``) the Fast-LLM converter doesn't use — vocab_size
+            # rides at top level via the flat-merged ``LlamaEmbeddingsConverter``. Claim the injected
+            # subdict so the HF coverage check doesn't flag it.
+            "embeddings_subdict_unmapped": IgnoredConfigConverter(hf_paths=(("embeddings",),)),
         }
 
     @classmethod
@@ -996,6 +1009,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        cls._check_hf_coverage(config)
         return {"base_model": cls.base_model_converter_class.import_config(config)}
 
     @classmethod
