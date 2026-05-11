@@ -87,7 +87,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 and self._config.head_size <= 256
             ):
                 self._implementation = AttentionImplementation.flash
-            elif self._distributed_config.use_cuda and self._config.window_size is None:
+            else:
+                self._implementation = AttentionImplementation.sdpa
+        if self._implementation == AttentionImplementation.sdpa:
+            if self._distributed_config.use_cuda and self._config.window_size is None:
                 self._implementation = AttentionImplementation.sdpa_nested
             else:
                 self._implementation = AttentionImplementation.sdpa_dense
@@ -272,6 +275,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         kwargs: dict[str, typing.Any],
     ) -> torch.Tensor:  # total_q, heads, head_size
         # SDPA's fused kernels require Q/K/V to share heads, so we expand K/V across query heads.
+        # `enable_gqa=True` would handle this internally, but it forces a fallback to the MATH
+        # backend (which materializes the O(S^2) attention matrix) and is unsupported by the
+        # nested-jagged path entirely; manual `repeat_interleave` keeps EFFICIENT in play.
         if self._local_heads_per_group > 1:
             key = key.repeat_interleave(self._local_heads_per_group, dim=1)
             value = value.repeat_interleave(self._local_heads_per_group, dim=1)
@@ -310,13 +316,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
             # nested + is_causal) and on CUDA with sliding window (the nested path can't express
             # it). Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
-            attention_mask = kwargs[AttentionKwargs.attention_mask]
-            if attention_mask is not None:
-                attention_mask = attention_mask.transpose(1, 2)
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
-            sdpa_args["attn_mask"] = attention_mask
+            sdpa_args["attn_mask"] = kwargs[AttentionKwargs.attention_mask].transpose(1, 2)
 
         output = torch.nn.functional.scaled_dot_product_attention(
             query.transpose(1, 2),

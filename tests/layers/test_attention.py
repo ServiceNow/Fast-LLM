@@ -386,6 +386,7 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         distributed_check: Distributed,
         hidden_states_check: torch.Tensor,
         out_ref_check: torch.Tensor,
+        grads_ref_check: list[torch.Tensor],
         rtol: float,
     ) -> None:
         attention_impl: Attention = config.get_attention_config(implementation).get_layer(
@@ -405,16 +406,19 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         )
         kwargs_impl = model_input.to_kwargs()
         attention_impl.preprocess(kwargs_impl)
-        out_impl, _ = stage_impl.forward(hidden_states_check, kwargs_impl)
+        out_impl, context = stage_impl.forward(hidden_states_check, kwargs_impl)
+        stage_impl.backward(torch.ones_like(out_impl), context)
         Assert.rms_close_relative(out_impl, out_ref_check, rtol, 1e-7)
+        for param_impl, grad_ref in zip(attention_impl.parameters(), grads_ref_check, strict=True):
+            Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, rtol, 1e-7, msg=implementation)
 
     # SDPA-dense equivalence check: sdpa_dense reuses backup's mask, so its packed fp32 output
-    # must match the per-sequence backup reference. This is the only SDPA branch that runs on CPU
-    # (sdpa_nested needs CUDA), so the check is unconditional rather than CUDA-gated.
-    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states.detach(), out_ref, 1e-5)
+    # and parameter gradients must match the per-sequence backup reference. This is the only SDPA
+    # branch that runs on CPU (sdpa_nested needs CUDA), so the check is unconditional.
+    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states, out_ref, grads_ref, 1e-5)
 
-    # Flash and SDPA-nested equivalence checks: each implementation's packed bfloat16 output must
-    # match a per-sequence bfloat16 backup reference.
+    # Flash and SDPA-nested equivalence checks: each implementation's packed bfloat16 output and
+    # parameter gradients must match a per-sequence bfloat16 backup reference.
     if not torch.cuda.is_available():
         return
 
@@ -430,18 +434,23 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
 
     hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16)
     out_ref_bf16 = _run_per_seq_reference(
-        attention_backup_bf16,
-        stage_backup_bf16,
-        distributed_config_bf16,
-        hidden_states_bf16,
-        lengths,
-        device,
-        with_backward=False,
+        attention_backup_bf16, stage_backup_bf16, distributed_config_bf16, hidden_states_bf16, lengths, device
     )
+    grads_ref_bf16 = [param.grad_buffer.clone() for param in attention_backup_bf16.parameters()]
 
     if _flash_available and config.head_size <= 256:
-        _check_packed("flash", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, 5e-3)
-    _check_packed("sdpa_nested", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, 5e-3)
+        _check_packed(
+            "flash", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, grads_ref_bf16, 5e-3
+        )
+    _check_packed(
+        "sdpa_nested",
+        distributed_config_bf16,
+        distributed_bf16,
+        hidden_states_bf16,
+        out_ref_bf16,
+        grads_ref_bf16,
+        5e-3,
+    )
 
 
 @pytest.mark.slow
