@@ -163,6 +163,11 @@ class AttentionConfig(MixerConfig):
         if self.implementation == AttentionImplementation.flash:
             Assert.leq(self.head_size, 256)
 
+        if self.implementation == AttentionImplementation.sdpa_nested:
+            assert (
+                self.window_size is None
+            ), "`sdpa_nested` does not support sliding window; use `sdpa` or `sdpa_dense`."
+
     @property
     def layer_class(self) -> "type[Attention]":
         from fast_llm.layers.attention.attention import Attention

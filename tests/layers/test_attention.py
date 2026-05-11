@@ -387,7 +387,8 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         hidden_states_check: torch.Tensor,
         out_ref_check: torch.Tensor,
         grads_ref_check: list[torch.Tensor],
-        rtol: float,
+        out_rtol: float,
+        grad_rtol: float,
     ) -> None:
         attention_impl: Attention = config.get_attention_config(implementation).get_layer(
             distributed_config_check, hidden_dim, lr_scale=None, peft=None, return_bias=False
@@ -408,17 +409,19 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         attention_impl.preprocess(kwargs_impl)
         out_impl, context = stage_impl.forward(hidden_states_check, kwargs_impl)
         stage_impl.backward(torch.ones_like(out_impl), context)
-        Assert.rms_close_relative(out_impl, out_ref_check, rtol, 1e-7)
+        Assert.rms_close_relative(out_impl, out_ref_check, out_rtol, 1e-7)
         for param_impl, grad_ref in zip(attention_impl.parameters(), grads_ref_check, strict=True):
-            Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, rtol, 1e-7, msg=implementation)
+            Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, grad_rtol, 1e-7, msg=implementation)
 
     # SDPA-dense equivalence check: sdpa_dense reuses backup's mask, so its packed fp32 output
     # and parameter gradients must match the per-sequence backup reference. This is the only SDPA
     # branch that runs on CPU (sdpa_nested needs CUDA), so the check is unconditional.
-    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states, out_ref, grads_ref, 1e-5)
+    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states, out_ref, grads_ref, 1e-5, 1e-5)
 
-    # Flash and SDPA-nested equivalence checks: each implementation's packed bfloat16 output and
-    # parameter gradients must match a per-sequence bfloat16 backup reference.
+    # Flash and SDPA equivalence checks: each implementation's packed bfloat16 output and parameter
+    # gradients must match a per-sequence bfloat16 backup reference. Backward grad tolerance is
+    # looser than forward — bf16 reduction-order noise compounds through the backward pass, and
+    # the same-kernel sdpa_dense path itself diverges from per-seq backup by ~7e-3 at bf16.
     if not torch.cuda.is_available():
         return
 
@@ -432,25 +435,44 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     for param_bf16, param_f32 in zip(attention_backup_bf16.parameters(), attention.parameters(), strict=True):
         param_bf16.data.copy_(param_f32.data)
 
-    hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16)
+    hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16).requires_grad_()
     out_ref_bf16 = _run_per_seq_reference(
         attention_backup_bf16, stage_backup_bf16, distributed_config_bf16, hidden_states_bf16, lengths, device
     )
     grads_ref_bf16 = [param.grad_buffer.clone() for param in attention_backup_bf16.parameters()]
 
-    if _flash_available and config.head_size <= 256:
-        _check_packed(
-            "flash", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, grads_ref_bf16, 5e-3
-        )
     _check_packed(
-        "sdpa_nested",
+        "sdpa_dense",
         distributed_config_bf16,
         distributed_bf16,
         hidden_states_bf16,
         out_ref_bf16,
         grads_ref_bf16,
         5e-3,
+        1.5e-2,
     )
+    if _flash_available and config.head_size <= 256:
+        _check_packed(
+            "flash",
+            distributed_config_bf16,
+            distributed_bf16,
+            hidden_states_bf16,
+            out_ref_bf16,
+            grads_ref_bf16,
+            5e-3,
+            1.5e-2,
+        )
+    if config.window_size is None:
+        _check_packed(
+            "sdpa_nested",
+            distributed_config_bf16,
+            distributed_bf16,
+            hidden_states_bf16,
+            out_ref_bf16,
+            grads_ref_bf16,
+            5e-3,
+            1.5e-2,
+        )
 
 
 @pytest.mark.slow
