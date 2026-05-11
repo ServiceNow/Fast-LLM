@@ -380,7 +380,40 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         Assert.rms_close_relative(param.grad_buffer, grad_ref, 1e-5, 1e-7, msg=name)
     stage.reset_gradients()
 
-    # Flash and SDPA equivalence checks: each implementation's packed bfloat16 output must
+    def _check_packed(
+        implementation: str,
+        distributed_config_check: DistributedConfig,
+        distributed_check: Distributed,
+        hidden_states_check: torch.Tensor,
+        out_ref_check: torch.Tensor,
+        rtol: float,
+    ) -> None:
+        attention_impl: Attention = config.get_attention_config(implementation).get_layer(
+            distributed_config_check, hidden_dim, lr_scale=None, peft=None, return_bias=False
+        )
+        stage_impl = get_stage([attention_impl], distributed_check)
+        for param_impl, param_f32 in zip(attention_impl.parameters(), attention.parameters(), strict=True):
+            param_impl.data.copy_(param_f32.data)
+        (model_input,) = LanguageModelBatch(
+            tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
+        ).get_model_inputs(
+            LanguageModelBatchPreprocessingConfig(
+                distributed=distributed_config_check,
+                predicted_tokens=0,
+                **attention_impl.get_preprocessing_config(),
+            )
+        )
+        kwargs_impl = model_input.to_kwargs()
+        attention_impl.preprocess(kwargs_impl)
+        out_impl, _ = stage_impl.forward(hidden_states_check, kwargs_impl)
+        Assert.rms_close_relative(out_impl, out_ref_check, rtol, 1e-7)
+
+    # SDPA-dense equivalence check: sdpa_dense reuses backup's mask, so its packed fp32 output
+    # must match the per-sequence backup reference. This is the only SDPA branch that runs on CPU
+    # (sdpa_nested needs CUDA), so the check is unconditional rather than CUDA-gated.
+    _check_packed("sdpa_dense", distributed_config, distributed, hidden_states.detach(), out_ref, 1e-5)
+
+    # Flash and SDPA-nested equivalence checks: each implementation's packed bfloat16 output must
     # match a per-sequence bfloat16 backup reference.
     if not torch.cuda.is_available():
         return
@@ -406,30 +439,9 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         with_backward=False,
     )
 
-    def _check_packed(implementation: str) -> None:
-        attention_impl: Attention = config.get_attention_config(implementation).get_layer(
-            distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
-        )
-        stage_impl = get_stage([attention_impl], distributed_bf16)
-        for param_impl, param_f32 in zip(attention_impl.parameters(), attention.parameters(), strict=True):
-            param_impl.data.copy_(param_f32.data)
-        (model_input,) = LanguageModelBatch(
-            tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
-        ).get_model_inputs(
-            LanguageModelBatchPreprocessingConfig(
-                distributed=distributed_config_bf16,
-                predicted_tokens=0,
-                **attention_impl.get_preprocessing_config(),
-            )
-        )
-        kwargs_impl = model_input.to_kwargs()
-        attention_impl.preprocess(kwargs_impl)
-        out_impl, _ = stage_impl.forward(hidden_states_bf16, kwargs_impl)
-        Assert.rms_close_relative(out_impl, out_ref_bf16, 5e-3, 1e-7)
-
     if _flash_available and config.head_size <= 256:
-        _check_packed("flash")
-    _check_packed("sdpa")
+        _check_packed("flash", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, 5e-3)
+    _check_packed("sdpa_nested", distributed_config_bf16, distributed_bf16, hidden_states_bf16, out_ref_bf16, 5e-3)
 
 
 @pytest.mark.slow

@@ -40,7 +40,8 @@ class AttentionKwargs(MixerKwargs):
 class AttentionImplementation(enum.StrEnum):
     auto = "auto"
     flash = "flash"
-    sdpa = "sdpa"
+    sdpa_nested = "sdpa_nested"
+    sdpa_dense = "sdpa_dense"
     backup = "backup"
 
 

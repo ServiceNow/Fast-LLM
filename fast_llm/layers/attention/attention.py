@@ -87,8 +87,10 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 and self._config.head_size <= 256
             ):
                 self._implementation = AttentionImplementation.flash
+            elif self._distributed_config.use_cuda and self._config.window_size is None:
+                self._implementation = AttentionImplementation.sdpa_nested
             else:
-                self._implementation = AttentionImplementation.sdpa
+                self._implementation = AttentionImplementation.sdpa_dense
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         self._sequence_data_parallel_dim = self._distributed_config.get_distributed_dim(
@@ -278,7 +280,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             "dropout_p": self._config.dropout if self.training else 0.0,
             "scale": self._softmax_scale,
         }
-        if query.is_cuda and self._config.window_size is None:
+        if self._implementation == AttentionImplementation.sdpa_nested:
             # Wrap each document as its own batch element via nested-jagged so cross-doc masking
             # is structural and EFFICIENT skips materializing the attention mask. The dispatch
             # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
@@ -486,7 +488,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         with set_generator(self._distributed.tp_generator):
             if self._implementation == AttentionImplementation.flash:
                 input_ = self._attn_flash(query, key, value, kwargs)
-            elif self._implementation == AttentionImplementation.sdpa:
+            elif self._implementation in (AttentionImplementation.sdpa_nested, AttentionImplementation.sdpa_dense):
                 input_ = self._attn_sdpa(query, key, value, kwargs)
             elif self._implementation == AttentionImplementation.backup:
                 # TODO: Avoid the flattens.
@@ -542,7 +544,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         if (not config.hardware) or self._implementation in (
             AttentionImplementation.flash,
-            AttentionImplementation.sdpa,
+            AttentionImplementation.sdpa_nested,
+            AttentionImplementation.sdpa_dense,
         ):
             # Remove non-causal part. (TODO: Support non-causal)
             # TODO: Compute is overestimated without cross-document attention.
@@ -575,28 +578,21 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 "return_max_sequence_lengths": True,
                 "causal": self._config.causal,
             }
-        elif (
-            self._implementation == AttentionImplementation.sdpa
-            and self._distributed_config.use_cuda
-            and self._config.window_size is None
-        ):
+        elif self._implementation == AttentionImplementation.sdpa_nested:
             return {
                 "return_cumulative_sequence_lengths": True,
                 "return_max_sequence_lengths": True,
                 "return_min_sequence_lengths": True,
                 "causal": self._config.causal,
             }
-        elif self._implementation in (AttentionImplementation.sdpa, AttentionImplementation.backup):
+        elif self._implementation in (AttentionImplementation.sdpa_dense, AttentionImplementation.backup):
             return {"return_document_index": True, "causal": self._config.causal}
         else:
             raise NotImplementedError(self._implementation)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._rotary.preprocess(kwargs)
-        if self._implementation == AttentionImplementation.backup or (
-            self._implementation == AttentionImplementation.sdpa
-            and (not self._distributed_config.use_cuda or self._config.window_size is not None)
-        ):
+        if self._implementation in (AttentionImplementation.backup, AttentionImplementation.sdpa_dense):
             self._preprocess_for_backup_attention(kwargs)
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:

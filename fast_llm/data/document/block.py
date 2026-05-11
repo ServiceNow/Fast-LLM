@@ -124,17 +124,19 @@ class LengthModelInputPreprocessor:
         return cumulative_lengths_q, cumulative_lengths_k
 
     @functools.cached_property
+    def _first_length_k(self) -> int:
+        # First doc's K-side length includes the past KV prefix; remaining docs match q-side.
+        return self.sequence_k_past + self.lengths[0] - self.first_document_begin
+
+    @functools.cached_property
     def max_lengths(self) -> tuple[int, int]:
         max_length_q = max(self.lengths)
-        max_length_k = max(max_length_q, self.sequence_k_past + self.lengths[0] - self.first_document_begin)
-        return max_length_q, max_length_k
+        return max_length_q, max(max_length_q, self._first_length_k)
 
     @functools.cached_property
     def min_lengths(self) -> tuple[int, int]:
         min_length_q = min(self.lengths)
-        # First doc's K-side length includes the past KV prefix; remaining docs match q-side.
-        first_length_k = self.sequence_k_past + self.lengths[0] - self.first_document_begin
-        min_length_k = min(first_length_k, *self.lengths[1:]) if len(self.lengths) > 1 else first_length_k
+        min_length_k = min(self._first_length_k, *self.lengths[1:]) if len(self.lengths) > 1 else self._first_length_k
         return min_length_q, min_length_k
 
     @functools.cached_property
