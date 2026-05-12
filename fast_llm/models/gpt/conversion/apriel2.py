@@ -72,6 +72,30 @@ def _per_layer_bias_import(hf_dict: dict, layer_names: tuple[str, ...]) -> dict:
     return out
 
 
+def _per_layer_bias_converter(layer_names: tuple[str, ...]) -> CustomConfigConverter:
+    """Per-layer ``bias.enabled`` round-trip for the named sub-layers of an attention or MLP config:
+    emits/consumes the HF ``{layer: {"bias": {"enabled": ...}}}`` tree."""
+    return CustomConfigConverter(
+        fast_llm_paths=tuple((name,) for name in layer_names),
+        hf_paths=tuple((name,) for name in layer_names),
+        export_fn=lambda c: _per_layer_bias_export(c, layer_names),
+        import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
+        recurses=True,
+    )
+
+
+def _apriel2_conv_kernel_converter() -> CustomConfigConverter:
+    """Round-trip Apriel2's flat ``convolution_layer.kernel_size`` against the Fast-LLM
+    ``convolution_layer`` sub-config. Shared between :class:`Apriel2GatedDeltaNetConverter` and
+    :class:`Apriel2KimiDeltaAttentionConverter`."""
+    return CustomConfigConverter(
+        fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
+        hf_paths=(("convolution_layer",),),
+        export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
+        import_fn=lambda hf: ({("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}),
+    )
+
+
 # ============================================================
 # Mixer converters
 # ============================================================
@@ -143,13 +167,7 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
                 ("add_linear_biases",), ("add_linear_biases",), sentinel=True
             ),
             "window_size": OptionalConfigConverter(("window_size",), ("window_size",)),
-            "linear_layers": CustomConfigConverter(
-                fast_llm_paths=tuple((name,) for name in layer_names),
-                hf_paths=tuple((name,) for name in layer_names),
-                export_fn=lambda c: _per_layer_bias_export(c, layer_names),
-                import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
-                recurses=True,
-            ),
+            "linear_layers": _per_layer_bias_converter(layer_names),
             "causal": IgnoredConfigConverter(("causal",)),
             "softmax_scale_power": IgnoredConfigConverter(("softmax_scale_power",)),
         }
@@ -318,14 +336,7 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
             "key_heads": RenameConfigConverter(("key_heads",), ("key_heads",)),
             "key_head_dim": RenameConfigConverter(("key_head_dim",), ("key_head_dim",)),
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("value_head_dim",)),
-            "convolution_layer_kernel": CustomConfigConverter(
-                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
-                hf_paths=(("convolution_layer",),),
-                export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
-                import_fn=lambda hf: (
-                    {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
-                ),
-            ),
+            "convolution_layer_kernel": _apriel2_conv_kernel_converter(),
             # CausalConv1dConfig sub-fields the Apriel2 HF format does not surface (weight rides the tensor
             # side; bias/activation round-trip at their Fast-LLM defaults).
             "convolution_layer_unmapped": IgnoredConfigConverter(
@@ -407,14 +418,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
         return {
             "heads": RenameConfigConverter(("heads",), ("heads",)),
             "head_dim": RenameConfigConverter(("head_dim",), ("head_dim",)),
-            "convolution_layer_kernel": CustomConfigConverter(
-                fast_llm_paths=(("convolution_layer",), ("convolution_layer", "kernel_size")),
-                hf_paths=(("convolution_layer",),),
-                export_fn=lambda c: {("convolution_layer",): {"kernel_size": c.convolution_layer.kernel_size}},
-                import_fn=lambda hf: (
-                    {("convolution_layer",): hf["convolution_layer"]} if "convolution_layer" in hf else {}
-                ),
-            ),
+            "convolution_layer_kernel": _apriel2_conv_kernel_converter(),
             # CausalConv1dConfig sub-fields not surfaced in HF (same as :class:`Apriel2GatedDeltaNetConverter`).
             "convolution_layer_unmapped": IgnoredConfigConverter(
                 ("convolution_layer", "weight"),
@@ -682,13 +686,7 @@ class Apriel2MLPConverter(ConfigSectionConverter):
                 export_fn=lambda c: {("activation",): c.activation.hf_name},
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
             ),
-            "layers": CustomConfigConverter(
-                fast_llm_paths=tuple((name,) for name in layer_names),
-                hf_paths=tuple((name,) for name in layer_names),
-                export_fn=lambda c: _per_layer_bias_export(c, layer_names),
-                import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
-                recurses=True,
-            ),
+            "layers": _per_layer_bias_converter(layer_names),
         }
 
     @classmethod
@@ -912,6 +910,13 @@ class Apriel2HeadConverter(ConfigSectionConverter):
             # fails on export instead of silently round-tripping.
             "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
         }
+
+    @classmethod
+    def _validate_export(cls, config: LanguageModelHeadConfig) -> None:
+        # The config side dispatches normalization through APRIEL2_NORM_REGISTRY (RMS/Layer/None), but the
+        # weight side below hardcodes ``normalization_converter_class`` (RMSNorm-only). Fail loudly here so a
+        # LayerNorm/NoNorm head config doesn't silently round-trip through the wrong weight conversion.
+        Assert.is_(type(config.normalization), RMSNormalizationConfig)
 
     # --- weight side (imperative) ---
 

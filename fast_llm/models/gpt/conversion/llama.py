@@ -26,7 +26,9 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
+from fast_llm.layers.common.peft.config import NoPeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import (
@@ -48,12 +50,10 @@ logger = logging.getLogger(__name__)
 def assert_no_peft(config: GPTBaseModelConfig) -> None:
     """Reject any non-trivial PEFT config: HuggingFace formats serialize the base weights only,
     so a configured LoRA (or other adapter) would be silently dropped on export."""
-    from fast_llm.layers.common.peft.config import NoPeftConfig
-
     Assert.custom(isinstance, config.peft, NoPeftConfig)
 
 
-def effective_bias(layer_config, default: bool) -> bool:
+def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
     """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default."""
     return default if layer_config.bias.enabled is None else layer_config.bias.enabled
 
@@ -603,7 +603,6 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
 
     fast_llm_config_class = GPTBaseModelConfig
 
-    # TODO: Peft?
     decoder_converter_class: typing.ClassVar[type[LlamaDecoderConverter]] = LlamaDecoderConverter
     embeddings_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaEmbeddingsConverter
     head_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaHeadConverter

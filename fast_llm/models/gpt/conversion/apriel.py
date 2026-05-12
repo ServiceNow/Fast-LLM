@@ -1,3 +1,4 @@
+import functools
 import math
 import typing
 
@@ -126,13 +127,6 @@ class AprielMambaConverter(ConfigSectionConverter):
         Assert.incl(config.output_layer.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        # Inject the Fast-LLM dynamic-type discriminator: the parent (AprielBlockConverter) selects this
-        # leaf via `hybrid_block_layout`, not via a nested HF discriminator, so DispatchConfigConverter's
-        # auto-injection isn't in play and we must add `type` manually.
-        return {"type": "mamba", **super().import_config(hf_dict)}
-
-    @classmethod
     def get_converters(
         cls,
         config: MambaConfig,
@@ -222,10 +216,6 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
                 ("a_log_weight",),
             ),
         }
-
-    @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        return {"type": "gdn", **super().import_config(hf_dict)}
 
     @classmethod
     def get_converters(
@@ -320,10 +310,6 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
                 ("a_log_weight",),
             ),
         }
-
-    @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        return {"type": "kda", **super().import_config(hf_dict)}
 
     @classmethod
     def get_converters(
@@ -468,6 +454,7 @@ class AprielBlockConverter:
         return cls._converter_classes[type(config.mixer)].export_config(config)
 
     @classmethod
+    @functools.cache
     def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
         """Union of consumed HF paths across every per-mixer-type block converter — used by the parent's
         decoder Custom to pre-claim Apriel's flat top-level keys for the HF coverage check."""

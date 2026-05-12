@@ -48,13 +48,6 @@ class MixtralMLPConverter(LlamaMLPConverter):
         }
 
     @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        # Inject the Fast-LLM dynamic-type discriminator so `from_dict` instantiates `MoEMLPConfig`
-        # rather than the default `MLPConfig`. The MLP is wrapped via `NestedConfigConverter`, so
-        # there's no surrounding `DispatchConfigConverter` to inject this for us.
-        return {"type": "moe", **super().import_config(hf_dict)}
-
-    @classmethod
     def get_converters(
         cls,
         config: MoEMLPConfig,

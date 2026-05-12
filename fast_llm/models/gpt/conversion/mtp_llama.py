@@ -4,18 +4,16 @@ from transformers import PretrainedConfig
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import RenameConfigConverter, WeightConverter
-from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
-    LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     get_parameter_converter,
 )
-from fast_llm.utils import Assert, safe_merge_dicts
+from fast_llm.utils import safe_merge_dicts
 
 
 class MTPLlamaHeadConverter(LlamaHeadConverter):
@@ -62,26 +60,7 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         return converters
 
 
-class MTPLlamaDecoderConverter(LlamaDecoderConverter):
-    @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        return {
-            "block": cls.block_converter_class.import_config(hf_dict),
-            "num_blocks": hf_dict["num_hidden_layers"],
-        }
-
-    @classmethod
-    def export_config(cls, decoder_config: FixedBlockSequenceConfig) -> dict:
-        # TODO: Support PatternBlockSequenceConfig with compatible configs.
-        Assert.custom(isinstance, decoder_config, FixedBlockSequenceConfig)
-        return safe_merge_dicts(
-            cls.block_converter_class.export_config(decoder_config.block),
-            {"num_hidden_layers": decoder_config.num_blocks},
-        )
-
-
 class MTPLlamaBaseModelConverter(LlamaBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[MTPLlamaDecoderConverter]] = MTPLlamaDecoderConverter
     head_converter_class: typing.ClassVar[type[MTPLlamaHeadConverter]] = MTPLlamaHeadConverter
 
 

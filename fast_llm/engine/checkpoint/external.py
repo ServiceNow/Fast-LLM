@@ -398,12 +398,6 @@ class DispatchConfigConverter(ConfigConverter):
                 f"No converter registered for HF discriminator {type_name!r} at {'.'.join(self.fast_llm_paths[0])}"
             )
         sub_fast_llm = converter_class.import_config(sub_hf)
-        # Inject the Fast-LLM dynamic-type discriminator so the parent's `from_dict` dispatches to the
-        # correct subclass. Reads from the registered Config class rather than the HF discriminator so
-        # mismatched Fast-LLM/HF type names work too.
-        fast_llm_type = getattr(converter_class.fast_llm_config_class, "dynamic_type_name", None)
-        if fast_llm_type is not None:
-            sub_fast_llm = {"type": fast_llm_type, **sub_fast_llm}
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
 
@@ -468,9 +462,6 @@ class TypedDictContainerConfigConverter(ConfigConverter):
                         f"{'.'.join(self.hf_paths[0])}[{name!r}]"
                     )
             sub_fast_llm = converter_class.import_config(sub_hf)
-            fast_llm_type = getattr(converter_class.fast_llm_config_class, "dynamic_type_name", None)
-            if fast_llm_type is not None:
-                sub_fast_llm = {"type": fast_llm_type, **sub_fast_llm}
             out[name] = sub_fast_llm
         set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], out)
 
@@ -528,10 +519,18 @@ class ConfigSectionConverter(abc.ABC):
 
     @classmethod
     def import_config(cls, hf_dict: dict) -> dict:
-        """Convert an HF config dict to a Fast-LLM config dict via this section's declarations."""
+        """Convert an HF config dict to a Fast-LLM config dict via this section's declarations.
+
+        When ``fast_llm_config_class`` carries a ``dynamic_type_name`` (i.e. the target is a registered
+        dynamic-type subclass), inject ``"type": <name>`` so the caller's ``from_dict`` dispatches to the
+        correct subclass without each section converter having to prepend it manually.
+        """
         out: dict = {}
         for converter in cls._create_config_converters().values():
             converter.import_to(hf_dict, out)
+        fast_llm_type = getattr(cls.fast_llm_config_class, "dynamic_type_name", None)
+        if fast_llm_type is not None:
+            out = {"type": fast_llm_type, **out}
         return out
 
     @classmethod
