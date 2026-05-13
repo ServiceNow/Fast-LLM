@@ -162,18 +162,6 @@ class AudioEncoderConfig(BlockConfig):
         hint=FieldHint.architecture,
     )
 
-    # --- Special tokens ---
-    audio_start_token: int | None = Field(
-        default=None,
-        desc="Token id for audio start.",
-        hint=FieldHint.optional,
-    )
-    audio_end_token: int | None = Field(
-        default=None,
-        desc="Token id for audio end.",
-        hint=FieldHint.optional,
-    )
-
     @property
     def layer_class(self) -> "type[AudioEncoder]":
         from fast_llm.layers.audio_encoder.audio_encoder import AudioEncoder

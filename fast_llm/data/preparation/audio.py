@@ -14,9 +14,14 @@ class AudioPreparationConfig(Config):
     """
     Configuration for audio placeholder token insertion during dataset preparation.
 
-    The preparator inserts ``num_audio_tokens`` placeholder tokens (token ID ``-100``)
-    immediately after each audio position in the token sequence.  The audio encoder
-    then overwrites these placeholders with its output embeddings during training.
+    The preparator inserts ``num_audio_encoder_tokens`` placeholder tokens (token ID
+    ``-100``) immediately after each audio position in the token sequence.  The audio
+    encoder then overwrites these placeholders with its output embeddings during training.
+
+    Any "audio start" / "audio end" wrap tokens are the chat template's
+    responsibility: emit them as literal vocabulary tokens around the audio
+    marker in the rendered text and they will tokenize like any other token,
+    landing immediately adjacent to the ``-100`` placeholder block.
 
     All fields must match the corresponding fields in ``AudioEncoderConfig``.
     """
@@ -27,47 +32,16 @@ class AudioPreparationConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.geq, 1),
     )
-    audio_start_token: int | None = Field(
-        default=None,
-        desc="Token ID prepended to each audio clip output. Must match audio_encoder.audio_start_token.",
-        hint=FieldHint.optional,
-    )
-    audio_end_token: int | None = Field(
-        default=None,
-        desc="Token ID appended to each audio clip output. Must match audio_encoder.audio_end_token.",
-        hint=FieldHint.optional,
-    )
 
     def num_audio_encoder_tokens(self, num_samples: int) -> int:
         """
-        Return the number of audio encoder output slots for a single clip.
-
-        This is the count of ``-100`` placeholder tokens inserted into the token sequence.
-        It does *not* include ``audio_start_token`` or ``audio_end_token``, which are
-        inserted as real vocabulary token IDs alongside the placeholders.
+        Return the number of ``-100`` placeholder tokens inserted into the LM
+        token stream for a single clip.
 
         Args:
             num_samples: Length of the raw waveform in samples.
         """
         return num_samples // AUDIO_HOP_LENGTH // AUDIO_CONV_STRIDE // self.aud_downsampling_k
-
-    def num_audio_tokens(self, num_samples: int) -> int:
-        """
-        Return the total number of LM token slots produced by a single audio clip,
-        including ``audio_start_token`` and ``audio_end_token`` if configured.
-
-        Use this for sequence-length accounting.  Use ``num_audio_encoder_tokens``
-        when you need only the placeholder (``-100``) count.
-
-        Args:
-            num_samples: Length of the raw waveform in samples.
-        """
-        n = self.num_audio_encoder_tokens(num_samples)
-        if self.audio_start_token is not None:
-            n += 1
-        if self.audio_end_token is not None:
-            n += 1
-        return n
 
     @classmethod
     def get_patches_from_audio(
@@ -80,6 +54,6 @@ class AudioPreparationConfig(Config):
         import numpy as np
 
         return [
-            config.num_audio_tokens(len(np.asarray(clip["array"], dtype=np.float32)))
+            config.num_audio_encoder_tokens(len(np.asarray(clip["array"], dtype=np.float32)))
             for clip in audio_clips
         ]

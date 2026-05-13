@@ -339,29 +339,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         image_index += 1
                     elif span_type == SpanType.audio:
                         base_n = self._config.audio.num_audio_encoder_tokens(len(audio_clips[audio_index]))
-                        insert_ids: list[int] = []
-                        if self._config.audio.audio_start_token is not None:
-                            insert_ids.append(self._config.audio.audio_start_token)
-                        audio_slot_begin = begin + len(insert_ids)
-                        insert_ids.extend([-100] * base_n)
-                        if self._config.audio.audio_end_token is not None:
-                            insert_ids.append(self._config.audio.audio_end_token)
-                        insert_tensor = tokens.new_tensor(insert_ids)
+                        insert_tensor = tokens.new_full((base_n,), -100)
                         tokens = torch.cat([tokens[:begin], insert_tensor, tokens[begin:]])
-                        token_spans_by_type[SpanType.audio].append((audio_slot_begin, audio_slot_begin + base_n))
-                        # `begin` (audio_position) marks the insertion point for the entire audio block
-                        # (start token + placeholders + end token), with no knowledge of
-                        # audio_start_token.  Any loss-masking span whose range contains `begin`
-                        # was stored before this insertion and its end boundary is now stale:
-                        # the inserted tokens push the original tail (e.g. <|end|>) past the old
-                        # span end.  Extend it by the full block size so it continues to cover
-                        # everything it was meant to mask.
+                        token_spans_by_type[SpanType.audio].append((begin, begin + base_n))
+                        # Any loss-masking span whose range contains `begin` was stored before
+                        # this insertion and its end boundary is now stale: the inserted
+                        # placeholders push the original tail past the old span end.  Extend it
+                        # by the placeholder count so it continues to cover everything it was
+                        # meant to mask.
                         lm_spans = token_spans_by_type[SpanType.loss_masking]
                         for i, (s, e) in enumerate(lm_spans):
                             if s <= begin < e:
-                                lm_spans[i] = (s, e + len(insert_ids))
+                                lm_spans[i] = (s, e + base_n)
                                 break
-                        tokens_shift += len(insert_ids)
+                        tokens_shift += base_n
                         audio_index += 1
                     else:
                         token_spans_by_type[span_type].append((begin, end))
