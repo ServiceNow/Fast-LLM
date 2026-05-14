@@ -2,12 +2,18 @@
 
 import typing
 
+from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
+    ConstantExportConfigConverter,
+    CustomConfigConverter,
+    IgnoredConfigConverter,
+    RenameConfigConverter,
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, ProportionalRotaryConfig
@@ -622,54 +628,132 @@ class Gemma4HeadConverter(LlamaHeadConverter):
         return out
 
 
-class Gemma4BaseModelConverter:
+def _gemma4_bidirectional_export(_: Config) -> dict:
+    # Fast-LLM is text-only; bidirectional attention (used for vision tokens in the multimodal
+    # model) is not implemented. Always emit ``None``.
+    return {("use_bidirectional_attention",): None}
+
+
+def _gemma4_bidirectional_import(hf_dict: dict) -> dict:
+    # ``use_bidirectional_attention="vision"`` only affects vision tokens; the text path stays
+    # causal. Only ``"all"`` toggles ``is_causal=False`` for the text decoder, which we don't
+    # implement.
+    if hf_dict.get("use_bidirectional_attention") == "all":
+        raise NotImplementedError(
+            'Gemma 4 `use_bidirectional_attention="all"` is not supported (text path stays causal).'
+        )
+    return {}
+
+
+class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+    """Top-level converter for ``GPTBaseModelConfig`` ↔ Gemma 4 HF dict.
+
+    Gemma 4 has several wrinkles that prevent the standard per-section decomposition used by Llama:
+
+    * The decoder is a :class:`PatternBlockSequenceConfig` whose two named blocks
+      (``sliding_attention`` / ``full_attention``) share most HF keys but diverge on ``head_dim`` and
+      rope parameters. The HF format emits both block variants from a single root-level config, so
+      the block-level transform inherently sees both Fast-LLM blocks at once.
+    * ``embedding_scale = hidden_size ** 0.5`` and ``router_input_scale = hidden_size ** -0.5`` make
+      the embeddings and routed MLP cross-reference the root-level ``hidden_size``.
+
+    Each section ((embeddings, decoder, head)) is therefore expressed as a :class:`CustomConfigConverter`
+    that delegates to an imperative helper class (kept private to this module). Coverage at the
+    section level is satisfied via ``recurses=True``.
+    """
+
+    fast_llm_config_class = GPTBaseModelConfig
+
     decoder_converter_class: typing.ClassVar[type[Gemma4DecoderConverter]] = Gemma4DecoderConverter
     embeddings_converter_class: typing.ClassVar[type[Gemma4EmbeddingsConverter]] = Gemma4EmbeddingsConverter
     head_converter_class: typing.ClassVar[type[Gemma4HeadConverter]] = Gemma4HeadConverter
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        if config.get("hidden_size_per_layer_input") not in (None, 0):
-            raise NotImplementedError(
-                "Gemma 4 Per-Layer Embeddings (`hidden_size_per_layer_input != 0`) are not supported."
-            )
-        if config.get("num_kv_shared_layers", 0):
-            raise NotImplementedError("Gemma 4 cross-layer KV sharing (`num_kv_shared_layers != 0`) is not supported.")
-        if config.get("use_double_wide_mlp", False):
-            raise NotImplementedError("Gemma 4 `use_double_wide_mlp=True` is not supported.")
-        # `use_bidirectional_attention="vision"` only affects vision tokens; the text path stays causal.
-        # Only `"all"` toggles `is_causal=False` for the text decoder, which we don't implement.
-        if config.get("use_bidirectional_attention") == "all":
-            raise NotImplementedError(
-                'Gemma 4 `use_bidirectional_attention="all"` is not supported (text path stays causal).'
-            )
+    def _create_config_converters(cls) -> dict:
+        decoder_cls = cls.decoder_converter_class
+        embeddings_cls = cls.embeddings_converter_class
+        head_cls = cls.head_converter_class
+
+        def _embeddings_export(parent: Config) -> dict:
+            return {(k,): v for k, v in embeddings_cls.export_config(parent.embeddings, parent.hidden_size).items()}
+
+        def _embeddings_import(hf_dict: dict) -> dict:
+            return {("embeddings",): embeddings_cls.import_config(hf_dict)}
+
+        def _decoder_export(parent: Config) -> dict:
+            return {(k,): v for k, v in decoder_cls.export_config(parent.decoder, parent.hidden_size).items()}
+
+        def _decoder_import(hf_dict: dict) -> dict:
+            return {("decoder",): decoder_cls.import_config(hf_dict)}
+
+        def _head_export(parent: Config) -> dict:
+            return {(k,): v for k, v in head_cls.export_config(parent.head).items()}
+
+        def _head_import(hf_dict: dict) -> dict:
+            return {("head",): head_cls.import_config(hf_dict)}
+
         return {
-            "embeddings": cls.embeddings_converter_class.import_config(config),
-            "decoder": cls.decoder_converter_class.import_config(config),
-            "head": cls.head_converter_class.import_config(config),
-            "hidden_size": config["hidden_size"],
-            "tied_embedding_weight": config["tie_word_embeddings"],
+            "embeddings": CustomConfigConverter(
+                fast_llm_paths=(("embeddings",),),
+                hf_paths=(("vocab_size",),),
+                export_fn=_embeddings_export,
+                import_fn=_embeddings_import,
+                recurses=True,
+            ),
+            "decoder": CustomConfigConverter(
+                fast_llm_paths=(("decoder",),),
+                hf_paths=(
+                    ("num_hidden_layers",),
+                    ("layer_types",),
+                    ("num_attention_heads",),
+                    ("num_key_value_heads",),
+                    ("head_dim",),
+                    ("global_head_dim",),
+                    ("num_global_key_value_heads",),
+                    ("attention_bias",),
+                    ("attention_dropout",),
+                    ("sliding_window",),
+                    ("rms_norm_eps",),
+                    ("attention_k_eq_v",),
+                    ("rope_parameters",),
+                    ("intermediate_size",),
+                    ("hidden_activation",),
+                    ("enable_moe_block",),
+                    ("num_experts",),
+                    ("top_k_experts",),
+                    ("moe_intermediate_size",),
+                ),
+                export_fn=_decoder_export,
+                import_fn=_decoder_import,
+                recurses=True,
+            ),
+            "head": CustomConfigConverter(
+                fast_llm_paths=(("head",),),
+                hf_paths=(("final_logit_softcapping",),),
+                export_fn=_head_export,
+                import_fn=_head_import,
+                recurses=True,
+            ),
+            "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
+            "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),
+            "peft": IgnoredConfigConverter(("peft",)),
+            # TODO: Implement Per-Layer Embeddings (PLE). Gemma4TextConfig defaults to 256; explicitly
+            # zero to disable the feature in the exported model until Fast-LLM supports it natively.
+            "hidden_size_per_layer_input": ConstantExportConfigConverter(("hidden_size_per_layer_input",), 0),
+            "num_kv_shared_layers": ConstantExportConfigConverter(("num_kv_shared_layers",), 0),
+            "use_double_wide_mlp": ConstantExportConfigConverter(("use_double_wide_mlp",), False),
+            "use_bidirectional_attention": CustomConfigConverter(
+                fast_llm_paths=(),
+                hf_paths=(("use_bidirectional_attention",),),
+                export_fn=_gemma4_bidirectional_export,
+                import_fn=_gemma4_bidirectional_import,
+            ),
+            # Vocab-size-per-layer is part of Per-Layer Embeddings (PLE), gated by
+            # ``hidden_size_per_layer_input``. PLE is rejected above, so we ignore the size field too.
+            "vocab_size_per_layer_input": IgnoredConfigConverter(hf_paths=(("vocab_size_per_layer_input",),)),
         }
 
-    @classmethod
-    def export_config(cls, config: GPTBaseModelConfig) -> dict:
-        Assert.custom(isinstance, config, GPTBaseModelConfig)
-        return safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings, config.hidden_size),
-            cls.decoder_converter_class.export_config(config.decoder, config.hidden_size),
-            cls.head_converter_class.export_config(config.head),
-            {
-                "tie_word_embeddings": config.tied_embedding_weight,
-                "hidden_size": config.hidden_size,
-                # TODO: Implement Per-Layer Embeddings (PLE). Gemma4TextConfig defaults to 256;
-                # explicitly zero to disable the feature in the exported model until Fast-LLM
-                # supports it natively.
-                "hidden_size_per_layer_input": 0,
-                # Fast-LLM is text-only; bidirectional attention (used for vision tokens in the
-                # multimodal model) is not implemented.
-                "use_bidirectional_attention": None,
-            },
-        )
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
