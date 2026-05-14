@@ -303,6 +303,19 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
             # Llava's vision_config carries a literal ``model_type: "pixtral"``;
             # ``ConstantExportConfigConverter`` emits on export and asserts equality on import.
             "model_type": ConstantExportConfigConverter(("model_type",), cls.model_type),
+            # transformers' ``PretrainedConfig.to_dict()`` populates these metadata fields on nested
+            # configs (vision_config is a PretrainedConfig under transformers.LlavaConfig). The top-level
+            # ``_HF_METADATA_ALLOWLIST`` only matches single-key paths, so we explicitly mark them ignored
+            # within this scope so the recursive HF coverage check doesn't flag round-tripped saves.
+            "hf_metadata": IgnoredConfigConverter(
+                hf_paths=(
+                    ("_name_or_path",),
+                    ("architectures",),
+                    ("dtype",),
+                    ("torch_dtype",),
+                    ("transformers_version",),
+                ),
+            ),
             # Adapter is handled at LlavaBaseModelConverter scope (sees text_config). Mark recursively
             # consumed here so the architecture walker sees the sub-tree as claimed at this level too.
             "adapter": IgnoredConfigConverter(("adapter",)),
