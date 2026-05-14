@@ -170,6 +170,21 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.feature,
     )
 
+    predefined_layouts: list[list[str]] = Field(
+        default_factory=list,
+        desc="List of predefined layouts to oversample. Each layout is a list of mixer names, one per layer. "
+        "Mixer names must match keys in the mixers dict. All layouts must share a common length.",
+        hint=FieldHint.feature,
+    )
+
+    predefined_layout_probabilities: list[float] = Field(
+        default_factory=list,
+        desc="Per-layout sampling probability, parallel to predefined_layouts. "
+        "Each value must be in [0, 1]; the sum must be <= 1. The residual probability (1 - sum) "
+        "falls through to sampling_strategy.",
+        hint=FieldHint.feature,
+    )
+
     seed_shift: int = Field(
         default=_BIG_PRIMES[11],
         desc="Seed shift for mixer sampling reproducibility.",
@@ -203,6 +218,26 @@ class StochasticMixerConfig(MixerConfig):
             # Normalize weights to sum to 1.0 (also validates non-negative and positive sum)
             normalized_values = normalize_probabilities(list(self.sampling_weights.values()))
             self.sampling_weights = dict(zip(self.sampling_weights.keys(), normalized_values))
+
+        # Validate predefined layouts
+        if self.predefined_layouts:
+            Assert.eq(len(self.predefined_layout_probabilities), len(self.predefined_layouts))
+            mixer_names = set(self.mixers.keys())
+            common_length = len(self.predefined_layouts[0])
+            for i, (layout, probability) in enumerate(
+                zip(self.predefined_layouts, self.predefined_layout_probabilities, strict=True)
+            ):
+                unknown = set(layout) - mixer_names
+                if unknown:
+                    raise ValueError(
+                        f"predefined_layouts[{i}] contains unknown mixer names: {unknown}. "
+                        f"Valid names: {mixer_names}"
+                    )
+                Assert.eq(len(layout), common_length)
+                Assert.in_range_incl(probability, 0.0, 1.0)
+            Assert.leq(sum(self.predefined_layout_probabilities), 1.0)
+        elif self.predefined_layout_probabilities:
+            raise ValueError("predefined_layout_probabilities provided but predefined_layouts is empty")
 
     @property
     def layer_class(self) -> "type[StochasticMixer]":
