@@ -1,3 +1,4 @@
+import dataclasses
 import typing
 
 import torch
@@ -30,28 +31,20 @@ except ImportError:
     _flash_available = False
 
 
-class AttachGrad(torch.autograd.Function):
+@dataclasses.dataclass
+class _KVCacheSlot:
+    """Per-layer K/V buffer shared across micro-sequences of a full sequence.
+
+    Forward fills `buffer[0:frontier]` progressively (one slice per micro-sequence's gather);
+    backward lazily allocates `grad_buffer` and accumulates each micro-sequence's K/V grad
+    into the slice it attended to. Because backwards run in reverse temporal order, by the
+    time micro-sequence i's backward extracts `grad_buffer[frontier_prev_i:frontier_new_i]`
+    for its projection, all later micro-sequences' contributions are already accumulated.
     """
-    "Attach" the gradient of y to that of x,
-    so that the gradient of y is automatically added to that of x during the gradient computation of x.
-    The gradient of y should be computed first.
 
-    In practice this allows inserting a breaking point in autograd to
-    split the gradient computation of x in two separate backward calls,
-    by setting `y = x.detach().requires_grad_()`.
-    """
-
-    @staticmethod
-    def forward(ctx, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa
-        # TODO: can we do it without saving y? (We only need its grad)
-        ctx.save_for_backward(y)
-        return x
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:  # noqa
-        (y,) = ctx.saved_tensors
-        grad = y.grad + grad_output
-        return grad, None
+    buffer: torch.Tensor
+    frontier: int = 0
+    grad_buffer: torch.Tensor | None = None
 
 
 class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
@@ -405,13 +398,50 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             query_unflat, kv_unflat, kwargs, inplace_query=query_norm_context is None
         )
 
-        if self._sequence_data_parallel_dim.group:
-            # sequence dim may not be zero, but this needs to be handled after `handle.wait()`
-            key_value, handle = gather_op(
-                key_value, group=self._sequence_data_parallel_dim.group, dim=0, async_op=True
+        # Buffer management absorbs the SDP gather, past/present chaining, and the leading +
+        # trailing narrows that used to live in `_forward`. Each micro-sequence's gather writes
+        # directly into the next slice of a shared buffer, so K/V from past micro-sequences is
+        # accessed in place and there's no per-step `torch.cat`. The narrowed view returned is
+        # what the kernel consumes; its backward grad accumulates into a shared `grad_buffer`,
+        # making the cross-micro-sequence gradient splice (the previous `AttachGrad` workaround)
+        # implicit.
+        past_key_values = kwargs.get(AttentionKwargs.past_key_values)
+        presents = kwargs.get(AttentionKwargs.presents)
+        sdp_group = self._sequence_data_parallel_dim.group
+        micro_seq_length = key_value.size(0) * (sdp_group.size() if sdp_group else 1)
+
+        if past_key_values:
+            slot = past_key_values.pop(0)
+            frontier_prev = slot.frontier
+        else:
+            slot = _KVCacheSlot(
+                buffer=torch.empty(
+                    (kwargs[AttentionKwargs.sequence_length], 2 * self._local_head_groups, self._config.head_size),
+                    device=key_value.device,
+                    dtype=key_value.dtype,
+                ),
             )
-        if handle:
+            frontier_prev = 0
+        frontier_new = frontier_prev + micro_seq_length
+
+        # `.data` accessor sidesteps the version-counter bump that an in-place write to
+        # `slot.buffer` would otherwise trigger; downstream kernel ops save views of
+        # `slot.buffer` for their backward, and those views must not see a version change when
+        # a later micro-sequence writes to a different (non-overlapping) slice.
+        destination = slot.buffer.data[frontier_prev:frontier_new]
+        if sdp_group:
+            _, handle = gather_op(key_value, group=sdp_group, dim=0, async_op=True, out=destination)
             handle.wait()
+        else:
+            destination.copy_(key_value)
+
+        slot.frontier = frontier_new
+        if presents is not None:
+            presents.append(slot)
+
+        first_document_begin = kwargs.get(AttentionKwargs.first_document_begin, 0)
+        sequence_k_end = kwargs[AttentionKwargs.sequence_k_dim].size
+        key_value_view = slot.buffer[first_document_begin:sequence_k_end]
 
         context = {
             "query": query_context,
@@ -420,12 +450,32 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             "query_norm": query_norm_context,
             "key_norm": key_norm_context,
             "value_norm": value_norm_context,
+            "slot": slot,
+            "first_document_begin": first_document_begin,
+            "sequence_k_end": sequence_k_end,
+            "frontier_prev": frontier_prev,
+            "frontier_new": frontier_new,
         }
-        return query, key_value, context
+        return query, key_value_view, context
 
     def _query_key_value_backward(
         self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict
     ) -> torch.Tensor:
+        # Lazily allocate the shared grad buffer on the first backward call (which corresponds
+        # to the last micro-sequence's forward); accumulate this micro-sequence's K/V grad into
+        # the slice it attended to, then take this micro-sequence's own contribution slice
+        # (which already includes all later micro-sequences' contributions) for the reduce-
+        # scatter and projection backward.
+        slot = context.pop("slot")
+        first_document_begin = context.pop("first_document_begin")
+        sequence_k_end = context.pop("sequence_k_end")
+        frontier_prev = context.pop("frontier_prev")
+        frontier_new = context.pop("frontier_new")
+        if slot.grad_buffer is None:
+            slot.grad_buffer = torch.zeros_like(slot.buffer)
+        slot.grad_buffer[first_document_begin:sequence_k_end].add_(key_value_grad)
+        key_value_grad = slot.grad_buffer[frontier_prev:frontier_new]
+
         # TODO: De-allocate qkv grads quicker.
         key_value_grad, handle = reduce_scatter_op(
             key_value_grad,
@@ -478,6 +528,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         self._debug(input_, "attn_input", (kwargs[AttentionKwargs.hidden_token_dim], self._hidden_dim), kwargs)
+        # `_query_key_value` absorbs the SDP gather + past/present chaining + leading/trailing
+        # K/V narrows, so the returned `key_value` is already the right view for the kernel.
         query, key_value = self._query_key_value(input_, kwargs)
 
         self._debug(
@@ -487,19 +539,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             kwargs,
         )
 
-        # TODO: These get unnecessarily big with lots of small documents.
-        if (past_key_values := kwargs.get(AttentionKwargs.past_key_values)) is not None:
-            # Clear the lists so tensors can be de-allocated
-            key_value = torch.cat((past_key_values.pop(0), key_value), dim=0)
-
-        if (presents := kwargs.get(AttentionKwargs.presents)) is not None:
-            # Return the presents as a leaf tensors so the gradients from later micro-sequences
-            # don't propagate to this one.
-            presents.append(present := key_value.detach().requires_grad_())
-            # Manually add the gradients from later micro-sequences.
-            key_value = AttachGrad.apply(key_value, present)
-
-        key_value = key_value[: kwargs[AttentionKwargs.sequence_k_dim].size]
         key, value = key_value.chunk(2, dim=1)
 
         with set_generator(self._distributed.tp_generator):
@@ -628,6 +667,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device
         sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
         sequence_q = kwargs[AttentionKwargs.token_dim].size
+        first_document_begin = kwargs.get(AttentionKwargs.first_document_begin, 0)
         if self._config.causal:
             if (
                 sequence_length := kwargs[AttentionKwargs.sequence_length]
@@ -643,7 +683,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
                 if self._config.window_size is not None:
                     self._backup_attention_mask.triu_(-self._config.window_size + 1)
-            attention_mask = self._backup_attention_mask[None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
+            attention_mask = self._backup_attention_mask[
+                None, sequence_k - sequence_q : sequence_k, None, first_document_begin:sequence_k
+            ]
         else:
             attention_mask = None
 
