@@ -594,8 +594,11 @@ class ConfigSectionConverter(abc.ABC):
         """Raise :class:`ValueError` if the input HF dict carries keys not consumed by any declaration.
 
         Walks ``hf_dict`` recursively. A path is considered covered if it (or any of its prefixes) is in
-        :meth:`_consumed_hf_paths`, or — for top-level keys — appears in ``allowlist``. Uncovered leaves
-        raise; uncovered sub-dicts trigger descent into their entries to surface the offending leaf path.
+        :meth:`_consumed_hf_paths`, or if any segment of the path appears in ``allowlist`` (so transformers'
+        generic ``PretrainedConfig`` metadata keys — ``architectures``, ``torch_dtype``, ``transformers_version``,
+        … — are accepted at any depth, including under nested sub-configs like Llava's ``vision_config``).
+        Uncovered leaves raise; uncovered sub-dicts trigger descent into their entries to surface the offending
+        leaf path.
 
         Catches transformers-version drift, manual edits, and corrupted configs at the import boundary —
         the symmetric counterpart to the architecture-coverage check (which is statically verified by
@@ -607,7 +610,7 @@ class ConfigSectionConverter(abc.ABC):
             for length in range(1, len(path) + 1):
                 if path[:length] in prefixes:
                     return
-            if len(path) == 1 and path[0] in allowlist:
+            if any(segment in allowlist for segment in path):
                 return
             if isinstance(value, dict):
                 for key, sub in value.items():
