@@ -82,6 +82,13 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         else:
             raise NotImplementedError(f"Sampling strategy {self._config.sampling_strategy} not implemented")
 
+        # Multinomial weights over [*predefined_layouts, residual]; residual mass falls through to sampling_strategy.
+        if self._config.predefined_layouts:
+            probs = self._config.predefined_layout_probabilities
+            self._predefined_layout_probs = torch.tensor([*probs, 1.0 - sum(probs)], dtype=torch.float32, device="cpu")
+        else:
+            self._predefined_layout_probs = None
+
         logger.info(
             f"Initialized StochasticMixer with {len(self.mixers)} mixers: "
             f"{', '.join(f'{name}={type(mixer).__name__}' for name, mixer in self.mixers.items())} "
@@ -191,20 +198,18 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         perm = torch.randperm(num_layers, generator=generator)
         return [layout[i] for i in perm.tolist()]
 
-    def _sample_predefined_layout(self, num_layers: int, generator: torch.Generator) -> list[str] | None:
+    def _sample_predefined_layout(self, generator: torch.Generator) -> list[str] | None:
         """
-        With probability `predefined_layout_probability`, pick a predefined layout uniformly.
-        Returns None if we should use the normal sampling strategy instead.
+        Draw one multinomial over [*predefined_layouts, residual].
+        Returns the chosen layout, or None when the residual is selected
+        (caller falls through to sampling_strategy).
         """
-        if not self._config.predefined_layouts or self._config.predefined_layout_probability <= 0:
+        if self._predefined_layout_probs is None:
             return None
-        coin = torch.rand(1, generator=generator).item()
-        if coin >= self._config.predefined_layout_probability:
+        idx = torch.multinomial(self._predefined_layout_probs, num_samples=1, generator=generator).item()
+        if idx == len(self._config.predefined_layouts):
             return None
-        idx = torch.randint(len(self._config.predefined_layouts), (1,), generator=generator).item()
-        layout = list(self._config.predefined_layouts[idx])
-        Assert.eq(len(layout), num_layers)
-        return layout
+        return list(self._config.predefined_layouts[idx])
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         from fast_llm.engine.distributed.config import MAX_SEED
@@ -217,7 +222,9 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         kwargs[StochasticMixerKwargs.generator] = generator
 
         num_layers = kwargs[BlockKwargs.num_blocks_in_sequence]
-        predefined = self._sample_predefined_layout(num_layers, generator)
+        if self._config.predefined_layouts:
+            Assert.eq(len(self._config.predefined_layouts[0]), num_layers)
+        predefined = self._sample_predefined_layout(generator)
 
         if predefined is not None:
             # Use predefined layout (overrides any sampling strategy)
