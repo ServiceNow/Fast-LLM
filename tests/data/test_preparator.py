@@ -167,6 +167,7 @@ def test_preparator_split_sharded():
 def test_dataset_preparator_from_hub():
     # TODO: Find or make a smaller dataset to speed things up.
     output_path = DATASET_CACHE / "preparator_from_hub"
+    expected_url = "https://huggingface.co/datasets/openai/gsm8k"
     preparator_config = GPTMemmapDatasetPreparatorConfig.from_dict(
         {
             "dataset": {
@@ -181,8 +182,13 @@ def test_dataset_preparator_from_hub():
     )
     preparator_config.run()
 
-    assert (croissant_path := output_path / "croissant.json").is_file()
-    Assert.eq(json.load(croissant_path.open("r"))["url"], "https://huggingface.co/datasets/openai/gsm8k")
+    croissant_path = output_path / "croissant.json"
+    assert croissant_path.is_file(), (
+        "Expected the preparator to fetch Croissant metadata from the Hugging Face Hub "
+        f"and save it to {croissant_path}. If this fails intermittently, check network/DNS "
+        f"and the availability of {expected_url}/tree/main or the Croissant API endpoint."
+    )
+    Assert.eq(json.load(croissant_path.open("r"))["url"], expected_url)
 
     dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build()
     Assert.custom(isinstance, dataset, MemmapDataset)

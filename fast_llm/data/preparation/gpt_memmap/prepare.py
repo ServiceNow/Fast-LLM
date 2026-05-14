@@ -11,8 +11,8 @@ import typing
 
 import datasets
 import huggingface_hub
+import huggingface_hub.utils
 import numpy as np
-import requests
 import torch.distributed
 import tqdm
 import transformers
@@ -81,27 +81,26 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def _get_croissant_metadata(self):
+        url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
         token = huggingface_hub.get_token()
         try:
             # Retrieve the dataset metadata in croissant format
-            url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
-            if token is None:
-                response = requests.get(url)
-            else:
-                response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+            headers = None if token is None else {"Authorization": f"Bearer {token}"}
+            response = huggingface_hub.utils.http_backoff("GET", url, headers=headers, timeout=10)
 
             if response.status_code != 200:
                 logger.warning(
-                    f"Failed to get croissant metadata, status_code: {response.status_code}, body: {response.text}"
+                    f"Failed to get croissant metadata from {url}, "
+                    f"status_code: {response.status_code}, body: {response.text}"
                 )
                 return None
 
             data = response.json()
         except Exception as e:
-            logger.warning(f"Failed to get croissant metadata, {e}")
+            logger.warning(f"Failed to get croissant metadata from {url} after retries, {e}")
             return None
         if "error" in data:
-            logger.warning(f"Failed to get croissant metadata, error: {data['error']}")
+            logger.warning(f"Failed to get croissant metadata from {url}, error: {data['error']}")
             return None
 
         return data
