@@ -247,11 +247,26 @@ class StochasticMixer[ConfigType: StochasticMixerConfig](BlockWithBias[ConfigTyp
         usages = [mixer.get_compute_usage(input_, kwargs, config) for mixer in self.mixers.values()]
 
         if self._sampling_probs is not None:
-            # Weight by sampling probability and return the expected value
-            expected_usage = sum(usage * prob.item() for usage, prob in zip(usages, self._sampling_probs))
+            strategy_usage = sum(usage * prob.item() for usage, prob in zip(usages, self._sampling_probs))
         else:
             # full_layout: uniform over compositions, so equal expected weight per mixer
-            expected_usage = sum(usages) / len(usages)
+            strategy_usage = sum(usages) / len(usages)
+
+        if self._config.predefined_layouts:
+            usage_by_name = dict(zip(self.mixers.keys(), usages, strict=True))
+            layout_length = len(self._config.predefined_layouts[0])
+            predefined_usage = sum(
+                probability * sum(usage_by_name[name] for name in layout) / layout_length
+                for probability, layout in zip(
+                    self._config.predefined_layout_probabilities,
+                    self._config.predefined_layouts,
+                    strict=True,
+                )
+            )
+            residual = 1.0 - sum(self._config.predefined_layout_probabilities)
+            expected_usage = predefined_usage + residual * strategy_usage
+        else:
+            expected_usage = strategy_usage
 
         return int(expected_usage)
 
