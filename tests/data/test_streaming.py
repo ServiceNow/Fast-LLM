@@ -218,7 +218,7 @@ def check_data_streaming_results(path: pathlib.Path, distributed_config: Distrib
 
 
 def _run_test_data_streaming_distributed(
-    test_context: DistributedTestContext, base_path: pathlib.Path, port: int
+    test_context: DistributedTestContext, base_path: pathlib.Path, redis_port: int
 ) -> None:
     # Import all dynamic classes. TODO: needed?
     import fast_llm.cli  # noqa
@@ -228,7 +228,7 @@ def _run_test_data_streaming_distributed(
             logger.info(name, subtest.do_run)
             if subtest.do_run:
                 distributed_config = _get_distributed_config(distributed_config_dict, num_gpus)
-                _run_test_data_streaming(base_path / name, distributed_config, port)
+                _run_test_data_streaming(base_path / name, distributed_config, redis_port)
 
 
 @pytest.mark.parametrize("num_workers", (0, 1))

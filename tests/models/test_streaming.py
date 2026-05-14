@@ -16,7 +16,7 @@ from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig
 from fast_llm.engine.training.streaming import REDIS_TRAINING_FIELD, REDIS_TRAINING_STREAM
 from fast_llm.utils import Assert
-from tests.conftest import WorkerResources
+from tests.conftest import MODEL_STREAMING_PORT_OFFSET, PORTS_PER_WORKER, WorkerResources
 from tests.models.test_checkpoint import compare_safetensor_files
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup, update_and_add_testing_config
@@ -58,6 +58,9 @@ _DISTRIBUTED_STREAMING_CONFIGS = [
         consumer_count=2,
     ),
 ]
+
+# Each config consumes one redis producer port plus one weights-broadcast rendezvous port.
+Assert.leq(MODEL_STREAMING_PORT_OFFSET + 2 * len(_DISTRIBUTED_STREAMING_CONFIGS), PORTS_PER_WORKER)
 
 
 def _run_event_consumer(

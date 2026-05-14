@@ -183,11 +183,7 @@ def test_dataset_preparator_from_hub():
     preparator_config.run()
 
     croissant_path = output_path / "croissant.json"
-    assert croissant_path.is_file(), (
-        "Expected the preparator to fetch Croissant metadata from the Hugging Face Hub "
-        f"and save it to {croissant_path}. If this fails intermittently, check network/DNS "
-        f"and the availability of {expected_url}/tree/main or the Croissant API endpoint."
-    )
+    assert croissant_path.is_file(), f"Croissant metadata not fetched from {expected_url}"
     Assert.eq(json.load(croissant_path.open("r"))["url"], expected_url)
 
     dataset = GPTDatasetFromFileConfig(path=output_path / "fast_llm_config.yaml").build()
