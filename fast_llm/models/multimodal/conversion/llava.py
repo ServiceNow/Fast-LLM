@@ -19,6 +19,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
@@ -427,17 +428,25 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        text_base_cls = cls.language_model_converter_class
+        decoder_config = config.decoder
+        block_config = (
+            decoder_config.block
+            if isinstance(decoder_config, FixedBlockSequenceConfig)
+            else next(iter(decoder_config.blocks.values()))
+        )
+        block_converters: list[WeightConverter] = []
+        for block_index in range(decoder_config.num_blocks):
+            block_converters += text_base_cls.block_converter_class.get_converters(
+                block_config, f"decoder.{block_index}", f"language_model.model.layers.{block_index}"
+            )
         return [
             *cls.vision_model_converter_class.get_converters(config.vision_encoder),
-            *cls.language_model_converter_class.embeddings_converter_class.get_converters(
+            *text_base_cls.embeddings_converter_class.get_converters(
                 config.embeddings, "embeddings", "language_model.model"
             ),
-            *cls.language_model_converter_class.decoder_converter_class.get_converters(
-                config.decoder, "decoder", "language_model.model.layers"
-            ),
-            *cls.language_model_converter_class.head_converter_class.get_converters(
-                config, {"tie_word_embeddings": False}
-            ),
+            *block_converters,
+            *text_base_cls.head_converter_class.get_converters(config, {"tie_word_embeddings": False}),
         ]
 
 

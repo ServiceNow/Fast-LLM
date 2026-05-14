@@ -7,7 +7,6 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBaseModelConverter,
     LlamaBlockConverter,
-    LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     LlamaMLPConverter,
@@ -40,16 +39,12 @@ class MistralBlockConverter(LlamaBlockConverter):
     mlp_converter_class: typing.ClassVar[type[MistralMLPConverter]] = MistralMLPConverter
 
 
-class MistralDecoderConverter(LlamaDecoderConverter):
-    block_converter_class: typing.ClassVar[type[MistralBlockConverter]] = MistralBlockConverter
-
-
 class MistralHeadConverter(LlamaHeadConverter):
     block_converter_class: typing.ClassVar[type[MistralBlockConverter]] = MistralBlockConverter
 
 
 class MistralBaseModelConverter(LlamaBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[MistralDecoderConverter]] = MistralDecoderConverter
+    block_converter_class: typing.ClassVar[type[MistralBlockConverter]] = MistralBlockConverter
     head_converter_class: typing.ClassVar[type[MistralHeadConverter]] = MistralHeadConverter
 
 

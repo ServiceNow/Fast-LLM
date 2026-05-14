@@ -4,6 +4,7 @@ import typing
 
 from transformers import PretrainedConfig
 
+from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
@@ -17,9 +18,10 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
-from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
+    LlamaDecoderConverter,
     effective_bias,
     get_parameter_converter,
     get_weight_and_bias_converters,
@@ -27,7 +29,6 @@ from fast_llm.models.gpt.conversion.llama import (
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
-    MistralDecoderConverter,
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
@@ -476,10 +477,11 @@ class AprielBlockConverter:
         )
 
 
-class AprielDecoderConverter(MistralDecoderConverter):
+class AprielDecoderConverter(LlamaDecoderConverter):
     """Pattern-style decoder dispatched via Apriel's ``hybrid_block_layout`` list (one entry per block).
     Stays imperative because the layout-list shape doesn't match the declarative ``decoder.type``
-    discriminator that Apriel2 uses.
+    discriminator that Apriel2 uses. Overrides every classmethod from
+    :class:`LlamaDecoderConverter`; the parent is used only as a nominal base.
     """
 
     block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
@@ -551,8 +553,50 @@ class AprielHeadConverter(MistralHeadConverter):
 
 
 class AprielBaseModelConverter(MistralBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[AprielDecoderConverter]] = AprielDecoderConverter
+    """Apriel needs the per-position hybrid layout dispatcher (:class:`AprielDecoderConverter`) instead of
+    the standard Fixed/Pattern dispatch inlined in :class:`LlamaBaseModelConverter`. The override below
+    replaces the parent's ``"decoder"`` declaration with one that delegates to Apriel's dispatcher.
+    """
+
     head_converter_class: typing.ClassVar[type[AprielHeadConverter]] = AprielHeadConverter
+    apriel_decoder_converter_class: typing.ClassVar[type[AprielDecoderConverter]] = AprielDecoderConverter
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        decoder_cls = cls.apriel_decoder_converter_class
+
+        def _decoder_export(parent: Config) -> dict:
+            return {(k,): v for k, v in decoder_cls.export_config(parent.decoder).items()}
+
+        def _decoder_import(hf_dict: dict) -> dict:
+            return {("decoder",): decoder_cls.import_config(hf_dict)}
+
+        return {
+            **super()._create_config_converters(),
+            "decoder": CustomConfigConverter(
+                fast_llm_paths=(("decoder",),),
+                # Block converter is the per-position dispatcher (:class:`AprielBlockConverter`), which
+                # unions the HF claims of every leaf-mixer's block converter.
+                hf_paths=(
+                    ("num_hidden_layers",),
+                    ("hybrid_block_layout",),
+                    *decoder_cls.block_converter_class._consumed_hf_paths(),
+                ),
+                export_fn=_decoder_export,
+                import_fn=_decoder_import,
+                recurses=True,
+            ),
+        }
+
+    # --- weight side (imperative): use Apriel's per-position dispatcher instead of the standard inline loop.
+
+    @classmethod
+    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        return [
+            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
+            *cls.apriel_decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
+            *cls.head_converter_class.get_converters(config, exported_config),
+        ]
 
 
 class AprielHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):

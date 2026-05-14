@@ -472,12 +472,35 @@ class LlamaBlockConverter(ConfigSectionConverter):
         ]
 
 
-class LlamaDecoderConverter:
-    """Converts ``BlockSequenceConfig`` (polymorphic Fixed/Pattern) ↔ Llama's flat block + ``num_hidden_layers``.
+def _llama_decoder_export(
+    decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
+    block_converter_class: type[ConfigSectionConverter],
+) -> dict:
+    """Convert a Fast-LLM polymorphic Fixed/Pattern block sequence to Llama's flat HF representation.
 
-    Kept as a regular class (not a :class:`ConfigSectionConverter`) so it can stay imperative — the polymorphism
-    between Fixed/Pattern block sequences doesn't lend itself to the declarative shape, and subclasses (Mistral,
-    Qwen2, MTP-Llama, ...) plug in different block converters via ``block_converter_class``.
+    Pattern: assert all blocks export identical HF (Llama's format has no per-block discriminator), then use
+    the common export. Fixed: just delegate to the single block.
+    """
+    if isinstance(decoder_config, PatternBlockSequenceConfig):
+        exports = [block_converter_class.export_config(block) for block in decoder_config.blocks.values()]
+        for other in exports[1:]:
+            Assert.eq(exports[0], other)
+        block_hf = exports[0]
+    elif isinstance(decoder_config, FixedBlockSequenceConfig):
+        block_hf = block_converter_class.export_config(decoder_config.block)
+    else:
+        raise NotImplementedError(f"Unsupported decoder type: {type(decoder_config).__name__}")
+    return {**block_hf, "num_hidden_layers": decoder_config.num_blocks}
+
+
+class LlamaDecoderConverter:
+    """Imperative dispatcher for the polymorphic Fixed/Pattern block sequence.
+
+    Used by formats that don't compose at the :class:`LlamaBaseModelConverter` level — currently only
+    Pixtral's vision encoder (:class:`PixtralEncoderConverter`) and Apriel's per-position hybrid layout
+    dispatcher inherit from it. The standard text formats (Mistral/Qwen2/Mixtral) use the inline dispatch
+    inside :class:`LlamaBaseModelConverter._create_config_converters` instead, parameterised by
+    ``block_converter_class``.
     """
 
     block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
@@ -491,16 +514,7 @@ class LlamaDecoderConverter:
 
     @classmethod
     def export_config(cls, decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
-        if isinstance(decoder_config, PatternBlockSequenceConfig):
-            exports = [cls.block_converter_class.export_config(block) for block in decoder_config.blocks.values()]
-            for other in exports[1:]:
-                Assert.eq(exports[0], other)
-            block_hf = exports[0]
-        elif isinstance(decoder_config, FixedBlockSequenceConfig):
-            block_hf = cls.block_converter_class.export_config(decoder_config.block)
-        else:
-            raise NotImplementedError(f"Unsupported decoder type: {type(decoder_config).__name__}")
-        return {**block_hf, "num_hidden_layers": decoder_config.num_blocks}
+        return _llama_decoder_export(decoder_config, cls.block_converter_class)
 
     @classmethod
     def get_converters(
@@ -599,37 +613,44 @@ class LlamaHeadConverter(ConfigSectionConverter):
 
 
 class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
-    """Top-level converter for ``GPTBaseModelConfig`` ↔ Llama HF dict."""
+    """Top-level converter for ``GPTBaseModelConfig`` ↔ Llama HF dict.
+
+    Subclasses (Mistral, Qwen2, Mixtral, MTP-Llama, …) override ``block_converter_class`` to plug their
+    per-block declarations into the polymorphic Fixed/Pattern decoder dispatch held here.
+    """
 
     fast_llm_config_class = GPTBaseModelConfig
 
-    decoder_converter_class: typing.ClassVar[type[LlamaDecoderConverter]] = LlamaDecoderConverter
     embeddings_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaEmbeddingsConverter
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
     head_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaHeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        decoder_converter_class = cls.decoder_converter_class
+        block_converter_class = cls.block_converter_class
 
         def _decoder_export(parent: Config) -> dict:
-            return {(k,): v for k, v in decoder_converter_class.export_config(parent.decoder).items()}
+            return {(k,): v for k, v in _llama_decoder_export(parent.decoder, block_converter_class).items()}
 
         def _decoder_import(hf_dict: dict) -> dict:
-            return {("decoder",): decoder_converter_class.import_config(hf_dict)}
+            return {
+                ("decoder",): {
+                    "block": block_converter_class.import_config(hf_dict),
+                    "num_blocks": hf_dict["num_hidden_layers"],
+                }
+            }
 
         return {
             "embeddings": NestedConfigConverter(("embeddings",), cls.embeddings_converter_class),
             "head": NestedConfigConverter(("head",), cls.head_converter_class),
             "decoder": CustomConfigConverter(
                 fast_llm_paths=(("decoder",),),
-                # The Custom wraps the imperative LlamaDecoderConverter, which delegates to
-                # cls.decoder_converter_class.block_converter_class (a ConfigSectionConverter). The
-                # block converter's flat-merge declarations claim all per-block top-level keys; pull
-                # them up here so the HF coverage check sees them as covered. ``num_hidden_layers``
-                # is consumed by LlamaDecoderConverter itself.
+                # The block converter's flat-merge declarations claim all per-block top-level keys; pull
+                # them up here so the HF coverage check sees them as covered. ``num_hidden_layers`` is
+                # consumed by the Fixed/Pattern dispatch above.
                 hf_paths=(
                     ("num_hidden_layers",),
-                    *cls.decoder_converter_class.block_converter_class._consumed_hf_paths(),
+                    *block_converter_class._consumed_hf_paths(),
                 ),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
@@ -650,9 +671,20 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        decoder_config = config.decoder
+        block_config = (
+            decoder_config.block
+            if isinstance(decoder_config, FixedBlockSequenceConfig)
+            else next(iter(decoder_config.blocks.values()))
+        )
+        block_converters: list[WeightConverter] = []
+        for block_index in range(decoder_config.num_blocks):
+            block_converters += cls.block_converter_class.get_converters(
+                block_config, f"decoder.{block_index}", f"model.layers.{block_index}"
+            )
         return [
             *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
-            *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
+            *block_converters,
             *cls.head_converter_class.get_converters(config, exported_config),
         ]
 

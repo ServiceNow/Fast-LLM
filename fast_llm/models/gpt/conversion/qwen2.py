@@ -16,7 +16,6 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBaseModelConverter,
     LlamaBlockConverter,
-    LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     LlamaMLPConverter,
@@ -119,22 +118,32 @@ class Qwen2BlockConverter(LlamaBlockConverter):
     mlp_converter_class: typing.ClassVar[type[Qwen2MLPConverter]] = Qwen2MLPConverter
 
 
-class Qwen2DecoderConverter(LlamaDecoderConverter):
-    block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
-
-
 class Qwen2HeadConverter(LlamaHeadConverter):
     block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
 
 
+def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
+    if hf_dict.get("use_mrope") is True:
+        raise AssertionError("MRoPE (use_mrope=True) is not supported by the Qwen2 converter")
+    return {}
+
+
 class Qwen2BaseModelConverter(LlamaBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[Qwen2DecoderConverter]] = Qwen2DecoderConverter
+    block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
     head_converter_class: typing.ClassVar[type[Qwen2HeadConverter]] = Qwen2HeadConverter
 
     @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
-        assert hf_dict.get("use_mrope") is not True, "MRoPE (use_mrope=True) is not supported by the Qwen2 converter"
-        return super().import_config(hf_dict)
+    def _create_config_converters(cls) -> dict:
+        return {
+            **super()._create_config_converters(),
+            # Refuse MRoPE on import; the export path can't produce ``use_mrope=True`` because Fast-LLM
+            # has no rotary type that maps to it.
+            "use_mrope_guard": ImportOnlyConfigConverter(
+                fast_llm_paths=(),
+                hf_paths=(("use_mrope",),),
+                import_fn=_qwen2_mrope_guard_import,
+            ),
+        }
 
     @classmethod
     def _validate_export(cls, config: GPTBaseModelConfig) -> None:
