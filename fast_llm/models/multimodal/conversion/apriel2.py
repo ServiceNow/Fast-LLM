@@ -332,15 +332,15 @@ class Apriel2EmbeddingsConverter(ConfigSectionConverter):
         ]
 
 
-class Apriel2VisionAdapterConverter(ConfigSectionConverter, LlavaVisionAdapterConverter):
+class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
     """Converts :class:`MLPConfig` (adapter) ↔ Apriel2 HF ``adapter`` subdict.
 
     Apriel2 nests the adapter shape under ``adapter`` and uses the typed ``{type: mlp, ...}`` dict-of-fields
     layout, distinct from Llava's flat top-level ``projector_hidden_act``/``multimodal_projector_bias`` shape.
 
-    MRO ordering: :class:`ConfigSectionConverter` (declarative) comes before :class:`LlavaVisionAdapterConverter`
-    (imperative) so the declarative ``import_config``/``export_config`` are picked up. ``get_converters`` is
-    inherited from Llava (weight-side imperative).
+    Inherits declarative ``import_config``/``export_config`` from :class:`ConfigSectionConverter` via
+    :class:`LlavaVisionAdapterConverter`, and weight-side ``get_converters`` from Llava (same ``linear_1`` /
+    ``linear_2`` weight names as Llava).
     """
 
     fast_llm_config_class = MLPConfig

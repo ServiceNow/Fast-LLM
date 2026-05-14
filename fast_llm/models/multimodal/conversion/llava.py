@@ -37,7 +37,7 @@ from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiMo
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert, div, safe_merge_dicts
+from fast_llm.utils import Assert, div
 
 
 class PixtralNormalizationConverter(LlamaNormalizationConverter):
@@ -80,6 +80,15 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
             "head_groups": ImportOnlyConfigConverter(
                 fast_llm_paths=(("head_groups",),),
                 import_fn=lambda hf: {("head_groups",): hf["num_attention_heads"]},
+            ),
+            # Llava's PixtralVisionConfig has no ``head_dim`` field — it is derived as ``hidden_size //
+            # num_attention_heads``. Don't emit head_dim on export (would otherwise need to be popped
+            # downstream); on import, derive head_size from the same expression. Invariant validated by
+            # :class:`LlavaVisionModelConverter._validate_export`, which has access to the parent's
+            # ``hidden_size``.
+            "head_size": ImportOnlyConfigConverter(
+                fast_llm_paths=(("head_size",),),
+                import_fn=lambda hf: {("head_size",): div(hf["hidden_size"], hf["num_attention_heads"])},
             ),
             # Pixtral always uses 2D rotary; only ``theta`` round-trips. The flat (v4) vs ``rope_parameters`` (v5)
             # layout follows the active transformers major version, mirroring the Llama parent.
@@ -191,27 +200,46 @@ class PixtralEmbeddingsConverter(ConfigSectionConverter):
         ]
 
 
-class LlavaVisionAdapterConverter:
+class LlavaVisionAdapterConverter(ConfigSectionConverter):
+    """Converts the vision adapter :class:`MLPConfig` ↔ Llava's flat top-level adapter fields
+    (``projector_hidden_act``, ``multimodal_projector_bias``).
+
+    Wrinkle: the adapter's ``intermediate_size`` derives from the **text** half of the model
+    (``text_config["hidden_size"]``). The cross-section reference is reachable because this converter is
+    flat-merged at the :class:`LlavaBaseModelConverter` scope, where ``text_config`` lives as a sibling
+    HF top-level key.
+    """
+
+    fast_llm_config_class = MLPConfig
+    hf_type_name = "mlp"
+
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "intermediate_size": config["text_config"]["hidden_size"],
-            "add_linear_biases": config["multimodal_projector_bias"],
-            "gated": False,
-            "activation": ActivationType.from_hf_name(config["projector_hidden_act"]),
+            # Cross-section: imported from text_config.hidden_size. No HF claim — text_config is claimed
+            # by the language model converter at the base level.
+            "intermediate_size": ImportOnlyConfigConverter(
+                fast_llm_paths=(("intermediate_size",),),
+                import_fn=lambda hf: {("intermediate_size",): hf["text_config"]["hidden_size"]},
+            ),
+            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("multimodal_projector_bias",)),
+            "gated": ConstantImportConfigConverter(("gated",), False),
+            "activation": CustomConfigConverter(
+                fast_llm_paths=(("activation",),),
+                hf_paths=(("projector_hidden_act",),),
+                export_fn=lambda c: {("projector_hidden_act",): c.activation.hf_name},
+                import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["projector_hidden_act"])},
+            ),
+            # Per-layer ``bias.enabled`` has no HF representation; defaults round-trip. Validated below.
+            "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
         }
 
     @classmethod
-    def export_config(cls, config: MLPConfig) -> dict:
-        Assert.custom(isinstance, config, MLPConfig)
+    def _validate_export(cls, config: MLPConfig) -> None:
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
-        assert not config.gated
 
-        return {
-            "projector_hidden_act": config.activation.hf_name,
-            "multimodal_projector_bias": config.add_linear_biases,
-        }
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -231,39 +259,63 @@ class LlavaVisionAdapterConverter:
         ]
 
 
-class LlavaVisionModelConverter:
-    vision_adapter_converter_class: typing.ClassVar[type[LlavaVisionAdapterConverter]] = LlavaVisionAdapterConverter
+class LlavaVisionModelConverter(ConfigSectionConverter):
+    """Converts :class:`VisionEncoderConfig` ↔ Llava's ``vision_config`` HF subdict.
+
+    Declarations operate relative to ``vision_config`` (parent nests this converter via
+    ``NestedConfigConverter(hf_path=("vision_config",))``). The adapter is *not* declared here — it
+    lives at the base level because its Fast-LLM intermediate_size derives from text_config.hidden_size,
+    a cross-section reference only visible at the top of the HF dict.
+    """
+
+    fast_llm_config_class = VisionEncoderConfig
+
     embeddings_converter_class: typing.ClassVar[type[PixtralEmbeddingsConverter]] = PixtralEmbeddingsConverter
     encoder_converter_class: typing.ClassVar[type[PixtralEncoderConverter]] = PixtralEncoderConverter
     model_type: typing.ClassVar[str] = "pixtral"
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        Assert.eq(config["vision_config"]["model_type"], cls.model_type)
+    def _create_config_converters(cls) -> dict:
+        encoder_cls = cls.encoder_converter_class
+
+        def _encoder_export(config: VisionEncoderConfig) -> dict:
+            return {(k,): v for k, v in encoder_cls.export_config(config.encoder).items()}
+
+        def _encoder_import(hf_dict: dict) -> dict:
+            return {("encoder",): encoder_cls.import_config(hf_dict)}
+
         return {
-            "embeddings": cls.embeddings_converter_class.import_config(config["vision_config"]),
-            "encoder": cls.encoder_converter_class.import_config(config["vision_config"]),
-            "adapter": cls.vision_adapter_converter_class.import_config(config),
-            "hidden_size": config["vision_config"]["hidden_size"],
+            # Flat-merged into vision_config: embeddings (PatchEmbeddingsConverter writes patch_size/etc),
+            # encoder (LlamaDecoderConverter dispatch — Custom-wrapped since it stays imperative).
+            "embeddings": NestedConfigConverter(("embeddings",), cls.embeddings_converter_class),
+            "encoder": CustomConfigConverter(
+                fast_llm_paths=(("encoder",),),
+                hf_paths=(
+                    ("num_hidden_layers",),
+                    *encoder_cls.block_converter_class._consumed_hf_paths(),
+                ),
+                export_fn=_encoder_export,
+                import_fn=_encoder_import,
+                recurses=True,
+            ),
+            "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
+            # Llava's vision_config carries a literal ``model_type: "pixtral"``;
+            # ``ConstantExportConfigConverter`` emits on export and asserts equality on import.
+            "model_type": ConstantExportConfigConverter(("model_type",), cls.model_type),
+            # Adapter is handled at LlavaBaseModelConverter scope (sees text_config). Mark recursively
+            # consumed here so the architecture walker sees the sub-tree as claimed at this level too.
+            "adapter": IgnoredConfigConverter(("adapter",)),
         }
 
     @classmethod
-    def export_config(cls, config: VisionEncoderConfig) -> dict:
-        Assert.custom(isinstance, config, VisionEncoderConfig)
-        vision_config = safe_merge_dicts(
-            cls.embeddings_converter_class.export_config(config.embeddings),
-            cls.encoder_converter_class.export_config(config.encoder),
-            {"hidden_size": config.hidden_size, "model_type": cls.model_type},
-        )
+    def _validate_export(cls, config: VisionEncoderConfig) -> None:
+        # Llava's PixtralVisionConfig does not carry head_dim — it is derived as ``hidden_size //
+        # num_attention_heads``. Validate the Fast-LLM head_size satisfies this invariant.
+        mixer = config.encoder.block.mixer
+        if isinstance(mixer, AttentionConfig):
+            Assert.eq(mixer.head_size * mixer.heads, config.hidden_size)
 
-        Assert.eq(
-            vision_config.pop("head_dim"), div(vision_config["hidden_size"], vision_config["num_attention_heads"])
-        )
-
-        return safe_merge_dicts(
-            {"vision_config": vision_config},
-            cls.vision_adapter_converter_class.export_config(config.adapter),
-        )
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
@@ -274,7 +326,7 @@ class LlavaVisionModelConverter:
             *cls.encoder_converter_class.get_converters(
                 config.encoder, "vision_encoder.encoder", "vision_tower.transformer.layers"
             ),
-            *cls.vision_adapter_converter_class.get_converters(
+            *LlavaVisionAdapterConverter.get_converters(
                 config.adapter, "vision_encoder.adapter", "multi_modal_projector"
             ),
         ]
@@ -305,36 +357,73 @@ class LlavaLanguageModelConverter(MistralBaseModelConverter):
     head_converter_class: typing.ClassVar[type[LlavaHeadConverter]] = LlavaHeadConverter
 
 
-class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
+class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+    """Top-level converter for Llava. Composes:
+
+    * ``text_config`` HF subdict ← :class:`LlavaLanguageModelConverter` (Mistral text base).
+    * ``vision_config`` HF subdict ← :class:`LlavaVisionModelConverter` (Pixtral vision encoder).
+    * Top-level adapter fields (``projector_hidden_act``, ``multimodal_projector_bias``) ←
+      :class:`LlavaVisionAdapterConverter`, flat-merged because the adapter's ``intermediate_size``
+      derives from ``text_config.hidden_size``.
+    * Top-level multimodal metadata (``image_token_index``, ``vision_feature_select_strategy``,
+      ``vision_feature_layer``).
+    """
+
+    fast_llm_config_class = MultiModalBaseModelConfig
+
     vision_model_converter_class: typing.ClassVar[type[LlavaVisionModelConverter]] = LlavaVisionModelConverter
+    vision_adapter_converter_class: typing.ClassVar[type[LlavaVisionAdapterConverter]] = LlavaVisionAdapterConverter
     # TODO: Make it flexible?
     language_model_converter_class: typing.ClassVar[type[LlavaLanguageModelConverter]] = LlavaLanguageModelConverter
     # TODO: Is tie_word_embeddings supported?
 
     @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return safe_merge_dicts(
-            {
-                "vision_encoder": cls.vision_model_converter_class.import_config(config),
-                "image_token_index": config["image_token_index"],
-            },
-            cls.language_model_converter_class.import_config(config["text_config"]),
-        )
+    def _create_config_converters(cls) -> dict:
+        text_base_cls = cls.language_model_converter_class
+        vision_cls = cls.vision_model_converter_class
+        adapter_cls = cls.vision_adapter_converter_class
+
+        # The Fast-LLM ``MultiModalBaseModelConfig`` IS-A ``GPTBaseModelConfig`` (multi-inherits via
+        # ``VisionMultiModalModelConfig``), so ``text_base_cls.export_config(config)`` works directly on
+        # the multimodal config: its declarations only touch GPTBaseModelConfig fields, which exist here.
+        def _text_export(config: MultiModalBaseModelConfig) -> dict:
+            return {("text_config",): text_base_cls.export_config(config)}
+
+        def _text_import(hf_dict: dict) -> dict:
+            return {(k,): v for k, v in text_base_cls.import_config(hf_dict["text_config"]).items()}
+
+        return {
+            "text_base": CustomConfigConverter(
+                fast_llm_paths=(
+                    ("embeddings",),
+                    ("decoder",),
+                    ("head",),
+                    ("hidden_size",),
+                    ("tied_embedding_weight",),
+                    ("peft",),
+                ),
+                hf_paths=(("text_config",),),
+                export_fn=_text_export,
+                import_fn=_text_import,
+                recurses=True,
+            ),
+            "vision_encoder": NestedConfigConverter(("vision_encoder",), vision_cls, hf_path=("vision_config",)),
+            # Adapter flat-merged at top level: its import sees text_config.hidden_size as a sibling key.
+            "adapter": NestedConfigConverter(("vision_encoder", "adapter"), adapter_cls, hf_path=None),
+            "image_token_index": RenameConfigConverter(("image_token_index",), ("image_token_index",)),
+            "vision_feature_select_strategy": ConstantExportConfigConverter(
+                ("vision_feature_select_strategy",), "full"
+            ),
+            "vision_feature_layer": ConstantExportConfigConverter(("vision_feature_layer",), -1),
+        }
 
     @classmethod
-    def export_config(cls, config: MultiModalBaseModelConfig) -> dict:
-        Assert.custom(isinstance, config, MultiModalBaseModelConfig)
-        assert config.image_token_index is not None
-        out = safe_merge_dicts(
-            cls.vision_model_converter_class.export_config(config.vision_encoder),
-            {
-                "text_config": cls.language_model_converter_class.export_config(config),
-                "image_token_index": config.image_token_index,
-                "vision_feature_select_strategy": "full",
-                "vision_feature_layer": -1,
-            },
-        )
-        return out
+    def _validate_export(cls, config: MultiModalBaseModelConfig) -> None:
+        # Llava requires both a vision encoder and an image_token_index to be set.
+        Assert.custom(lambda v: v is not None, config.vision_encoder)
+        Assert.custom(lambda v: v is not None, config.image_token_index)
+
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
