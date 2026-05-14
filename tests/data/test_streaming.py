@@ -56,7 +56,7 @@ def test_streaming_dataset(
     worker_resources: WorkerResources,
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
-    stream_config = StreamingDatasetConfig(port=worker_resources.torchrun_port, timeout=1)
+    stream_config = StreamingDatasetConfig(port=worker_resources.data_streaming_port, timeout=1)
     dataset_iterator = RedisStreamingDataset(stream_config).iterate(SamplingConfig(), len(documents), 0)
     documents = [document if isinstance(document, dict) else {"tokens": list(document)} for document in documents]
     for document in documents:
@@ -126,7 +126,7 @@ def test_streaming_sampled_dataset(
 ):
     """StreamingDataset should read a message and convert it into LanguageModelSample."""
     dataset_iterator = iter(
-        StreamingDatasetConfig(port=worker_resources.torchrun_port, timeout=1).build_and_sample(
+        StreamingDatasetConfig(port=worker_resources.data_streaming_port, timeout=1).build_and_sample(
             SamplingConfig(truncate_documents=False, micro_batch_size=5, predicted_tokens=0), 1, 0
         )
     )
@@ -161,13 +161,13 @@ def _get_distributed_config(distributed_config_dict: dict[str, typing.Any], worl
 
 
 def _run_test_data_streaming(
-    path: pathlib.Path, distributed_config: DistributedConfig, port: int, num_workers: int = 1
+    path: pathlib.Path, distributed_config: DistributedConfig, redis_port: int, num_workers: int = 1
 ):
-    redis_config = RedisConfig(port=port + 100, timeout=1)
+    redis_config = RedisConfig(port=redis_port, timeout=1)
 
     data = GPTData(
         GPTDataConfig(
-            datasets={"train": {"type": "streaming", "port": port + 100}},
+            datasets={"train": {"type": "streaming", "port": redis_port}},
             micro_batch_size=_SEQUENCE_LENGTH,
             truncate_documents=False,
         ),
@@ -218,7 +218,7 @@ def check_data_streaming_results(path: pathlib.Path, distributed_config: Distrib
 
 
 def _run_test_data_streaming_distributed(
-    test_context: DistributedTestContext, base_path: pathlib.Path, port: int
+    test_context: DistributedTestContext, base_path: pathlib.Path, redis_port: int
 ) -> None:
     # Import all dynamic classes. TODO: needed?
     import fast_llm.cli  # noqa
@@ -228,14 +228,14 @@ def _run_test_data_streaming_distributed(
             logger.info(name, subtest.do_run)
             if subtest.do_run:
                 distributed_config = _get_distributed_config(distributed_config_dict, num_gpus)
-                _run_test_data_streaming(base_path / name, distributed_config, port)
+                _run_test_data_streaming(base_path / name, distributed_config, redis_port)
 
 
 @pytest.mark.parametrize("num_workers", (0, 1))
 def test_data_streaming(data_result_path, worker_resources, num_workers):
     distributed_config = _get_distributed_config({})
     path = data_result_path / f"data_streaming/single_gpu_workers_{num_workers}"
-    _run_test_data_streaming(path, distributed_config, worker_resources.torchrun_port, num_workers)
+    _run_test_data_streaming(path, distributed_config, worker_resources.data_streaming_port, num_workers)
     check_data_streaming_results(path, distributed_config)
 
 
@@ -258,7 +258,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
 def test_run_data_streaming_distributed(run_parallel_script, data_result_path, worker_resources):
     run_parallel_script(
         _run_test_data_streaming_distributed,
-        (data_result_path / "data_streaming", worker_resources.torchrun_port),
+        (data_result_path / "data_streaming", worker_resources.data_streaming_port),
         world_size=4,
         backend=DistributedBackend.gloo,
         use_cuda=False,  # Disable device count check.
