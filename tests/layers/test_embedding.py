@@ -21,6 +21,7 @@ NUM_POSITION_EMBEDDINGS = 128
 @dataclasses.dataclass
 class EmbeddingTestConfig:
     name: str
+    embedding_scale: float = 1.0
     compute_dtype: DataType = DataType.float32
     full_precision_residual: bool = False
     with_position_embeddings: bool = False
@@ -33,6 +34,7 @@ class EmbeddingTestConfig:
     def get_config(self) -> GPTModelConfig:
         embeddings: dict = {
             "vocab_size": VOCAB_SIZE,
+            "embedding_scale": self.embedding_scale,
             "full_precision_residual": self.full_precision_residual,
         }
         if self.with_position_embeddings:
@@ -88,6 +90,9 @@ class EmbeddingTestConfig:
         if mask_inputs:
             embeddings = embeddings * token_mask.unsqueeze(-1)
 
+        if self.embedding_scale != 1.0:
+            embeddings = embeddings * self.embedding_scale
+
         return embeddings.to(dtype=self.residual_dtype)
 
 
@@ -103,6 +108,7 @@ _variants = [
     ("float32", {}),
     ("bfloat16", {"compute_dtype": DataType.bfloat16}),
     ("full_precision_residual", {"full_precision_residual": True}),
+    ("embedding_scale", {"embedding_scale": 2.0}),
 ]
 
 

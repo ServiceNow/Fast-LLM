@@ -39,12 +39,22 @@ class MixtralMLPConverter(LlamaMLPConverter):
             # the in-memory config independently. The only architecture-hint sub-field is ``router.weight``,
             # a ParameterConfig with no architecture sub-fields, so the blanket carries no real risk.
             "router": IgnoredConfigConverter(("router",)),
+            "router_normalization": ConstantImportConfigConverter(("router_normalization",), None),
+            "router_scale": IgnoredConfigConverter(("router_scale",)),
+            "router_input_scale": ConstantImportConfigConverter(("router_input_scale",), 1.0),
+            "router_per_expert_scale": IgnoredConfigConverter(("router_per_expert_scale",)),
             # Router / inference toggles surfaced by HF but not consumed by Fast-LLM's MoEMLPConfig
             # (auxiliary_loss_coefficient and jitter_eps are FieldHint.feature, not architecture).
             "router_runtime_unsupported": IgnoredConfigConverter(
                 hf_paths=(("router_aux_loss_coef",), ("router_jitter_noise",), ("output_router_logits",)),
             ),
         }
+
+    @classmethod
+    def _validate_export(cls, config: MoEMLPConfig) -> None:
+        super()._validate_export(config)
+        assert not config.router_scale.enabled
+        assert not config.router_per_expert_scale.enabled
 
     @classmethod
     def get_converters(

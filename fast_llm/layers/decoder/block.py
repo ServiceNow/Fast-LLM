@@ -6,7 +6,8 @@ import torch
 
 from fast_llm.core.distributed import ReduceOp, all_reduce, set_generator
 from fast_llm.engine.base_model.config import LossDef, ResourceUsageConfig
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.config_utils.initialization import init_ones_
+from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.utils import AuxiliaryLoss
@@ -86,8 +87,26 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input = return_input
-        self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
-        self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.norm_1 = (
+            self._config.normalization
+            if self._config.pre_mixer_normalization is None
+            else self._config.pre_mixer_normalization
+        ).get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.norm_2 = (
+            self._config.normalization
+            if self._config.pre_mlp_normalization is None
+            else self._config.pre_mlp_normalization
+        ).get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.post_mixer_norm = (
+            self._config.post_mixer_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.post_mixer_normalization is not None
+            else None
+        )
+        self.post_mlp_norm = (
+            self._config.post_mlp_normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+            if self._config.post_mlp_normalization is not None
+            else None
+        )
 
         self.mixer = self._config.mixer.get_layer(
             self._distributed_config,
@@ -105,6 +124,13 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
             return_bias=True,
         )
 
+        self.output_scale = self._config.output_scale.get_parameter(
+            (scalar_dim,),
+            default_initialization=init_ones_,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
+        )
+
     def setup(self, distributed: Distributed) -> None:
         super().setup(distributed)
         self.mixer.setup(distributed)
@@ -112,11 +138,18 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
 
     @torch.compile
     def _bias_dropout_add(
-        self, input_: torch.Tensor, bias: torch.Tensor | None, residual: torch.Tensor
+        self,
+        input_: torch.Tensor,
+        bias: torch.Tensor | None,
+        residual: torch.Tensor,
+        output_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
-        return residual + torch.dropout(input_, self._config.dropout, self.training)
+        output = residual + torch.dropout(input_, self._config.dropout, self.training)
+        if output_scale is not None:
+            output = output * output_scale
+        return output
 
     def forward(
         self,
@@ -145,14 +178,24 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
                 bias = None
             hidden_states = self._activation_distillation_loss(hidden_states, kwargs, losses, metrics)
 
+        if self.post_mixer_norm is not None:
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
+            hidden_states = self.post_mixer_norm(hidden_states)
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         self._debug(input_, "mixer_residual", hidden_dims, kwargs)
         hidden_states = self.norm_2(input_)
         self._debug(hidden_states, "norm_2", hidden_dims, kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
+        if self.post_mlp_norm is not None:
+            if bias is not None:
+                hidden_states = hidden_states + bias
+                bias = None
+            hidden_states = self.post_mlp_norm(hidden_states)
         with set_generator(generator):
-            hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
+            hidden_states = self._bias_dropout_add(hidden_states, bias, input_, self.output_scale)
         self._debug(hidden_states, None, hidden_dims, kwargs)
 
         if self._return_input:

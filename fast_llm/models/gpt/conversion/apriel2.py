@@ -170,6 +170,10 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
             "linear_layers": _per_layer_bias_converter(layer_names),
             "causal": IgnoredConfigConverter(("causal",)),
             "softmax_scale_power": IgnoredConfigConverter(("softmax_scale_power",)),
+            "query_norm": ConstantImportConfigConverter(("query_norm",), None),
+            "key_norm": ConstantImportConfigConverter(("key_norm",), None),
+            "value_norm": ConstantImportConfigConverter(("value_norm",), None),
+            "shared_key_value": ConstantImportConfigConverter(("shared_key_value",), False),
         }
 
     # --- weight side (imperative) ---
@@ -687,6 +691,8 @@ class Apriel2MLPConverter(ConfigSectionConverter):
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
             ),
             "layers": _per_layer_bias_converter(layer_names),
+            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
+            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
         }
 
     @classmethod
@@ -751,6 +757,11 @@ class Apriel2BlockConverter(ConfigSectionConverter):
                 hf_path=("normalization",),
                 registry=APRIEL2_NORM_REGISTRY,
             ),
+            "pre_mixer_normalization": ConstantImportConfigConverter(("pre_mixer_normalization",), None),
+            "pre_mlp_normalization": ConstantImportConfigConverter(("pre_mlp_normalization",), None),
+            "post_mixer_normalization": ConstantImportConfigConverter(("post_mixer_normalization",), None),
+            "post_mlp_normalization": ConstantImportConfigConverter(("post_mlp_normalization",), None),
+            "output_scale": IgnoredConfigConverter(("output_scale",)),
         }
 
     @classmethod
@@ -759,6 +770,7 @@ class Apriel2BlockConverter(ConfigSectionConverter):
         # (``Apriel2MLPConverter`` registered against ``MLPConfig``) and would silently descend into a
         # ``MoEMLPConfig`` via MRO, dropping every MoE-specific architecture field.
         Assert.is_(type(config.mlp), MLPConfig)
+        assert not config.output_scale.enabled
 
     # --- weight side (imperative) ---
 
@@ -909,6 +921,7 @@ class Apriel2HeadConverter(ConfigSectionConverter):
             # Apriel2 HF format does not support multi-token prediction; pin to 1 so any non-default value
             # fails on export instead of silently round-tripping.
             "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
+            "final_logit_softcap": ConstantImportConfigConverter(("final_logit_softcap",), None),
         }
 
     @classmethod

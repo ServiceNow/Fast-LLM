@@ -295,6 +295,8 @@ class LlamaMLPConverter(ConfigSectionConverter):
             "gated": ConstantImportConfigConverter(("gated",), True),
             # Llama doesn't expose per-layer bias overrides; the bias-match check lives on _validate_export.
             "layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
+            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
+            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
         }
 
     @classmethod
@@ -368,6 +370,10 @@ class LlamaAttentionConverter(ConfigSectionConverter):
                 import_fn=_llama_rotary_import,
                 recurses=True,
             ),
+            "query_norm": ConstantImportConfigConverter(("query_norm",), None),
+            "key_norm": ConstantImportConfigConverter(("key_norm",), None),
+            "value_norm": ConstantImportConfigConverter(("value_norm",), None),
+            "shared_key_value": ConstantImportConfigConverter(("shared_key_value",), False),
         }
 
     @classmethod
@@ -436,7 +442,16 @@ class LlamaBlockConverter(ConfigSectionConverter):
             "mixer": NestedConfigConverter(("mixer",), cls.mixer_converter_class),
             "mlp": NestedConfigConverter(("mlp",), cls.mlp_converter_class),
             "normalization": NestedConfigConverter(("normalization",), cls.normalization_converter_class),
+            "pre_mixer_normalization": ConstantImportConfigConverter(("pre_mixer_normalization",), None),
+            "pre_mlp_normalization": ConstantImportConfigConverter(("pre_mlp_normalization",), None),
+            "post_mixer_normalization": ConstantImportConfigConverter(("post_mixer_normalization",), None),
+            "post_mlp_normalization": ConstantImportConfigConverter(("post_mlp_normalization",), None),
+            "output_scale": IgnoredConfigConverter(("output_scale",)),
         }
+
+    @classmethod
+    def _validate_export(cls, config: DecoderBlockConfig) -> None:
+        assert not config.output_scale.enabled
 
     # --- weight side (imperative) ---
 
@@ -553,6 +568,7 @@ class LlamaEmbeddingsConverter(ConfigSectionConverter):
             "vocab_size": RenameConfigConverter(("vocab_size",), ("vocab_size",)),
             "word_embeddings": IgnoredConfigConverter(("word_embeddings",)),
             "position_embeddings": IgnoredConfigConverter(("position_embeddings",), ("num_position_embeddings",)),
+            "embedding_scale": ConstantImportConfigConverter(("embedding_scale",), 1.0),
         }
 
     @classmethod
@@ -587,6 +603,7 @@ class LlamaHeadConverter(ConfigSectionConverter):
             # ``RenameConfigConverter`` (the override replaces the parent's declaration in the returned
             # dict, so this ConstantImport never fires for MTP-Llama configs).
             "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
+            "final_logit_softcap": ConstantImportConfigConverter(("final_logit_softcap",), None),
         }
 
     # --- weight side (imperative) ---

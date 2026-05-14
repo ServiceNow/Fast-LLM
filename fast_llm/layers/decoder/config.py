@@ -3,7 +3,7 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig, combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import _BIG_PRIMES, DistributedConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
@@ -59,6 +59,17 @@ class MLPBaseConfig(BlockWithBiasConfig):
     """Abstract base configuration for MLP (feedforward) layers. Use `type: mlp` or `type: moe` to select a variant."""
 
     _abstract = True
+
+    pre_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP input.",
+        hint=FieldHint.architecture,
+    )
+    post_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output.",
+        hint=FieldHint.architecture,
+    )
 
     def get_layer(
         self,
@@ -159,6 +170,21 @@ class StochasticMixerConfig(MixerConfig):
         hint=FieldHint.architecture,
     )
 
+    predefined_layouts: list[list[str]] = Field(
+        default_factory=list,
+        desc="List of predefined layouts to oversample. Each layout is a list of mixer names, one per layer. "
+        "Mixer names must match keys in the mixers dict. All layouts must share a common length.",
+        hint=FieldHint.feature,
+    )
+
+    predefined_layout_probabilities: list[float] = Field(
+        default_factory=list,
+        desc="Per-layout sampling probability, parallel to predefined_layouts. "
+        "Each value must be in [0, 1]; the sum must be <= 1. The residual probability (1 - sum) "
+        "falls through to sampling_strategy.",
+        hint=FieldHint.feature,
+    )
+
     seed_shift: int = Field(
         default=_BIG_PRIMES[11],
         desc="Seed shift for mixer sampling reproducibility.",
@@ -193,6 +219,26 @@ class StochasticMixerConfig(MixerConfig):
             normalized_values = normalize_probabilities(list(self.sampling_weights.values()))
             self.sampling_weights = dict(zip(self.sampling_weights.keys(), normalized_values))
 
+        # Validate predefined layouts
+        if self.predefined_layouts:
+            Assert.eq(len(self.predefined_layout_probabilities), len(self.predefined_layouts))
+            mixer_names = set(self.mixers.keys())
+            common_length = len(self.predefined_layouts[0])
+            for i, (layout, probability) in enumerate(
+                zip(self.predefined_layouts, self.predefined_layout_probabilities, strict=True)
+            ):
+                unknown = set(layout) - mixer_names
+                if unknown:
+                    raise ValueError(
+                        f"predefined_layouts[{i}] contains unknown mixer names: {unknown}. "
+                        f"Valid names: {mixer_names}"
+                    )
+                Assert.eq(len(layout), common_length)
+                Assert.in_range_incl(probability, 0.0, 1.0)
+            Assert.leq(sum(self.predefined_layout_probabilities), 1.0)
+        elif self.predefined_layout_probabilities:
+            raise ValueError("predefined_layout_probabilities provided but predefined_layouts is empty")
+
     @property
     def layer_class(self) -> "type[StochasticMixer]":
         from fast_llm.layers.decoder.stochastic_mixer import StochasticMixer
@@ -215,7 +261,32 @@ class DecoderBlockConfig(BlockConfig):
     )
     # TODO: Review names
     normalization: NormalizationConfig = Field(
-        desc="Configuration for the block normalization layers.",
+        desc="Configuration for the block normalization layers. Used as default for `pre_mixer_normalization` and `pre_mlp_normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the mixer. Defaults to `normalization` when not set.",
+        hint=FieldHint.architecture,
+    )
+    pre_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to the residual before the MLP. Defaults to `normalization` when not set."
+        " Set to `{type: none}` to disable independently of the pre-mixer norm.",
+        hint=FieldHint.architecture,
+    )
+    post_mixer_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the mixer output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    post_mlp_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the MLP output before the residual add. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    output_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable scalar multiplied into the block output (after the MLP residual add).",
         hint=FieldHint.architecture,
     )
     # TODO: Review names

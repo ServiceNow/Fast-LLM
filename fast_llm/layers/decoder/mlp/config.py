@@ -3,13 +3,15 @@ import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.parameter import OptionalParameterConfig
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MLPBaseConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.decoder.mlp.mixture_of_experts import MixtureOfExpertMLP
+    from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP, MixtureOfExpertMLP
     from fast_llm.layers.decoder.mlp.mlp import MLP
 
 
@@ -97,6 +99,25 @@ class MoEMLPConfig(MLPConfig):
         desc="Configuration for the MoE router.",
         hint=FieldHint.architecture,
     )
+    router_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc="Optional normalization applied to the router input (independent of `pre_norm`, which goes to experts).",
+        hint=FieldHint.architecture,
+    )
+    router_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable per-feature scale applied to the router input after `router_normalization`.",
+        hint=FieldHint.architecture,
+    )
+    router_input_scale: float = Field(
+        default=1.0,
+        desc="Constant multiplied into the router input after `router_normalization` and `router_scale`."
+        " Set to `hidden_size ** -0.5` for Gemma-style routing.",
+        hint=FieldHint.architecture,
+    )
+    router_per_expert_scale: OptionalParameterConfig = Field(
+        desc="Optional learnable per-expert scale multiplied into the router scores after top-k selection.",
+        hint=FieldHint.architecture,
+    )
     experts: int = Field(
         default=2,
         desc="Number of MLP experts in a Mixture of Expert (MoE) model",
@@ -164,3 +185,33 @@ class MoEMLPConfig(MLPConfig):
         super()._validate()
         Assert.leq(self.shared_experts, self.experts)
         Assert.leq(self.shared_experts + self.experts_per_token, self.experts)
+
+
+@config_class(dynamic_type={MLPBaseConfig: "hybrid_moe"})
+class HybridMoEMLPConfig(MLPBaseConfig):
+    """Configuration for a MoE layer combining an always-active dense MLP with top-K routed experts."""
+
+    _abstract = False
+
+    dense: MLPConfig = Field(
+        desc="Configuration for the always-active dense MLP.",
+        hint=FieldHint.architecture,
+    )
+    routed: MoEMLPConfig = Field(
+        desc="Configuration for the top-K routed expert MLP.",
+        hint=FieldHint.architecture,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.eq(self.routed.shared_experts, 0)
+        # Both branches share an activation/gating shape in known checkpoint formats; reject
+        # divergence so that converters can emit a single value without picking a side silently.
+        Assert.eq(self.dense.gated, self.routed.gated)
+        Assert.eq(self.dense.activation, self.routed.activation)
+
+    @property
+    def layer_class(self) -> "type[HybridMoEMLP]":
+        from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP
+
+        return HybridMoEMLP

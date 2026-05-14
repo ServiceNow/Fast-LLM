@@ -233,6 +233,8 @@ class LlavaVisionAdapterConverter(ConfigSectionConverter):
             ),
             # Per-layer ``bias.enabled`` has no HF representation; defaults round-trip. Validated below.
             "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
+            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
+            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
         }
 
     @classmethod

@@ -81,11 +81,16 @@ def pytest_addoption(parser):
 class WorkerResources:
     torchrun_port: int
     rendezvous_port: int
+    data_streaming_port: int
+    model_streaming_port: int
 
 
 MAX_TEST_MEMORY = 5e9
 CUDA_CONTEXT_SIZE = 7e8
 TORCHRUN_DEFAULT_PORT = 25900
+PORTS_PER_WORKER = 32
+DATA_STREAMING_PORT_OFFSET = 2
+MODEL_STREAMING_PORT_OFFSET = 8
 
 
 def pytest_configure(config):
@@ -128,10 +133,15 @@ def pytest_configure(config):
                 f"Please reduce the number of workers to {int(gpu_memory/(MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE))*num_gpus} or less."
             )
 
+    worker_port_base = TORCHRUN_DEFAULT_PORT + PORTS_PER_WORKER * worker_id
     config.worker_resources = WorkerResources(
         # Each worker needs its own set of ports for safe distributed run. Hopefully these are free.
-        torchrun_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id,
-        rendezvous_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id + 1,
+        torchrun_port=worker_port_base,
+        rendezvous_port=worker_port_base + 1,
+        data_streaming_port=worker_port_base + DATA_STREAMING_PORT_OFFSET,
+        # Model streaming uses a contiguous range starting here: one port per redis
+        # producer plus one port per weights broadcast rendezvous.
+        model_streaming_port=worker_port_base + MODEL_STREAMING_PORT_OFFSET,
     )
 
     # Skip slow autotune for tests. The default config has the highest block size, so this shouldn't hide any bug.

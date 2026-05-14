@@ -20,6 +20,7 @@ from fast_llm.models.gpt.conversion.config import (
     Apriel2TextCheckpointFormat,
     DiffusionDreamCheckpointFormat,
     DiffusionLlamaCheckpointFormat,
+    Gemma4CheckpointFormat,
     LlamaCheckpointFormat,
     MistralCheckpointFormat,
     MixtralCheckpointFormat,
@@ -960,6 +961,120 @@ update_and_add_testing_config(
     # TP excluded because no gradient reductions implemented for TP norm in GDN (use STP instead).
     skip_tests=("sdp", "ms", GRAD_ACC, TP_NO_STP),
     requires_cuda=True,
+)
+
+
+# Use init_1 for extra norms to keep the residual stream at small scale (~0.35).
+# Default ones-init would normalize small layer outputs to unit scale before the residual add,
+# growing the stream to ~1.5 per block and causing bf16 absolute errors to exceed compare_factor=2.
+# query_norm/key_norm init_1 also keeps attention logits small (softmax_scale_power=0 otherwise
+# amplifies bf16 relative error 3x). ParameterConfig.initialization is FieldHint.feature so
+# this is invisible to the architecture comparison in test_load_pretrained.
+_gemma4_block_overrides = {
+    "post_mixer_normalization": {"type": "rms_norm", "weight": init_1},
+    "post_mlp_normalization": {"type": "rms_norm", "weight": init_1},
+    # MoE blocks normalize per branch inside HybridMoEMLP; DecoderBlock skips its own pre-MLP norm.
+    "pre_mlp_normalization": {"type": "none"},
+    # Must match the gemma4 converter's lr_scale=0 — frozen params are packed at the end of the stage,
+    # so a mismatch produces a shifted shard layout that fails round-trip.
+    "output_scale": {"enabled": True, "lr_scale": 0},
+}
+_gemma4_mixer_overrides = {
+    "softmax_scale_power": 0,
+    "query_norm": {"type": "rms_norm", "weight": init_1},
+    "key_norm": {"type": "rms_norm", "weight": init_1},
+    "value_norm": {"type": "fixed_rms_norm"},
+}
+# Hybrid MoE structure mirrors what `Gemma4HybridMoEMLPConverter.import_config` produces from the
+# real `google/gemma-4-26B-A4B` config (always-active dense + top-k routed, both with their own
+# pre/post norms, plus router preprocessing).
+_gemma4_moe_mlp = {
+    "type": "hybrid_moe",
+    "dense": {
+        "intermediate_size": 1024,
+        "gated": True,
+        "add_linear_biases": False,
+        "activation": "gelu",  # matches HF "gelu_pytorch_tanh"
+        "layer_1": {"weight": init_1},
+        "layer_2": {"weight": init_2},
+        "pre_norm": {"type": "rms_norm", "weight": init_1},
+        "post_norm": {"type": "rms_norm", "weight": init_1},
+    },
+    "routed": {
+        "intermediate_size": 256,
+        "gated": True,
+        "add_linear_biases": False,
+        "activation": "gelu",
+        "experts": 4,
+        "experts_per_token": 2,
+        "layer_1": {"weight": init_1},
+        "layer_2": {"weight": init_2},
+        "router": {"weight": init_1},
+        "pre_norm": {"type": "rms_norm", "weight": init_1},
+        "post_norm": {"type": "rms_norm", "weight": init_1},
+        "router_normalization": {"type": "fixed_rms_norm"},
+        "router_scale": {"enabled": True},
+        "router_input_scale": 256**-0.5,  # hidden_size ** -0.5 (hidden_size=256 in tests)
+        "router_per_expert_scale": {"enabled": True},
+    },
+}
+
+update_and_add_testing_config(
+    # Tests Gemma4 converter: pattern decoder with alternating sliding/full attention,
+    # per-head norms (q/k/v), post-attention and post-MLP norms, embedding scale,
+    # HybridMoE MLP with router preprocessing (norm + scale + 1/sqrt(H) + per-expert scale).
+    "llama",
+    "gemma4",
+    updates={
+        ("model", "base_model", "tied_embedding_weight"): True,
+        ("model", "base_model", "embeddings", "embedding_scale"): 16.0,  # sqrt(hidden_size=256); must match converter
+        ("model", "base_model", "decoder"): {
+            "type": "pattern",
+            "blocks": {
+                "sliding_attention": {
+                    **copy.deepcopy(_llama_block),
+                    **_gemma4_block_overrides,
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        **_gemma4_mixer_overrides,
+                        "window_size": 128,
+                    },
+                    "mlp": copy.deepcopy(_gemma4_moe_mlp),
+                },
+                "full_attention": {
+                    **copy.deepcopy(_llama_block),
+                    **_gemma4_block_overrides,
+                    "mixer": {
+                        **copy.deepcopy(_llama_block["mixer"]),
+                        **_gemma4_mixer_overrides,
+                        "rotary": {"type": "proportional", "partial_rotary_factor": 0.25},
+                    },
+                    "mlp": copy.deepcopy(_gemma4_moe_mlp),
+                },
+            },
+            "pattern": ["sliding_attention", "full_attention"],
+            "num_blocks": 2,
+        },
+    },
+    megatron_args=None,
+    checkpoint_format=Gemma4CheckpointFormat,
+    # 8.0 trades two competing fp16/bf16 noise sources:
+    #   - init_1 on extra norms keeps the residual stream small (~0.35) and tiny norm gradients
+    #     (~5e-6 / ~3e-5) hit the fp16 rms_eps floor → would need ~8x slack.
+    #   - ones-init on the same norms grows the residual stream to ~1.5 per block, blowing up
+    #     bf16 absolute errors past compare_factor=2.
+    # Neither end works at compare_factor=2; init_1 + 8.0 is the working balance.
+    compare_factor=8.0,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    skip_tests=("sdp", "ms"),
+    requires_cuda=False,
 )
 
 

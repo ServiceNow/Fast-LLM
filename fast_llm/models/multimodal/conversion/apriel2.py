@@ -6,6 +6,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
     ConstantExportConfigConverter,
+    ConstantImportConfigConverter,
     CustomConfigConverter,
     IgnoredConfigConverter,
     NestedConfigConverter,
@@ -106,6 +107,10 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
                 ("query_layer",), ("key_layer",), ("value_layer",), ("dense_layer",)
             ),
             "softmax_scale_power": IgnoredConfigConverter(("softmax_scale_power",)),
+            "query_norm": ConstantImportConfigConverter(("query_norm",), None),
+            "key_norm": ConstantImportConfigConverter(("key_norm",), None),
+            "value_norm": ConstantImportConfigConverter(("value_norm",), None),
+            "shared_key_value": ConstantImportConfigConverter(("shared_key_value",), False),
         }
 
     @classmethod
@@ -143,6 +148,8 @@ class Apriel2VisionMLPConverter(ConfigSectionConverter):
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
             ),
             "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
+            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
+            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
         }
 
     @classmethod
@@ -184,7 +191,16 @@ class Apriel2VisionBlockConverter(ConfigSectionConverter):
             "normalization": NestedConfigConverter(
                 ("normalization",), cls.normalization_converter_class, hf_path=("normalization",)
             ),
+            "pre_mixer_normalization": ConstantImportConfigConverter(("pre_mixer_normalization",), None),
+            "pre_mlp_normalization": ConstantImportConfigConverter(("pre_mlp_normalization",), None),
+            "post_mixer_normalization": ConstantImportConfigConverter(("post_mixer_normalization",), None),
+            "post_mlp_normalization": ConstantImportConfigConverter(("post_mlp_normalization",), None),
+            "output_scale": IgnoredConfigConverter(("output_scale",)),
         }
+
+    @classmethod
+    def _validate_export(cls, config: DecoderBlockConfig) -> None:
+        assert not config.output_scale.enabled
 
     # --- weight side (imperative) ---
 
@@ -359,6 +375,8 @@ class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
                 import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
             ),
             "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
+            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
+            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
         }
 
     @classmethod
