@@ -303,6 +303,21 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
             # Llava's vision_config carries a literal ``model_type: "pixtral"``;
             # ``ConstantExportConfigConverter`` emits on export and asserts equality on import.
             "model_type": ConstantExportConfigConverter(("model_type",), cls.model_type),
+            # ``transformers.LlavaConfig.from_dict(...).save_pretrained(...)`` round-trips the
+            # vision_config through :class:`PixtralVisionConfig`, which fills in these default fields.
+            # Fast-LLM does not consume them; mark them ignored so the recursive coverage check accepts
+            # round-tripped saves. (``head_dim`` is normally not emitted because we override head_size to
+            # ImportOnly, but transformers fills it from ``hidden_size // num_attention_heads`` on load.)
+            "pixtral_hf_defaults": IgnoredConfigConverter(
+                hf_paths=(
+                    ("head_dim",),
+                    ("image_size",),
+                    ("initializer_factor",),
+                    ("layer_norm_eps",),
+                    ("projection_dim",),
+                    ("vocab_size",),
+                ),
+            ),
             # Adapter is handled at LlavaBaseModelConverter scope (sees text_config). Mark recursively
             # consumed here so the architecture walker sees the sub-tree as claimed at this level too.
             "adapter": IgnoredConfigConverter(("adapter",)),
@@ -416,6 +431,13 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
                 ("vision_feature_select_strategy",), "full"
             ),
             "vision_feature_layer": ConstantExportConfigConverter(("vision_feature_layer",), -1),
+            # ``transformers.LlavaConfig.save_pretrained(...)`` round-trips the top-level config through
+            # :class:`transformers.LlavaConfig`, which fills these defaults. Fast-LLM tracks
+            # ``tie_word_embeddings`` *inside* text_config (Llama's tied_embedding_weight), not at the
+            # Llava level; ``image_seq_length`` is a runtime/inference field, not architecture.
+            "llava_hf_defaults": IgnoredConfigConverter(
+                hf_paths=(("image_seq_length",), ("tie_word_embeddings",)),
+            ),
         }
 
     @classmethod
