@@ -19,6 +19,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Rotary2DConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
+from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import LanguageModelHeadConfig
@@ -141,6 +142,15 @@ class Apriel2VisionMLPConverter(Apriel2MLPConverter):
             "layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
         }
 
+    @classmethod
+    def _validate_export(cls, config: MLPConfig) -> None:
+        # The inherited weight side reads ``effective_bias(config.layer_X, config.add_linear_biases)``; if
+        # a per-layer override diverges from ``add_linear_biases`` the bias would silently include/exclude
+        # weight tensors that the HF format cannot describe (since per-layer bias is Ignored on the config
+        # side).
+        Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
+        Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
+
 
 class Apriel2VisionBlockConverter(ConfigSectionConverter):
     """Converts a vision :class:`DecoderBlockConfig` ↔ Apriel2's nested ``{mixer, mlp, normalization}`` block.
@@ -181,6 +191,10 @@ class Apriel2VisionBlockConverter(ConfigSectionConverter):
 
     @classmethod
     def _validate_export(cls, config: DecoderBlockConfig) -> None:
+        # Config side binds Apriel2RMSNormConverter via plain Nested (RMS-only), so this is currently
+        # unreachable in practice. Mirror the text-side assertion so a future widening of the config
+        # dispatch doesn't silently produce phantom norm_1.weight/norm_2.weight converters.
+        Assert.is_(type(config.normalization), RMSNormalizationConfig)
         Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod

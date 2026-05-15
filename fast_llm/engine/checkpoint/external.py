@@ -59,6 +59,22 @@ def _collect_architecture_paths(config: Config) -> list[tuple[str, ...]]:
     return paths
 
 
+def _safe_set_nested_dict_value(out: dict, path: tuple[str, ...], value: typing.Any) -> None:
+    """Set ``out[path] = value``, but raise via :class:`Assert.eq` if the path already holds a different value.
+
+    Converters share a single output dict during ``export_config``/``import_config``. Multiple converters may
+    legitimately write the same path (e.g. Llama's decoder block and head both produce ``rms_norm_eps``
+    via flat-merge), but only with the same value — a divergent value means a cross-section invariant has
+    been mis-modelled and the silent override would drop one side of the mismatch.
+    """
+    try:
+        existing = get_nested_dict_value(out, path)
+    except KeyError:
+        set_nested_dict_value(out, path, value)
+        return
+    Assert.eq(existing, value)
+
+
 # ============================================================
 # Config conversion primitives (declarative)
 # ============================================================
@@ -111,11 +127,11 @@ class RenameConfigConverter(ConfigConverter):
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         value = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
-        set_nested_dict_value(hf_out, self.hf_paths[0], value)
+        _safe_set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         value = get_nested_dict_value(hf_dict, self.hf_paths[0])
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
 
 class ConstantExportConfigConverter(ConfigConverter):
@@ -129,7 +145,7 @@ class ConstantExportConfigConverter(ConfigConverter):
         self._value = value
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
-        set_nested_dict_value(hf_out, self.hf_paths[0], self._value)
+        _safe_set_nested_dict_value(hf_out, self.hf_paths[0], self._value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         try:
@@ -154,7 +170,7 @@ class ConstantImportConfigConverter(ConfigConverter):
         Assert.eq(actual, self._value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], self._value)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], self._value)
 
 
 class DefaultConfigConverter(ConfigConverter):
@@ -176,14 +192,14 @@ class DefaultConfigConverter(ConfigConverter):
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         value = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
-        set_nested_dict_value(hf_out, self.hf_paths[0], value)
+        _safe_set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         try:
             value = get_nested_dict_value(hf_dict, self.hf_paths[0])
         except KeyError:
             value = self._hf_default_fn(hf_dict)
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
 
 class OptionalConfigConverter(ConfigConverter):
@@ -200,7 +216,7 @@ class OptionalConfigConverter(ConfigConverter):
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         value = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
         if value != self._sentinel:
-            set_nested_dict_value(hf_out, self.hf_paths[0], value)
+            _safe_set_nested_dict_value(hf_out, self.hf_paths[0], value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         try:
@@ -208,7 +224,7 @@ class OptionalConfigConverter(ConfigConverter):
         except KeyError:
             return
         if value != self._sentinel:
-            set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
+            _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], value)
 
 
 class IgnoredConfigConverter(ConfigConverter):
@@ -265,12 +281,12 @@ class CustomConfigConverter(ConfigConverter):
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         produced = self._export_fn(fast_llm_config)
         for path, value in produced.items():
-            set_nested_dict_value(hf_out, path, value)
+            _safe_set_nested_dict_value(hf_out, path, value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         produced = self._import_fn(hf_dict)
         for path, value in produced.items():
-            set_nested_dict_value(fast_llm_out, path, value)
+            _safe_set_nested_dict_value(fast_llm_out, path, value)
 
 
 class ImportOnlyConfigConverter(ConfigConverter):
@@ -307,7 +323,7 @@ class ImportOnlyConfigConverter(ConfigConverter):
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         produced = self._import_fn(hf_dict)
         for path, value in produced.items():
-            set_nested_dict_value(fast_llm_out, path, value)
+            _safe_set_nested_dict_value(fast_llm_out, path, value)
 
 
 class NestedConfigConverter(ConfigConverter):
@@ -345,12 +361,9 @@ class NestedConfigConverter(ConfigConverter):
             sub_hf = {self._hf_discriminator_key: self._converter_class.hf_type_name, **sub_hf}
         if self._hf_path is None:
             for key, value in sub_hf.items():
-                if key in hf_out:
-                    Assert.eq(hf_out[key], value)
-                else:
-                    hf_out[key] = value
+                _safe_set_nested_dict_value(hf_out, (key,), value)
         else:
-            set_nested_dict_value(hf_out, self._hf_path, sub_hf)
+            _safe_set_nested_dict_value(hf_out, self._hf_path, sub_hf)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_hf = get_nested_dict_value(hf_dict, self._hf_path) if self._hf_path is not None else hf_dict
@@ -358,7 +371,7 @@ class NestedConfigConverter(ConfigConverter):
             Assert.eq(sub_hf[self._hf_discriminator_key], self._converter_class.hf_type_name)
             sub_hf = {key: value for key, value in sub_hf.items() if key != self._hf_discriminator_key}
         sub_fast_llm = self._converter_class.import_config(sub_hf)
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
 
 class DispatchConfigConverter(ConfigConverter):
@@ -394,10 +407,10 @@ class DispatchConfigConverter(ConfigConverter):
         if converter_class.hf_type_name is not None:
             sub_hf = {self._hf_discriminator_key: converter_class.hf_type_name, **sub_hf}
         if self.hf_paths:
-            set_nested_dict_value(hf_out, self.hf_paths[0], sub_hf)
+            _safe_set_nested_dict_value(hf_out, self.hf_paths[0], sub_hf)
         else:
             for key, value in sub_hf.items():
-                hf_out[key] = value
+                _safe_set_nested_dict_value(hf_out, (key,), value)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_hf = get_nested_dict_value(hf_dict, self.hf_paths[0]) if self.hf_paths else hf_dict
@@ -408,7 +421,7 @@ class DispatchConfigConverter(ConfigConverter):
                 f"No converter registered for HF discriminator {type_name!r} at {'.'.join(self.fast_llm_paths[0])}"
             )
         sub_fast_llm = converter_class.import_config(sub_hf)
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
 
 class TypedDictContainerConfigConverter(ConfigConverter):
@@ -455,7 +468,7 @@ class TypedDictContainerConfigConverter(ConfigConverter):
             if converter_class.hf_type_name is not None:
                 sub_hf = {self._hf_discriminator_key: converter_class.hf_type_name, **sub_hf}
             out[name] = sub_hf
-        set_nested_dict_value(hf_out, self.hf_paths[0], out)
+        _safe_set_nested_dict_value(hf_out, self.hf_paths[0], out)
 
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
         sub_hf_dict = get_nested_dict_value(hf_dict, self.hf_paths[0])
@@ -473,7 +486,7 @@ class TypedDictContainerConfigConverter(ConfigConverter):
                     )
             sub_fast_llm = converter_class.import_config(sub_hf)
             out[name] = sub_fast_llm
-        set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], out)
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], out)
 
 
 # ============================================================

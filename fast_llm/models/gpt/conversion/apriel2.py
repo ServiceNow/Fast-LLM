@@ -768,6 +768,10 @@ class Apriel2BlockConverter(ConfigSectionConverter):
         # ``MoEMLPConfig`` via MRO, dropping every MoE-specific architecture field.
         # Strict type to reject MoEMLPConfig subclass — not isinstance.
         Assert.is_(type(config.mlp), MLPConfig)
+        # The config side dispatches normalization through APRIEL2_NORM_REGISTRY (RMS/Layer/None), but the
+        # weight side below hardcodes LlamaNormalizationConverter (RMS-only). Fail loudly here so a
+        # LayerNorm/NoNorm block config doesn't silently produce phantom norm_1.weight/norm_2.weight.
+        Assert.is_(type(config.normalization), RMSNormalizationConfig)
         Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod

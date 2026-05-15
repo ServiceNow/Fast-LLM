@@ -23,6 +23,7 @@ from fast_llm.engine.checkpoint.external import (
     OptionalConfigConverter,
     TypedDictContainerConfigConverter,
     _get_attr_path,
+    _safe_set_nested_dict_value,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.layers.attention.config import AttentionConfig
@@ -132,3 +133,43 @@ def test_format_converter_tree(handler_class: type[HuggingfaceStateDictCheckpoin
                 f"{converter_class.__name__}.{name}: sentinel {declaration._sentinel!r} "
                 f"does not match field default {default!r} at path {'.'.join(path)}"
             )
+
+
+def test_safe_set_nested_dict_value_collision() -> None:
+    """A divergent write to an already-populated path must raise instead of silently overwriting.
+
+    Regression for the cross-section invariant: e.g. Llama's decoder block and head both export
+    ``rms_norm_eps`` via flat-merge — a divergent value used to silently overwrite under a plain
+    ``set_nested_dict_value`` semantics.
+    """
+    out: dict = {}
+    _safe_set_nested_dict_value(out, ("rms_norm_eps",), 1e-5)
+    # Same value at the same path: no-op.
+    _safe_set_nested_dict_value(out, ("rms_norm_eps",), 1e-5)
+    assert out == {"rms_norm_eps": 1e-5}
+    # Divergent value: raise.
+    with pytest.raises(AssertionError):
+        _safe_set_nested_dict_value(out, ("rms_norm_eps",), 1e-6)
+    # Works recursively for nested paths.
+    _safe_set_nested_dict_value(out, ("nested", "key"), "value")
+    with pytest.raises(AssertionError):
+        _safe_set_nested_dict_value(out, ("nested", "key"), "other")
+
+
+def test_llama_export_rejects_mismatched_block_and_head_norm_epsilon() -> None:
+    """End-to-end regression: a Llama config with mismatched block/head normalization epsilon must fail to
+    export. Both the decoder Custom and the head Nested write ``rms_norm_eps`` into the same HF dict; a
+    silent override would drop the head value (or the block value, depending on declaration order)."""
+    import copy
+
+    from fast_llm.models.gpt.config import GPTBaseModelConfig
+    from fast_llm.models.gpt.conversion.llama import LlamaBaseModelConverter
+    from tests.utils.model_configs import MODEL_CONFIGS
+
+    cfg = copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"])
+    # Default head normalization inherits the block default (1e-5); pin head to a different value.
+    cfg["head"] = {"normalization": {"type": "rms_norm", "epsilon": 1.234e-9}}
+    config = GPTBaseModelConfig.from_dict(cfg)
+    assert config.decoder.block.normalization.epsilon != config.head.normalization.epsilon
+    with pytest.raises(AssertionError):
+        LlamaBaseModelConverter.export_config(config)
